@@ -153,6 +153,10 @@ T2（加快捷键、当场生效、重启后还在、可撤销）里，"重启�
 3. 验收脚本按第七节改口径（审阅并保存），用脚本模型排练通过后，用户在场跑 T2。
 4. （M7 之后）`superchat-authority.el` 改名为 `superchat-tool-execution.el`——用户裁定 ④(a)，顺延至此。
 
+## 第五节定位规则的更正（2026-09-19）
+
+第五节"定位顺序：先按记录的名字找 live buffer，找不到再按记录的文件找……（不为此另存 Buffer 身份）"已被[`/changes` 靠 Buffer 身上的标记认"工具改过的那一个"](2026-09-19-changes-recognizes-a-buffer-by-its-mark.md)取代：名字和文件都只是某一时刻的描述，旧名字被别的 Buffer 占用时会列错并漏掉真正的目标。现在由编辑工具在 Buffer 自己身上留标记，`:buffer`／`:buffer-file` 只作当时的证据。第五节其余内容（候选由 Tape ∩ 当前状态推导、不创造新的领域对象、`eval_elisp` 不归属、提醒不入 Tape）不变。
+
 ## 交付后的更正（2026-09-19）
 
 第二片漏删了一句与本契约相反的模型可见文字：`eval_elisp` 的工具说明仍写着 "For persistence, save the actual loaded configuration and verify in a fresh Emacs that loads it"（M5 时期留下的）。有人值守的三次 act 运行都经 `eval_elisp` 自行存盘并另起 Emacs 自证，与这句话逐项对应。已改为"本工具不用于保存文件；保存由用户决定；要让配置长期有效，就修改 Emacs 实际加载的那个配置文件的 Buffer，并告诉用户保存哪个 Buffer"，并加回归 `m7/write-path/no-default-tool-tells-the-model-to-persist`（默认工具面上任何说明都不得要求模型保存）。第六节"要删"的清单应当包含"所有要求模型自行持久化的模型可见文字"，当时没有写这一条。

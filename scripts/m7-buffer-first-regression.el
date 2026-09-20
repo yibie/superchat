@@ -273,6 +273,184 @@ file as they are now, never the old path."
                   (kill-buffer reopened)))))
         (when (buffer-live-p indirect) (kill-buffer indirect))))))
 
+;;;; The edited buffer is recognized by its own mark -------------------------------
+;; docs/decisions/accepted/2026-09-19-changes-recognizes-a-buffer-by-its-mark.md
+;; A name and a file describe a buffer at one moment; neither is its identity.
+
+(defun m7--candidate-buffers (session &optional run)
+  (mapcar (lambda (row) (plist-get row :buffer))
+          (superchat-changes-candidates session run)))
+
+(ert-deftest m7/changes/a-buffer-that-took-the-old-name-is-not-the-edited-one ()
+  "The development audit's case: the edited buffer is renamed, an unrelated
+buffer with the user's own unsaved text takes its old name.  Only the buffer
+the tool really changed is listed."
+  (m7--with-dir dir
+    (let* ((file (m7--write (expand-file-name "owned.el" dir) "one\n"))
+           (other (m7--write (expand-file-name "unrelated.el" dir) "unrelated\n")))
+      (m7--fixture
+          (list `(:tool-uses (("open_file" (path . ,file))))
+                (m7--edit-round "owned.el" "one" "two") '(:text "done"))
+        (let* ((view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view))
+               (run (m7--settle (smoke--send view "edit")))
+               (target (get-file-buffer file))
+               (impostor (find-file-noselect other)))
+          (with-current-buffer target (rename-buffer "actual-edited-buffer"))
+          (with-current-buffer impostor
+            (rename-buffer "owned.el")
+            (goto-char (point-max)) (insert "user edit\n"))
+          (should (equal (list target) (m7--candidate-buffers session run)))
+          (should (equal (list target) (m7--candidate-buffers session)))
+          (should (string-match-p "actual-edited-buffer"
+                                  (superchat-changes-run-summary session run)))
+          (should-not (string-match-p "unrelated" (superchat-changes-run-summary session run))))))))
+
+(ert-deftest m7/changes/a-reopened-buffer-is-a-different-buffer ()
+  "Killed and visited again -- same name, same file, edited by the user: the
+tool's change went away with the old buffer, so nothing is listed.  The same
+for a buffer without a file."
+  (m7--with-dir dir
+    (let ((file (m7--write (expand-file-name "again.el" dir) "one\n")))
+      (m7--fixture
+          (list `(:tool-uses (("open_file" (path . ,file))))
+                (m7--edit-round "again.el" "one" "two")
+                '(:tool-uses (("append_to_buffer" (buffer . "*m7-scratch-notes*") (text . "by the tool"))))
+                '(:text "done"))
+        (let* ((superchat-llm-tool-names (append superchat-llm-default-tool-names
+                                                 '("append_to_buffer")))
+               (view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view))
+               (run (m7--settle (smoke--send view "edit"))))
+          (unwind-protect
+              (progn
+                (should (= 2 (length (m7--candidate-buffers session run))))
+                (with-current-buffer (get-file-buffer file)
+                  (set-buffer-modified-p nil) (kill-buffer))
+                (with-current-buffer "*m7-scratch-notes*"
+                  (set-buffer-modified-p nil) (kill-buffer))
+                (with-current-buffer (find-file-noselect file)
+                  (goto-char (point-max)) (insert "the user's own\n"))
+                (with-current-buffer (get-buffer-create "*m7-scratch-notes*")
+                  (insert "the user's own") (set-buffer-modified-p t))
+                (should-not (m7--candidate-buffers session run))
+                (should-not (superchat-changes-run-summary session run)))
+            (when (get-buffer "*m7-scratch-notes*")
+              (with-current-buffer "*m7-scratch-notes*" (set-buffer-modified-p nil))
+              (kill-buffer "*m7-scratch-notes*"))))))))
+
+(ert-deftest m7/changes/the-mark-stays-with-the-buffer-and-with-nothing-else ()
+  "Guard: a major-mode change does not wipe it; a clone does not inherit it; an
+edit the tool sent back leaves none."
+  (m7--with-dir dir
+    (let ((file (m7--write (expand-file-name "mode.el" dir) "(defun a () 1)\n")))
+      (m7--fixture
+          (list `(:tool-uses (("open_file" (path . ,file))))
+                (m7--edit-round "mode.el" "1)" "2)")
+                '(:tool-uses (("append_to_buffer" (buffer . "*m7-clone-source*") (text . "by the tool"))))
+                '(:text "done"))
+        (let* ((superchat-llm-tool-names (append superchat-llm-default-tool-names
+                                                 '("append_to_buffer")))
+               (view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view))
+               (run (m7--settle (smoke--send view "edit")))
+               (target (get-file-buffer file))
+               (source (get-buffer "*m7-clone-source*"))
+               clone)
+          (unwind-protect
+              (progn
+                (with-current-buffer target (text-mode))
+                (should (memq target (m7--candidate-buffers session run)))
+                (setq clone (with-current-buffer source (clone-buffer "*m7-clone*")))
+                (with-current-buffer clone (set-buffer-modified-p t))
+                (should (memq source (m7--candidate-buffers session run)))
+                (should-not (memq clone (m7--candidate-buffers session run)))
+                ;; Sent back: the buffer was never changed, so it is not marked.
+                (let* ((untouched (find-file-noselect
+                                   (m7--write (expand-file-name "sent-back.el" dir) "(defun b () 1)\n")))
+                       (superchat--tool-execution-context
+                        (list :session-id session :run-id run)))
+                  (should (string-prefix-p "Error:" (superchat-tool-edit-buffer "sent-back.el" "1)" "1))")))
+                  (with-current-buffer untouched (set-buffer-modified-p t))
+                  (should-not (memq untouched (m7--candidate-buffers session run)))
+                  (with-current-buffer untouched (set-buffer-modified-p nil))))
+            (dolist (buffer (list source clone))
+              (when (buffer-live-p buffer)
+                (with-current-buffer buffer (set-buffer-modified-p nil))
+                (kill-buffer buffer)))))))))
+
+(ert-deftest m7/changes/each-run-lists-its-own-buffers ()
+  "Two Runs of one Session edit two buffers, a Run of another Session a third.
+A Run lists what it marked; the Session lists both of its Runs'; nobody lists
+the other Session's."
+  (m7--with-dir dir
+    (let ((first-file (m7--write (expand-file-name "first.el" dir) "one\n"))
+          (second-file (m7--write (expand-file-name "second.el" dir) "one\n"))
+          (foreign-file (m7--write (expand-file-name "foreign.el" dir) "one\n")))
+      (m7--fixture
+          (list `(:tool-uses (("open_file" (path . ,first-file))))
+                (m7--edit-round "first.el" "one" "two") '(:text "first done")
+                `(:tool-uses (("open_file" (path . ,second-file))))
+                (m7--edit-round "second.el" "one" "two") '(:text "second done")
+                `(:tool-uses (("open_file" (path . ,foreign-file))))
+                (m7--edit-round "foreign.el" "one" "two") '(:text "foreign done"))
+        (let* ((view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view))
+               (first (m7--settle (smoke--send view "first")))
+               (second (m7--settle (smoke--send view "second")))
+               (foreign-session (format "m7-foreign-%06x" (random #x1000000)))
+               (foreign (m7--submit-with (get-buffer-create " *m7-foreign-host*") foreign-session
+                                         '("open_file" "edit_buffer") "foreign"))
+               (a (get-file-buffer first-file))
+               (b (get-file-buffer second-file))
+               (c (get-file-buffer foreign-file)))
+          (should (equal (list a) (m7--candidate-buffers session first)))
+          (should (equal (list b) (m7--candidate-buffers session second)))
+          (should (equal (list c) (m7--candidate-buffers foreign-session foreign)))
+          (let ((of-session (m7--candidate-buffers session)))
+            (should (= 2 (length of-session)))
+            (should (memq a of-session))
+            (should (memq b of-session))
+            (should-not (memq c of-session))))))))
+
+(ert-deftest m7/changes/a-delegated-runs-edit-belongs-to-the-run-that-started-it ()
+  "A child Run in its own Session, started by a Run of this Session, edits a
+buffer.  The parent's Run and Session list it; the mark carries the child's
+identity and the Tape says whose child it is.  A Session that started nothing
+lists nothing."
+  (m7--with-dir dir
+    (let ((file (m7--write (expand-file-name "delegated.el" dir) "one\n")))
+      (m7--fixture
+          (list '(:hang t)
+                `(:tool-uses (("open_file" (path . ,file))))
+                (m7--edit-round "delegated.el" "one" "two")
+                '(:text "child done"))
+        (let* ((view (smoke--open-chat))
+               (session (buffer-local-value 'superchat--session-id view))
+               (parent (smoke--send view "delegate it"))
+               (child-session (format "m7-child-%06x" (random #x1000000)))
+               (child (plist-get
+                       (superchat-service-call
+                        nil 'driver 'submit
+                        (list :surface 'external :session-id child-session
+                              :parent-run-id parent
+                              :tools '("open_file" "edit_buffer") :content "edit it"
+                              ;; The chat View belongs to the parent's Session.
+                              :context (list :host-buffer (get-buffer-create " *m7-child-host*"))
+                              :runtime-extras '(:record-conversation nil)
+                              :sink (superchat-sink-discard)))
+                       :run-id)))
+          (unwind-protect
+              (progn
+                (m7--settle child)
+                (let ((buffer (get-file-buffer file)))
+                  (should (buffer-modified-p buffer))
+                  (should (equal (list buffer) (m7--candidate-buffers session parent)))
+                  (should (equal (list buffer) (m7--candidate-buffers session)))
+                  (should (equal (list buffer) (m7--candidate-buffers child-session child)))
+                  (should-not (m7--candidate-buffers "m7-a-session-that-started-nothing"))))
+            (ignore-errors (superchat-runtime-cancel parent "[m7 done]"))))))))
+
 (ert-deftest m7/changes/revert-is-the-users-operation-too ()
   (m7--with-dir dir
     (let ((file (m7--write (expand-file-name "r.el" dir) "one\n")))

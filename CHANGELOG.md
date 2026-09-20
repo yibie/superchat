@@ -4,6 +4,15 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- `/changes` and the Run-end reminder recognize the buffer a tool edited by a
+  mark on the buffer itself, not by the name and file recorded at the time.
+  Before, after the edited buffer was renamed, an unrelated buffer that took
+  its old name was listed and the real one was missed.  The mark is a
+  buffer-local value set by the editing tool: it follows the buffer through a
+  rename, `set-visited-file-name` and a major-mode change, is not inherited by
+  a clone, and goes away with the buffer -- so a buffer that was killed and
+  visited again is no longer listed.  Nothing is added to the Tape or to disk.
+
 - `eval_elisp`'s description no longer tells the model to persist.  It still
   carried an M5-era sentence -- "For persistence, save the actual loaded
   configuration and verify in a fresh Emacs that loads it" -- the opposite of

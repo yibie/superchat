@@ -9,10 +9,20 @@
 ;; visible when the user is not looking at the buffer.  It records nothing of
 ;; its own.  The candidates are derived each time they are asked for:
 ;;
-;;   targets of the Session's (or one Run's) structured buffer-editing tool
-;;   calls, read from their `tool.completed' facts on the Tape
+;;   the Session's (or one Run's) Runs that made a structured buffer edit, read
+;;   from their `tool.completed' facts on the Tape, delegated Runs included
 ;;       ∩
-;;   buffers that are live and `buffer-modified-p' right now
+;;   buffers that are live, `buffer-modified-p' right now, and carry the mark
+;;   of one of those Runs
+;;
+;; The mark is how the edited buffer is recognized.  A name and a file describe
+;; a buffer at one moment and either can come to mean another buffer (a rename
+;; followed by a reuse of the name, `set-visited-file-name', kill and revisit);
+;; the buffer object is the only identity Emacs has.  The mark is a buffer-local
+;; variable set by the editing tool: it is not on the Tape, not on disk, records
+;; nothing about what changed, and dies with its buffer.  The Tape's `:buffer'
+;; and `:buffer-file' stay as evidence of that moment and locate nothing.
+;; See docs/decisions/implemented/2026-09-19-changes-recognizes-a-buffer-by-its-mark.md.
 ;;
 ;; A stated limit: what code run through `eval_elisp' (or any other full
 ;; Emacs control tool) changed is not attributed and may not be listed.  Emacs
@@ -36,6 +46,28 @@
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (defvar superchat--session-id)
 
+(defvar-local superchat-changes--edited-by nil
+  "The structured edits made to this buffer: (BUFFER . PAIRS).
+PAIRS is a list of (SESSION-ID . RUN-ID).  BUFFER is the buffer the mark was
+given to: `clone-buffer' copies local variables, and a copy naming another
+buffer is not a mark.")
+;; A major-mode change is not a new buffer.
+(put 'superchat-changes--edited-by 'permanent-local t)
+
+(defun superchat-changes-mark-buffer (buffer session-id run-id)
+  "Note on BUFFER itself that RUN-ID of SESSION-ID changed it with a tool."
+  (when (and (buffer-live-p buffer) (stringp session-id) (stringp run-id))
+    (with-current-buffer buffer
+      (let ((pairs (superchat-changes--marks buffer))
+            (pair (cons session-id run-id)))
+        (setq superchat-changes--edited-by
+              (cons buffer (if (member pair pairs) pairs (cons pair pairs))))))))
+
+(defun superchat-changes--marks (buffer)
+  "Return the (SESSION-ID . RUN-ID) pairs BUFFER is marked with."
+  (let ((mark (buffer-local-value 'superchat-changes--edited-by buffer)))
+    (and (consp mark) (eq buffer (car mark)) (cdr mark))))
+
 (defun superchat-changes--child-sessions (run-ids)
   "Return the ids of Sessions whose Runs were started by one of RUN-IDS.
 A delegated child's structured edits belong to the Session that started it."
@@ -49,9 +81,10 @@ A delegated child's structured edits belong to the Session that started it."
                          "SELECT DISTINCT session_id FROM tape WHERE meta LIKE ?"
                          (list (format "%%\"parent_run_id\":\"%s\"%%" run)))))))))
 
-(defun superchat-changes--targets (session-id &optional run-id)
-  "Return (NAME . FILE) of every structured edit SESSION-ID's Tape records.
-With RUN-ID only that Run's, together with the Runs it delegated to."
+(defun superchat-changes--editing-runs (session-id &optional run-id)
+  "Return (SESSION . RUN) of every Run the Tape shows making a structured edit.
+SESSION-ID's Runs, or with RUN-ID only that Run, together with the Runs they
+delegated to."
   (let* ((events (superchat-tape-replay-events session-id))
          (own (if run-id
                   (cl-remove-if-not (lambda (event) (equal run-id (plist-get event :run-id)))
@@ -60,16 +93,17 @@ With RUN-ID only that Run's, together with the Runs it delegated to."
          (runs (delete-dups (delq nil (mapcar (lambda (event) (plist-get event :run-id)) own))))
          (children (cl-remove session-id (superchat-changes--child-sessions runs)
                               :test #'equal))
-         (all (append own
-                      (cl-loop for child in children
-                               append (ignore-errors (superchat-tape-replay-events child))))))
-    (delete-dups
-     (delq nil
-           (mapcar (lambda (event)
-                     (when (equal "tool.completed" (plist-get event :type))
-                       (when-let* ((name (plist-get (plist-get event :payload) :buffer)))
-                         (cons name (plist-get (plist-get event :payload) :buffer-file)))))
-                   all)))))
+         (pairs nil))
+    (cl-flet ((collect (session events)
+                (dolist (event events)
+                  (when (and (equal "tool.completed" (plist-get event :type))
+                             (plist-get (plist-get event :payload) :buffer)
+                             (plist-get event :run-id))
+                    (push (cons session (plist-get event :run-id)) pairs)))))
+      (collect session-id own)
+      (dolist (child children)
+        (collect child (ignore-errors (superchat-tape-replay-events child)))))
+    (delete-dups (nreverse pairs))))
 
 (defun superchat-changes-candidates (session-id &optional run-id)
   "Return the unsaved buffers SESSION-ID's structured tool calls edited.
@@ -77,19 +111,16 @@ Each element is (:buffer BUFFER :name NAME :file FILE :new-file BOOL).  With
 RUN-ID, only what that Run (and the Runs it delegated to) edited.  Derived
 from the Tape and the buffers' state now; see this file's commentary for what
 is not attributed."
-  (let (seen rows)
-    (dolist (target (superchat-changes--targets session-id run-id))
-      ;; The recorded name and file are evidence from when the tool ran; they
-      ;; only locate the buffer.  Everything reported below is read from the
-      ;; live buffer now, so a later rename or `set-visited-file-name' never
-      ;; makes an old path pass for the current one.
-      (let* ((file (cdr target))
-             (buffer (or (get-buffer (car target))
-                         (and file (find-buffer-visiting file)))))
-        (when (and (buffer-live-p buffer)
-                   (not (memq buffer seen))
-                   (buffer-modified-p buffer))
-          (push buffer seen)
+  (let ((runs (superchat-changes--editing-runs session-id run-id))
+        rows)
+    (when runs
+      ;; The buffer is recognized by its own mark, never looked up by the name
+      ;; or the file the Tape recorded.  Everything reported is read from the
+      ;; live buffer now, so a rename or `set-visited-file-name' never makes an
+      ;; old path pass for the current one.
+      (dolist (buffer (buffer-list))
+        (when (and (buffer-modified-p buffer)
+                   (cl-intersection runs (superchat-changes--marks buffer) :test #'equal))
           (let ((visited (buffer-file-name buffer)))
             (push (list :buffer buffer :name (buffer-name buffer) :file visited
                         :new-file (and visited (not (file-exists-p visited)) t))

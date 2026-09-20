@@ -374,13 +374,27 @@ with nothing on disk.  A failure is a string starting with `Error:'."
   (with-current-buffer buffer
     (buffer-substring-no-properties (point-min) (point-max))))
 
+(declare-function superchat-changes-mark-buffer "superchat-changes"
+                  (buffer session-id run-id))
+
+(defun superchat-tools--note-mutation (target)
+  "Record that a structured tool really changed TARGET's buffer.
+One place for the two things that must agree: what the executor writes on this
+call's `tool.completed' fact (see `superchat-tool-mutation-target'), and the
+mark on the buffer itself that lets `/changes' recognize it later whatever it
+is called by then."
+  (setq superchat-tool-mutation-target
+        (list :buffer (plist-get target :name) :file (plist-get target :file)))
+  (when (fboundp 'superchat-changes-mark-buffer)
+    (superchat-changes-mark-buffer
+     (plist-get target :buffer)
+     (plist-get superchat--tool-execution-context :session-id)
+     (plist-get superchat--tool-execution-context :run-id))))
+
 (defun superchat-tools--write-evidence (target layer)
   "Return the evidence lines a structured buffer change appends to its result.
 TARGET is the resolved buffer target and LAYER says how far the change went."
-  ;; The same resolved target is what the executor records on this call's
-  ;; `tool.completed' fact (see `superchat-tool-mutation-target').
-  (setq superchat-tool-mutation-target
-        (list :buffer (plist-get target :name) :file (plist-get target :file)))
+  (superchat-tools--note-mutation target)
   (concat
    (format "\nTarget: buffer %s%s%s"
            (plist-get target :name)
@@ -1065,9 +1079,7 @@ Superchat's own data directory."
                   ;; A region Artifact's buffer is what really changed.
                   (when-let* ((target (plist-get resolved :target))
                               ((plist-get target :buffer)))
-                    (setq superchat-tool-mutation-target
-                          (list :buffer (plist-get target :name)
-                                :file (plist-get target :file))))))))))
+                    (superchat-tools--note-mutation target))))))))
 
 (defun superchat-tool-workspace-read (&optional artifact-id expected-revision)
   "Return content from ARTIFACT-ID at EXPECTED-REVISION."
