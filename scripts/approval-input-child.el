@@ -16,6 +16,7 @@
 
 (require 'cl-lib)
 (require 'superchat-approval)
+(require 'superchat-runtime)
 
 (defconst aic-dir (file-name-as-directory (getenv "AIC_DIR")))
 (defconst aic-request
@@ -53,6 +54,21 @@
             (list (aic-ask "q1")))
            ("double-y" (list (aic-ask "q1") (aic-ask "q2")))
            ("fresh" (list (aic-ask "q1")))
+           ("run-ends"
+            ;; A Run that stops being able to act one second after the question
+            ;; opened.  Nobody types anything.
+            (let ((alive-until (+ (float-time) 1.0)))
+              (advice-add 'superchat-runtime-effect-capable-p :override
+                          (lambda (_run) (< (float-time) alive-until)))
+              (aic-mark "q1.open")
+              (let ((start (float-time)))
+                (list (list "q1"
+                            (superchat-approval--ask-while-run-lives
+                             "aic-run" "eval_elisp"
+                             (lambda () (if (superchat-approval-confirm
+                                             (append aic-request '(:run-id "aic-run")))
+                                            'allowed 'rejected)))
+                            (- (float-time) start))))))
            ("macro"
             (global-set-key [f9] #'aic-macro-command)
             (let ((buffer (get-buffer-create "aic-typing")))

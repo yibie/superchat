@@ -371,7 +371,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-data-directory` — 记忆、配置、命令的存储路径（默认 `~/.emacs.d/superchat/`）。
 - `superchat-lang` — 自定义命令中 `$lang` 变量的语言（默认 `"English"`）。
 - `superchat-response-timeout` — 每次 provider 请求的静默窗口（默认 120 秒，工具模式有调整）。
-- `superchat-response-hard-timeout` — 跨请求的累计传输上限（默认 600 秒）。
+- `superchat-response-timeout-hard-limit` — 可选的跨请求累计传输上限（秒）。默认 nil，即没有这道上限（2026-09-19 之前是 600）。
 - `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — 工具轮数预算与触顶行为（默认 12 / `ask`）。
 - `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
@@ -451,7 +451,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 **工具调用超时**
 
-每次 provider 请求都有自己的静默窗口：默认 120 秒，工具模式乘以 1.5，并按上下文调整。新正文、reasoning 和工具进展会刷新窗口；早先的一句前言不会取消后续请求的保护。`superchat-response-hard-timeout` 独立限制整个传输对话，默认 600 秒，Runtime 还可能设置自己的 Run deadline。显式人工输入会暂停并恢复传输计时余额。如果某一次请求确实很慢，可调整静默窗口，例如 `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。这些计时器不能抢占同步 Lisp；详见[模型进展与工具预算](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets)。
+每次 provider 请求都有自己的静默窗口：默认 120 秒，工具模式乘以 1.5，并按上下文调整。新正文、reasoning 和工具进展会刷新窗口；早先的一句前言不会取消后续请求的保护。默认不再对整个传输对话设累计上限；需要的话可以用 `superchat-response-timeout-hard-limit` 设一个。Run 总期限（`superchat-runtime-default-deadline`，1800 秒）限制整个 Run，你回答批准提问所花的时间也计入；批准提问开着的时候静默窗口停表；如果 Run 结束时提问还开着，提问会自动关闭，并告诉你这次调用没有执行。如果某一次请求确实很慢，可调整静默窗口，例如 `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`。这些计时器不能抢占同步 Lisp；详见[模型进展与工具预算](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets)。
 
 **达到工具轮数上限**
 

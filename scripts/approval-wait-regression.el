@@ -231,6 +231,73 @@ newer attempt (slot replaced) is left alone; a second, nested stop is a no-op."
             (cancel-timer timer)))
         (superchat-llm--transport-timer-owner-cancel owner)))))
 
+;;;; The question is dismissed when its Run ends -----------------------------------
+;; docs/decisions/accepted/2026-09-19-a-question-is-dismissed-when-its-run-ends.md
+
+(defun aw--decided (session)
+  (cl-loop for event in (superchat-tape-replay-events session)
+           when (equal "approval.decided" (plist-get event :type))
+           collect (plist-get event :payload)))
+
+(defmacro aw--with-announcements (var &rest body)
+  (declare (indent 1) (debug t))
+  `(let* ((,var nil)
+          (note (lambda (text) (push text ,var))))
+     (unwind-protect
+         (progn (advice-add 'superchat-approval--announce :before note) ,@body)
+       (advice-remove 'superchat-approval--announce note))))
+
+(ert-deftest approval-wait/a-deadline-with-the-question-open-dismisses-it ()
+  "The Run's deadline arrives while the answerer blocks.  The answerer is
+abandoned at once -- nobody has to answer a question that can no longer do
+anything -- the decision says why, the user is told, nothing runs."
+  (aw--pipeline (list aw--eval-round '(:text "must not be requested"))
+    (aw--with-announcements told
+      (let* ((superchat-response-timeout nil)
+             (superchat-runtime-default-deadline 2)
+             (returned nil) (start (float-time)) (settled nil)
+             (superchat-approval-function
+              (lambda (_public) (aw--read-for 8) (setq returned t) t))
+             (view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (run (aw--settle (smoke--send view "go"))))
+        ;; The decision is written when the question is given up, not when the
+        ;; answerer would have come back on its own.
+        (should (smoke--wait (lambda () (aw--decided session)) 3))
+        (setq settled (- (float-time) start))
+        (should (< settled 5))
+        (should-not returned)
+        (let ((decided (car (aw--decided session))))
+          (should (equal "deny" (plist-get decided :decision)))
+          (should (equal "cancelled" (plist-get decided :outcome)))
+          (should (equal "run-ended" (plist-get decided :interruption))))
+        (should (= 0 aw--effect))
+        (should (= 0 (aw--count session "tool.execution.started")))
+        (should (= 1 (length smoke--requests)))
+        (should (cl-some (lambda (text) (string-match-p "eval_elisp" text)) told))
+        (should (eq 'audit-incomplete (plist-get (superchat-runtime-status run) :status)))))))
+
+(ert-deftest approval-wait/a-cancel-with-the-question-open-dismisses-it ()
+  "The same when the Run is cancelled from somewhere else while the person reads."
+  (aw--pipeline (list aw--eval-round '(:text "must not be requested"))
+    (aw--with-announcements told
+      (let* ((returned nil)
+             (superchat-approval-function
+              (lambda (public)
+                (run-at-time 0.5 nil #'superchat-runtime-cancel
+                             (plist-get public :run-id) "[aw cancelled elsewhere]")
+                (aw--read-for 8) (setq returned t) t))
+             (view (smoke--open-chat))
+             (session (buffer-local-value 'superchat--session-id view))
+             (start (float-time)))
+        (aw--settle (smoke--send view "go"))
+        (should (smoke--wait (lambda () (aw--decided session)) 3))
+        (should (< (- (float-time) start) 4))
+        (should-not returned)
+        (should (equal "run-ended" (plist-get (car (aw--decided session)) :interruption)))
+        (should (= 0 aw--effect))
+        (should told)))))
+
 (provide 'approval-wait-regression)
 
 ;;; approval-wait-regression.el ends here

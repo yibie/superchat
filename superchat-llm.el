@@ -70,19 +70,27 @@ Set to nil to disable both transport timers."
                  (integer :tag "Seconds"))
   :group 'superchat)
 
-(defcustom superchat-response-timeout-hard-limit 600
-  "Cumulative transport time limit in seconds for one tool conversation.
+(defcustom superchat-response-timeout-hard-limit nil
+  "Optional cumulative transport time limit, in seconds, for one tool conversation.
 
-The adaptive inactivity interval may grow with the current prompt and tool
-schemas, but never beyond this limit.  Neither progress nor a new provider
-attempt resets this cap.  A trusted ask_user wait freezes its remaining
-budget through the existing input protocol; ordinary tool-boundary pauses
-continue to consume it.  Runtime's Run deadline is independent.
+Nil, the default, means there is no such limit.  A Run is still bounded by
+the per-attempt inactivity timeout (`superchat-response-timeout'), the tool
+round budget and the Run deadline (`superchat-runtime-default-deadline'),
+which together cover everything this limit did.  It used to default to 600:
+under the default permission level a person reading each approval question
+could use that up and lose the Run while a question was still open.
+
+With a positive integer the old behaviour applies: the adaptive inactivity
+interval never grows beyond this limit, neither progress nor a new provider
+attempt resets it, a trusted ask_user wait freezes its remaining budget, and
+ordinary tool-boundary pauses -- approval questions included -- consume it.
 
 Set `superchat-response-timeout' to nil to disable both transport timers."
-  :type '(restricted-sexp
-          :match-alternatives ((lambda (value)
-                                 (and (integerp value) (> value 0)))))
+  :type '(choice (const :tag "No cumulative limit" nil)
+                 (restricted-sexp
+                  :tag "Seconds"
+                  :match-alternatives ((lambda (value)
+                                         (and (integerp value) (> value 0))))))
   :group 'superchat)
 
 (defcustom superchat-tool-timeout-multiplier 1.5
@@ -956,7 +964,7 @@ transport caller."
           (* character-estimate superchat--llm-preflight-safety-factor)))))
 
 (defun superchat-llm--adaptive-response-timeout (base-timeout estimated-tokens)
-  "Scale BASE-TIMEOUT for ESTIMATED-TOKENS without crossing the hard cap.
+  "Scale BASE-TIMEOUT for ESTIMATED-TOKENS without crossing a set hard cap.
 The first 4096 estimated tokens use the configured base.  Larger serialized
 prompts add one second per 256 tokens, a deliberately simple prefill allowance
 whose behavior is stable across providers."
@@ -965,9 +973,10 @@ whose behavior is stable across providers."
            (extra (if (> tokens 4096)
                       (ceiling (/ (- tokens 4096) 256.0))
                     0))
-           (scaled (+ base-timeout extra))
-           (hard-limit (max 1 superchat-response-timeout-hard-limit)))
-      (min scaled hard-limit))))
+           (scaled (+ base-timeout extra)))
+      (if superchat-response-timeout-hard-limit
+          (min scaled (max 1 superchat-response-timeout-hard-limit))
+        scaled))))
 
 (defconst superchat--llm-context-overflow-patterns
   '("prompt is too long"
@@ -2383,8 +2392,11 @@ requests until it receives text, bounded by
            (response-mode (superchat-llm--response-mode tools))
            (_ (superchat-llm--indicate-response-mode response-mode))
            (base-timeout (superchat-llm--adjusted-timeout response-mode))
+           ;; Nil: no cumulative limit, and the owner's hard clock stays
+           ;; `disabled' for the whole call.
            (hard-timeout-limit
-            (max 1 superchat-response-timeout-hard-limit))
+            (and superchat-response-timeout-hard-limit
+                 (max 1 superchat-response-timeout-hard-limit)))
            (effective-backend (superchat--effective-llm-backend target-model))
            (request-model
             (or (superchat--provider-chat-model effective-backend)
@@ -2778,7 +2790,7 @@ requests until it receives text, bounded by
                                          (superchat-llm--transport-timer-owner-wait-timer
                                           transport-timer-owner)))
                           (cancel-timer timer)))))))))
-      (when adjusted-timeout
+      (when (and adjusted-timeout hard-timeout-limit)
         (let ((expire
                (lambda ()
                  (let ((notice (format "[Response hard timeout after %ss; last phase: %s]"

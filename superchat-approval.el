@@ -141,6 +141,57 @@ answered by input that came after it\")."
               '((?y "yes, allow once") (?n "no"))
               (superchat-approval--details request)))))))
 
+;;;; A question does not outlive its Run ---------------------------------------
+;; decision of 2026-09-19, "a question is dismissed when its Run ends".
+
+(declare-function superchat-runtime-effect-capable-p "superchat-runtime" (run-id))
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+
+(defvar superchat-approval--interruption nil
+  "Why the question being decided was given up, or nil.
+Bound around one decision; `run-ended' when its Run ended under it.")
+
+(defun superchat-approval--announce (text)
+  "Tell the user TEXT."
+  (message "superchat: %s" text))
+
+(defun superchat-approval--ask-while-run-lives (run-id tool-name ask)
+  "Call ASK, the answerer of last resort, and return what it returns.
+While it blocks, watch RUN-ID: once that Run can no longer act -- its deadline
+passed, it was cancelled elsewhere, it failed -- the question can decide
+nothing, so ASK is abandoned with a non-local exit (the way C-g abandons it),
+the user is told, and `:run-ended' is returned.  A question without a live
+Run to begin with is asked as it always was."
+  (if (not (and (stringp run-id)
+                (fboundp 'superchat-runtime-effect-capable-p)
+                (superchat-runtime-effect-capable-p run-id)))
+      (funcall ask)
+    (let* ((tag (make-symbol "run-ended"))
+           (watch nil)
+           (result
+            (catch tag
+              (unwind-protect
+                  (progn
+                    (setq watch
+                          (run-with-timer
+                           0.5 0.5
+                           (lambda ()
+                             (unless (superchat-runtime-effect-capable-p run-id)
+                               (throw tag tag)))))
+                    (funcall ask))
+                (when (timerp watch) (cancel-timer watch))))))
+      (if (not (eq result tag))
+          result
+        (when-let* ((help (get-buffer "*Multiple Choice Help*")))
+          (quit-windows-on help))
+        (superchat-approval--announce
+         (format "the Run ended (%s) while `%s' was waiting for your answer; the call was not run"
+                 (or (ignore-errors
+                       (plist-get (superchat-runtime-status run-id) :status))
+                     "gone")
+                 tool-name))
+        :run-ended))))
+
 (defun superchat-approval--fallback-answerer ()
   "Return the human answerer the chain ends in, or nil when nobody can answer.
 The default minibuffer answerer counts as nobody in a batch Emacs and while a
@@ -255,9 +306,18 @@ afterwards it continues from what remained and is renewed once."
                      (let ((superchat-event-waterfall-propagate-quit t)
                            (superchat-event-waterfall-terminal
                             (lambda (asked)
-                              (let ((answerer (superchat-approval--fallback-answerer)))
+                              (let* ((answerer (superchat-approval--fallback-answerer))
+                                     (answer
+                                      (and answerer
+                                           (superchat-approval--ask-while-run-lives
+                                            (plist-get asked :run-id)
+                                            (plist-get asked :tool-name)
+                                            (lambda () (funcall answerer asked))))))
                                 (cond ((not answerer) 'unavailable)
-                                      ((funcall answerer asked) 'allowed-once)
+                                      ((eq answer :run-ended)
+                                       (setq superchat-approval--interruption 'run-ended)
+                                       'cancelled)
+                                      (answer 'allowed-once)
                                       (t 'rejected))))))
                        (superchat-emit scope 'approval/request public))))
                 (if (memq claimed superchat-approval-outcomes)
@@ -309,7 +369,8 @@ outcome is `allowed-once'."
     (superchat-approval--append
      "approval.requested" request
      (when (plist-get request :reason) (list :reason (plist-get request :reason))))
-    (let ((outcome
+    (let* ((superchat-approval--interruption nil)
+           (outcome
            (condition-case condition
                (superchat-approval--decide request scope)
              (quit
@@ -321,8 +382,12 @@ outcome is `allowed-once'."
               (signal (car condition) (cdr condition))))))
       (superchat-approval--append
        "approval.decided" request
-       (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
-             :outcome (symbol-name outcome)))
+       (append
+        (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
+              :outcome (symbol-name outcome))
+        ;; Given up because its Run ended: not the user's C-g (`user-quit').
+        (when (eq superchat-approval--interruption 'run-ended)
+          (list :reason "run-ended" :interruption "run-ended"))))
       ;; The mark is cleared only after the decision is durable: a failed
       ;; append leaves it open, and the Run then seals `audit-incomplete'.
       (superchat-approval--note request 'approval-settled)

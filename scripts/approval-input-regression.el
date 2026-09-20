@@ -98,6 +98,13 @@ question: it lands in the buffer like any typed key."
     (should (eq 'rejected (plist-get seen :direct-answer)))
     (should (equal "y" (plist-get seen :typed-into-buffer)))))
 
+(ert-deftest approval-input/the-question-goes-away-when-its-run-ends ()
+  "Nobody types; the Run ends one second into the question; the real
+`read-multiple-choice' is abandoned and the caller learns why."
+  (pcase-let ((`((,_ ,answer ,seconds)) (ai--run "run-ends" nil)))
+    (should (eq :run-ended answer))
+    (should (< 0.8 seconds 4))))
+
 (provide 'approval-input-regression)
 
 ;;; approval-input-regression.el ends here

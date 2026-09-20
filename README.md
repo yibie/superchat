@@ -377,7 +377,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).
 - `superchat-lang` — language for `$lang` variable in custom commands (default `"English"`).
 - `superchat-response-timeout` — silence window for each provider attempt (default 120 seconds, adjusted in tool mode).
-- `superchat-response-hard-timeout` — aggregate transport limit across attempts (default 600 seconds).
+- `superchat-response-timeout-hard-limit` — optional aggregate transport limit across attempts, in seconds. Default nil: no such limit (it was 600 until 2026-09-19).
 - `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — tool round budget and its boundary action (default 12 / `ask`).
 - `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
@@ -448,7 +448,7 @@ Run `/models` to see available models. Use `/refresh-models` to reload from the 
 
 **Tool calls timing out**
 
-Each provider attempt gets its own silence window: 120 seconds by default, multiplied by 1.5 in tool mode and adjusted for context. New text, reasoning and tool progress refresh that window; an earlier preamble does not disable later protection. `superchat-response-hard-timeout` separately limits the whole transport conversation to 600 seconds, and Runtime may impose its own Run deadline. Explicit human input suspends its transport clock balances. If an individual attempt is genuinely slow, configure the silence window, for example `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`. These timers do not preempt synchronous Lisp; see [model progress and tool budgets](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets).
+Each provider attempt gets its own silence window: 120 seconds by default, multiplied by 1.5 in tool mode and adjusted for context. New text, reasoning and tool progress refresh that window; an earlier preamble does not disable later protection. There is no cumulative limit on the whole transport conversation by default; `superchat-response-timeout-hard-limit` can set one. The Run deadline (`superchat-runtime-default-deadline`, 1800 seconds) bounds the whole Run and counts the time you take to answer an approval question; while such a question is open the silence window is stopped, and if the Run ends with the question still open, the question is dismissed and you are told the call was not run. If an individual attempt is genuinely slow, configure the silence window, for example `(setq superchat-response-timeout 300 superchat-tool-timeout-multiplier 1.2)`. These timers do not preempt synchronous Lisp; see [model progress and tool budgets](docs/protocols/request-lifecycle.md#model-progress-and-tool-budgets).
 
 **Tool round limit reached**
 

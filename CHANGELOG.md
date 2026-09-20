@@ -4,6 +4,21 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- `superchat-response-timeout-hard-limit` now defaults to nil: there is no
+  cumulative 600-second limit on a tool conversation any more.  A Run is still
+  bounded by the per-attempt inactivity timeout, the tool round budget and the
+  Run deadline (1800 s, which counts the time a person takes to answer).  Under
+  the default permission level the time spent reading approval questions could
+  use the old limit up and end the Run with a question still open.  Set a
+  positive integer to get the old behaviour back.  The option and its clock
+  machinery remain in the code; removing them is a separate item.
+- An approval question no longer outlives its Run.  When the Run ends while a
+  question is open -- its deadline passed, it was cancelled elsewhere -- the
+  question is dismissed without a key press, the user is told that the call was
+  not run, and the decision is recorded as cancelled because the Run ended
+  (distinct from the user's own `C-g`).  Before, the question stayed on screen
+  and answering it did nothing.
+
 - `/changes` and the Run-end reminder recognize the buffer a tool edited by a
   mark on the buffer itself, not by the name and file recorded at the time.
   Before, after the edited buffer was renamed, an unrelated buffer that took

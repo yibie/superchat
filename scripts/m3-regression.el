@@ -2224,11 +2224,16 @@ decides this, so Closure's guard is switched off where it still exists."
                  (superchat-runtime-default-deadline (m3a-deadline ending))
                  (superchat-approval-function
                   (lambda (_request)
-                    (if (eq ending 'timed-out)
-                        (sleep-for 1.5)
-                      (m3a-end run ending))
-                    (setq ended-while-asking
-                          (superchat-runtime--terminal-p (m3r-status run)))
+                    ;; Observed on the way out, however the answerer leaves:
+                    ;; since 2026-09-19 a question is given up the moment its
+                    ;; Run ends, so under `timed-out' this answerer is
+                    ;; abandoned inside the sleep and never returns.
+                    (unwind-protect
+                        (if (eq ending 'timed-out)
+                            (sleep-for 1.5)
+                          (m3a-end run ending))
+                      (setq ended-while-asking
+                            (superchat-runtime--terminal-p (m3r-status run))))
                     t)))
             (m3a-with-tools (("m3a-asks" :function (lambda () (cl-incf ran) "ran")
                               :description "m3a approval"))
