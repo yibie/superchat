@@ -146,17 +146,18 @@ other context fields captured at Run start."
   (and (boundp 'superchat--session-id) superchat--session-id))
 
 (defun superchat--agent-render-buffer (target-buffer &optional session-id)
-  "Return exact TARGET-BUFFER when its View still corresponds to SESSION-ID.
+  "Return exact TARGET-BUFFER when it is a chat View for SESSION-ID.
 SESSION-ID is captured when wrapping, never derived from the current View.
-Nil context and non-chat borrowed buffers keep their legacy presentation."
+A non-chat host buffer (inline, Org Babel, Magit) is never written to; its
+tool calls are on the Tape."
   (and (bufferp target-buffer)
        (buffer-live-p target-buffer)
+       (local-variable-p 'superchat-mode target-buffer)
+       (buffer-local-value 'superchat-mode target-buffer)
        (or (null session-id)
-           (not (local-variable-p 'superchat-mode target-buffer))
-           (not (buffer-local-value 'superchat-mode target-buffer))
            (not (local-variable-p 'superchat--session-id target-buffer))
-           (let ((current (buffer-local-value 'superchat--session-id target-buffer)))
-             (or (null current) (equal session-id current))))
+           (equal session-id
+                  (buffer-local-value 'superchat--session-id target-buffer)))
        target-buffer))
 
 (defun superchat--agent-render-tool-call

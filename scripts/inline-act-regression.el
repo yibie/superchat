@@ -1,0 +1,157 @@
+;;; inline-act-regression.el --- M8 inline-act regression -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;;
+;; Offline coverage for M8 slice 1: the `inline-act' row, its entry point,
+;; the envelope it submits, and in-place progress in the overlay header.
+;; A tool Turn started at point edits the source buffer and reports in the
+;; overlay; the chat window is never opened.
+;;
+;; This standalone suite reuses canonical smoke helpers as a library.  It
+;; neither loads nor modifies the leader-owned M3/M5 sets, and needs no scratch
+;; files.  All model calls are scripted; no user configuration is evaluated.
+;;
+;; Run from the repository root with an existing prepared dependency directory:
+;;
+;;   emacs -Q --batch \
+;;     --eval '(progn (require (quote package)) (setq package-user-dir "/path/to/prepared/elpa" native-comp-enable-subr-trampolines nil) (package-initialize))' \
+;;     -L . -L plugins/superchat-cowork-telega \
+;;     -l scripts/inline-act-regression.el \
+;;     --eval '(ert-run-tests-batch-and-exit "^inline-act/")'
+
+;;; Code:
+
+(require 'ert)
+(require 'cl-lib)
+(require 'subr-x)
+
+(when (getenv "SMOKE_REAL")
+  (error "Inline act regression tests are offline; unset SMOKE_REAL"))
+
+(defvar smoke-library-only)
+(setq smoke-library-only t)
+(load (expand-file-name "smoke.el"
+                        (file-name-directory (or load-file-name buffer-file-name)))
+      nil t)
+
+(setq print-circle t
+      ert-batch-print-level 6
+      ert-batch-print-length 16
+      ert-batch-backtrace-right-margin 160)
+
+(defmacro inline-act--fixture (script &rest body)
+  "Run BODY with SCRIPT through the canonical isolated product fixture."
+  (declare (indent 1) (debug t))
+  `(let ((superchat-runtime--session-queues (make-hash-table :test #'equal))
+         (superchat-runtime--queue-timers (make-hash-table :test #'equal))
+         (superchat-event-faults nil)
+         (superchat-llm-reasoning nil)
+         (superchat-llm-tool-names superchat-llm-default-tool-names)
+         (superchat-llm-tools-list nil))
+     (smoke--with-fixture ,script ,@body)))
+
+(defun inline-act--state (overlay)
+  "Return OVERLAY's inline state plist."
+  (overlay-get overlay 'superchat-inline))
+
+(defun inline-act--settle (overlay)
+  "Wait until OVERLAY's Run is terminal; return its run id."
+  (should (smoke--wait
+           (lambda () (plist-get (inline-act--state overlay) :run-id))
+           10))
+  (let ((run (plist-get (inline-act--state overlay) :run-id)))
+    (should (smoke--wait
+             (lambda ()
+               (superchat-runtime--terminal-p
+                (plist-get (superchat-runtime-status run) :status)))
+             20))
+    run))
+
+(defun inline-act--edit-round (buffer-name old new)
+  "A script step calling `edit_buffer' on BUFFER-NAME replacing OLD by NEW."
+  `(:tool-uses (("edit_buffer" (buffer_name . ,buffer-name)
+                 (old_string . ,old) (new_string . ,new)))))
+
+(defun inline-act--edit-script (buffer-name)
+  "A script: edit BUFFER-NAME, then answer text."
+  (list (inline-act--edit-round buffer-name "alpha" "beta")
+        '(:text "Done.")))
+
+(defun inline-act--request-tools ()
+  "Tool names of the chronologically first provider request of the fixture."
+  (plist-get (car (last smoke--requests)) :tools))
+
+;;;; Row and surface
+
+(ert-deftest inline-act/row/is-in-default-profile-and-registers-surface ()
+  "The default profile resolves the `inline-act' row and the row owns its surface."
+  (should (memq 'inline-act (superchat-profile-rows)))
+  (should (memq 'inline-act superchat-pipeline--surfaces)))
+
+(ert-deftest inline-act/row/entry-point-refuses-without-row ()
+  "Without its row, the entry point refuses and submits nothing."
+  (inline-act--fixture nil
+    (let ((mounted (superchat-plugin-row-active-p 'inline-act)))
+      (unwind-protect
+          (progn
+            (superchat-plugin-unmount 'inline-act)
+            (with-temp-buffer
+              (insert "some text")
+              (let ((refusal (error-message-string
+                              (should-error (superchat-inline-act "hello")))))
+                (should (string-match-p "inline-act" refusal))
+                (should (string-match-p "profile" refusal))))
+            (should-not smoke--requests))
+        (when mounted (superchat-plugin-mount 'inline-act))))))
+
+;;;; A tool Turn from the source buffer
+
+(ert-deftest inline-act/run/edit-lands-in-the-buffer-and-overlay-is-ready ()
+  "A scripted tool Turn edits the source buffer and reports in the overlay.
+No chat buffer is created: the whole Run stays in the source buffer."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let* ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (should (smoke--wait
+                   (lambda ()
+                     (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+          (should (equal "beta\n" (buffer-string)))
+          (should (eq 'ready (plist-get (inline-act--state overlay) :status)))
+          (should (equal "Done." (plist-get (inline-act--state overlay) :text)))
+          (should-not (get-buffer superchat-buffer-name)))))))
+
+(ert-deftest inline-act/run/request-carries-the-default-tool-baseline ()
+  "The Run's provider request offers the default baseline, not inline-ask's four."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (let ((tools (inline-act--request-tools)))
+            (should (member "edit_buffer" tools))
+            (should (member "read_buffer" tools))))))))
+
+(ert-deftest inline-act/run/status-header-shows-working-during-a-tool-call ()
+  "The row installs the header advice; a `working' state shows Working."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (should (advice-member-p #'superchat-inline-act--status-header
+                                   'superchat-inline--status-header))
+          (should (string-match-p
+                   "Working"
+                   (superchat-inline--status-header '(:status working))))
+          (should (eq 'ready (plist-get (inline-act--state overlay) :status))))))))
+
+(provide 'inline-act-regression)
+;;; inline-act-regression.el ends here

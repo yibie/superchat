@@ -39,6 +39,7 @@
 (declare-function superchat-handoff--context-budget-exceeded "superchat-compact")
 
 (declare-function superchat-inline--collect-reference "superchat-inline")
+(declare-function superchat-inline-act--install-header-advice "superchat-inline-act" ())
 (declare-function superchat-register-surface "superchat-pipeline" (symbol))
 
 ;; These surface rows declare no `:inject': their `:apply' only loads code and
@@ -54,6 +55,14 @@ Call time needs Services `driver' and `view'."
            (superchat-context-register 'inline-reference
                                        #'superchat-inline--collect-reference
                                        :owner 'inline)))
+
+(superchat-define-plugin inline-act
+  :doc "Inline act: surface `inline-act`, a full tool Turn reported in an overlay at point.
+Call time needs Services `driver' and `view'."
+  :apply (lambda (_scope _config)
+           (require 'superchat-inline-act)
+           (superchat-register-surface 'inline-act)
+           (superchat-inline-act--install-header-advice)))
 
 (superchat-define-plugin inline-rewrite
   :doc "Inline rewrite: surface `inline-rewrite` and command loading.

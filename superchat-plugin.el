@@ -238,7 +238,7 @@ Without an applying Scope, return UNDO unchanged."
     tools-baseline prompt-assembler chat-collectors
     chat-commands chat-turn-recorder chat-run-notices changes chat
     editor-workspace change-set
-    inline-ask inline-rewrite org-babel magit emacsclient
+    inline-ask inline-act inline-rewrite org-babel magit emacsclient
     memory experience plan agents-panel compact
     subagent workflow workspace)
   "The `default' profile's one row layer, mounted when Superchat loads.
@@ -257,6 +257,7 @@ Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
                (chat-collectors . :disabled)
                (inline . :disabled)
                (inline-ask . :disabled)
+               (inline-act . :disabled)
                (inline-rewrite . :disabled)
                (org-babel . :disabled)
                (magit . :disabled)
