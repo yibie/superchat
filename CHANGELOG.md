@@ -4,6 +4,14 @@ All notable changes to superchat.
 
 ## Unreleased — fixes
 
+- Installing with `package.el` no longer reports a byte-compile error in the
+  bundled Telega plugin (`Cannot open load file:
+  superchat-cowork-telega-legacy`): the plugin's session file now finds its
+  sibling when it is compiled on its own.  `superchat-pkg.el` declares the same
+  requirements as the `superchat.el` header (Emacs 29.1, llm 0.31.1).
+- Removed the user option `superchat-completion-check-delay`.  Nothing read it;
+  a configuration that sets it is unaffected.
+
 - `superchat-response-timeout-hard-limit` now defaults to nil: there is no
   cumulative 600-second limit on a tool conversation any more.  A Run is still
   bounded by the per-attempt inactivity timeout, the tool round budget and the
