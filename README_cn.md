@@ -144,7 +144,7 @@ User: 代码生成应该怎么设置 temperature？
 User: >code-review #src/utils.el
 ```
 
-预制的技能文件存放在 `skills/*.md`。内置技能包括 `code-review`、`planning`、`refactor`。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
+预制的技能文件存放在 `skills/*.md`。内置技能有 `code-review`、`planning`、`refactor` 和 `render-ui`（`render_ui` 工具的生成式界面语法）。和所有技能一样，它们通过 Preset 或 `>名字` 使用。编写自己的技能请参考 [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md)。
 
 在 prompt 中输入 `/` 会打开实时命令补全，候选来自实际用于分发的内置和已注册命令，例如 `/workflow`、`/code`、`/research`、`/cowork`、`/single`、`/permissions`。内置恢复复查命令不提供；只读报表 `M-x superchat-experience-monitor` 与 Experience 恢复路径保留。精确删除范围和旧记录保留规则见 [M3a 决策](docs/decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)。
 

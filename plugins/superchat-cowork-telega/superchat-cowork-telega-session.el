@@ -19,7 +19,17 @@
 (require 'superchat-render)
 (require 'superchat-runtime)
 (require 'superchat-tape)
-(require 'superchat-cowork-telega-legacy)
+;; The bundle lives in a subdirectory that is not on `load-path': the entry
+;; file binds it while loading, but this file is also byte-compiled on its own
+;; when the package is installed, so it finds its sibling itself.
+(eval-and-compile
+  ;; `macroexp-file-name' names THIS file whether it is being loaded or
+  ;; compiled; `load-file-name' can be some other file that is loading while
+  ;; this one is compiled (a script that installs the package, for one).
+  (let ((load-path
+         (cons (file-name-directory (or (macroexp-file-name) buffer-file-name))
+               load-path)))
+    (require 'superchat-cowork-telega-legacy)))
 
 (defvar telega-chatbuf--chat)
 

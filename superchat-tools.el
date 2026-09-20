@@ -1257,7 +1257,7 @@ Position defaults to the source buffer recorded by send-region/defun."
           "No hover information")))))
 
 ;;;---------------------------------------------
-;;; Tool List (llm.el) — replaces gptel-tools
+;;; Tool List (llm.el)
 ;;;---------------------------------------------
 
 (defvar superchat-llm-tools-list nil

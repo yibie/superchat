@@ -43,7 +43,7 @@ If BACKEND is nil, check the current `superchat-llm-backend'."
 
 (defcustom superchat-manual-models nil
   "Manually configured list of available models.
-If set, this list will be used instead of trying to get models from gptel.
+If set, this list is used instead of asking the configured llm.el provider.
 Example: (\"gpt-4\" \"gpt-3.5-turbo\" \"claude-3-opus\" \"qwen3-coder:30b-a3b-q8_0\")"
   :type '(repeat string)
   :group 'superchat

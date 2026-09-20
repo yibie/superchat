@@ -147,7 +147,7 @@ relevant terms.
 User: >code-review #src/utils.el
 ```
 
-Pre-written skills live in `skills/*.md`. Built-in skills include `code-review`, `planning`, and `refactor`. See [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) to write your own.
+Pre-written skills live in `skills/*.md`. Built-in skills are `code-review`, `planning`, `refactor` and `render-ui` (the generative-UI syntax for the `render_ui` tool). Like every skill they are applied through a Preset or `>name`. See [docs/SKILLS_QUICKSTART.md](docs/SKILLS_QUICKSTART.md) to write your own.
 
 **6. Work inside your own buffers** (no chat window needed)
 

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; This file provides a general-purpose, standalone chat view for interacting
-;; with LLMs via gptel. It is completely independent of org-supertag.
+;; with LLMs through llm.el.  It is completely independent of org-supertag.
 ;; It includes a command system for custom prompts and session-saving features.
 
 ;; Version: 1.4.0
@@ -262,7 +262,9 @@ Set to nil to keep all messages."
 
 ;; --- Inline File Context Options ---
 (defcustom superchat-inline-file-content t
-  "Whether to inline file contents into the prompt in addition to gptel context."
+  "Whether the text of a `#file' attachment is put into the prompt.
+When nil the file is still tracked for the Session but its body is not sent,
+and the user is told so."
   :type 'boolean
   :group 'superchat)
 
@@ -315,28 +317,6 @@ Set to nil to always inline up to `superchat-inline-max-bytes'."
 (declare-function superchat--llm-tool-error-feedback "superchat-llm" (result))
 (declare-function superchat--llm-tool-error-non-retryable-p "superchat-llm" (result))
 (declare-function llm-chat-prompt-append-response "llm" (prompt response &optional role))
-
-(defcustom superchat-completion-check-delay 2
-  "Time in seconds to wait for new data before considering response complete.
-
-This is used for smart completion detection, primarily for non-streaming
-responses (e.g., Ollama + tools mode). If no new data arrives within this
-time, the response is considered complete.
-
-Background:
-- gptel disables streaming for Ollama + tools (see gptel-request.el:2019)
-- Ollama's tool calling streaming has known issues (ollama/ollama#12557)
-- This setting provides a balance between responsiveness and reliability
-
-Recommended values:
-- 1-2 seconds: Fast completion, suitable for local models
-- 3-5 seconds: More conservative, for slower connections
-- Higher values: For very slow networks or complex tool calls
-
-Note: This only affects non-streaming responses. Normal streaming responses
-complete immediately via the standard completion signal."
-  :type 'integer
-  :group 'superchat)
 
 (defcustom superchat-show-response-mode t
   "Whether to display response mode indicator.
@@ -2933,15 +2913,15 @@ extension is in `superchat-default-file-extensions`. Hidden files are skipped."
 
 ;; --- Context Management ---
 (defvar superchat--current-context-files nil
-  "List of files currently added to gptel context for this session.")
+  "Files attached to this Session with `#file', sent again with later prompts.")
 
 (defun superchat--add-file-to-context (file-path)
   "Track FILE-PATH on the current buffer's `superchat--current-context-files',
 but only when the current buffer is a live `superchat-mode' View, and
 always buffer-locally there.  Returns non-nil only when it actually
 tracked the file.
-Note: We no longer call gptel-context-add-file directly due to gptel issue #572.
-Instead, files are passed to gptel-request via the :context parameter.
+The list is only bookkeeping: the prompt hooks read it and put the files' text
+into each later prompt.
 
 Anywhere else — a caller outside any View (`superchat-dired-send' and
 `superchat-embark-file-send' both `with-current-buffer' the destination
@@ -2966,7 +2946,7 @@ receives the file's content regardless of where this function runs."
   "Clear all files added to context during this session."
   (interactive)
   (when superchat--current-context-files
-    ;; Clear our tracking list (no need to call gptel-context-remove since we use :context parameter)
+    ;; Only our own tracking list holds them; nothing else has to be told.
     (setq superchat--current-context-files nil)
     (message "superchat: Session context cleared")))
 
