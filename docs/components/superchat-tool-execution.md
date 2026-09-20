@@ -1,13 +1,13 @@
 ---
-description: "The tool execution pipeline: the one seam every model-invoked tool call crosses. It checks identity and liveness, asks the Session's permission level for a decision, sends an `ask` to the approval seam, wraps and filters the call with the three `tools/*` waterfalls, and records every step on the Tape. The file keeps its historical name; the Authority decision machine it used to hold was removed in M6."
+description: "The tool execution pipeline: the one seam every model-invoked tool call crosses. It checks identity and liveness, asks the Session's permission level for a decision, sends an `ask` to the approval seam, wraps and filters the call with the three `tools/*` waterfalls, and records every step on the Tape. Until 2026-09-20 the file was `superchat-authority.el`; the Authority decision machine it used to hold was removed in M6."
 kind: "reference"
 ---
 
-# superchat-authority
+# superchat-tool-execution
 
 ## Summary
 
-Use this component to run a model-invoked tool call. `superchat-tool-execute` is the one execution seam: it refuses a call whose Run or installation is no longer live, asks the Session's permission level whether the call may run, sends an `ask` to the approval seam, runs the body at most once inside the `tools/execute` waterfall, filters the result through `tools/post-execute`, and appends the audit rows. It does **not** decide who may run what: [`superchat-sandbox.el`](../../superchat-sandbox.el) decides (permission levels) and [`superchat-approval.el`](../../superchat-approval.el) asks. Until M6 this file also held Authority — effect resolvers, named policies, an approval hash and preview registry; all of that is deleted ([decision record](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md)). The file name is historical.
+Use this component to run a model-invoked tool call. `superchat-tool-execute` is the one execution seam: it refuses a call whose Run or installation is no longer live, asks the Session's permission level whether the call may run, sends an `ask` to the approval seam, runs the body at most once inside the `tools/execute` waterfall, filters the result through `tools/post-execute`, and appends the audit rows. It does **not** decide who may run what: [`superchat-sandbox.el`](../../superchat-sandbox.el) decides (permission levels) and [`superchat-approval.el`](../../superchat-approval.el) asks. Until M6 this file also held Authority — effect resolvers, named policies, an approval hash and preview registry; all of that is deleted ([decision record](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md)). Until 2026-09-20 the file was named `superchat-authority.el`.
 
 ## Table of contents
 
@@ -135,7 +135,7 @@ Indirectly: a refusal or a tool result is appended to the conversation, so it ex
 - The target checks live in Superchat's own write tools. Code the model runs through `eval_elisp` or a shell is not fenced in; that is why those tools are asked about on every call rather than classified.
 - A listener that answers without delegating ends the `tools/pre-execute` chain, so a listener after it is never consulted: there is no deny-beats-allow rule *between listeners*. Listener order follows the Scope merge; only the fixed level stage is guaranteed to run.
 - The Experience guard blocks by tool name from a request-local View; it is not a permission rule and no level relaxes it.
-- The file and its `superchat-authority--` prefix are historical; renaming them is a separate change.
+- The file and its symbols were renamed from `superchat-authority` on 2026-09-20; no compatibility aliases were kept, because nothing outside this repository used them.
 
 ### Dev note
 

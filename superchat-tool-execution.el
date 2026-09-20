@@ -1,4 +1,4 @@
-;;; superchat-authority.el --- The tool execution pipeline -*- lexical-binding: t; -*-
+;;; superchat-tool-execution.el --- The tool execution pipeline -*- lexical-binding: t; -*-
 
 ;; This file is in the public domain.
 
@@ -8,8 +8,9 @@
 ;; context plist; identity and liveness, validation, the block check, Tape
 ;; ordering and result delivery stay local to this module.  Who may run what
 ;; is not decided here: the permission level (`superchat-sandbox.el') decides
-;; and the approval seam (`superchat-approval.el') asks.  The file keeps its
-;; historical name.
+;; and the approval seam (`superchat-approval.el') asks.  Until 2026-09-20
+;; this file was `superchat-authority.el'; the Authority decision machine it
+;; once held was removed in M6.
 
 ;;; Code:
 
@@ -51,13 +52,13 @@ is how the unsaved-changes list knows a Run's targets without a ledger of its
 own.  Code run through `eval_elisp' does not set it: what that changes is not
 attributed.")
 
-(defconst superchat-authority-transport-timer-owner-unavailable
+(defconst superchat-tool-execution-transport-timer-owner-unavailable
   :superchat-transport-timer-owner-unavailable
   "Marker for a Runtime Run that no longer owns transport timers.")
 
-(defun superchat-authority-transport-timer-owner (&optional context)
+(defun superchat-tool-execution-transport-timer-owner (&optional context)
   "Resolve CONTEXT's opaque transport timer owner.
-Return `superchat-authority-transport-timer-owner-unavailable' when CONTEXT
+Return `superchat-tool-execution-transport-timer-owner-unavailable' when CONTEXT
 identifies a Runtime Run whose owner is absent.  Return nil only when there is
 no Runtime Run identity, preserving the legacy non-Runtime hook behavior.
 When CONTEXT is nil, use `superchat--tool-execution-context'."
@@ -71,21 +72,21 @@ When CONTEXT is nil, use `superchat--tool-execution-context'."
       (or (and (fboundp 'superchat-runtime-transport-timer-owner)
                (ignore-errors
                  (superchat-runtime-transport-timer-owner run-id)))
-          superchat-authority-transport-timer-owner-unavailable))
+          superchat-tool-execution-transport-timer-owner-unavailable))
      (t nil))))
 
-(defgroup superchat-authority nil
+(defgroup superchat-tool-execution nil
   "The tool execution pipeline."
   :group 'superchat)
 
-(defvar superchat-authority--tool-installation nil
+(defvar superchat-tool-execution--tool-installation nil
   "Private Scope installation captured from this materialized tool function.
 
 It is process-local and dynamically bound only while Authority executes or
 settles that exact tool invocation.  It is never copied into an Envelope,
 Tape event, or public Run status.")
 
-(defun superchat-authority--installation-from-function (function)
+(defun superchat-tool-execution--installation-from-function (function)
   "Return FUNCTION's private materialized tool installation, if any.
 
 Plugin tools use an uninterned callable symbol whose property carries the
@@ -96,20 +97,20 @@ its implementation with a later same-name resolver or approval preview."
   (and (symbolp function)
        (get function 'superchat-tools--installation)))
 
-(defun superchat-authority--plist-p (value)
+(defun superchat-tool-execution--plist-p (value)
   "Return non-nil when VALUE looks like a plist."
   (and (consp value)
        (cl-evenp (length value))
        (cl-loop for (key _value) on value by #'cddr
                 always (keywordp key))))
 
-(defun superchat-authority--alist-p (value)
+(defun superchat-tool-execution--alist-p (value)
   "Return non-nil when VALUE looks like an alist."
   (and (consp value)
        (cl-every (lambda (item) (and (consp item) (not (listp (car item)))))
                  value)))
 
-(defun superchat-authority--snapshot-value (value)
+(defun superchat-tool-execution--snapshot-value (value)
   "Return a detached copy of mutable JSON-like VALUE."
   (cond
    ((stringp value) (copy-sequence value))
@@ -117,65 +118,65 @@ its implementation with a later same-name resolver or approval preview."
     (let ((copy (make-hash-table :test (hash-table-test value))))
       (maphash
        (lambda (key item)
-         (puthash (superchat-authority--snapshot-value key)
-                  (superchat-authority--snapshot-value item)
+         (puthash (superchat-tool-execution--snapshot-value key)
+                  (superchat-tool-execution--snapshot-value item)
                   copy))
        value)
       copy))
    ((vectorp value)
     (apply #'vector
-           (mapcar #'superchat-authority--snapshot-value (append value nil))))
+           (mapcar #'superchat-tool-execution--snapshot-value (append value nil))))
    ((consp value)
-    (cons (superchat-authority--snapshot-value (car value))
-          (superchat-authority--snapshot-value (cdr value))))
+    (cons (superchat-tool-execution--snapshot-value (car value))
+          (superchat-tool-execution--snapshot-value (cdr value))))
    (t value)))
 
-(defun superchat-authority--visible-tool-installation (tool-name &optional scope)
+(defun superchat-tool-execution--visible-tool-installation (tool-name &optional scope)
   "Return live Scope tool installation TOOL-NAME visible from SCOPE."
   (let ((installation
          (superchat-scope-lookup
           (superchat-execution-scope-resolve scope) 'tool tool-name)))
     (and (plist-get installation :live) installation)))
 
-(defun superchat-authority--installation-active-p (tool-name)
+(defun superchat-tool-execution--installation-active-p (tool-name)
   "Whether the captured materialized TOOL-NAME installation is still current.
 
 Built-ins and direct legacy Authority callers carry no installation and retain
 their established behavior.  A plugin descriptor must still be the exact
 nearest Scope installation when it reaches Authority; an old descriptor after
 withdrawal or replacement therefore cannot start a new tool body."
-  (let ((installation superchat-authority--tool-installation))
+  (let ((installation superchat-tool-execution--tool-installation))
     (or (null installation)
         (and (equal tool-name (plist-get installation :name))
              (plist-get installation :live)
              (eq installation
-                 (superchat-authority--visible-tool-installation tool-name))))))
+                 (superchat-tool-execution--visible-tool-installation tool-name))))))
 
-(defun superchat-authority--execution-id ()
+(defun superchat-tool-execution--execution-id ()
   "Return a request-local tool execution identifier."
   (format "tool-%s-%06x"
           (format-time-string "%Y%m%dT%H%M%S%3N" nil t)
           (random #x1000000)))
 
-(defun superchat-authority--experience-block-reason (tool-name context)
+(defun superchat-tool-execution--experience-block-reason (tool-name context)
   "Return a denial reason when a blocked Experience View owns TOOL-NAME.
 
 The dependency list is explicit request policy.  A blocked View never blocks
 unrelated tools, and Authority does not infer dependencies from Candidate text
 or from the model prompt."
   (let* ((envelope (plist-get context :context-envelope))
-         (view (and (superchat-authority--plist-p envelope)
+         (view (and (superchat-tool-execution--plist-p envelope)
                     (plist-get envelope :experience-view)))
-         (policy (and (superchat-authority--plist-p envelope)
+         (policy (and (superchat-tool-execution--plist-p envelope)
                       (plist-get envelope :experience-action-policy)))
-         (status (and (superchat-authority--plist-p view)
+         (status (and (superchat-tool-execution--plist-p view)
                       (plist-get view :status)))
-         (kind (and (superchat-authority--plist-p policy)
+         (kind (and (superchat-tool-execution--plist-p policy)
                     (plist-get policy :kind)))
-         (phase (and (superchat-authority--plist-p policy)
+         (phase (and (superchat-tool-execution--plist-p policy)
                      (plist-get policy :phase)))
          (dependent-tools
-          (and (superchat-authority--plist-p policy)
+          (and (superchat-tool-execution--plist-p policy)
                (plist-get policy :dependent-tools)))
          (name (if (symbolp tool-name)
                    (symbol-name tool-name)
@@ -197,7 +198,7 @@ or from the model prompt."
         (format "Experience View is blocked; dependent action %s is not authorized"
                 name)))))
 
-(defun superchat-authority--event-base (type context payload &optional summary)
+(defun superchat-tool-execution--event-base (type context payload &optional summary)
   "Build a Runtime event of TYPE from CONTEXT and PAYLOAD."
   (let ((event
          (list :type type
@@ -212,13 +213,13 @@ or from the model prompt."
         (setq event (plist-put event key (plist-get context key)))))
     event))
 
-(defun superchat-authority--append-event
+(defun superchat-tool-execution--append-event
     (type tool-name context payload &optional summary requires-payload
           return-record)
   "Append a tool event and return its logical event identity."
-  (superchat-authority--require-current-evidence-origin context)
+  (superchat-tool-execution--require-current-evidence-origin context)
   (let* ((event
-          (superchat-authority--event-base
+          (superchat-tool-execution--event-base
            type context
            (append (list :tool-name tool-name) payload)
            (or summary (format "%s: %s" type tool-name))))
@@ -233,7 +234,7 @@ or from the model prompt."
         (append event record)
       (plist-get record :event-id))))
 
-(defun superchat-authority--evidence-fields (context)
+(defun superchat-tool-execution--evidence-fields (context)
   "Return attempt provenance fields from eligible tool CONTEXT."
   (when (plist-get context :evidence-contract)
     (list :evidence-contract (plist-get context :evidence-contract)
@@ -243,7 +244,7 @@ or from the model prompt."
           :tool-call-id (plist-get context :tool-call-id)
           :tool-call-ordinal (plist-get context :tool-call-ordinal))))
 
-(defun superchat-authority--exact-fields (label value)
+(defun superchat-tool-execution--exact-fields (label value)
   "Return exact JSON receipt fields for LABEL and VALUE."
   (let ((receipt (superchat-tape-exact-json value)))
     (when (> (plist-get receipt :size) superchat-tape-max-inline-bytes)
@@ -252,7 +253,7 @@ or from the model prompt."
           (intern (format ":%s-size" label)) (plist-get receipt :size)
           (intern (format ":%s-hash" label)) (plist-get receipt :hash))))
 
-(defun superchat-authority--require-current-evidence-origin (context)
+(defun superchat-tool-execution--require-current-evidence-origin (context)
   "Signal when eligible CONTEXT no longer names the active provider attempt."
   (when (plist-get context :evidence-contract)
     (let ((attempt (plist-get context :evidence-attempt))
@@ -264,7 +265,7 @@ or from the model prompt."
                    (funcall validator attempt snapshot-id))
         (error "Tool evidence origin is missing, stale, or mismatched")))))
 
-(defun superchat-authority--validated-evidence-action
+(defun superchat-tool-execution--validated-evidence-action
     (tool-name args context)
   "Return exact action receipt for TOOL-NAME ARGS and eligible CONTEXT."
   (when-let* ((contract (plist-get context :evidence-contract)))
@@ -283,15 +284,15 @@ or from the model prompt."
                    (equal tool-name call-name)
                    (listp call-args))
         (error "Tool evidence origin is missing, stale, or mismatched"))
-      (superchat-authority--require-current-evidence-origin context)
-      (superchat-authority--exact-fields
+      (superchat-tool-execution--require-current-evidence-origin context)
+      (superchat-tool-execution--exact-fields
        "arguments"
        (list :tool-name tool-name
              :call-id call-id
              :named-arguments (copy-tree call-args t)
              :positional-arguments (vconcat (copy-tree args t)))))))
 
-(defun superchat-authority--result-fingerprint (result)
+(defun superchat-tool-execution--result-fingerprint (result)
   "Return bounded identity metadata for RESULT."
   (let* ((printed (prin1-to-string result))
          (encoded (encode-coding-string printed 'utf-8)))
@@ -299,11 +300,11 @@ or from the model prompt."
           :result-hash
           (concat "sha256:" (secure-hash 'sha256 encoded)))))
 
-(defun superchat-authority--run-hooks (event &rest args)
+(defun superchat-tool-execution--run-hooks (event &rest args)
   "Emit tool lifecycle EVENT with ARGS."
   (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
 
-(defun superchat-authority--filter-result (tool-name args result)
+(defun superchat-tool-execution--filter-result (tool-name args result)
   "Return RESULT as the post-execution stage leaves it.
 That stage is the `tools/post-execute' waterfall: a
 listener may replace a string result, or block it, which turns the listener's
@@ -312,7 +313,7 @@ feedback into an error result."
     (let ((outcome (superchat-emit
                     (superchat-execution-scope-resolve nil) 'tools/post-execute
                     (list :tool-name tool-name
-                          :args (superchat-authority--snapshot-value args)
+                          :args (superchat-tool-execution--snapshot-value args)
                           :result result :kind 'accept))))
       (cond
        ((superchat-waterfall-refused-p outcome)
@@ -325,7 +326,7 @@ feedback into an error result."
        ((stringp (plist-get outcome :result)) (plist-get outcome :result))
        (t result)))))
 
-(defun superchat-authority--implementation-receipt (result)
+(defun superchat-tool-execution--implementation-receipt (result)
   "Return bounded receipt metadata distinct from a delivered Result."
   (let* ((printed (prin1-to-string result))
          (encoded (encode-coding-string printed 'utf-8)))
@@ -333,21 +334,21 @@ feedback into an error result."
           :implementation-result-hash
           (concat "sha256:" (secure-hash 'sha256 encoded)))))
 
-(defun superchat-authority--notify-failure (tool-name args err)
+(defun superchat-tool-execution--notify-failure (tool-name args err)
   "Notify failure hooks with detached ARGS and ERR."
-  (superchat-authority--run-hooks
+  (superchat-tool-execution--run-hooks
    'tool-failed
    tool-name
-   (superchat-authority--snapshot-value args)
-   (superchat-authority--snapshot-value err)))
+   (superchat-tool-execution--snapshot-value args)
+   (superchat-tool-execution--snapshot-value err)))
 
-(defun superchat-authority--deliver (async callback result)
+(defun superchat-tool-execution--deliver (async callback result)
   "Return or asynchronously deliver RESULT."
   (if async
       (progn (funcall callback result) nil)
     result))
 
-(defun superchat-authority--run-active-p (context)
+(defun superchat-tool-execution--run-active-p (context)
   "Return whether the Runtime owning CONTEXT still accepts tool work.
 
 Contexts from non-Runtime callers omit `:run-active-p' and retain the
@@ -362,12 +363,12 @@ tool implementation."
              (funcall predicate)
              (error nil))))))
 
-(defun superchat-authority--execution-active-p (tool-name context)
+(defun superchat-tool-execution--execution-active-p (tool-name context)
   "Return whether TOOL-NAME may still begin native execution for CONTEXT."
-  (and (superchat-authority--run-active-p context)
-       (superchat-authority--installation-active-p tool-name)))
+  (and (superchat-tool-execution--run-active-p context)
+       (superchat-tool-execution--installation-active-p tool-name)))
 
-(defun superchat-authority--note-runtime-work (context execution-id action)
+(defun superchat-tool-execution--note-runtime-work (context execution-id action)
   "Report ACTION for EXECUTION-ID to Runtime when Runtime is available.
 The call is a no-op outside a Runtime-provided Run context, in any process
 where `superchat-runtime.el' is not loaded, or with a malformed identity."
@@ -379,28 +380,28 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     (funcall #'superchat-runtime--note-open-work
              (plist-get context :run-id) execution-id action)))
 
-(defun superchat-authority--inactive-result (tool-name)
+(defun superchat-tool-execution--inactive-result (tool-name)
   "Return the truthful refusal text for inactive TOOL-NAME."
-  (if (superchat-authority--installation-active-p tool-name)
+  (if (superchat-tool-execution--installation-active-p tool-name)
       "[Tool call blocked: Run is no longer active]"
     "[Tool call blocked: Tool is no longer available]"))
 
-(defun superchat-authority--record-inactive-fault
+(defun superchat-tool-execution--record-inactive-fault
     (tool-name context execution-id)
   "Diagnose an execution gate without fabricating an Effect disposition."
   (superchat-event-record-fault
-   'tool-liveness execution-id 'authority
+   'tool-liveness execution-id 'tool-execution
    (list :tool tool-name :run-id (plist-get context :run-id)
-         :reason (if (superchat-authority--installation-active-p tool-name)
+         :reason (if (superchat-tool-execution--installation-active-p tool-name)
                      'run-inactive
                    'installation-inactive))))
 
-(defun superchat-authority--record-failure
+(defun superchat-tool-execution--record-failure
     (tool-name context execution-id status
                &optional result exact-error metadata)
   "Record a failed or refused tool execution."
   (let ((record
-         (superchat-authority--append-event
+         (superchat-tool-execution--append-event
           "tool.failed" tool-name context
           (append
            (list :execution-id execution-id
@@ -410,12 +411,12 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
              (list :block-reason block-reason))
            (when-let* ((error-type (plist-get exact-error :error-type)))
              (list :error-type error-type))
-           (superchat-authority--evidence-fields context)
+           (superchat-tool-execution--evidence-fields context)
            (when (plist-get context :evidence-contract)
-             (superchat-authority--exact-fields
+             (superchat-tool-execution--exact-fields
               "error" (or exact-error (list :status status :result result)))))
           nil (and (plist-get context :evidence-contract) t) t)))
-    (superchat-authority--note-runtime-work
+    (superchat-tool-execution--note-runtime-work
      context execution-id 'effect-settled)
     (unless (equal "user-quit" (plist-get metadata :interruption))
       (when-let* ((callback (plist-get context :failure-recorded-function)))
@@ -436,13 +437,13 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                              :error exact-error))
             (error
              (display-warning
-              'superchat-authority
+              'superchat-tool-execution
               (format "Tool failure observer failed: %s"
                       (error-message-string err))
               :warning))))))
     record))
 
-(defun superchat-authority--handle-quit
+(defun superchat-tool-execution--handle-quit
     (condition tool-name args context execution-id phase
                &optional implementation-returned-p implementation-result
                outcome-durable failure-status)
@@ -453,7 +454,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
       (condition-case audit-condition
           (progn
             (setq failure-record
-                  (superchat-authority--record-failure
+                  (superchat-tool-execution--record-failure
                    tool-name context execution-id
                    (or failure-status "failed")
                    "[Tool call interrupted by user]"
@@ -465,7 +466,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                     (when (equal phase "implementation")
                       (list :effects-may-be-partial t))
                     (when implementation-returned-p
-                      (superchat-authority--implementation-receipt
+                      (superchat-tool-execution--implementation-receipt
                        implementation-result)))))
             (setq audit-ok t))
         ((error quit)
@@ -478,7 +479,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                ((error quit) nil)))))))
     (when failure-record
       (condition-case nil
-          (superchat-authority--notify-failure tool-name args condition)
+          (superchat-tool-execution--notify-failure tool-name args condition)
         ((error quit) nil)))
     (when audit-ok
       (when-let* ((interrupt (plist-get context :interrupt-function)))
@@ -488,29 +489,29 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
             ((error quit) nil)))))
     (signal (car condition) (cdr condition))))
 
-(defun superchat-authority--finish-success
+(defun superchat-tool-execution--finish-success
     (tool-name args result context execution-id async callback)
   "Filter, audit, and deliver successful RESULT."
   (let* ((evidence (plist-get context :evidence-contract))
          (completed-record nil)
-         (result (superchat-authority--snapshot-value result))
+         (result (superchat-tool-execution--snapshot-value result))
          (audit
          (condition-case err
              (progn
-               (superchat-authority--require-current-evidence-origin context)
+               (superchat-tool-execution--require-current-evidence-origin context)
                ;; Reject sensitive raw results before compatibility hooks can
                ;; render or copy them outside the exact-evidence seam.
                (when evidence
-                 (superchat-authority--exact-fields
+                 (superchat-tool-execution--exact-fields
                   "result" (list :result result)))
                (setq result
-                     (superchat-authority--filter-result
+                     (superchat-tool-execution--filter-result
                       tool-name args result))
                ;; Detach from filter-owned data before persistence and
                ;; provider delivery on both ordinary and exact paths.
-               (setq result (superchat-authority--snapshot-value result))
+               (setq result (superchat-tool-execution--snapshot-value result))
                (setq completed-record
-                     (superchat-authority--append-event
+                     (superchat-tool-execution--append-event
                       "tool.completed" tool-name context
                       (append
                        (list :execution-id execution-id
@@ -520,13 +521,13 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                          (append (list :buffer name)
                                  (when (plist-get target :file)
                                    (list :buffer-file (plist-get target :file)))))
-                       (superchat-authority--result-fingerprint result)
-                       (superchat-authority--evidence-fields context)
+                       (superchat-tool-execution--result-fingerprint result)
+                       (superchat-tool-execution--evidence-fields context)
                        (when evidence
-                         (superchat-authority--exact-fields
+                         (superchat-tool-execution--exact-fields
                           "result" (list :result result))))
                       nil (and evidence t) t))
-               (superchat-authority--note-runtime-work
+               (superchat-tool-execution--note-runtime-work
                 context execution-id 'effect-settled)
                ;; Runtime owns recovery state.  Notify it only after the
                ;; durable success event exists; a bookkeeping failure must not
@@ -538,31 +539,31 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                        (funcall
                         observer
                         (list :tool-name tool-name
-                              :args (superchat-authority--snapshot-value args)
-                              :result (superchat-authority--snapshot-value
+                              :args (superchat-tool-execution--snapshot-value args)
+                              :result (superchat-tool-execution--snapshot-value
                                        result)
                               :event completed-record
                               :execution-id execution-id))
                      (error
                       (display-warning
-                       'superchat-authority
+                       'superchat-tool-execution
                        (format "Tool completion observer failed: %s"
                                (error-message-string err))
                        :warning)))))
-               (superchat-authority--run-hooks
+               (superchat-tool-execution--run-hooks
                  'tool-after
                   tool-name args
-                  (superchat-authority--snapshot-value result)
+                  (superchat-tool-execution--snapshot-value result)
                   (and (listp context) (plist-get context :run-id)))
-               (superchat-authority--require-current-evidence-origin context)
+               (superchat-tool-execution--require-current-evidence-origin context)
                'complete)
            (error (cons 'failed err))
            (quit
-            (superchat-authority--handle-quit
+            (superchat-tool-execution--handle-quit
              err tool-name args context execution-id
              "result-processing" t result (and completed-record t))))))
     (if (eq audit 'complete)
-        (superchat-authority--deliver async callback result)
+        (superchat-tool-execution--deliver async callback result)
       (let* ((evidence (plist-get context :evidence-contract))
              (err (cdr audit))
              (failure
@@ -578,9 +579,9 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
               ;; Runtime has closed the Run and cancelled its provider request.
               ;; A delayed async callback would only reopen the transport path.
               (unless async failure))
-          (superchat-authority--deliver async callback failure))))))
+          (superchat-tool-execution--deliver async callback failure))))))
 
-(defun superchat-authority--finish-error
+(defun superchat-tool-execution--finish-error
     (tool-name args err context execution-id async callback)
   "Audit ERR from TOOL-NAME and deliver a model-readable failure."
   (let* ((message (error-message-string err))
@@ -592,20 +593,20 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
          (audit
           (condition-case audit-err
               (progn
-                (superchat-authority--require-current-evidence-origin context)
-                (superchat-authority--record-failure
+                (superchat-tool-execution--require-current-evidence-origin context)
+                (superchat-tool-execution--record-failure
                  tool-name context execution-id
                  "failed" result exact-error)
-                (superchat-authority--notify-failure tool-name args err)
-                (superchat-authority--require-current-evidence-origin context)
+                (superchat-tool-execution--notify-failure tool-name args err)
+                (superchat-tool-execution--require-current-evidence-origin context)
                 'complete)
             (quit
-             (superchat-authority--handle-quit
+             (superchat-tool-execution--handle-quit
               audit-err tool-name args context execution-id
               "result-processing" nil nil t))
             (error (cons 'failed audit-err)))))
     (if (eq audit 'complete)
-        (superchat-authority--deliver async callback result)
+        (superchat-tool-execution--deliver async callback result)
       (let* ((audit-err (cdr audit))
              (failure
               (if (plist-get context :evidence-contract)
@@ -620,9 +621,9 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                audit-failure audit-err
                "[Tool error withheld because exact audit failed]")
               (unless async failure))
-          (superchat-authority--deliver async callback failure))))))
+          (superchat-tool-execution--deliver async callback failure))))))
 
-(defun superchat-authority--normalize-tool-result (value)
+(defun superchat-tool-execution--normalize-tool-result (value)
   "Normalize textual tool results at the shared execution seam.
 A byte-level read (e.g. coding-system-for-read bound to binary) or an
 encoding artifact leaves raw bytes inside a tool result string, and
@@ -646,7 +647,7 @@ renderer, and the provider.  Non-string values pass through."
           (error value))
       value)))
 
-(defun superchat-authority--input-read-receipt (expected)
+(defun superchat-tool-execution--input-read-receipt (expected)
   "Read the exact stored EXPECTED input outcome, rejecting any conflict.
 Ordinary results have a fingerprint, not durable raw result text."
   (let* ((events (superchat-tape-replay-events (plist-get expected :session-id)))
@@ -672,7 +673,7 @@ Ordinary results have a fingerprint, not durable raw result text."
           (error "Input receipt has no stored identity"))
         actual))))
 
-(defun superchat-authority--make-human-input-operation (run-id token)
+(defun superchat-tool-execution--make-human-input-operation (run-id token)
   "Create the built-in operation for one accepted Run; no reverse require.
 The native callback is intentionally not used to acknowledge waiting."
   (lambda (_done question)
@@ -685,7 +686,7 @@ The native callback is intentionally not used to acknowledge waiting."
         (error "Invalid trusted human input invocation"))
       (superchat-runtime--request-input capability (list :question question)))))
 
-(defun superchat-authority--make-input-settlement
+(defun superchat-tool-execution--make-input-settlement
     (tool-name args context execution-id callback)
   "Create the NONSHIPPING invocation's single settlement capability."
   (let (claim expected receipt (receipt-state 'not-attempted)
@@ -694,7 +695,7 @@ The native callback is intentionally not used to acknowledge waiting."
       (pcase operation
         ('snapshot
          (list :claim claim :receipt-state receipt-state
-               :receipt (superchat-authority--snapshot-value receipt)
+               :receipt (superchat-tool-execution--snapshot-value receipt)
                :delivery delivery :fault fault
                :run-id (plist-get context :run-id)
                :session-id (plist-get context :session-id)
@@ -704,18 +705,18 @@ The native callback is intentionally not used to acknowledge waiting."
            ;; Claim is the only winner, and precedes every callback/append.
            (setq claim (car values) fault 'prepare)
            (unless (memq claim '(answer failed)) (error "Invalid input outcome"))
-           (setq result (superchat-authority--snapshot-value
-                         (superchat-authority--normalize-tool-result (cadr values))))
+           (setq result (superchat-tool-execution--snapshot-value
+                         (superchat-tool-execution--normalize-tool-result (cadr values))))
            (when (eq claim 'answer)
-             (setq result (superchat-authority--snapshot-value
-                           (superchat-authority--filter-result tool-name args result))))
-           (let* ((event (superchat-authority--event-base
+             (setq result (superchat-tool-execution--snapshot-value
+                           (superchat-tool-execution--filter-result tool-name args result))))
+           (let* ((event (superchat-tool-execution--event-base
                           (if (eq claim 'answer) "tool.completed" "tool.failed") context
                           (append
                            (list :tool-name tool-name :execution-id execution-id
                                  :status (if (eq claim 'answer) "succeeded" "failed"))
                            (if (eq claim 'answer)
-                               (superchat-authority--result-fingerprint result)
+                               (superchat-tool-execution--result-fingerprint result)
                              (list :error-type "input-stopped" :reason result)))))
                   (payload (superchat-tape--encoded-payload (plist-get event :payload))))
              (when (plist-get payload :omitted) (error "Input receipt payload omitted"))
@@ -732,11 +733,11 @@ The native callback is intentionally not used to acknowledge waiting."
                ;; A real append can commit and then signal.  Never infer
                ;; absence from its nonlocal exit or attempt another outcome.
                (condition-case nil
-                   (setq receipt (superchat-authority--input-read-receipt expected)
+                   (setq receipt (superchat-tool-execution--input-read-receipt expected)
                          receipt-state (if receipt 'committed 'absent))
                  ((error quit) (setq receipt-state 'unknown))))
              (unless (eq receipt-state 'committed) (error "Input receipt not verifiable"))
-             (superchat-authority--note-runtime-work
+             (superchat-tool-execution--note-runtime-work
               context execution-id 'effect-settled)
              (setq fault 'observer)
              (if (eq claim 'answer)
@@ -745,7 +746,7 @@ The native callback is intentionally not used to acknowledge waiting."
                      (funcall observer
                               (list :tool-name tool-name :args args :result result
                                     :event receipt :execution-id execution-id)))
-                   (superchat-authority--run-hooks
+                   (superchat-tool-execution--run-hooks
                     'tool-after
                     tool-name args result
                     (and (listp context) (plist-get context :run-id))))
@@ -756,7 +757,7 @@ The native callback is intentionally not used to acknowledge waiting."
         ('deliver
          (when (and (eq claim 'answer) (eq receipt-state 'committed)
                     (eq delivery 'not-started)
-                    (superchat-authority--run-active-p context))
+                    (superchat-tool-execution--run-active-p context))
            (setq delivery 'entered)
            (condition-case condition
                (prog1 (funcall callback result) (setq delivery 'returned))
@@ -765,31 +766,31 @@ The native callback is intentionally not used to acknowledge waiting."
               (signal (car condition) (cdr condition))))))
         (_ (error "Unknown input settlement operation"))))))
 
-(defun superchat-authority--invoke-async
+(defun superchat-tool-execution--invoke-async
     (tool-name original-fn args context execution-id callback)
   "Invoke asynchronous ORIGINAL-FN once and account for its outcome."
   (if (and (plist-get context :input-core-token)
            (equal tool-name (plist-get context :input-core-tool-name)))
       (let* ((execution-scope (superchat-execution-scope-resolve nil))
-             (installation superchat-authority--tool-installation)
-             (capability (superchat-authority--make-input-settlement
+             (installation superchat-tool-execution--tool-installation)
+             (capability (superchat-tool-execution--make-input-settlement
                           tool-name args context execution-id callback))
              (superchat--tool-execution-context
-              (plist-put (superchat-authority--snapshot-value context)
+              (plist-put (superchat-tool-execution--snapshot-value context)
                          :input-settlement capability)))
         (let ((superchat-execution-scope execution-scope)
-              (superchat-authority--tool-installation installation))
+              (superchat-tool-execution--tool-installation installation))
           (apply original-fn
                  (lambda (value)
                    (let ((superchat-execution-scope execution-scope)
-                         (superchat-authority--tool-installation installation))
+                         (superchat-tool-execution--tool-installation installation))
                      (when (funcall capability 'settle 'answer value)
                        (funcall capability 'deliver))))
                  args)))
-    (superchat-authority--invoke-async-default
+    (superchat-tool-execution--invoke-async-default
      tool-name original-fn args context execution-id callback)))
 
-(defun superchat-authority--invoke-async-default
+(defun superchat-tool-execution--invoke-async-default
     (tool-name original-fn args context execution-id callback)
   "Preserve the ordinary async execution and consumer condition contract."
   (let ((completed nil)
@@ -797,12 +798,12 @@ The native callback is intentionally not used to acknowledge waiting."
         ;; callback must therefore carry the invocation's borrowed Scope now,
         ;; rather than attempt to recover it from a terminal Run later.
         (execution-scope (superchat-execution-scope-resolve nil))
-        (installation superchat-authority--tool-installation))
+        (installation superchat-tool-execution--tool-installation))
     (condition-case condition
         (let ((superchat-execution-scope execution-scope)
-              (superchat-authority--tool-installation installation)
+              (superchat-tool-execution--tool-installation installation)
               (superchat--tool-execution-context
-               (superchat-authority--snapshot-value context)))
+               (superchat-tool-execution--snapshot-value context)))
           (apply
            original-fn
            (cons
@@ -810,43 +811,43 @@ The native callback is intentionally not used to acknowledge waiting."
               (unless completed
                 (setq completed t)
                 (let ((superchat-execution-scope execution-scope)
-                      (superchat-authority--tool-installation installation))
+                      (superchat-tool-execution--tool-installation installation))
                   ;; A genuine late result is a fact about an already-entered
                   ;; Effect.  Do not recheck installation liveness here: the
                   ;; invocation gate already prevented new work, while this
                   ;; completion must still settle truthful residual evidence.
-                  (superchat-authority--finish-success
+                  (superchat-tool-execution--finish-success
                    tool-name args
-                   (superchat-authority--normalize-tool-result result)
+                   (superchat-tool-execution--normalize-tool-result result)
                    context execution-id t callback))))
             args)))
       (error
        (unless completed
          (setq completed t)
-         (superchat-authority--finish-error
+         (superchat-tool-execution--finish-error
           tool-name args condition context execution-id
           t callback)))
       (quit
        (unless completed
          (setq completed t)
-         (superchat-authority--handle-quit
+         (superchat-tool-execution--handle-quit
           condition tool-name args context execution-id
           "implementation"))
        (signal (car condition) (cdr condition))))))
 
-(defun superchat-authority--invoke-sync
+(defun superchat-tool-execution--invoke-sync
     (tool-name original-fn args context execution-id )
   "Invoke synchronous ORIGINAL-FN once and account for its outcome."
   (let ((outcome
          (condition-case condition
              (let ((superchat-execution-scope
                     (superchat-execution-scope-resolve nil))
-                   (superchat-authority--tool-installation
-                    superchat-authority--tool-installation)
+                   (superchat-tool-execution--tool-installation
+                    superchat-tool-execution--tool-installation)
                    (superchat--tool-execution-context
-                    (superchat-authority--snapshot-value context))
+                    (superchat-tool-execution--snapshot-value context))
                    (superchat-tool-mutation-target nil))
-               (let ((value (superchat-authority--normalize-tool-result
+               (let ((value (superchat-tool-execution--normalize-tool-result
                              (apply original-fn args))))
                  (when superchat-tool-mutation-target
                    (setq context
@@ -855,16 +856,16 @@ The native callback is intentionally not used to acknowledge waiting."
                  (cons 'ok value)))
            (error (cons 'error condition))
            (quit
-            (superchat-authority--handle-quit
+            (superchat-tool-execution--handle-quit
              condition tool-name args context execution-id
              "implementation")))))
     (if (eq (car outcome) 'ok)
-        (superchat-authority--finish-success
+        (superchat-tool-execution--finish-success
          tool-name args (cdr outcome) context execution-id nil nil)
-      (superchat-authority--finish-error
+      (superchat-tool-execution--finish-error
        tool-name args (cdr outcome) context execution-id nil nil))))
 
-(defun superchat-authority--invoke
+(defun superchat-tool-execution--invoke
     (tool-name original-fn args context execution-id
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
@@ -878,8 +879,8 @@ the call is then recorded as blocked, never as started, and delivered once.
 Trusted human input and a call whose Run is no longer live keep the plain
 path."
   (if (or (and (plist-get context :input-core-token) (equal tool-name "ask_user"))
-          (not (superchat-authority--execution-active-p tool-name context)))
-      (superchat-authority--invoke-body
+          (not (superchat-tool-execution--execution-active-p tool-name context)))
+      (superchat-tool-execution--invoke-body
        tool-name original-fn args context execution-id
        async callback refuse)
     (let* ((started nil)
@@ -888,7 +889,7 @@ path."
             (let ((superchat-event-waterfall-terminal
                    (lambda (call)
                      (setq started t
-                           returned (superchat-authority--invoke-body
+                           returned (superchat-tool-execution--invoke-body
                                      tool-name original-fn args context
                                      execution-id
                                      async callback refuse))
@@ -896,7 +897,7 @@ path."
               (superchat-emit
                (superchat-execution-scope-resolve nil) 'tools/execute
                (list :tool-name tool-name
-                     :args (superchat-authority--snapshot-value args)
+                     :args (superchat-tool-execution--snapshot-value args)
                      :session-id (plist-get context :session-id)
                      :run-id (plist-get context :run-id))))))
       (if started
@@ -908,68 +909,68 @@ path."
                          (superchat-waterfall-refusal-reason answer)))
                 ((stringp (plist-get answer :result)) (plist-get answer :result))
                 (t "[Tool call blocked: a tools/execute listener ended the call without a result]"))))
-          (superchat-authority--record-failure
+          (superchat-tool-execution--record-failure
            tool-name context execution-id "blocked" result)
           (if refuse
               (funcall refuse result)
-            (superchat-authority--deliver async callback result)))))))
+            (superchat-tool-execution--deliver async callback result)))))))
 
-(defun superchat-authority--invoke-body
+(defun superchat-tool-execution--invoke-body
     (tool-name original-fn args context execution-id
                async callback &optional refuse)
   "Invoke ORIGINAL-FN after the authority and audit gates.
 REFUSE, when supplied, delivers a preexecution liveness refusal."
-  (if (not (superchat-authority--execution-active-p tool-name context))
-      (let ((result (superchat-authority--inactive-result tool-name)))
+  (if (not (superchat-tool-execution--execution-active-p tool-name context))
+      (let ((result (superchat-tool-execution--inactive-result tool-name)))
         ;; Losing execution authority is not an Effect disposition.  Preserve
         ;; unresolved Tape evidence and diagnose without fabricating a failure.
-        (superchat-authority--record-inactive-fault
+        (superchat-tool-execution--record-inactive-fault
          tool-name context execution-id)
         (if refuse
             (funcall refuse result)
-          (superchat-authority--deliver async callback result)))
+          (superchat-tool-execution--deliver async callback result)))
     (progn
       ;; Persist before any compatibility hook or tool code can produce
       ;; effects.  An inactive Run returned above no longer needs an evidence
       ;; origin check because it cannot reach ORIGINAL-FN.
-      (superchat-authority--require-current-evidence-origin context)
-      (superchat-authority--note-runtime-work context execution-id 'effect-entered)
+      (superchat-tool-execution--require-current-evidence-origin context)
+      (superchat-tool-execution--note-runtime-work context execution-id 'effect-entered)
       (let* ((started-id
-              (superchat-authority--append-event
+              (superchat-tool-execution--append-event
                "tool.execution.started" tool-name context
                (list :execution-id execution-id
                      :status "executing")))
              (context
               (plist-put (copy-sequence context) :causation-id started-id)))
       (condition-case condition
-          (superchat-authority--run-hooks
+          (superchat-tool-execution--run-hooks
            'tool-before
-           tool-name (superchat-authority--snapshot-value args)
+           tool-name (superchat-tool-execution--snapshot-value args)
            (and (listp context) (plist-get context :run-id)))
         (quit
-         (superchat-authority--handle-quit
+         (superchat-tool-execution--handle-quit
           condition tool-name args context execution-id "pre")))
-      (superchat-authority--require-current-evidence-origin context)
-      (if (or (not (superchat-authority--execution-active-p tool-name context))
+      (superchat-tool-execution--require-current-evidence-origin context)
+      (if (or (not (superchat-tool-execution--execution-active-p tool-name context))
               (and (plist-get context :input-core-token)
                    (equal tool-name "ask_user")
                    (not (superchat-runtime--trusted-input-operation-p
                          context original-fn async))))
           (let* ((human-input (and (equal tool-name "ask_user") (plist-get context :input-operation)))
                  (result (if human-input "[Human input adapter is no longer available]"
-                           (superchat-authority--inactive-result tool-name))))
+                           (superchat-tool-execution--inactive-result tool-name))))
             ;; The trusted input operation has not run.  Its admitted failure
             ;; is truthful, but a failed receipt must never reach native done.
             ;; Ordinary late-work accounting keeps its existing behavior.
             (let (audit-condition)
               (if (and human-input
-                       (superchat-authority--execution-active-p tool-name context))
+                       (superchat-tool-execution--execution-active-p tool-name context))
                   (condition-case condition
-                      (superchat-authority--record-failure
+                      (superchat-tool-execution--record-failure
                        tool-name context execution-id "failed" result
                        '(:error-type "input-adapter-unavailable"))
                     ((error quit) (setq audit-condition condition)))
-                (superchat-authority--record-inactive-fault
+                (superchat-tool-execution--record-inactive-fault
                  tool-name context execution-id))
               (if audit-condition
                   (unwind-protect
@@ -978,12 +979,12 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
                     (when (eq (car audit-condition) 'quit)
                       (signal (car audit-condition) (cdr audit-condition))))
                 (if refuse (funcall refuse result)
-                  (superchat-authority--deliver async callback result)))))
+                  (superchat-tool-execution--deliver async callback result)))))
         (if async
-            (superchat-authority--invoke-async
+            (superchat-tool-execution--invoke-async
              tool-name original-fn args context execution-id
              callback)
-          (superchat-authority--invoke-sync
+          (superchat-tool-execution--invoke-sync
            tool-name original-fn args context execution-id )))))))
 
 ;;;###autoload
@@ -1001,15 +1002,15 @@ that must be asked about goes to the approval seam."
   ;; A withdrawn proxy is intentionally no longer `functionp', but still
   ;; carries its revoked identity so the initial liveness gate can return the
   ;; ordinary refusal rather than accidentally treating it as legacy.
-  (let* ((superchat-authority--tool-installation
-          (superchat-authority--installation-from-function original-fn))
+  (let* ((superchat-tool-execution--tool-installation
+          (superchat-tool-execution--installation-from-function original-fn))
          (session-id (plist-get context :session-id))
          refusal-delivery-started
          (refuse (lambda (result)
                    (setq refusal-delivery-started t)
-                   (superchat-authority--deliver async callback result))))
+                   (superchat-tool-execution--deliver async callback result))))
     (unless (or (functionp original-fn)
-                superchat-authority--tool-installation)
+                superchat-tool-execution--tool-installation)
       (error "Tool %s has no callable implementation" tool-name))
     (unless (listp args)
       (error "Tool %s arguments must be a list" tool-name))
@@ -1019,17 +1020,17 @@ that must be asked about goes to the approval seam."
       (error "Tool execution requires context :session-id"))
     ;; A first arrival on a terminal Run, or through a revoked materialized
     ;; installation, was never admitted to execution audit.
-    (unless (superchat-authority--execution-active-p tool-name context)
+    (unless (superchat-tool-execution--execution-active-p tool-name context)
       (cl-return-from superchat-tool-execute
-        (superchat-authority--deliver
-         async callback (superchat-authority--inactive-result tool-name))))
+        (superchat-tool-execution--deliver
+         async callback (superchat-tool-execution--inactive-result tool-name))))
     ;; ── before the decision: normalize only, never decide ─────────────
     ;; Liveness, identity, argument normalization and the block check all
     ;; live here; none returns a verdict.
     (condition-case outer-err
-        (let* ((provider-args (superchat-authority--snapshot-value args))
+        (let* ((provider-args (superchat-tool-execution--snapshot-value args))
                (evidence-action
-                (superchat-authority--validated-evidence-action
+                (superchat-tool-execution--validated-evidence-action
                  tool-name provider-args context))
                (context
                 (if evidence-action
@@ -1041,7 +1042,7 @@ that must be asked about goes to the approval seam."
                (args (if (functionp normalizer)
                          (funcall normalizer args)
                        args))
-               (args (superchat-authority--snapshot-value args))
+               (args (superchat-tool-execution--snapshot-value args))
                (context
                 (plist-put (copy-sequence context)
                            :recovery-failure-args
@@ -1053,14 +1054,14 @@ that must be asked about goes to the approval seam."
                (validator (plist-get context :validate))
                (_ (when (functionp validator)
                     (funcall validator
-                             (superchat-authority--snapshot-value args))))
+                             (superchat-tool-execution--snapshot-value args))))
                (input-candidate (equal tool-name "ask_user"))
                (trusted-input
                 (and input-candidate
                      (fboundp 'superchat-runtime--trusted-input-operation-p)
                      (superchat-runtime--trusted-input-operation-p context original-fn async)))
                (experience-block
-                (superchat-authority--experience-block-reason
+                (superchat-tool-execution--experience-block-reason
                  tool-name context))
                ;; ── blocks: reasons a call cannot run whatever the level ──
                (block-reason
@@ -1107,23 +1108,23 @@ that must be asked about goes to the approval seam."
                (disposition
                 (when input-candidate (format "human-input-v1:%s" decision)))
                (execution-id (or (plist-get context :execution-id)
-                                 (superchat-authority--execution-id)))
+                                 (superchat-tool-execution--execution-id)))
                (_request-active
-                (superchat-authority--require-current-evidence-origin context))
+                (superchat-tool-execution--require-current-evidence-origin context))
                (_admission-active
                 ;; Normalizers, validators and `tools/pre-execute' listeners
                 ;; may cancel a Run or withdraw this materialized
                 ;; installation.  Recheck before persisting/starting any new
                 ;; native work.
-                (unless (superchat-authority--execution-active-p tool-name context)
+                (unless (superchat-tool-execution--execution-active-p tool-name context)
                   (cl-return-from superchat-tool-execute
                     (funcall refuse
-                             (superchat-authority--inactive-result
+                             (superchat-tool-execution--inactive-result
                               tool-name)))))
                ;; ── body: entered only after the decision is well-formed ─
                ;; `tool.requested' is already on the Tape (invariant 3).
                (requested-id
-                (superchat-authority--append-event
+                (superchat-tool-execution--append-event
                  "tool.requested" tool-name context
                  (append
                   (list :execution-id execution-id
@@ -1132,7 +1133,7 @@ that must be asked about goes to the approval seam."
                   (when disposition (list :disposition disposition))
                   (when block-reason
                     (list :block-reason block-reason))
-                  (superchat-authority--evidence-fields context)
+                  (superchat-tool-execution--evidence-fields context)
                   evidence-action)
                  nil (and evidence-action t)))
                (_
@@ -1141,7 +1142,7 @@ that must be asked about goes to the approval seam."
                                         :evidence-action-recorded-function)))
                   (funcall recorded)))
                (_render-active
-                (superchat-authority--require-current-evidence-origin context))
+                (superchat-tool-execution--require-current-evidence-origin context))
                (context
                 (plist-put
                  (copy-sequence context) :causation-id requested-id)))
@@ -1150,14 +1151,14 @@ that must be asked about goes to the approval seam."
           (cond
            (blocked
             (let ((result (format "[Tool call blocked: %s]" block-reason)))
-              (superchat-authority--record-failure
+              (superchat-tool-execution--record-failure
                tool-name context execution-id "blocked" result)
               (funcall refuse result)))
            ((eq decision 'deny)
             (let ((result (format "[Tool call denied: %s]"
                                   (or (plist-get level :reason)
                                       "the permission level does not grant it"))))
-              (superchat-authority--record-failure
+              (superchat-tool-execution--record-failure
                tool-name context execution-id "denied" result)
               (funcall refuse result)))
            ((eq decision 'ask)
@@ -1185,13 +1186,13 @@ that must be asked about goes to the approval seam."
                         (superchat-approval-outside-run
                          (list :outcome 'unavailable))
                         (quit
-                         (superchat-authority--handle-quit
+                         (superchat-tool-execution--handle-quit
                           condition tool-name args context
                           execution-id "approval"
                           nil nil nil "cancelled")))))
                    (outcome (plist-get answer :outcome)))
               (if (eq outcome 'allowed-once)
-                  (superchat-authority--invoke
+                  (superchat-tool-execution--invoke
                    tool-name original-fn (plist-get answer :args) context
                    execution-id async callback refuse)
                 (let ((refusal
@@ -1203,12 +1204,12 @@ that must be asked about goes to the approval seam."
                               "[Tool call denied: approval prompts are disabled in this session]"
                             "[Tool call cancelled by user]"))
                          (_ "[Tool call cancelled by user]"))))
-                  (superchat-authority--record-failure
+                  (superchat-tool-execution--record-failure
                    tool-name context execution-id
                    "cancelled" refusal)
                   (funcall refuse refusal)))))
            (t
-            (superchat-authority--invoke
+            (superchat-tool-execution--invoke
              tool-name original-fn args context execution-id
              async callback refuse))))
       (error
@@ -1228,8 +1229,8 @@ that must be asked about goes to the approval seam."
              (progn
                (funcall audit-failure outer-err failure)
                (unless async failure))
-           (superchat-authority--deliver async callback failure)))))))
+           (superchat-tool-execution--deliver async callback failure)))))))
 
-(provide 'superchat-authority)
+(provide 'superchat-tool-execution)
 
-;;; superchat-authority.el ends here
+;;; superchat-tool-execution.el ends here

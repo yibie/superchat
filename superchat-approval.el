@@ -21,7 +21,7 @@
 (declare-function superchat-runtime-effect-capable-p "superchat-runtime" (run-id))
 (declare-function superchat-runtime--note-open-work "superchat-runtime"
                   (run-id execution-id action))
-(declare-function superchat-authority-transport-timer-owner "superchat-authority"
+(declare-function superchat-tool-execution-transport-timer-owner "superchat-tool-execution"
                   (&optional context))
 (declare-function superchat--extend-timeout "superchat" (&optional transport-timer-owner))
 (declare-function superchat-llm--transport-timer-owner-suspend-wait "superchat-llm" (owner))
@@ -206,9 +206,9 @@ still answers there."
 
 (defun superchat-approval--transport-owner (run-id)
   "Return RUN-ID's transport timer owner, or nil."
-  (when (and run-id (fboundp 'superchat-authority-transport-timer-owner))
+  (when (and run-id (fboundp 'superchat-tool-execution-transport-timer-owner))
     (ignore-errors
-      (superchat-authority-transport-timer-owner (list :run-id run-id)))))
+      (superchat-tool-execution-transport-timer-owner (list :run-id run-id)))))
 
 (defun superchat-approval--suspend-wait (run-id)
   "Stop RUN-ID's inactivity clock while somebody decides; return a token.
@@ -228,10 +228,10 @@ A person reading the question is not a model making no progress."
 (defun superchat-approval--extend-wait (run-id)
   "Keep RUN-ID's transport wait alive while a human decides."
   (when (and (fboundp 'superchat--extend-timeout)
-             (fboundp 'superchat-authority-transport-timer-owner))
+             (fboundp 'superchat-tool-execution-transport-timer-owner))
     (ignore-errors
       (superchat--extend-timeout
-       (superchat-authority-transport-timer-owner (list :run-id run-id))))))
+       (superchat-tool-execution-transport-timer-owner (list :run-id run-id))))))
 
 ;;;; Request
 

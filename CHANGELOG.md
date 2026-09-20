@@ -2,6 +2,15 @@
 
 All notable changes to superchat.
 
+## Unreleased — renamed module
+
+- `superchat-authority.el` is now `superchat-tool-execution.el`, and every
+  symbol it defines changed prefix with it (`superchat-authority-…` →
+  `superchat-tool-execution-…`; the feature and the customization group too).
+  The file has held only the tool execution pipeline since M6.  No
+  compatibility aliases: the module had no user options and nothing outside the
+  repository used its symbols.  `superchat-tool-execute` keeps its name.
+
 ## Unreleased — fixes
 
 - Installing with `package.el` no longer reports a byte-compile error in the

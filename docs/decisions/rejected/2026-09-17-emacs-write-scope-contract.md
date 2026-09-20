@@ -6,7 +6,7 @@ Status: rejected — 2026-09-17 用户改选按 DeepSeek Harness 的方式替换
 
 M5 最终真实任务里，`superchat-act` 入口的模型在用户明确要求"不要修改这个文件"之后，仍然用 `edit_buffer` 加 `eval_elisp` 中的 `save-buffer` 改写并保存了来源文件 `work.el`（[验收记录](../../reports/2026-09-17-m5-execution-handoff.md)）。工具忠实执行了错误参数；撤销后恢复原状不能让这次越界变成合格。
 
-现有 [Authority](../../components/superchat-authority.md) 只看工具声明的 Effect：`edit_buffer`、`replace_buffer`、`append_to_buffer` 声明 `local-write buffer :scope <buffer 名>`，所以策略层能按名字拒绝；但 `eval_elisp` 只能声明 `process-exec emacs <表达式全文>`，`shell-command`/`eshell-command` 只能声明 `process-exec process <命令>`。一段 Lisp 或一条 shell 命令会碰哪个 buffer、哪个文件，Authority 在执行前不可能知道。自然语言的禁令不会自动变成机器可执行的规则；只拦 `edit_buffer` 的名字，或在 eval 文本里搜索路径，都挡不住 `(with-current-buffer (car (buffer-list)) (save-buffer))` 这类间接写法。
+现有 [Authority](../../components/superchat-tool-execution.md) 只看工具声明的 Effect：`edit_buffer`、`replace_buffer`、`append_to_buffer` 声明 `local-write buffer :scope <buffer 名>`，所以策略层能按名字拒绝；但 `eval_elisp` 只能声明 `process-exec emacs <表达式全文>`，`shell-command`/`eshell-command` 只能声明 `process-exec process <命令>`。一段 Lisp 或一条 shell 命令会碰哪个 buffer、哪个文件，Authority 在执行前不可能知道。自然语言的禁令不会自动变成机器可执行的规则；只拦 `edit_buffer` 的名字，或在 eval 文本里搜索路径，都挡不住 `(with-current-buffer (car (buffer-list)) (save-buffer))` 这类间接写法。
 
 同一次任务还暴露了答复无法核对的三个空白：模型说"已改"，但没有说改的是哪个对象；说"已保存"，但分不清只改了内存、已写入磁盘、还是已重新加载；说"已验证"，但没有说明验证做了哪些检查。这三个空白让人工审阅只能逐条对照 Tape，也让验收器只能靠外部后置条件判定。
 

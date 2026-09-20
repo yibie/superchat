@@ -12,7 +12,7 @@ Superchat is an Emacs-native chat and Agent Runtime, packaged as one Emacs Lisp 
 ## Locate the work
 
 - UI and producers: `superchat.el`, `superchat-dispatcher.el`, `superchat-inline.el`, `superchat-rewrite.el`; the full ownership map is in [architecture](docs/architecture.md#composition-and-ownership).
-- Execution: `superchat-runtime.el`; model adapter: `superchat-llm.el`; tool execution pipeline: `superchat-authority.el` (historical file name); permission levels: `superchat-sandbox.el`; approval: `superchat-approval.el`; selection: `superchat-select-tools.el`.
+- Execution: `superchat-runtime.el`; model adapter: `superchat-llm.el`; tool execution pipeline: `superchat-tool-execution.el`; permission levels: `superchat-sandbox.el`; approval: `superchat-approval.el`; selection: `superchat-select-tools.el`.
 - Composition: `superchat-plugin.el`, `superchat-service.el`, `superchat-event.el`, `superchat-invariant.el`, `superchat-sink.el`. `superchat-pipeline.el` also contains the product driver; it is not a product-free registry file.
 - Persistence/read models: `superchat-tape.el`, `superchat-db.el`, `superchat-projection.el`, `superchat-tape-view.el`. Keep DB storage, Tape facts and derived views distinct; recorded Run outcomes are consumed under the [request lifecycle contract](docs/protocols/request-lifecycle.md).
 - Find public commands with `rg -n ';;;###autoload' --glob '*.el'`; inspect Service and Event declarations in source rather than copying an inventory.

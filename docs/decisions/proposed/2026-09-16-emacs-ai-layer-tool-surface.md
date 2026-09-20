@@ -87,7 +87,7 @@ Omarchy 能预先规定自己的系统组件和配置布局；Superchat 面对�
 
 [渲染为普通函数的决定](../accepted/2026-09-16-rendering-is-a-function-not-a-service.md)提供同一取舍：没有真实替换或组合价值的共享函数保持普通函数。长时间运行的测试进程若需要统一的取消、超时与结果收取，可以形成有独立生命周期的接口；是否抽取，以真实消费者和责任为依据。
 
-所有模型调用沿用 [tools](../../components/superchat-tools.md) 与 [Authority](../../components/superchat-authority.md)。现有 explore/ask/execute 模式、敏感读取、上层 deny、合成工具批准规则保持各自语义。本提案不以“AI layer”目标自动批准无提示执行，也不增加第二个授权中心。
+所有模型调用沿用 [tools](../../components/superchat-tools.md) 与 [Authority](../../components/superchat-tool-execution.md)。现有 explore/ask/execute 模式、敏感读取、上层 deny、合成工具批准规则保持各自语义。本提案不以“AI layer”目标自动批准无提示执行，也不增加第二个授权中心。
 
 完整的实时 Elisp 访问属于对当前 Emacs 进程的信任。Authority 在入口判断模型工具是否可以运行，并不把任意获准 Lisp 隔离在一个文件范围内。不能同时宣传任意 Elisp 完全控制与同进程权限数据不可改写；需要严格受限的任务使用能实施该限制的动作或真正隔离的后端。
 

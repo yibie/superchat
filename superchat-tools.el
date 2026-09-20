@@ -23,7 +23,7 @@
 ;; Generated UI loads on the first `render_ui' call; see `superchat-tool-render-ui'.
 (defvar superchat-genui-buffer-name)
 (declare-function superchat-genui-render-form "superchat-genui" (form))
-(require 'superchat-authority)
+(require 'superchat-tool-execution)
 (require 'superchat-sandbox)
 (defvar superchat--tool-execution-context)
 (declare-function superchat-runtime--trusted-input-operation-p
@@ -82,7 +82,7 @@ instead of the chat buffer's directory.")
 (defun superchat-tools--extend-active-transport-wait ()
   "Extend the transport wait owned by the current tool's Runtime Run."
   (when (fboundp 'superchat--extend-timeout)
-    (superchat--extend-timeout (superchat-authority-transport-timer-owner))))
+    (superchat--extend-timeout (superchat-tool-execution-transport-timer-owner))))
 
 (defun superchat-tools--base-dir ()
   "Return the effective `default-directory' for tool operations.
@@ -2086,7 +2086,7 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
       descriptors #'superchat-tools-visible-descriptor-names
       materialize #'superchat-get-llm-tools
       execute (lambda (&rest args) (apply #'superchat-tool-execute args))
-      transport-timer-owner #'superchat-authority-transport-timer-owner))))
+      transport-timer-owner #'superchat-tool-execution-transport-timer-owner))))
 
 
 ;; ── Built-in tools as selectable descriptors ──

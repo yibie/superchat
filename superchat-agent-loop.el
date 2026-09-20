@@ -14,7 +14,7 @@
 (require 'cl-lib)
 (require 'superchat-event)
 (require 'superchat-preset)
-(require 'superchat-authority)
+(require 'superchat-tool-execution)
 (require 'superchat-runtime)
 (require 'superchat-editor-workspace)
 
@@ -124,7 +124,7 @@ other context fields captured at Run start."
 ;; The per-tool lifecycle Events (spec §1.5): `tool-before', `tool-after',
 ;; `tool-failed' observe a call; `tools/pre-execute', `tools/execute' and
 ;; `tools/post-execute' are the waterfalls that decide, wrap and filter it
-;; (see `superchat-authority.el').  Register listeners with `superchat-on'.
+;; (see `superchat-tool-execution.el').  Register listeners with `superchat-on'.
 
 (defun superchat--agent-run-tool-hooks (event &rest args)
   "Emit tool lifecycle EVENT with ARGS (listener errors are recorded, not raised)."
@@ -257,7 +257,7 @@ another owner's identical heading text the way a backward text search from
 
 Updates the matching pending `*** ⏳ NAME' heading (S21) in place to
 `*** ✓ NAME (D.Ds)' or `*** ✗ NAME (D.Ds)' -- a result starting with
-\"[Tool call\" (the family of markers `superchat-authority'/`superchat-
+\"[Tool call\" (the family of markers `superchat-tool-execution'/`superchat-
 llm' use for a blocked/failed/denied/cancelled call) counts as failure --
 and inserts the result block right after that same call's own args block,
 before whatever comes next (S21-fix-2, Spec 1): out-of-order completion of
@@ -324,7 +324,7 @@ The Authority seam already normalizes every executed result before it
 forks to Tape/rendering/provider; this wrapper-level call remains as a
 no-op safety net for results that pass through post-execution rewrite
 hooks.  Non-string values pass through untouched."
-  (superchat-authority--normalize-tool-result value))
+  (superchat-tool-execution--normalize-tool-result value))
 
 (defun superchat--agent-wrap-function
     (tool-name original-fn async &optional guardrails counter target-buffer

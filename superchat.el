@@ -29,7 +29,7 @@
 (require 'superchat-core)
 (require 'superchat-db)
 (require 'superchat-tape)
-(require 'superchat-authority)
+(require 'superchat-tool-execution)
 (require 'superchat-sandbox)
 (require 'superchat-changes)
 (require 'superchat-runtime)
@@ -2269,7 +2269,7 @@ hooks that have no Runtime Run identity."
              transport-timer-owner
              superchat--timeout-extension-amount))))))
    ((eq transport-timer-owner
-        superchat-authority-transport-timer-owner-unavailable)
+        superchat-tool-execution-transport-timer-owner-unavailable)
     nil)
    ((and superchat--active-timeout-timer
          (timerp superchat--active-timeout-timer)

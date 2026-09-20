@@ -19,7 +19,7 @@
 (require 'superchat-projection)
 (require 'json)
 (require 'superchat-preset)
-(require 'superchat-authority)
+(require 'superchat-tool-execution)
 (require 'superchat-sink)
 
 ;; External declarations

@@ -31,8 +31,9 @@ default's former name and still accepted) plus an approval policy (`ask`,
 tools exist.  Built-in tools edit ordinary buffers freely except under
 `read-only`, and never Superchat's own buffers; full-Emacs-control and
 third-party tools are asked about, refused or free by level.  A delegated child inherits its parent's
-mode with `never`.  It replaced Authority (effect policies) in M6; the file
-`superchat-authority.el` is now only the tool execution pipeline.
+mode with `never`.  It replaced Authority (effect policies) in M6; what was left of that module,
+the tool execution pipeline, is `superchat-tool-execution.el` (named
+`superchat-authority.el` until 2026-09-20).
 _Avoid_: Authority, authority policy, attendance
 
 **Session**:

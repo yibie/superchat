@@ -67,7 +67,7 @@ check that signals records `invariant.check-failed' and returns nil."
 ;;;; The six Invariants (spec §1.7) ---------------------------------------------
 ;; Checks are written against the seam arguments the Kernel-owned code passes
 ;; (see the `superchat-invariant-check' call sites in superchat-pipeline.el,
-;; superchat-runtime.el and superchat-authority.el).
+;; superchat-runtime.el and superchat-tool-execution.el).
 
 (superchat-invariant-define 'host-buffer-unchanged
   :seam 'terminal-delivery

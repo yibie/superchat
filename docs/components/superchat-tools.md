@@ -103,12 +103,12 @@ With `TOOL-NAMES` a list, it builds exactly that request-local profile and retur
 
 ### Executing a tool
 
-`tools execute` is `superchat-tool-execute`, whose contract is [superchat-authority](superchat-authority.md)'s. From this component's side two things matter:
+`tools execute` is `superchat-tool-execute`, whose contract is [superchat-tool-execution](superchat-tool-execution.md)'s. From this component's side two things matter:
 
 - The body runs only after the pipeline's admission, decision and (when asked) approval steps, so a registered function is never reached by a refused call.
 - Execution carries the Tape audit: a call needs the execution identity the audit checks, which Runtime's accepted execution context supplies. A caller outside an accepted Run gets a refusal instead of running a body.
 
-The pipeline's event types are defined once, in [superchat-authority](superchat-authority.md); this component appends none of them itself.
+The pipeline's event types are defined once, in [superchat-tool-execution](superchat-tool-execution.md); this component appends none of them itself.
 
 ### Built-in buffer names
 
@@ -140,7 +140,7 @@ Two registries meet in this component. The built-in tools are a fixed list mater
 
 ## Further exploration
 
-- [superchat-authority](superchat-authority.md) — the pipeline every execution crosses; prerequisite.
+- [superchat-tool-execution](superchat-tool-execution.md) — the pipeline every execution crosses; prerequisite.
 - [architecture.md](../architecture.md) — where the registry and the execution seam sit among the other owners.
 - [plugin-architecture.md](../design/plugin-architecture.md) — Scopes, installation layers and scope-accounted cleanup.
 - [plugin-guide.md](../plugin-guide.md) — registering a tool from a plugin.

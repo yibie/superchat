@@ -18,7 +18,7 @@
 (require 'superchat-core)
 (require 'superchat-preset)
 (require 'superchat-tape)
-(require 'superchat-authority)
+(require 'superchat-tool-execution)
 (require 'superchat-sink)
 (require 'superchat-service)
 (require 'superchat-invariant)
@@ -3318,7 +3318,7 @@ Absent options preserve legacy behavior; result delivery retains three args."
          (input-core-token (and input-core (make-symbol "input-core")))
          (input-operation
           (when (eq (plist-get input-core :operation) 'ask-user)
-            (superchat-authority--make-human-input-operation run-id input-core-token)))
+            (superchat-tool-execution--make-human-input-operation run-id input-core-token)))
          (started-at (float-time))
          (deadline-seconds
           (if (plist-member request :deadline)

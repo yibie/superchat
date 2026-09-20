@@ -13,7 +13,7 @@ Superchat is one Emacs package. Plugins contribute through Scope-accounted regis
 | Request preparation and chat routing | `superchat-core.el`, `superchat-parser.el`, `superchat-dispatcher.el`, `superchat-preset.el` | Runtime completion |
 | Run/Turn lifecycle | `superchat-runtime.el` | Owning or closing borrowed editor buffers |
 | Model transport and tool-loop instrumentation | `superchat-llm.el`, `superchat-models.el`, `superchat-agent-loop.el` | Public Run status or an alternative tool authorization decision |
-| Tool selection, execution and permission | `superchat-select-tools.el`, `superchat-tools.el`, `superchat-authority.el` (the execution pipeline), `superchat-sandbox.el` (permission levels), `superchat-approval.el` (approval) | Widening a permission level through child Scope shadowing |
+| Tool selection, execution and permission | `superchat-select-tools.el`, `superchat-tools.el`, `superchat-tool-execution.el` (the execution pipeline), `superchat-sandbox.el` (permission levels), `superchat-approval.el` (approval) | Widening a permission level through child Scope shadowing |
 | Prompt construction | `superchat-prompt-hooks.el`, `superchat-prompt.el` | Mutating Tape history |
 | Durable facts and read models | `superchat-tape.el`, `superchat-db.el`, `superchat-projection.el`, `superchat-tape-view.el` | Treating a Projection or selected view as mutable source history |
 | Chat View and live editor resources | `superchat.el`, `superchat-render.el`, `superchat-editor-workspace.el` | Inferring ownership from a buffer name, project or selected window |
