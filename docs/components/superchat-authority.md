@@ -110,7 +110,7 @@ Without the `tape` plugin there is no audit, and a call is blocked rather than e
 ## Further exploration
 
 - [superchat-tools](superchat-tools.md) — the registry whose tools this pipeline runs; prerequisite.
-- [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md) — the contract for levels and approval. Its write-target checks and one-shot escalation were removed by [Buffer-first mutation](../decisions/accepted/2026-09-18-buffer-first-mutation.md), which is the contract for what a built-in tool may change.
+- [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md) — the contract for levels and approval. Its write-target checks and one-shot escalation were removed by [Buffer-first mutation](../decisions/implemented/2026-09-18-buffer-first-mutation.md), which is the contract for what a built-in tool may change.
 - [ADR-0005](../adr/0005-fail-closed-ordinary-llm-tool-admission.md) — why a missing trusted wrapper fails closed.
 - [ADR-0006](../adr/0006-authority-refusal-consumer-delivery.md) — why a refusal reaches the consumer as a result does.
 

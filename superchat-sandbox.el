@@ -9,7 +9,7 @@
 ;; `superchat-approval.el').  A level decides how the tools that exist may
 ;; execute; it never decides which tools exist -- Preset and Request do.
 ;;
-;; Buffer-first mutation (docs/decisions/accepted/2026-09-18-buffer-first-mutation.md):
+;; Buffer-first mutation (docs/decisions/implemented/2026-09-18-buffer-first-mutation.md):
 ;; the model's ordinary write capability is the Buffer.  There is no path
 ;; sandbox here any more -- no workspace containment, no write escalation.
 ;; What remains is one small capability boundary for the structured

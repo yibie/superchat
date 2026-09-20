@@ -48,7 +48,7 @@ All notable changes to superchat.
   times out as before.  The cumulative limit
   (`superchat-response-timeout-hard-limit`) is unchanged.
 
-## Unreleased — buffer-first mutation (M7, in progress)
+## Unreleased — buffer-first mutation (M7)
 
 - New default tool `open_file`: brings a file into Emacs as a buffer (a real
   visit -- major mode, hooks, file-local variables; Emacs's own questions are

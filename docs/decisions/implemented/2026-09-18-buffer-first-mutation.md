@@ -1,6 +1,6 @@
 # M7 — Buffer-first mutation：模型的写能力以 Buffer 为界
 
-Status: accepted — 用户 2026-09-18 提出原则，对四个范围问题答"都按建议"，审阅草案后对两个命名问题都选 (a)，并要求收紧四处契约细节（持久化的措辞与 `save_buffer` 的批准组合、`/changes` 的推导与局限、`open_file` 的宿主副作用、保留内部 Buffer 保护）；本稿已全部并入。实现状态逐片记在[路线图](../../roadmap.md)。
+Status: implemented（2026-09-19：第一至三片交付，有人值守的 T2 在 chat 与 act 两个入口通过，见文末；第四片——`superchat-authority.el` 改名——按原定顺延为 M7 之后的独立事项）。此前：accepted — 用户 2026-09-18 提出原则，对四个范围问题答"都按建议"，审阅草案后对两个命名问题都选 (a)，并要求收紧四处契约细节（持久化的措辞与 `save_buffer` 的批准组合、`/changes` 的推导与局限、`open_file` 的宿主副作用、保留内部 Buffer 保护）；本稿已全部并入。实现状态逐片记在[路线图](../../roadmap.md)。
 
 ## 一句话
 
@@ -156,6 +156,14 @@ T2（加快捷键、当场生效、重启后还在、可撤销）里，"重启�
 ## 交付后的更正（2026-09-19）
 
 第二片漏删了一句与本契约相反的模型可见文字：`eval_elisp` 的工具说明仍写着 "For persistence, save the actual loaded configuration and verify in a fresh Emacs that loads it"（M5 时期留下的）。有人值守的三次 act 运行都经 `eval_elisp` 自行存盘并另起 Emacs 自证，与这句话逐项对应。已改为"本工具不用于保存文件；保存由用户决定；要让配置长期有效，就修改 Emacs 实际加载的那个配置文件的 Buffer，并告诉用户保存哪个 Buffer"，并加回归 `m7/write-path/no-default-tool-tells-the-model-to-persist`（默认工具面上任何说明都不得要求模型保存）。第六节"要删"的清单应当包含"所有要求模型自行持久化的模型可见文字"，当时没有写这一条。
+
+## 第三片的交付记录（2026-09-19）
+
+验收脚本按第七节改成"模型改 Buffer 并当场生效、不保存 → 人审阅 diff 并保存 → 独立检查器重启"。有人值守的真实模型运行共十次（qwen3.8-27b 三次、deepseek-chat 七次），其中两次判无效；每次的第一处偏离都已定位并记录，过程中修掉了四个产品缺陷（批准等待期间无进展计时照走；坏的 Lisp 修改无反馈；排队的旧按键回答批准提问；`eval_elisp` 的说明要求模型自行持久化——最后一条是本契约第二片的遗漏）和两个验收缺陷（验收源码留在 ` *load*` 缓冲区里；diff 审阅窗口可能未被选中）。
+
+通过的两次：`m7-attended-chat-04-deepseek`（chat）与 `m7-attended-act-06-deepseek`（act），模型 `deepseek-chat`。两次都是：模型 `open_file` → `edit_buffer` → `eval_elisp` 当场生效，未请求保存；产品的未保存提醒点名 `init.el`；用户审阅 1 行 diff 后保存；独立重启验证通过；undo 同理，磁盘恢复为基线原字节；答复如实说明"改的是 Buffer、尚未保存、请你保存"。
+
+**保证的范围**：在所记录的产品提交、`deepseek-chat` 配置和人工审阅流程下，两个入口各一次完整通过。**不保证**：稳定成功率；其他模型（本机 27B 在 chat 入口有两次有效失败：一次括号写错——此后由工具打回机制覆盖，一次用 `load` 磁盘文件来恢复当前会话）；模型在保存请求被拒绝之后的恢复路径（说明修正之后模型不再请求保存，这条路径没有被走到）。
 
 ## 不做
 

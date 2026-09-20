@@ -23,7 +23,7 @@
 ;; Diff is observation.  Save and revert here are explicit user operations,
 ;; so they do not contradict "the model's default path performs no
 ;; persistence".  Nothing in this file is a model tool.
-;; See docs/decisions/accepted/2026-09-18-buffer-first-mutation.md.
+;; See docs/decisions/implemented/2026-09-18-buffer-first-mutation.md.
 
 ;;; Code:
 

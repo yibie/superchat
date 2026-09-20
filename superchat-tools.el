@@ -316,7 +316,7 @@ failure is returned as a string starting with `Error:'."
     (error (format "Error: %s" (error-message-string err)))))
 
 ;;;; open_file: File -> Buffer
-;; docs/decisions/accepted/2026-09-18-buffer-first-mutation.md
+;; docs/decisions/implemented/2026-09-18-buffer-first-mutation.md
 
 (defun superchat-tool-open-file (path)
   "Bring the file PATH into Emacs as a buffer and say which buffer it is.
@@ -585,7 +585,7 @@ The change stays in the buffer; nothing is saved."
   "Save the file BUFFER-NAME visits and report where it went.
 Persisting is not a default capability: this tool exists only where a Preset or
 Request offers it, and the level stage asks the user about every call before
-this body runs (docs/decisions/accepted/2026-09-18-buffer-first-mutation.md).
+this body runs (decision of 2026-09-18, buffer-first mutation).
 An indirect or narrowed buffer saves the whole file its base buffer visits.
 A buffer without a file is an error: this tool never chooses a file name.
 The whole buffer is saved, including modifications that were already unsaved

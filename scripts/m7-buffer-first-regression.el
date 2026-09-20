@@ -1,7 +1,7 @@
 ;;; m7-buffer-first-regression.el --- buffer-first mutation -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Offline coverage for docs/decisions/accepted/2026-09-18-buffer-first-mutation.md.
+;; Offline coverage for docs/decisions/implemented/2026-09-18-buffer-first-mutation.md.
 ;; Slice 1: `open_file' and the unsaved-changes outlet.  The canonical smoke
 ;; fixture supplies the Session, the Tape and a scripted Run; no real model.
 ;;
