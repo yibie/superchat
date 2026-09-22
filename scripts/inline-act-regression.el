@@ -242,5 +242,88 @@ No chat buffer is created: the whole Run stays in the source buffer."
                            (plist-get (plist-get (car (last intents)) :payload)
                                       :surface)))))))))
 
+;;;; Approval denial and cancellation
+
+(defvar inline-act--probe nil
+  "Bound to nil by a test; set to a non-nil value only if its expression runs.")
+
+(ert-deftest inline-act/approval/denied-ask-tool-reaches-the-seam-and-does-not-run ()
+  "A denied ask-class tool records the approval pair and its body never runs."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((inline-act--probe nil))
+      (inline-act--fixture
+          (list `(:tool-uses (("eval_elisp"
+                               (expression . "(setq inline-act--probe 'ran)"))))
+                '(:text "Understood."))
+        (let* ((superchat-approval-function (lambda (_request) nil))
+               (overlay (superchat-inline-act "try to evaluate it")))
+          (should (smoke--wait
+                   (lambda () (plist-get (inline-act--state overlay) :run-id))
+                   10))
+          (let ((run (inline-act--settle overlay)))
+            (should (smoke--wait
+                     (lambda ()
+                       (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+            ;; The denied body never ran.
+            (should-not inline-act--probe)
+            ;; The source buffer was not touched.
+            (should (equal "alpha\n" (buffer-string)))
+            (let* ((session (plist-get (inline-act--state overlay) :session-id))
+                   (events (cl-remove-if-not
+                            (lambda (event) (equal run (plist-get event :run-id)))
+                            (superchat-tape-replay-events session)))
+                   (types (mapcar (lambda (event) (plist-get event :type)) events))
+                   (requested (cl-position "approval.requested" types :test #'equal))
+                   (decided (cl-position "approval.decided" types :test #'equal)))
+              (should requested)
+              (should decided)
+              (should (< requested decided))
+              ;; The refusal is recorded as a failed call of the exact tool.
+              (let ((failed (cl-find-if
+                             (lambda (event)
+                               (and (equal "tool.failed" (plist-get event :type))
+                                    (equal "eval_elisp"
+                                           (plist-get (plist-get event :payload)
+                                                      :tool-name))))
+                             events)))
+                (should failed)
+                ;; The ask path refuses as "cancelled" (`rejected' outcome).
+                (should (equal "cancelled"
+                               (plist-get (plist-get failed :payload) :status))))))
+          ;; `eval_elisp' is full Emacs control; the level asks before it runs.
+          (should (eq 'full-control (superchat-sandbox-tool-class "eval_elisp")))
+          (should (string-prefix-p "Understood."
+                                   (plist-get (inline-act--state overlay) :text))))))))
+
+(ert-deftest inline-act/keys/q-cancels-the-run-and-removes-the-overlay ()
+  "`q' (via `superchat-inline-clear') cancels the Run and removes the overlay."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (inline-act--fixture '((:hang t))
+      (let* ((overlay (superchat-inline-act "never answers"))
+             (state (lambda () (overlay-get overlay 'superchat-inline))))
+        (should (smoke--wait (lambda () (plist-get (funcall state) :run-id)) 10))
+        (let* ((run (plist-get (funcall state) :run-id))
+               (session (plist-get (funcall state) :session-id)))
+          (superchat-inline-clear overlay)
+          (should-not (overlay-buffer overlay))
+          (should (smoke--wait
+                   (lambda ()
+                     (let ((status (plist-get (superchat-runtime-status run) :status)))
+                       (and status (superchat-runtime--terminal-p status))))
+                   20))
+          (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status)))
+          (should (smoke--wait
+                   (lambda ()
+                     (cl-find-if
+                      (lambda (event)
+                        (and (equal "run.cancelled" (plist-get event :type))
+                             (equal run (plist-get event :run-id))))
+                      (superchat-tape-replay-events session)))
+                   5)))))))
+
 (provide 'inline-act-regression)
 ;;; inline-act-regression.el ends here
