@@ -121,7 +121,9 @@ No chat buffer is created: the whole Run stays in the source buffer."
                      (eq 'ready (plist-get (inline-act--state overlay) :status)))))
           (should (equal "beta\n" (buffer-string)))
           (should (eq 'ready (plist-get (inline-act--state overlay) :status)))
-          (should (equal "Done." (plist-get (inline-act--state overlay) :text)))
+          ;; Slice 2 appends the Run footer after the answer; the exact footer
+          ;; is asserted by `inline-act/footer/...' below.
+          (should (string-prefix-p "Done." (plist-get (inline-act--state overlay) :text)))
           (should-not (get-buffer superchat-buffer-name)))))))
 
 (ert-deftest inline-act/run/request-carries-the-default-tool-baseline ()
@@ -152,6 +154,93 @@ No chat buffer is created: the whole Run stays in the source buffer."
                    "Working"
                    (superchat-inline--status-header '(:status working))))
           (should (eq 'ready (plist-get (inline-act--state overlay) :status))))))))
+
+;;;; The Run footer
+
+(ert-deftest inline-act/footer/counts-tool-calls-and-names-unsaved-buffers ()
+  "The overlay footer counts the Run's tool calls and names its unsaved edits."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let* ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (should (smoke--wait
+                   (lambda ()
+                     (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+          (let* ((state (inline-act--state overlay))
+                 (text (plist-get state :text))
+                 (footer (superchat-inline-act--footer
+                          (plist-get state :session-id)
+                          (plist-get state :run-id))))
+            (should (string-prefix-p "Done." text))
+            (should (string-match-p "1 tool call" text))
+            (should (string-match-p "unsaved" text))
+            (should (string-match-p (regexp-quote target) footer))))))))
+
+(ert-deftest inline-act/footer/is-empty-without-tool-calls ()
+  "A Run with no tool calls and no edits has nothing to append."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (inline-act--fixture '((:text "Nothing to do."))
+      (let* ((overlay (superchat-inline-act "just answer"))
+             (state (lambda () (overlay-get overlay 'superchat-inline))))
+        (inline-act--settle overlay)
+        (should (smoke--wait
+                 (lambda ()
+                   (eq 'ready (plist-get (funcall state) :status)))))
+        (should (equal "Nothing to do." (plist-get (funcall state) :text)))))))
+
+;;;; The `d' and `r' keys
+
+(ert-deftest inline-act/keys/d-opens-the-diff-of-the-edited-buffer ()
+  "`d' shows the diff of the buffer the Run edited."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let ((overlay (superchat-inline-act "replace alpha with beta"))
+              (called nil))
+          (inline-act--settle overlay)
+          (cl-letf (((symbol-function 'superchat-changes-diff)
+                     (lambda (buffer) (setq called buffer))))
+            (superchat-inline-act-diff overlay))
+          (should (eq called (get-buffer target))))))))
+
+(ert-deftest inline-act/keys/reply-resubmits-with-the-inline-act-surface ()
+  "The `r' reply stays on the inline-act surface in the same Session."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture
+          (append (inline-act--edit-script target) '((:text "Second.")))
+        (let ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (should (smoke--wait
+                   (lambda ()
+                     (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+          (superchat-inline-act-reply overlay "and now?")
+          (inline-act--settle overlay)
+          (should (smoke--wait
+                   (lambda ()
+                     (and (eq 'ready
+                              (plist-get (inline-act--state overlay) :status))
+                          (string-prefix-p
+                           "Second."
+                           (plist-get (inline-act--state overlay) :text))))))
+          (let* ((session (plist-get (inline-act--state overlay) :session-id))
+                 (intents (cl-remove-if-not
+                           (lambda (event)
+                             (equal "intent.received" (plist-get event :type)))
+                           (superchat-tape-replay-events session))))
+            (should (= 2 (length intents)))
+            (should (equal "inline-act"
+                           (plist-get (plist-get (car (last intents)) :payload)
+                                      :surface)))))))))
 
 (provide 'inline-act-regression)
 ;;; inline-act-regression.el ends here

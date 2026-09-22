@@ -19,9 +19,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'superchat-plugin)
 (require 'superchat-service)
 (require 'superchat-inline)
+(require 'superchat-changes)
 
 (defvar superchat-inline-act-history nil
   "Minibuffer history of inline act instructions.")
@@ -45,6 +47,41 @@ Called from the `inline-act' row's `:apply'."
    (lambda ()
      (advice-remove 'superchat-inline--status-header
                     #'superchat-inline-act--status-header))))
+
+;;; Footer
+
+(defun superchat-inline-act--footer (session-id run-id)
+  "Return the footer for the Run RUN-ID in SESSION-ID, or an empty string.
+The footer states what the Tape and the live buffers show -- how many tool
+calls the Run made and which buffers it left unsaved -- never that the task
+succeeded.  Empty when there is nothing to say."
+  (let* ((events (and (stringp session-id) (stringp run-id)
+                      (ignore-errors
+                        (superchat-tape-replay-events session-id))))
+         (calls (cl-count-if
+                 (lambda (event)
+                   (and (equal run-id (plist-get event :run-id))
+                        (member (plist-get event :type)
+                                '("tool.completed" "tool.failed"))))
+                 events))
+         (summary (and run-id
+                       (ignore-errors
+                         (superchat-changes-run-summary session-id run-id))))
+         (lines (append (when (> calls 0)
+                          (list (format "— %d tool call%s"
+                                        calls (if (= calls 1) "" "s"))))
+                        (when summary (list summary)))))
+    (if lines (string-join lines "\n") "")))
+
+(defun superchat-inline-act--finish-text (overlay text)
+  "Return TEXT with OVERLAY's Run footer appended, or TEXT when there is none."
+  (let* ((state (overlay-get overlay 'superchat-inline))
+         (answer (or text ""))
+         (footer (superchat-inline-act--footer (plist-get state :session-id)
+                                               (plist-get state :run-id))))
+    (cond ((string-empty-p footer) answer)
+          ((string-empty-p answer) footer)
+          (t (concat answer "\n\n" footer)))))
 
 ;;; Sink
 
@@ -81,10 +118,16 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
                                         :status))
                    (superchat-inline--set-state overlay :status 'typing)))))
    :final (lambda (_run result)
-            (superchat-inline--set-state overlay :text
-                                         (or (plist-get result :text) ""))
+            (superchat-inline--set-state
+             overlay :text
+             (superchat-inline-act--finish-text overlay (plist-get result :text)))
             (superchat-inline--set-state overlay :status 'ready))
    :error (lambda (_run failure)
+            (superchat-inline--set-state
+             overlay :text
+             (superchat-inline-act--finish-text
+              overlay
+              (plist-get (overlay-get overlay 'superchat-inline) :text)))
             (superchat-inline--set-state
              overlay :error-message (or (plist-get failure :text) "failed"))
             (superchat-inline--set-state overlay :status 'error)
@@ -95,6 +138,53 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
    :orphaned (lambda (_run _reason)
                (superchat-inline--set-state overlay :error-message "sink lost")
                (superchat-inline--set-state overlay :status 'error))))
+
+;;; Keys
+
+(defvar superchat-inline-act--keymap
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map superchat-inline--keymap)
+    (define-key map (kbd "d") #'superchat-inline-act-diff)
+    (define-key map (kbd "r") #'superchat-inline-act-reply)
+    map)
+  "Transient keymap of an inline act overlay.")
+
+(defun superchat-inline-act-diff (&optional overlay)
+  "Show how the buffer OVERLAY's Run edited differs from its file."
+  (interactive)
+  (let* ((overlay (or overlay (superchat-inline--overlay)))
+         (state (overlay-get overlay 'superchat-inline))
+         (rows (superchat-changes-candidates (plist-get state :session-id)
+                                             (plist-get state :run-id))))
+    (unless rows
+      (user-error "This Run left no unsaved edited buffer"))
+    (let* ((names (mapcar (lambda (row) (plist-get row :name)) rows))
+           (name (if (= 1 (length rows))
+                     (car names)
+                   (completing-read "Buffer: " names nil t))))
+      (superchat-changes-diff (get-buffer name)))))
+
+(defun superchat-inline-act-reply (&optional overlay question)
+  "Ask a follow-up QUESTION in OVERLAY's inline act conversation.
+The same overlay, Session and surface are reused, so the earlier turns
+reach the model as history and the reply stays an `inline-act' Run."
+  (interactive)
+  (superchat-plugin-require-active-row 'inline-act)
+  (let* ((overlay (or overlay (superchat-inline--overlay)))
+         (state (overlay-get overlay 'superchat-inline))
+         (question (or question
+                       (read-string "Reply: " nil 'superchat-inline-act-history))))
+    (unless (and (stringp question) (not (string-empty-p (string-trim question))))
+      (user-error "Inline act reply needs a question"))
+    (when (memq (plist-get state :status) '(waiting typing working))
+      (user-error "The previous answer is still streaming"))
+    (let ((timer (plist-get state :error-timer)))
+      (when (timerp timer) (cancel-timer timer)))
+    (with-current-buffer (overlay-buffer overlay)
+      (superchat-inline-act--submit
+       overlay question
+       (let ((range (plist-get state :reference)))
+         (and range (superchat-inline--reference range)))))))
 
 ;;; Commands
 
@@ -132,6 +222,7 @@ opened."
                       :text ""))
          (overlay (superchat-inline--make-overlay
                    (car overlay-bounds) (cdr overlay-bounds) state)))
+    (overlay-put overlay 'keymap superchat-inline-act--keymap)
     (superchat-inline--clear-reference-highlight)
     (setq superchat-inline--reference nil)
     (superchat-inline-act--submit overlay instruction reference)))
