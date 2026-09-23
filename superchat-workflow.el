@@ -521,6 +521,7 @@ consumed without resolving WORKFLOW-NAME again."
   (interactive
    (list (completing-read "Workflow: " (superchat-workflow--list))
          (read-string "Argument (optional): ")))
+  (superchat-plugin-require-active-row 'workflow)
   (let* ((body (if resolved-file
                    (superchat-workflow--load workflow-name resolved-file)
                  (superchat-workflow--load workflow-name))))
@@ -1012,7 +1013,9 @@ Returns a list of imported skill names."
 ;;;###autoload
 (defun superchat--cmd-workflow (_cmd args _input _lang _target-model)
   "Execute a .workflow recipe.  /workflow <name> [argument].
-Double-quote names containing whitespace.  With no arguments, list recipes."
+Double-quote names containing whitespace.  With no arguments, list recipes.
+Listing is read-only and stays available with the workflow row unmounted;
+running a recipe is refused by `superchat-workflow-execute-async'."
   (pcase-let ((`(,name . ,argument) (superchat-workflow--parse-invocation args)))
     (if (and name (not (string-empty-p name)))
         (let ((resolved-file (superchat-workflow--exists-p name)))
@@ -1234,6 +1237,7 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
 (defun superchat-research-workflow (query)
   "Start the durable collector → analyst → reviewer workflow for QUERY."
   (interactive "sResearch question: ")
+  (superchat-plugin-require-active-row 'workflow)
   (unless (and (stringp query) (not (string-empty-p (string-trim query))))
     (user-error "Research question cannot be empty"))
   (require 'superchat-subagent)
@@ -1261,6 +1265,7 @@ Double-quote names containing whitespace.  With no arguments, list recipes."
 (defun superchat-research-workflow-resume (instance-id)
   "Resume the next advance-approved stage of Research INSTANCE-ID."
   (interactive (list (superchat-research-workflow--read-instance-id)))
+  (superchat-plugin-require-active-row 'workflow)
   (superchat-research-workflow--continue instance-id)
   (let ((view (superchat-research-workflow-view instance-id)))
     (when (called-interactively-p 'interactive)

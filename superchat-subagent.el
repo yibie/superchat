@@ -1457,6 +1457,7 @@ is nil or its buffer was killed."
 ARGS format: `<preset> <task>'.  Available presets: researcher,
 executor, introspector.  The sub-agent runs in isolation and its
 report is rendered in the chat buffer."
+  (superchat-plugin-require-active-row 'subagent)
   (let* ((trimmed (string-trim (or args "")))
          (preset (when (string-match "^\\([a-zA-Z0-9_-]+\\)" trimmed)
                    (match-string 1 trimmed)))

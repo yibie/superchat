@@ -378,5 +378,151 @@ and no `tool.execution.started' happen."
                    "memory row is not mounted"
                    (plist-get (car smoke--requests) :prompt-text))))))))
 
+;;;; Entry points that start new work
+
+(ert-deftest composition/entry/dispatcher->>-route-refuses-without-the-workflow-row ()
+  "A `>>` message with the workflow row unmounted is refused; no Run starts."
+  (composition--fixture '((:text "must not be sent"))
+    (composition--with-restored-composition
+      ;; Load the implementation first: an autoload triggered inside the
+      ;; stubbed section would redefine the stubs away.
+      (require 'superchat-workflow)
+      (let ((view (smoke--open-chat)))
+        (superchat-plugin-unmount 'workflow)
+        (let ((refusal (error-message-string
+                        (should-error (smoke--send view ">>demo")))))
+          (should (string-match-p "workflow" refusal))
+          (should (string-match-p "profile" refusal)))
+        (should-not smoke--requests)
+        ;; Remounted, the route reaches the work again (stubbed).
+        (superchat-plugin-mount 'workflow)
+        (with-current-buffer view (superchat--refresh-prompt))
+        (let ((started nil))
+          (cl-letf (((symbol-function 'superchat-workflow--exists-p)
+                     (lambda (_) "/tmp/composition-demo.workflow"))
+                    ((symbol-function 'superchat-workflow-execute-async)
+                     (lambda (&rest _) (setq started t))))
+            (smoke--send view ">>demo"))
+          (should started))))))
+
+(ert-deftest composition/entry/workflow-execute-async-refuses-without-its-row ()
+  "The async executor refuses without the workflow row; remounted it reaches work."
+  (composition--with-restored-composition
+    (require 'superchat-workflow)
+    (superchat-plugin-unmount 'workflow)
+    (let ((refusal (error-message-string
+                    (should-error (superchat-workflow-execute-async "demo")))))
+      (should (string-match-p "workflow" refusal))
+      (should (string-match-p "profile" refusal)))
+    (superchat-plugin-mount 'workflow)
+    (let ((loaded nil))
+      (cl-letf (((symbol-function 'superchat-workflow--load)
+                 (lambda (&rest _) (setq loaded t) nil)))
+        (should-error (superchat-workflow-execute-async "demo"))
+        (should loaded)))))
+
+(ert-deftest composition/entry/workflow-command-refuses-without-its-row ()
+  "`/workflow NAME` refuses without the workflow row (through
+`superchat-workflow-execute-async'); `/workflow` with no name only lists
+recipes, which is read-only and stays available; remounted it starts."
+  (composition--with-restored-composition
+    (require 'superchat-workflow)
+    (superchat-plugin-unmount 'workflow)
+    (cl-letf (((symbol-function 'superchat-workflow--exists-p)
+               (lambda (_) "/tmp/composition-demo.workflow"))
+              ((symbol-function 'superchat-workflow--list)
+               (lambda () '("demo"))))
+      (let ((refusal (error-message-string
+                      (should-error
+                       (superchat--cmd-workflow nil "demo" nil nil nil)))))
+        (should (string-match-p "workflow" refusal))
+        (should (string-match-p "profile" refusal)))
+      (should (superchat--cmd-workflow nil "" nil nil nil)))
+    (superchat-plugin-mount 'workflow)
+    (let ((started nil))
+      (cl-letf (((symbol-function 'superchat-workflow--exists-p)
+                 (lambda (_) "/tmp/composition-demo.workflow"))
+                ((symbol-function 'superchat-workflow-execute-async)
+                 (lambda (&rest _) (setq started t) '(:type :noop))))
+        (superchat--cmd-workflow nil "demo" nil nil nil))
+      (should started))))
+
+(ert-deftest composition/entry/research-workflow-refuses-without-its-row ()
+  "The research workflow starter refuses without the workflow row."
+  (composition--with-restored-composition
+    (require 'superchat-workflow)
+    (superchat-plugin-unmount 'workflow)
+    (let ((refusal (error-message-string
+                    (should-error (superchat-research-workflow "q")))))
+      (should (string-match-p "workflow" refusal))
+      (should (string-match-p "profile" refusal)))
+    (superchat-plugin-mount 'workflow)
+    (let ((continued nil))
+      (cl-letf (((symbol-function 'superchat-workspace-bind)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'superchat-team-message)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'superchat-research-workflow--continue)
+                 (lambda (&rest _) (setq continued t))))
+        (superchat-research-workflow "q"))
+      (should continued))))
+
+(ert-deftest composition/entry/research-workflow-resume-refuses-without-its-row ()
+  "Resuming a research workflow refuses without the workflow row."
+  (composition--with-restored-composition
+    (require 'superchat-workflow)
+    (superchat-plugin-unmount 'workflow)
+    (let ((refusal (error-message-string
+                    (should-error
+                     (superchat-research-workflow-resume "research-x")))))
+      (should (string-match-p "workflow" refusal))
+      (should (string-match-p "profile" refusal)))
+    (superchat-plugin-mount 'workflow)
+    (let ((continued nil))
+      (cl-letf (((symbol-function 'superchat-research-workflow--continue)
+                 (lambda (&rest _) (setq continued t)))
+                ((symbol-function 'superchat-research-workflow-view)
+                 (lambda (&rest _) nil)))
+        (superchat-research-workflow-resume "research-x"))
+      (should continued))))
+
+(ert-deftest composition/entry/subagent-command-refuses-without-its-row ()
+  "The `/subagent` command refuses without the subagent row; remounted it runs."
+  (composition--fixture '((:text "must not be sent"))
+    (composition--with-restored-composition
+      (require 'superchat-subagent)
+      (superchat-plugin-unmount 'subagent)
+      (let ((refusal (error-message-string
+                      (should-error
+                       (superchat--cmd-subagent
+                        nil "researcher do it" nil nil nil)))))
+        (should (string-match-p "subagent" refusal))
+        (should (string-match-p "profile" refusal)))
+      (superchat-plugin-mount 'subagent)
+      (let ((ran nil))
+        (cl-letf (((symbol-function 'superchat--subagent-begin-placeholder)
+                   (lambda (&rest _) 'placeholder))
+                  ((symbol-function 'superchat--subagent-run-async)
+                   (lambda (&rest _) (setq ran t) "id"))
+                  ((symbol-function 'superchat--subagent-set-placeholder)
+                   (lambda (&rest _) nil)))
+          (superchat--cmd-subagent nil "researcher do it" nil nil nil))
+        (should ran)))))
+
+(ert-deftest composition/entry/agents-panel-show-refuses-without-its-row ()
+  "Opening the agents panel refuses without the agents-panel row."
+  (composition--with-restored-composition
+    (superchat-plugin-unmount 'agents-panel)
+    (let ((refusal (error-message-string
+                    (should-error (superchat-agents-panel-show)))))
+      (should (string-match-p "agents-panel" refusal))
+      (should (string-match-p "profile" refusal)))
+    (superchat-plugin-mount 'agents-panel)
+    (let ((reached nil))
+      (cl-letf (((symbol-function 'superchat-agents-panel-available-p)
+                 (lambda () (setq reached t) nil)))
+        (should-not (superchat-agents-panel-show))
+        (should reached)))))
+
 (provide 'composition-regression)
 ;;; composition-regression.el ends here

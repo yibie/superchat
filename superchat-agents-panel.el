@@ -214,6 +214,7 @@ The sub-agent lifecycle calls this function; no polling timer is needed."
   "Render and display the running sub-agent panel.
 Returns the panel buffer, or nil when textui.el is unavailable."
   (interactive)
+  (superchat-plugin-require-active-row 'agents-panel)
   (let* ((buffer-name (superchat-agents-panel--safe-buffer-name))
          (chat-buffer-name
           (if (bound-and-true-p superchat-mode)

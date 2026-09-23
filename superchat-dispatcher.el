@@ -1511,6 +1511,10 @@ This is the catch-all fallback after the hook chain."
            ;; nothing is returned to dispatch.
            ((and skill (string= skill "workflow")
                  (fboundp 'superchat-workflow-execute-async))
+            ;; The row owns the feature: a `>>` message with the workflow
+            ;; row unmounted is refused before parsing, existence checks or
+            ;; any Run.
+            (superchat-plugin-require-active-row 'workflow)
             ;; The coordinator is a local command; each executable workflow
             ;; step owns its lifecycle through Runtime.
             (let* ((rest (string-trim (or clean-input "")))

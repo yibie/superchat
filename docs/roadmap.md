@@ -214,13 +214,13 @@ Delivered (`current`, 2026-09-22, three worker slices under leader briefs): the 
 
 Evidence: `scripts/inline-act-regression.el` (11, scripted transport: row and surface, refusal without the row, an edit landing in the buffer with no chat buffer created, the default baseline in the request, the footer, `d`, `r`, a denied `eval_elisp` recording the approval pair with its body never run, `q` cancelling) and `scripts/borrowed-buffer-transcript-regression.el` (3); M3 137/137, smoke 0 mismatches, kernel check 0 fails, re-run by the leader. Not yet: a real-model run, and the user's acceptance of the record.
 
-### M9 — G4 closed at the composition layer (`accepted` 2026-09-22; composition layer partly done, one gap open)
+### M9 — G4 closed at the composition layer (`done` 2026-09-22; load isolation not a goal)
 
-Record: [the light M9 decision](decisions/accepted/2026-09-22-spine-loads-without-the-product.md). Load isolation is not a goal of this milestone: `(require 'superchat)` loads the whole product, including modules whose rows are disabled.
+Record: [the light M9 decision](decisions/accepted/2026-09-22-spine-loads-without-the-product.md), with its amendment. Load isolation is not a goal of this milestone: `(require 'superchat)` loads the whole product, including modules whose rows are disabled.
 
-Evidence (`current`): `scripts/composition-regression.el` checks the seven non-surface rows (memory, changes, subagent, workflow, workspace, plan, compact): each row's own registrations are present while mounted, absent after unmount and back after remount, a chat Turn completes with the row unmounted, and a Turn in flight survives unmounting memory.
+Delivered (`current`): unmounting a default row withdraws what that row contributes. For the seven non-surface rows (memory, changes, subagent, workflow, workspace, plan, compact) their projections, Services and listeners go and come back on remount. The built-in tools of `subagent`, `workspace` and `memory` are registered by those rows, so an unmounted row's tools are not offered to the model, cannot be selected by an explicit tool list, and a copy materialized earlier is refused before its body runs; the default tool surface is unchanged. Entry points that start new work refuse naming the row: `>>`, `superchat-workflow-execute-async` (and so `/workflow NAME`), `superchat-research-workflow` and its resume, `/subagent`, `superchat-agents-panel-show`. Listing recipes, running work's callbacks, cancel and cleanup are not blocked.
 
-Open gap (registered in `.scratch/issues/2026-09-22-row-tools-survive-unmount.md`, three expected-failure tests): the tools of `subagent`, `workspace` and `memory` are registered outside their rows, so unmounting the row does not stop the model being offered them; and none of the seven rows has an entry point that refuses when unmounted. Until that is fixed the composition layer is not `done`.
+Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/21, inline-act 11/11, smoke 0 mismatches, kernel check 0 fails, re-run by the leader.
 
 ### Housekeeping after M5/M7 (`done`, 2026-09-20)
 
