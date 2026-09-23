@@ -2292,7 +2292,10 @@ input obligation held."
                      " %d input(s) unresolved")
              (length unrecorded)
              (+ (length unresolved) (length unresolved-steers)))
-          (mapcar (lambda (output) (plist-get output :material))
+          (mapcar (lambda (output)
+                    (plist-put (copy-sequence (plist-get output :material))
+                               :attachment-storage-id
+                               (plist-get (plist-get output :record) :storage-id)))
                   outputs))))))
 
 (cl-defun superchat-runtime--enter-step (run-id request context-envelope)
@@ -2423,6 +2426,19 @@ distinguishable from the nil that an unusable entry would produce."
                       (superchat-runtime--update
                        run-id :step-material confirmed
                        :turn-stopping-notified nil)
+                      (when confirmed
+                        (superchat-runtime--update
+                         run-id :request-step-material-items
+                         (append
+                          (plist-get (superchat-runtime--entry run-id)
+                                     :request-step-material-items)
+                          (mapcar
+                           (lambda (material)
+                             (list :kind "step-material"
+                                   :storage-id
+                                   (plist-get material :attachment-storage-id)
+                                   :form (if (= step 1) "prompt-block" "message")))
+                           confirmed))))
                       (let ((augmented
                              (superchat-runtime--prompt-with-injected
                               (plist-get request :prompt) confirmed)))
@@ -2495,7 +2511,7 @@ original prompt untouched rather than send a rewritten copy of it."
            (mapconcat (lambda (material)
                         (let ((text (plist-get material :text)))
                           (when (and (stringp text) (not (string-empty-p text)))
-                            (format "[Injected material] %s" text))))
+                            (superchat-tape-injected-material-line text))))
                       claimed "\n")))
       (when (and (stringp block) (not (string-empty-p block)))
         (concat prompt "\n\n" block)))))
@@ -3671,6 +3687,13 @@ Absent options preserve legacy behavior; result delivery retains three args."
                    (pcase event
                      ('step-id
                       (plist-get (superchat-runtime--entry run-id) :step))
+                     ('request-message-items
+                      (append
+                       (append (superchat-runtime--envelope-items context-envelope)
+                               nil)
+                       (copy-tree
+                        (plist-get (superchat-runtime--entry run-id)
+                                   :request-step-material-items))))
                      ('turn-stopping
                       (superchat-runtime--turn-stopping run-id))
                      ('next-step

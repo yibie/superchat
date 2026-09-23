@@ -15,3 +15,7 @@ M1 promises that every provider request can be rebuilt from the Tape ([the reque
 ## Acceptance
 
 Scripted transport: a steered Run's continuation request rebuilds with the steer's text; the finish-check note appears in the rebuilt continuation (the expected-failure test `finish-check/request-evidence-omits-step-material` passes and loses its marker); a missing or omitted material row makes the rebuild `unknown`; requests without Step material rebuild exactly as before; M3's evidence tests and the canonical smoke stay green.
+
+## Scope recorded at implementation (2026-09-23)
+
+The rebuild rule of point 2 also covers a later turn's history item that names an admitted material row. The leader's probe showed such an item rebuilding as `(:kind "system" :content "Injected model material")` while the provider had received `User: [Injected material] TEXT` in the history fragment; that is the second fact of the Problem above, not a new decision. The item shapes, the two provider-visible forms (`prompt-block` for the first Step, `message` for later Steps) and the `unknown` conditions are written into [the continuity contract](../../design/context-continuity-contract-v0.md) ("Amendment 2026-09-23: material a Step inserted"). Found while preparing this slice and registered separately, not fixed here: all attempts of a Run share one request id, so the public rebuild reaches only the last attempt (`.scratch/issues/2026-09-23-request-evidence-rebuilds-only-the-last-attempt.md`).

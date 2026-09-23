@@ -345,11 +345,7 @@ and the third request's prompt contains it once."
       (kill-buffer target))))
 
 (ert-deftest finish-check/request-evidence-omits-step-material ()
-  "Known gap: `.scratch/issues/2026-09-23-request-evidence-omits-step-claimed-material.md'.
-`superchat-tape-request-evidence` for the third request returns messages that
-do not contain the note, because no `request.message-list` item names the
-Step-claimed material.  The reconstruction status is still `reproduced`."
-  :expected-result :failed
+  "The third request's rebuilt evidence includes its Step-claimed finish note."
   (let ((target (generate-new-buffer "finish-check-target")))
     (unwind-protect
         (progn

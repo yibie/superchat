@@ -2,6 +2,15 @@
 
 All notable changes to superchat.
 
+## Unreleased — the request record includes what was added mid-task
+
+- Superchat's record of each model request (M1 request evidence) now names
+  the text a task picked up while running: a message you sent while it was
+  working, an injection, and the finish-check note. Rebuilding a request
+  from the database now shows that text as the model received it, and a
+  later turn's rebuilt history shows it too, instead of the placeholder
+  "Injected model material". Nothing the model receives has changed.
+
 ## Unreleased — the inline act overlay shows when a tool is running
 
 - While the model's tool is running, the inline act overlay now says

@@ -571,7 +571,8 @@ An unavailable payload signals rather than inventing historical text."
                           (format "%s" (plist-get (plist-get payload :source) :origin)))
                       'system
                     'user)
-            :content (concat "[Injected material] " (plist-get payload :text))
+            :content (superchat-tape-injected-material-line
+                      (plist-get payload :text))
             :id (car row)
             :event-id (plist-get event :event-id)
             :source (plist-get payload :source)

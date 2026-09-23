@@ -226,17 +226,17 @@ Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/2
 
 Accepted by the user on 2026-09-23 ("我觉得可以验收"). The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
 
-### Fixes from the 2026-09-23 round (four `implemented`, one `accepted`)
+### Fixes from the 2026-09-23 round (`implemented`)
 
-The act entry's failing and passing runs and the user's 2026-09-23 decisions produced five accepted records. What each one has in the tree:
+The act entry's failing and passing runs and the user's 2026-09-23 decisions produced five accepted records, all built on 2026-09-23. What each one has in the tree:
 
 | Decision | State |
 |---|---|
 | [The next turn sees what earlier tools returned](decisions/accepted/2026-09-23-the-next-turn-sees-previous-tool-results.md) | implemented (`1711be1c`, `2d16c144`, `3ac45cec`): tool events keep bounded argument and result text, later turns see one line per tool call, compaction summarizes those lines and covers their rows |
-| [One finish check after a text-only reply](decisions/accepted/2026-09-23-one-finish-check-after-a-text-only-reply.md) | implemented in its narrowed form (`7133d4ab`): chat window and act only, not inline act; request evidence does not yet contain the note (last row) |
+| [One finish check after a text-only reply](decisions/accepted/2026-09-23-one-finish-check-after-a-text-only-reply.md) | implemented in its narrowed form (`7133d4ab`): chat window and act only, not inline act; since the last row, request evidence contains the note |
 | [Retry a transient provider error](decisions/accepted/2026-09-23-retry-transient-provider-errors.md) | implemented: transport failures first (`afba469b`), then the user's amendment, 10 retries 30 s apart and HTTP 429/5xx retried too. The status comes from a hook on llm's plz error handler; a test drives llm's real error chain with a stubbed transport, so an llm upgrade that breaks the hook fails that test. Not yet seen against a real rate limit |
 | [Surfaces are told when a tool runs](decisions/accepted/2026-09-23-surfaces-are-told-when-a-tool-runs.md) | implemented (`9c39d99f`): the inline act overlay shows "Working: tool…" during a tool body; the chat window is unchanged |
-| [Request evidence includes Step material](decisions/accepted/2026-09-23-request-evidence-includes-step-material.md) | accepted, not built |
+| [Request evidence includes Step material](decisions/accepted/2026-09-23-request-evidence-includes-step-material.md) | implemented: each request names the material its Run's Steps inserted (a steer, an injection, the finish-check note) and the evidence rebuilds it from the stored text; a later turn's history item for such material rebuilds as the line the model saw, no longer as the placeholder "Injected model material" |
 
 ### Chat entry acceptance on the current commit (`accepted` 2026-09-22)
 

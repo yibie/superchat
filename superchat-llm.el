@@ -3829,6 +3829,12 @@ requests until it receives text, bounded by
                                   (setq request-context
                                         (plist-put request-context :step
                                                    (funcall runtime-observer 'step-id nil))))
+                                (when (functionp runtime-observer)
+                                  (setq request-context
+                                        (plist-put
+                                         request-context :message-items
+                                         (funcall runtime-observer
+                                                  'request-message-items nil))))
                                 (superchat--llm-record-request-evidence
                                  request-context attempt-prompt
                                  provider-system-prompt)

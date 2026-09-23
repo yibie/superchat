@@ -1157,6 +1157,10 @@ newlines inside either text become the two characters `\\n'."
 A reconstruction that does not know this version reports `unknown' rather than
 comparing against the renderer it happens to have.")
 
+(defun superchat-tape-injected-material-line (text)
+  "Return the provider-visible line framing admitted material TEXT."
+  (concat "[Injected material] " text))
+
 (defun superchat-tape--request-digest (system tools model)
   "Return a stable digest of the header inputs SYSTEM, TOOLS and MODEL."
   (concat "sha256:"
@@ -1212,13 +1216,52 @@ EXECUTION optionally links this attempt to its Run, Turn and Step."
 A tool observation records identity only (`:kind', `:storage-id',
 `:source-ids', `:lossy'); its text is read back from the two tool rows and
 never copied into this payload.  Every other item is unchanged."
-  (if (superchat-tape--tool-observation-message-p item)
+  (cond
+   ((equal "step-material" (plist-get item :kind))
+    (list :kind "step-material"
+          :storage-id (plist-get item :storage-id)
+          :form (plist-get item :form)))
+   ((superchat-tape--tool-observation-message-p item)
       (append
        (list :kind "tool-observation"
              :storage-id (plist-get item :storage-id)
              :source-ids (plist-get item :source-ids))
-       (when (plist-get item :lossy) (list :lossy t)))
-    item))
+       (when (plist-get item :lossy) (list :lossy t))))
+   (t item)))
+
+(defun superchat-tape--request-admitted-material-text (row)
+  "Return admitted material text from ROW, or nil if it is unavailable.
+The same Runtime attachment identity and payload requirements as the
+Context View apply; a summary column is never provider-visible text."
+  (when (and row
+             (equal "inject" (nth 1 row))
+             (equal "system" (nth 2 row)))
+    (let* ((event (condition-case nil
+                      (superchat-tape--row-event row)
+                    (error nil)))
+           (payload (plist-get event :payload)))
+      (when (and (equal "attachment.added" (plist-get event :type))
+                 (equal 1 (plist-get event :schema))
+                 (equal "runtime" (plist-get event :actor-id))
+                 (stringp (plist-get payload :text))
+                 (plist-get payload :source)
+                 (not (plist-get payload :omitted)))
+        (plist-get payload :text)))))
+
+(defun superchat-tape--request-material-message (item row-at)
+  "Rebuild a step-material ITEM using ROW-AT, or return `:unknown'."
+  (let* ((row (and (plist-get item :storage-id)
+                   (funcall row-at (plist-get item :storage-id))))
+         (text (superchat-tape--request-admitted-material-text row))
+         (form (plist-get item :form)))
+    (cond
+     ((not (stringp text)) :unknown)
+     ((equal form "message") (list :kind "user" :content text))
+     ((equal form "prompt-block")
+      (list :kind "user"
+            :content (superchat-tape-injected-material-line text)
+            :form "prompt-block"))
+     (t :unknown))))
 
 (defun superchat-tape--tool-observation-message-p (item)
   "Return non-nil when ITEM names a tool observation."
@@ -1384,15 +1427,31 @@ This is the check the accepted request-header decision requires; a recorded
          ((or (plist-get header-payload :schema)
               (plist-get header-payload :template-version))
           (let* ((rows (mapcar (lambda (item)
-                                 (if (superchat-tape--tool-observation-message-p item)
-                                     (superchat-tape--request-tool-observation-message
-                                      item row-at)
+                                 (cond
+                                  ((superchat-tape--tool-observation-message-p item)
+                                   (superchat-tape--request-tool-observation-message
+                                    item row-at))
+                                  ((equal "step-material" (plist-get item :kind))
+                                   (superchat-tape--request-material-message
+                                    item row-at))
+                                  (t
                                    (let ((row (funcall row-at
                                                        (plist-get item :storage-id))))
-                                     (if row
-                                         (list :kind (nth 2 row)
-                                               :content (nth 3 row))
-                                       :unknown))))
+                                     (cond
+                                      ((null row) :unknown)
+                                      ((and (equal "inject" (nth 1 row))
+                                            (equal "system" (nth 2 row)))
+                                       (let ((text
+                                              (superchat-tape--request-admitted-material-text
+                                               row)))
+                                         (if (stringp text)
+                                             (list :kind "user"
+                                                   :content
+                                                   (superchat-tape-injected-material-line
+                                                    text))
+                                           :unknown)))
+                                      (t (list :kind (nth 2 row)
+                                               :content (nth 3 row))))))))
                                items))
                  (missing (memq :unknown rows)))
             (if missing

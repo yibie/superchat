@@ -756,3 +756,13 @@ Decision: [the next turn sees previous tool results](../decisions/accepted/2026-
 **Compaction.** Compaction's input includes the tool items of the span it summarizes, rendered with the same line, and the Anchor's `source_ids` include both rows of each, so a later View does not show a tool line whose rows an Anchor already covers.
 
 **Not changed.** `superchat-view-derive-messages` (the chat window's history cache, memory titles, the TTFT diagnostic) does not include tool items: the provider sees them, the in-buffer cache does not. That asymmetry is deliberate until a separate decision about showing tool lines in the chat history.
+
+## Amendment 2026-09-23: material a Step inserted
+
+Decision: [request evidence includes Step material](../decisions/accepted/2026-09-23-request-evidence-includes-step-material.md).
+
+**Two provider-visible forms.** Material the Run's first Step admits is appended to the current user message after a blank line, one `[Injected material] TEXT` line per material. Material a later Step admits (a steer, an injection, the finish-check note) is sent as its own user message carrying the raw text. A later turn's history fragment renders an admitted material row as `User: [Injected material] TEXT`. The framing comes from one function, `superchat-tape-injected-material-line`, used by the fold, the fragment and the rebuild.
+
+**Request evidence (M1).** Each attempt's `request.message-list` names the history items, then every material the Run's Steps admitted so far, in insertion order: `(:kind "step-material" :storage-id ATTACHMENT-ROW-ID :form "prompt-block"|"message")`. `superchat-tape-request-evidence` rebuilds it from the `attachment.added` payload's text: `(:kind "user" :content TEXT)` for `message`, `(:kind "user" :content "[Injected material] TEXT" :form "prompt-block")` for `prompt-block`. A history item that names an admitted material row rebuilds as `(:kind "user" :content "[Injected material] TEXT")`, the line the fragment carried, not the row's summary column. The rebuild reports `unknown` when the row is missing, is not an `attachment.added` row written by Runtime (schema 1, actor `runtime`, a string `:text`, a `:source`), or its payload was omitted; it never falls back to the row's content.
+
+**Not changed.** The current prompt and the Run's own tool calls are not items (M1's scope). All attempts of one Run share a request id; each attempt's list is checked by `prompt-reconstructable` when it is recorded, and `superchat-tape-request-evidence` afterwards rebuilds the last list recorded for that id.
