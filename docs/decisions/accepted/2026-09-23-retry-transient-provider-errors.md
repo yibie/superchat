@@ -22,3 +22,7 @@ Not decided here: changing the transport's own timeouts, retrying empty response
 ## Acceptance
 
 Scripted transport: one transport error then an answer completes the Run with two requests and a `transient-retry` attempt on record; 429 and 503 retry; 400 does not; six consecutive transport errors fail after five retries with the last error; a cancel during the backoff sends nothing more; a streamed partial answer followed by an error does not retry; the count resets after a success. Canonical smoke and M3 unchanged. Then the act entry's attended acceptance on DeepSeek, in a new directory.
+
+## Narrowing recorded at implementation (2026-09-23)
+
+The pinned llm 0.32.1 passes Superchat's error callback only the type `error` and a string (`llm-request-plz.el:97-120` classifies, `llm-provider-utils.el`'s `:on-error` discards the classification). Transport failures are recognizable from that string ("Operation timeout." for curl 28; "curl error code N: …" for the others), but the HTTP status of a 429 or 5xx is not: only the provider's body text arrives. So this slice retries transport failures only — curl 28 (timeout), 6 (could not resolve), 7 (could not connect), 35 (TLS handshake), 52 (empty reply), 55 (send failure) and 56 (receive failure) — and does **not** retry HTTP 429 or 5xx, and never guesses from body text. That part of the decision waits on `.scratch/issues/2026-09-23-llm-drops-the-http-status-of-a-failed-request.md`. The Runtime's decision-snapshot attempt-reason list gains `transient-retry` so a retry records like any attempt.

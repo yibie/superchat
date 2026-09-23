@@ -140,6 +140,26 @@ keep the fatal behaviour."
   :type 'natnum
   :group 'superchat)
 
+(defcustom superchat-llm-transient-retries 5
+  "Maximum consecutive transport retries within one Run.
+The count resets after a successful provider response.  Set to zero to
+fail immediately on a transport error."
+  :type 'natnum
+  :group 'superchat)
+
+(defvar superchat--llm-transient-retry-base-delay 0.5
+  "Initial transport retry delay in seconds, before exponential backoff.")
+
+(defun superchat--llm-transient-error-p (type err)
+  "Return non-nil if llm.el's TYPE and ERR identify a transport failure.
+llm 0.32.1 forwards chat errors as `error' plus a string; HTTP status is
+lost at that boundary, so provider response bodies are never guessed at."
+  (and (eq type 'error)
+       (stringp err)
+       (or (equal err "Operation timeout.")
+           (string-match-p
+            "\\`curl error code \\(6\\|7\\|35\\|52\\|55\\|56\\): " err))))
+
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
 
@@ -525,7 +545,7 @@ means 0.")
   "Optional distribution callbacks installed by `superchat-llm-configure'.")
 
 (defconst superchat-llm-provider-attempt-reasons
-  '(initial tool-protocol-retry tool-followup final-answer)
+  '(initial tool-protocol-retry transient-retry tool-followup final-answer)
   "Provider attempt reasons accepted by the LLM transport.")
 
 (defun superchat-llm-provider-attempt-reason-p (reason)
@@ -2657,6 +2677,7 @@ requests until it receives text, bounded by
            (tool-progress-cumulative nil)
            (tool-marker-cumulative nil)
            (tool-error-retries 0)
+           (transient-retries 0)
            (unknown-tool-retry-limit
             (or superchat--llm-unknown-tool-retry-limit
                 superchat-llm-unknown-tool-retries))
@@ -3030,6 +3051,31 @@ requests until it receives text, bounded by
                               (format "[llm-chat-streaming error: %s]"
                                       (error-message-string e))
                               'failed))))
+                 ((and (not completed)
+                       (funcall run-active-p)
+                       (not response-parts)
+                       (string-empty-p reasoning-cumulative)
+                       (< transient-retries superchat-llm-transient-retries)
+                       (superchat--llm-transient-error-p type err))
+                  (let* ((delay (* (min 10.0
+                                        (* superchat--llm-transient-retry-base-delay
+                                           (expt 2 transient-retries)))
+                                   (+ 0.9 (/ (random 2001) 10000.0)))))
+                    (cl-incf transient-retries)
+                    (funcall cancel-wait-timeout)
+                    (run-at-time
+                     delay nil
+                     (lambda ()
+                       (when (and (not completed) (funcall run-active-p))
+                         (condition-case e
+                             (funcall send-request 'transient-retry)
+                           (superchat-llm-evidence-recording-error
+                            (signal (car e) (cdr e)))
+                           (error
+                            (funcall finalize
+                                     (format "[llm-chat-streaming error: %s]"
+                                             (error-message-string e))
+                                     'failed))))))))
                  (t
                   (funcall finalize
                            (cond
@@ -3044,6 +3090,7 @@ requests until it receives text, bounded by
       (setq response-cb
             (lambda (response)
               (when (funcall run-active-p)
+                (setq transient-retries 0)
                 (funcall record-usage response)
                 (let ((final-text
                        (cond

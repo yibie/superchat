@@ -1210,7 +1210,7 @@ ENTRY is terminally closing; CAUSATION-ID identifies that terminal path."
             (unless (and (integerp attempt) (> attempt 0))
               (error "Decision snapshot needs an attempt ordinal"))
             (unless (member attempt-reason
-                            '("initial" "tool-protocol-retry"
+                            '("initial" "tool-protocol-retry" "transient-retry"
                               "tool-followup" "final-answer"))
               (error "Decision snapshot has an invalid attempt reason"))
             (unless (superchat-runtime--plist-p prepared)
