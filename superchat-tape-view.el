@@ -557,6 +557,89 @@ An unavailable payload signals rather than inventing historical text."
              :source (plist-get material :source)
              :input-ids (plist-get material :input-ids))))))
 
+(defun superchat-view--continuity-tool-pair-p (candidate)
+  "Return non-nil when CANDIDATE is a tool-observation pair."
+  (and (consp candidate)
+       (eq (car candidate) :tool-observation)))
+
+(defun superchat-view--continuity-row-event (record)
+  "Return RECORD's decoded Runtime event plist, or nil."
+  (condition-case nil
+      (superchat-tape--row-event (cdr record))
+    (error nil)))
+
+(defun superchat-view--continuity-tool-observation-pairs (records &optional excluded-ids)
+  "Return tool-observation pairs over lineage RECORDS.
+Each pair is `(:tool-observation t :requested RECORD :outcome RECORD)'.
+A requested row and the `tool.completed'/`tool.failed' row with the same
+payload `:execution-id' pair within the same Session; an outcome without a
+string `:result-text', a missing partner, or an EXCLUDED-IDS row yields no
+pair.  Never paired by adjacency or tool name."
+  (let (requested-by-key outcomes pairs)
+    (dolist (record records)
+      (let* ((session-id (superchat-view--continuity-record-session-id record))
+             (id (superchat-view--continuity-record-id record))
+             ;; Only tool rows can pair; decoding every row's meta on every
+             ;; assembly would make a long Session's history cost grow with
+             ;; its size.
+             (event (and (member (superchat-view--continuity-record-kind record)
+                                 '("tool_call" "tool_result"))
+                         (superchat-view--continuity-row-event record)))
+             (type (and event (plist-get event :type)))
+             (payload (and event (plist-get event :payload)))
+             (execution-id (and payload (plist-get payload :execution-id))))
+        (when (and (stringp execution-id)
+                   (not (memql id excluded-ids)))
+          (cond
+           ((equal type "tool.requested")
+            (push (cons (cons session-id execution-id) record)
+                  requested-by-key))
+           ((and (member type '("tool.completed" "tool.failed"))
+                 (stringp (plist-get payload :result-text)))
+            (push (list :tool-observation t
+                        :key (cons session-id execution-id)
+                        :outcome record)
+                  outcomes))))))
+    (dolist (outcome (nreverse outcomes))
+      (let ((requested (cdr (assoc (plist-get outcome :key) requested-by-key))))
+        (when (and requested
+                   (not (memql (superchat-view--continuity-record-id requested)
+                               excluded-ids)))
+          (push (list :tool-observation t
+                      :requested requested
+                      :outcome (plist-get outcome :outcome))
+                pairs))))
+    (nreverse pairs)))
+
+(defun superchat-view--continuity-tool-observation-item (pair)
+  "Normalize tool-observation PAIR as one item.
+STATUS is `ok' for `tool.completed' and the outcome's own `:status' else."
+  (let* ((requested (plist-get pair :requested))
+         (outcome (plist-get pair :outcome))
+         (requested-event (superchat-view--continuity-row-event requested))
+         (outcome-event (superchat-view--continuity-row-event outcome))
+         (requested-payload
+          (and requested-event (plist-get requested-event :payload)))
+         (outcome-payload (and outcome-event (plist-get outcome-event :payload)))
+         (arguments-cut (plist-get requested-payload :arguments-truncated))
+         (result-cut (plist-get outcome-payload :result-truncated)))
+    (list :class 'tool-observation
+          :kind "tool-observation"
+          :storage-id (superchat-view--continuity-record-id outcome)
+          :source-ids (vector (superchat-view--continuity-record-id requested)
+                              (superchat-view--continuity-record-id outcome))
+          :tool-name (plist-get requested-payload :tool-name)
+          :status (if (equal "tool.completed" (plist-get outcome-event :type))
+                      "ok"
+                    (plist-get outcome-payload :status))
+          :arguments-text (plist-get requested-payload :arguments-text)
+          :arguments-cut arguments-cut
+          :arguments-chars (plist-get requested-payload :arguments-chars)
+          :result-text (plist-get outcome-payload :result-text)
+          :result-cut result-cut
+          :result-chars (plist-get outcome-payload :result-chars)
+          :lossy (or arguments-cut result-cut))))
+
 (defun superchat-view--continuity-compact-anchor-source-records
     (anchor records)
   "Return valid raw source RECORDS for typed compact ANCHOR, or nil."
@@ -613,11 +696,23 @@ An unavailable payload signals rather than inventing historical text."
 
 (defun superchat-view--continuity-item-line (item)
   "Render one normalized continuity ITEM as its canonical body line."
-  (if (eq (plist-get item :class) 'model-interpretation)
-      (format "Summary: %s" (plist-get item :content))
-    (format "%s: %s"
-            (superchat-view--continuity-role (plist-get item :kind))
-            (plist-get item :content))))
+  (pcase (plist-get item :class)
+    ('tool-observation
+     (superchat-tape-tool-observation-line
+      (plist-get item :tool-name)
+      (plist-get item :status)
+      (plist-get item :arguments-text)
+      (plist-get item :arguments-cut)
+      (plist-get item :arguments-chars)
+      (plist-get item :result-text)
+      (plist-get item :result-cut)
+      (plist-get item :result-chars)))
+    ('model-interpretation
+     (format "Summary: %s" (plist-get item :content)))
+    (_
+     (format "%s: %s"
+             (superchat-view--continuity-role (plist-get item :kind))
+             (plist-get item :content)))))
 
 (defun superchat-view--continuity-recall-item-line (item)
   "Render any explicitly recalled ITEM without treating it as prompt material."
@@ -929,7 +1024,13 @@ of omitted rows.  Contract v0 offers none, so the rendered header says
           (mapconcat
            render-line
            (append items nil)
-           "\n")))
+           "\n"))
+         (body
+          (if (cl-some (lambda (item)
+                         (eq (plist-get item :class) 'tool-observation))
+                       items)
+              (concat superchat-tape-tool-observation-note "\n" body)
+            body)))
     (if has-items
         (concat header "\n\n" body)
       header)))
@@ -994,6 +1095,20 @@ turn must leave neither context nor recallable disclosure behind."
           (cl-remove-if-not #'superchat-view--continuity-material-record-p
                             all-records))
          (source-id-list (and compact-valid-p (append compact-source-ids nil)))
+         (cancelled-ids
+          (cl-loop for record in all-records
+                   when (superchat-view--continuity-cancelled-record-p
+                         record cancelled-run-ids)
+                   collect (superchat-view--continuity-record-id record)))
+         (tool-pairs
+          (superchat-view--continuity-tool-observation-pairs
+           all-records (append source-id-list cancelled-ids)))
+         (tool-pair-outcomes
+          (mapcar (lambda (pair)
+                    (cons (superchat-view--continuity-record-id
+                           (plist-get pair :outcome))
+                          pair))
+                  tool-pairs))
          (candidate-records
           (if compact-valid-p
               (cl-remove-if-not
@@ -1023,20 +1138,74 @@ turn must leave neither context nor recallable disclosure behind."
                (superchat-view--continuity-cancelled-record-p
                 record cancelled-run-ids))
              material-records)))
+         (candidate-record-ids
+          (mapcar #'superchat-view--continuity-record-id candidate-records))
+         (candidates
+          (cl-loop for record in all-records
+                   for id = (superchat-view--continuity-record-id record)
+                   for pair = (cdr (assq id tool-pair-outcomes))
+                   when pair collect pair
+                   else when (memql id candidate-record-ids)
+                   collect record))
+         (item-function
+          (lambda (candidate)
+            (cond
+             ((superchat-view--continuity-tool-pair-p candidate)
+              (superchat-view--continuity-tool-observation-item candidate))
+             (compact-valid-p
+              (superchat-view--continuity-record-item
+               candidate compact-anchor compact-source-ids))
+             (t (superchat-view--continuity-raw-item candidate)))))
          (entry-budget max-entries)
          (char-budget (or max-chars 4000))
          (selection
           (superchat-view--continuity-select-records
-           candidate-records entry-budget char-budget
-           nil
-           (when compact-valid-p
-             (lambda (record)
-               (superchat-view--continuity-record-item
-                record compact-anchor compact-source-ids)))))
+           candidates entry-budget char-budget nil item-function))
          (records (plist-get selection :records))
          (skipped-records (plist-get selection :skipped-records))
+         (selected-records
+          (cl-remove-if #'superchat-view--continuity-tool-pair-p records))
+         (selected-pairs
+          (cl-remove-if-not #'superchat-view--continuity-tool-pair-p records))
+         (selected-pair-row-ids
+          (cl-loop for pair in selected-pairs
+                   append (list (superchat-view--continuity-record-id
+                                 (plist-get pair :requested))
+                                (superchat-view--continuity-record-id
+                                 (plist-get pair :outcome)))))
+         (skipped-pair-outcome-ids
+          (cl-loop for candidate in skipped-records
+                   when (superchat-view--continuity-tool-pair-p candidate)
+                   collect (superchat-view--continuity-record-id
+                            (plist-get candidate :outcome))))
+         (pair-row-ids
+          (cl-loop for pair in tool-pairs
+                   append (list (superchat-view--continuity-record-id
+                                 (plist-get pair :requested))
+                                (superchat-view--continuity-record-id
+                                 (plist-get pair :outcome)))))
+         (omitted-pair-reasons
+          (cl-loop for pair in tool-pairs
+                   unless (memql (superchat-view--continuity-record-id
+                                  (plist-get pair :outcome))
+                                 selected-pair-row-ids)
+                   append (let ((reason
+                                 (if (memql
+                                      (superchat-view--continuity-record-id
+                                       (plist-get pair :outcome))
+                                      skipped-pair-outcome-ids)
+                                     'oversized
+                                   'budget)))
+                            (list (cons (superchat-view--continuity-record-id
+                                         (plist-get pair :requested))
+                                        reason)
+                                  (cons (superchat-view--continuity-record-id
+                                         (plist-get pair :outcome))
+                                        reason)))))
          (selected-ids
-          (mapcar #'superchat-view--continuity-record-id records))
+          (append (mapcar #'superchat-view--continuity-record-id
+                          selected-records)
+                  selected-pair-row-ids))
          (anchor-selected-p
           (and compact-valid-p (member compact-anchor-id selected-ids)))
          (classified-omissions
@@ -1045,6 +1214,13 @@ turn must leave neither context nor recallable disclosure behind."
            (mapcar
             (lambda (record)
               (cond
+               ((memql (superchat-view--continuity-record-id record)
+                       pair-row-ids)
+                (when-let* ((reason
+                             (cdr (assq
+                                   (superchat-view--continuity-record-id record)
+                                   omitted-pair-reasons))))
+                  (cons record reason)))
                ((and (superchat-view--continuity-compact-anchor-p record)
                      (member
                       (superchat-view--continuity-record-id record)
@@ -1109,27 +1285,22 @@ turn must leave neither context nor recallable disclosure behind."
                            '(budget oversized unsupported-schema
                              malformed-provenance cancelled)))
                    classified-omissions))
-         (items (vconcat
-                 (mapcar
-                  (if compact-valid-p
-                      (lambda (record)
-                        (superchat-view--continuity-record-item
-                         record compact-anchor compact-source-ids))
-                    #'superchat-view--continuity-raw-item)
-                  records)))
+         (items (vconcat (mapcar item-function records)))
          (tape-head
           (and all-records
                (superchat-view--continuity-record-id
                 (car (last all-records)))))
          (covered
           (superchat-view--continuity-record-ranges
-           (if compact-valid-p
-               (cl-remove-if
-                (lambda (record)
-                  (= (superchat-view--continuity-record-id record)
-                     compact-anchor-id))
-                records)
-             records)))
+           (cl-remove-if
+            #'superchat-view--continuity-tool-pair-p
+            (if compact-valid-p
+                (cl-remove-if
+                 (lambda (record)
+                   (= (superchat-view--continuity-record-id record)
+                      compact-anchor-id))
+                 records)
+              records))))
          (represented
           (if anchor-selected-p
               (mapcar
@@ -1159,9 +1330,27 @@ turn must leave neither context nor recallable disclosure behind."
                  compact-source-records)
                 nil))
             nil))
-         (represented (vconcat represented))
+         (pair-represented
+          (mapcar
+           (lambda (pair)
+             (let* ((requested (plist-get pair :requested))
+                    (outcome (plist-get pair :outcome))
+                    (item (superchat-view--continuity-tool-observation-item pair)))
+               (append
+                (list :session-id
+                      (superchat-view--continuity-record-session-id outcome)
+                      :via-storage-id
+                      (superchat-view--continuity-record-id outcome)
+                      :class 'tool-observation
+                      :source-ids
+                      (vector (superchat-view--continuity-record-id requested)
+                              (superchat-view--continuity-record-id outcome)))
+                (when (plist-get item :lossy) (list :lossy t)))))
+           selected-pairs))
+         (represented (vconcat (append represented pair-represented)))
          (represented-count
-          (if anchor-selected-p (length compact-source-ids) 0))
+          (+ (if anchor-selected-p (length compact-source-ids) 0)
+             (* 2 (length selected-pairs))))
          (omissions (superchat-view--continuity-omission-ranges
                      classified-omissions))
          (recallable (superchat-view--continuity-recallable-ranges
