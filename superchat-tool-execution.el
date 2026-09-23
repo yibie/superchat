@@ -37,6 +37,9 @@
 (defvar superchat-tools-default-directory nil)
 (declare-function superchat-permission-level-decision "superchat-sandbox"
                   (tool-name args context &optional scope))
+(declare-function superchat-tools-row-builtin-owner "superchat-tools" (name))
+(declare-function superchat-tools-builtin-descriptor-p "superchat-tools"
+                  (name &optional scope))
 (declare-function superchat-approval-request-snapshot "superchat-approval"
                   (request &optional scope))
 (declare-function superchat-approval-effective-policy "superchat-approval"
@@ -367,6 +370,16 @@ tool implementation."
   "Return whether TOOL-NAME may still begin native execution for CONTEXT."
   (and (superchat-tool-execution--run-active-p context)
        (superchat-tool-execution--installation-active-p tool-name)))
+
+(defun superchat-tool-execution--row-builtin-unmounted (tool-name)
+  "Return the row owning TOOL-NAME when its built-in registration is absent.
+A built-in tool a default row owns is selectable only while that row is
+mounted; with the registration gone the row's name is returned so the call
+can be refused before any body starts.  Nil for every other tool."
+  (when (fboundp 'superchat-tools-row-builtin-owner)
+    (let ((row (superchat-tools-row-builtin-owner tool-name)))
+      (when (and row (not (superchat-tools-builtin-descriptor-p tool-name)))
+        row))))
 
 (defun superchat-tool-execution--note-runtime-work (context execution-id action)
   "Report ACTION for EXECUTION-ID to Runtime when Runtime is available.
@@ -1073,6 +1086,10 @@ that must be asked about goes to the approval seam."
                     experience-block
                     (plist-get context :block)))
                (blocked (and block-reason t))
+               ;; A row-owned built-in whose row was unmounted after this tool
+               ;; was materialized must not start a body either.
+               (row-builtin-unmounted
+                (superchat-tool-execution--row-builtin-unmounted tool-name))
                (context
                 (if block-reason
                     (plist-put (copy-sequence context)
@@ -1149,6 +1166,15 @@ that must be asked about goes to the approval seam."
           ;; ── finalize: every branch delivers through `refuse' or the ──
           ;; exact Sink, so a refusal reaches the consumer as a result does.
           (cond
+           (row-builtin-unmounted
+            (let ((result (format "[Tool call refused: the %s row is not mounted]"
+                                  row-builtin-unmounted)))
+              ;; The refused call is one audited fact, not an Effect: the same
+              ;; shape as the blocked/denied refusals (the inactive gate path
+              ;; records a diagnostic fault instead, or nothing at all).
+              (superchat-tool-execution--record-failure
+               tool-name context execution-id "blocked" result)
+              (funcall refuse result)))
            (blocked
             (let ((result (format "[Tool call blocked: %s]" block-reason)))
               (superchat-tool-execution--record-failure

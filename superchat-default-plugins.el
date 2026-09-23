@@ -96,11 +96,13 @@ Call time needs Services `driver' and `session'."
 (declare-function superchat-workflow--instance-projection-apply "superchat-workflow")
 (declare-function superchat-workspace--projection-apply "superchat-workspace")
 (declare-function superchat-experience--projection-apply "superchat-experience")
+(declare-function superchat-tools-install-row-builtins "superchat-tools" (row))
 
 (superchat-define-plugin subagent
   :inject '(driver tools tape)
   :doc "Sub-agent delegation: the team projection (tools and Surface autoload)."
   :apply (lambda (_scope _config)
+    (superchat-tools-install-row-builtins 'subagent)
     (superchat-projection-register
      'team
      :version 3
@@ -118,9 +120,10 @@ Call time needs Services `driver' and `session'."
      :apply #'superchat-workflow--instance-projection-apply)))
 
 (superchat-define-plugin workspace
-  :inject '(tape)
+  :inject '(tape tools)
   :doc "Artifact workspace: the artifacts projection (its tools autoload)."
   :apply (lambda (_scope _config)
+    (superchat-tools-install-row-builtins 'workspace)
     (superchat-projection-register
      'superchat-workspace-artifacts
      :version 2

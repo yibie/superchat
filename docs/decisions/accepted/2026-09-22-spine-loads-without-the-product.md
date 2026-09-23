@@ -32,3 +32,11 @@ Not proposed: lazy rows as a rule, new rows for helper modules, cutting the disp
 **The first draft (lazy everything, spine list, dispatcher cut).** Withdrawn for the reasons above.
 
 **Close G4 on M4's evidence alone, adding nothing.** Rejected narrowly: M4 tested the surface rows; the non-surface rows' withdrawal has not been checked one by one, and the reviewers asked for that check before calling the layer done.
+
+## Amendment (accepted 2026-09-22, user: "同意建议")
+
+Slice 1's verification found that unmounting `subagent`, `workspace` or `memory` left their tools offered to the model, because `tools-builtin` registers every built-in tool name (`superchat-tools.el:2120-2149`). Three reviewers agreed this is a real gap against this record's acceptance (`.scratch/discussions/2026-09-22-m9-tool-gap.md`). The user lifted "no production code change" for this fix and accepted:
+
+- The built-in tool groups move by *registration ownership* only: `tools-builtin` stops registering them and the owning row registers them as built-in descriptors in its own Scope, so unmount withdraws them. Implementations, descriptions, the reserved-name list, the user's tool-name list and the permission classes are unchanged; the default tool surface is unchanged. Groups: `subagent` owns `delegate_to_subagent`, `delegate_to_subagent_parallel`, `team_task`, `team_message`; `workspace` owns `workspace_write`, `workspace_publish`, `workspace_read`, `workspace_info`; `memory` owns `memory_search` (the user's ruling: turning memory off turns its search off).
+- The bypasses close too: an explicit Preset or request tool list cannot select a withdrawn tool, and a tool already materialized before the unmount refuses to start a new body.
+- Public entry points that start new work (`>>` workflow coordination, `/workflow`, `/subagent`, opening the agents panel) refuse when their row is unmounted; callbacks, cancel, cleanup and read-only inspection of work already running are not blocked. This is a second slice.

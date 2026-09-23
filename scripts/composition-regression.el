@@ -273,7 +273,7 @@ No entry point in the module that defines the listener calls
         (superchat-plugin-mount 'memory)
         (should (superchat-plugin-row-active-p 'memory))))))
 
-;;;; Known gap: a row's tools are not withdrawn with the row
+;;;; Row-owned tools
 
 (defun composition--offered-p (name)
   "Non-nil when tool NAME is in the chat surface's current tool decision."
@@ -283,10 +283,7 @@ No entry point in the module that defines the listener calls
 
 (defmacro composition--tool-withdrawn-test (row tool)
   `(ert-deftest ,(intern (format "composition/%s/unmount-withdraws-its-tool-%s" row tool)) ()
-     ,(format "Unmounting `%s' should stop offering `%s' to the model.
-Known gap (2026-09-22, .scratch/issues/2026-09-22-row-tools-survive-unmount.md):
-the tool is registered by superchat-tools.el, not by the row, so it stays offered." row tool)
-     :expected-result :failed
+     ,(format "Unmounting `%s' stops offering `%s' to the model." row tool)
      (composition--with-restored-composition
        (let ((superchat-llm-tool-names
               (append superchat-llm-default-tool-names (list ,tool))))
@@ -297,6 +294,89 @@ the tool is registered by superchat-tools.el, not by the row, so it stays offere
 (composition--tool-withdrawn-test subagent "delegate_to_subagent")
 (composition--tool-withdrawn-test workspace "workspace_write")
 (composition--tool-withdrawn-test memory "memory_search")
+
+(ert-deftest composition/row-tools/explicit-list-cannot-select-a-withdrawn-tool ()
+  "An explicit tool list cannot select a tool whose row is unmounted.
+`superchat--tool-descriptor-p' consults the row's own registration, so the
+withdrawn name is dropped while an ordinary built-in stays."
+  (composition--with-restored-composition
+    (superchat-plugin-unmount 'subagent)
+    (let* ((decision (superchat-select-tools-decision
+                      (list :surface 'chat
+                            :input-core (list :operation 'chat)
+                            :tools '("delegate_to_subagent" "read_buffer"))
+                      nil))
+           (names (plist-get decision :names)))
+      (should-not (member "delegate_to_subagent" names))
+      (should (member "read_buffer" names)))))
+
+(ert-deftest composition/row-tools/default-surface-unchanged ()
+  "The default tool surface is unchanged by the row-owned move.
+Captured on the unmodified tree before this slice (superchat.el mounted
+profile, default `superchat-llm-tool-names')."
+  (composition--fixture nil
+    (should (equal '("list_buffers" "read_buffer" "read_file" "read_reference"
+                     "open_file" "edit_buffer" "describe-function" "apropos"
+                     "eval_elisp" "ask_user")
+                   (plist-get (superchat-select-tools-decision
+                               (list :surface 'chat
+                                     :input-core (list :operation 'chat))
+                               nil)
+                              :names)))))
+
+(ert-deftest composition/row-tools/remount-restores-the-tool ()
+  "Unmounting then remounting `workspace' withdraws and restores its tool."
+  (composition--with-restored-composition
+    (let ((superchat-llm-tool-names
+           (append superchat-llm-default-tool-names (list "workspace_write"))))
+      (should (composition--offered-p "workspace_write"))
+      (superchat-plugin-unmount 'workspace)
+      (should-not (composition--offered-p "workspace_write"))
+      (superchat-plugin-mount 'workspace)
+      (should (composition--offered-p "workspace_write")))))
+
+(ert-deftest composition/row-tools/materialized-tool-refuses-after-unmount ()
+  "A tool materialized while its row was mounted refuses after the unmount.
+The model's first step arrives after a delay; `memory' is unmounted during
+it, so the call reaches Authority with the row gone.  The refusal is a
+`tool.failed' fact and reaches the model in the follow-up request; no body
+and no `tool.execution.started' happen."
+  (composition--fixture
+      '((:delay 0.3 :tool-uses (("memory_search" (query . "x"))))
+        (:text "done"))
+    (composition--with-restored-composition
+      (let* ((superchat-llm-tool-names
+              (append superchat-llm-default-tool-names (list "memory_search")))
+             (view (smoke--open-chat))
+             (run (smoke--send view "search memory")))
+        (should (stringp run))
+        (should (smoke--wait
+                 (lambda () (member run (superchat-runtime-active-runs)))
+                 10))
+        ;; Mounted when the request went out; the call arrives after this.
+        (should (superchat-tools-builtin-descriptor-p "memory_search"))
+        (superchat-plugin-unmount 'memory)
+        (should-not (superchat-tools-builtin-descriptor-p "memory_search"))
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 30))
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+        (let* ((session (buffer-local-value 'superchat--session-id view))
+               (events (superchat-tape-replay-events session))
+               (failures (cl-remove-if-not
+                          (lambda (event)
+                            (and (equal "tool.failed" (plist-get event :type))
+                                 (equal "memory_search"
+                                        (plist-get (plist-get event :payload)
+                                                   :tool-name))))
+                          events)))
+          (should (= 1 (length failures)))
+          ;; The body never started, and the refusal reached the model.
+          (should-not (cl-find-if
+                       (lambda (event)
+                         (equal "tool.execution.started" (plist-get event :type)))
+                       events))
+          (should (string-match-p
+                   "memory row is not mounted"
+                   (plist-get (car smoke--requests) :prompt-text))))))))
 
 (provide 'composition-regression)
 ;;; composition-regression.el ends here

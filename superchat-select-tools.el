@@ -157,7 +157,10 @@ fix."
   ;; is what makes a name a descriptor -- the same trust materialization has
   ;; always placed in this exact query.  Re-filtering here would instead
   ;; reject a test double's own synthetic tool names, which legitimately
-  ;; have no installation in a real Scope.
+  ;; have no installation in a real Scope.  Row-owned built-ins are the one
+  ;; exception: the materializer builds them from the configured name list
+  ;; regardless of whether their row is mounted, so the filter below drops
+  ;; one whose row's registration is absent.
   (let* (;; `superchat-llm-tool-names' is a `superchat-tools.el' defcustom;
          ;; this file does not require that file (soft dependency, like
          ;; `superchat--last-surface' elsewhere here), so a headless
@@ -180,10 +183,17 @@ fix."
          ;; still narrows it to the fixed five, exactly as the honest
          ;; list/`all' cases narrow it to their own configuration.
          (query-policy (if (or (eq policy 'all) (listp policy)) policy 'all))
-         (structs (if (fboundp 'superchat-get-llm-tools)
-                      (let ((superchat-llm-tool-names query-policy))
-                        (superchat-get-llm-tools))
-                    nil))
+         (raw-structs (if (fboundp 'superchat-get-llm-tools)
+                          (let ((superchat-llm-tool-names query-policy))
+                            (superchat-get-llm-tools))
+                        nil))
+         (structs (cl-remove-if
+                   (lambda (tool)
+                     (let ((name (llm-tool-name tool)))
+                       (and (fboundp 'superchat-tools-row-builtin-owner)
+                            (superchat-tools-row-builtin-owner name)
+                            (not (superchat-tools-builtin-descriptor-p name)))))
+                   raw-structs))
          (query-names (mapcar #'llm-tool-name structs))
          ;; A plugin-registered name always survives the configured-names
          ;; filter (S09-fix-5 item 3).  The soft Scope-view helper keeps this

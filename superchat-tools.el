@@ -2117,13 +2117,43 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
 
 ;; ── Built-in tools as selectable descriptors ──
 
+(defconst superchat-tools--row-owned-builtin-names
+  '((subagent "delegate_to_subagent" "delegate_to_subagent_parallel"
+              "team_task" "team_message")
+    (workspace "workspace_write" "workspace_publish"
+               "workspace_read" "workspace_info")
+    (memory "memory_search"))
+  "Built-in tool names registered by their owning default row.
+`superchat-tools--install-builtin-descriptors' skips these, and the owning
+row calls `superchat-tools-install-row-builtins' in its own `:apply', so
+unmounting the row withdraws exactly this group and no other row offers it.")
+
+(defun superchat-tools-row-builtin-owner (name)
+  "Return the default row owning built-in tool NAME, or nil."
+  (car (cl-find name superchat-tools--row-owned-builtin-names
+                :key #'cdr :test #'member)))
+
+(defun superchat-tools-install-row-builtins (row)
+  "Register ROW's built-in tools as selectable descriptors of this Scope.
+The registrations are withdrawn with that Scope, so unmounting ROW withdraws
+exactly this group."
+  (let ((names (cdr (assq row superchat-tools--row-owned-builtin-names))))
+    (unless names
+      (error "superchat-tools: %s has no row-owned built-in tools" row))
+    (let ((scope (superchat-registration-scope-resolve nil)))
+      (dolist (name names)
+        (superchat-scope-register scope 'builtin-tool name t)))))
+
 (defun superchat-tools--install-builtin-descriptors ()
   "Make every built-in tool a selectable descriptor of the mounting Scope.
 The registrations are withdrawn with that Scope, so unmounting the plugin
-that calls this leaves no built-in tool selectable."
+that calls this leaves no built-in tool selectable.  Names owned by another
+row (see `superchat-tools--row-owned-builtin-names') are that row's to
+register, so this skips them."
   (let ((scope (superchat-registration-scope-resolve nil)))
     (dolist (name superchat-tools--builtin-tool-names)
-      (superchat-scope-register scope 'builtin-tool name t))))
+      (unless (superchat-tools-row-builtin-owner name)
+        (superchat-scope-register scope 'builtin-tool name t)))))
 
 (defun superchat-tools-builtin-descriptor-p (name &optional scope)
   "Return non-nil when built-in tool NAME is selectable in SCOPE."

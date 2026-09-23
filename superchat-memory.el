@@ -655,11 +655,13 @@ Returns the number of anchors created."
 ;; ── Plugin (spec §3): the default provider defined next to its code ──
 (declare-function superchat-db-tape-search-prioritized "superchat-db")
 (declare-function superchat-db-memory-list-review "superchat-db")
+(declare-function superchat-tools-install-row-builtins "superchat-tools" (row))
 (superchat-define-plugin memory
-  :inject '(tape)
+  :inject '(tape tools)
   :doc "Memory rows: insert, search, review."
   :apply
   (lambda (scope _)
+    (superchat-tools-install-row-builtins 'memory)
     (superchat-projection-register
      'memory
      :version 1
