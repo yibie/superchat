@@ -293,6 +293,29 @@ rebuilt View hides replaced turns."
   "Return validated typed compaction source IDs from ANCHOR-ROW."
   (superchat-view--compact-anchor-row-source-ids anchor-row))
 
+(defun superchat-view--continuity-pair-row-ids (records)
+  "Return the storage ids of every row in a complete tool pair among RECORDS.
+Computed once per Anchor check, so validating N sources pairs them once
+rather than N times."
+  (cl-loop for pair in (superchat-view--continuity-tool-observation-pairs records)
+           append (list (superchat-view--continuity-record-id
+                         (plist-get pair :requested))
+                        (superchat-view--continuity-record-id
+                         (plist-get pair :outcome)))))
+
+(defun superchat-view--continuity-anchor-source-valid-p
+    (record pair-row-ids anchor-id)
+  "Return non-nil when RECORD may be a source of an Anchor.
+A material record is valid when it is older than ANCHOR-ID; a tool row is
+valid when it is older and belongs to a complete requested+outcome pair among
+the Anchor's sources (PAIR-ROW-IDS, from
+`superchat-view--continuity-pair-row-ids'), so an Anchor covers the
+observation as one fact."
+  (and (< (superchat-view--continuity-record-id record) anchor-id)
+       (or (superchat-view--continuity-material-record-p record)
+           (memql (superchat-view--continuity-record-id record)
+                  pair-row-ids))))
+
 (defun superchat-view--compaction-anchor-valid-p
   (session-id row &optional all-rows)
   "Return non-nil when ROW has complete same-Session provenance."
@@ -305,16 +328,25 @@ rebuilt View hides replaced turns."
          (ids (and source-ids (append source-ids nil)))
          (sources
           (and ids
-               (mapcar (lambda (id) (cl-find id rows :key #'car)) ids))))
+               (mapcar (lambda (id) (cl-find id rows :key #'car)) ids)))
+         (source-records
+          (delq nil
+                (mapcar (lambda (source)
+                          (and source
+                               (superchat-view--continuity-record
+                                session-id source)))
+                        sources)))
+         (pair-row-ids
+          (superchat-view--continuity-pair-row-ids source-records)))
     (and (superchat-view--compact-anchor-row-p row)
          (or (null source-session) (equal source-session session-id))
          (= (length sources) (length ids))
          (cl-every
           (lambda (source)
             (and source
-                 (< (nth 0 source) anchor-id)
-                 (superchat-view--continuity-material-record-p
-                  (superchat-view--continuity-record session-id source))))
+                 (superchat-view--continuity-anchor-source-valid-p
+                  (superchat-view--continuity-record session-id source)
+                  pair-row-ids anchor-id)))
           sources))))
 
 (defun superchat-view-compaction-anchor-latest (session-id)
@@ -640,6 +672,28 @@ STATUS is `ok' for `tool.completed' and the outcome's own `:status' else."
           :result-chars (plist-get outcome-payload :result-chars)
           :lossy (or arguments-cut result-cut))))
 
+(defun superchat-view-tool-observation-entries (session-id rows)
+  "Return SESSION-ID's tool observation entries over Tape ROWS.
+Each entry is `(:id OUTCOME-ID :source-ids (REQUESTED-ID OUTCOME-ID)
+:content LINE)' in outcome order.  Pairing and rendering are the Context
+View's own, so a consumer can never disagree with the prompt history; a row
+without its partner or stored text yields no entry."
+  (let* ((records (mapcar (lambda (row)
+                            (superchat-view--continuity-record session-id row))
+                          rows))
+         (pairs (superchat-view--continuity-tool-observation-pairs records)))
+    (mapcar
+     (lambda (pair)
+       (let* ((requested (plist-get pair :requested))
+              (outcome (plist-get pair :outcome))
+              (item (superchat-view--continuity-tool-observation-item pair)))
+         (list :id (superchat-view--continuity-record-id outcome)
+               :source-ids
+               (list (superchat-view--continuity-record-id requested)
+                     (superchat-view--continuity-record-id outcome))
+               :content (superchat-view--continuity-item-line item))))
+     pairs)))
+
 (defun superchat-view--continuity-compact-anchor-source-records
     (anchor records)
   "Return valid raw source RECORDS for typed compact ANCHOR, or nil."
@@ -661,13 +715,13 @@ STATUS is `ok' for `tool.completed' and the outcome's own `:status' else."
                  records))
               ids)))
         (when (and (cl-every #'identity sources)
-                   (cl-every
-                    (lambda (record)
-                      (and (< (superchat-view--continuity-record-id record)
-                              anchor-id)
-                           (superchat-view--continuity-material-record-p
-                            record)))
-                    sources)
+                   (let ((pair-row-ids
+                          (superchat-view--continuity-pair-row-ids sources)))
+                     (cl-every
+                      (lambda (record)
+                        (superchat-view--continuity-anchor-source-valid-p
+                         record pair-row-ids anchor-id))
+                      sources))
                    (= (length sources) (length ids)))
           (sort sources
                 (lambda (left right)
@@ -1292,15 +1346,16 @@ turn must leave neither context nor recallable disclosure behind."
                 (car (last all-records)))))
          (covered
           (superchat-view--continuity-record-ranges
-           (cl-remove-if
-            #'superchat-view--continuity-tool-pair-p
-            (if compact-valid-p
-                (cl-remove-if
-                 (lambda (record)
-                   (= (superchat-view--continuity-record-id record)
-                      compact-anchor-id))
-                 records)
-              records))))
+           (let ((plain
+                  (cl-remove-if
+                   #'superchat-view--continuity-tool-pair-p records)))
+             (if compact-valid-p
+                 (cl-remove-if
+                  (lambda (record)
+                    (= (superchat-view--continuity-record-id record)
+                       compact-anchor-id))
+                  plain)
+               plain))))
          (represented
           (if anchor-selected-p
               (mapcar

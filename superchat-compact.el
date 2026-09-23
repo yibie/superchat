@@ -20,6 +20,8 @@
                   "superchat-tape-view" (session-id))
 (declare-function superchat-view-compaction-anchor-source-ids
                   "superchat-tape-view" (row))
+(declare-function superchat-view-tool-observation-entries
+                  "superchat-tape-view" (session-id rows))
 (declare-function superchat--insert-system-message "superchat-render" (content))
 (declare-function superchat--response-region-insert-persistent
                   "superchat-render"
@@ -32,6 +34,7 @@
 (defvar superchat--session-id nil)
 (defvar superchat--conversation-history nil)
 (defvar superchat-buffer-name nil)
+(defvar superchat-tape-tool-observation-note)
 (defvar superchat-context-message-count nil)
 (defvar superchat-context-max-chars nil)
 (defvar superchat-data-directory nil)
@@ -100,6 +103,41 @@ foreign Session's buffer for the caller to compact."
 ;; Anchor expansion
 ;; ═══════════════════════════════════════════════════════════
 
+(defun superchat-compact--expanded-entries (session-id rows)
+  "Return expansion ENTRIES for the raw ROWS of SESSION-ID's expanded Anchor.
+A tool pair renders as one `system' entry whose content is the Context View's
+Tool line, with both rows as its sources; tool rows without a pair with
+stored text are skipped.  Everything else renders as it did before."
+  (let* ((tool-entries
+          (and session-id
+               (superchat-view-tool-observation-entries session-id rows)))
+         (tool-by-outcome
+          (mapcar (lambda (entry) (cons (plist-get entry :id) entry))
+                  tool-entries))
+         (tool-requested-ids
+          (mapcar (lambda (entry)
+                    (nth 0 (plist-get entry :source-ids)))
+                  tool-entries))
+         collected)
+    (dolist (row rows)
+      (let ((id (nth 0 row))
+            (kind (nth 2 row))
+            (content (nth 3 row)))
+        (cond
+         ((cdr (assq id tool-by-outcome))
+          (let ((entry (cdr (assq id tool-by-outcome))))
+            (push (list :role 'system
+                        :content (plist-get entry :content)
+                        :id (plist-get entry :id)
+                        :source-ids (plist-get entry :source-ids))
+                  collected)))
+         ((memql id tool-requested-ids) nil)
+         ((member kind '("user" "assistant"))
+          (push (list :role (intern kind) :content content :id id) collected))
+         ((member kind '("tool_call" "tool_result")) nil)
+         (t (push (list :role 'system :content content :id id) collected)))))
+    (nreverse collected)))
+
 (defun superchat-compact--expand-anchor (&optional session-id)
   "Expand the latest anchor for SESSION-ID back into raw history.
 M1: expanding changes how the Session is read, not what the Tape holds.  The
@@ -111,16 +149,7 @@ derivation as a cache.  Repeating the operation is a no-op."
          (anchor (when sid (superchat-service-call nil 'session 'anchor-latest sid))))
     (when anchor
       (let* ((entries (superchat-service-call nil 'session 'expand-anchor sid anchor))
-             (messages (mapcar
-                        (lambda (row)
-                          (let ((kind (nth 2 row))
-                                (content (nth 3 row))
-                                (id (nth 0 row)))
-                            (pcase kind
-                              ("user" (list :role 'user :content content :id id))
-                              ("assistant" (list :role 'assistant :content content :id id))
-                              (_ (list :role 'system :content content :id id)))))
-                        entries)))
+             (messages (superchat-compact--expanded-entries sid entries)))
         (when entries
           (let* ((anchor-id (nth 0 anchor))
                  (already-expanded-p
@@ -458,40 +487,48 @@ limit."
         summary))))
 
 (defun superchat-compact--message-line (message)
-  "Render MESSAGE using the same character accounting as Context View."
-  (superchat-service-call nil 'session 'item-line
-   (list :class 'raw-fact
-         :kind (symbol-name (plist-get message :role))
-         :content (or (plist-get message :content) ""))))
+  "Render MESSAGE using the same character accounting as Context View.
+A tool observation entry already carries its rendered line as its content."
+  (if (superchat-compact--tool-entry-p message)
+      (or (plist-get message :content) "")
+    (superchat-service-call nil 'session 'item-line
+     (list :class 'raw-fact
+           :kind (symbol-name (plist-get message :role))
+           :content (or (plist-get message :content) "")))))
 
-(defun superchat-compact--keep-recent-messages (rows context-budget)
-  "Return the newest raw ROWS fitting thirty percent of CONTEXT-BUDGET.
-The newest row is retained even when its rendered line alone exceeds that
-portion, so compaction never consumes the latest fact."
+(defun superchat-compact--tool-entry-p (entry)
+  "Return non-nil when ENTRY is a tool observation entry."
+  (and (listp entry) (plist-get entry :source-ids) t))
+
+(defun superchat-compact--keep-recent-messages (entries context-budget)
+  "Return the newest raw ENTRIES fitting thirty percent of CONTEXT-BUDGET.
+ENTRIES are message plists; a tool observation also carries `:source-ids' and
+costs its rendered line.  The newest entry is retained even when its rendered
+line alone exceeds that portion, so compaction never consumes the latest fact."
   (let ((keep-budget (floor (* context-budget 0.3)))
         (selected nil)
         (selected-chars 0))
     (catch 'keep-recent-stop
-      (dolist (row (reverse (copy-sequence rows)))
-        (let* ((message (list :role (intern (nth 2 row))
-                              :content (nth 3 row)))
-               (line-length
-                (length (superchat-compact--message-line message)))
+      (dolist (entry (reverse (copy-sequence entries)))
+        (let* ((line-length (length (superchat-compact--message-line entry)))
                (candidate-chars (+ selected-chars line-length
                                     (if selected 1 0))))
           (if (and selected (> candidate-chars keep-budget))
               (throw 'keep-recent-stop nil)
-            (push row selected)
+            (push entry selected)
             (setq selected-chars candidate-chars)))))
     selected))
 
 (defun superchat-compact--collect-messages (&optional context-budget)
   "Collect raw messages to summarize after the latest typed Anchor.
 The newest thirty percent of CONTEXT-BUDGET remains raw in the Context View;
-the returned plists carry the Tape row IDs used as Anchor provenance.
-Rows the Session replaced with `turn.superseded' are skipped; a failed
-supersession-index read signals, so compaction never summarizes history
-that still contains replaced turns."
+the returned plists carry the Tape row IDs used as Anchor provenance.  A
+requested+outcome tool pair of the span becomes one `tool' entry whose
+content is the Context View's own Tool line and whose `:source-ids' name
+both rows; it is placed at the outcome row's position and takes part in the
+recent window like any message.  Rows the Session replaced with
+`turn.superseded' are skipped; a failed supersession-index read signals, so
+compaction never summarizes history that still contains replaced turns."
   (let* ((session-id (and (boundp 'superchat--session-id)
                           superchat--session-id))
          (superseded (and session-id
@@ -500,25 +537,42 @@ that still contains replaced turns."
                       (superchat-service-call nil 'session 'anchor-latest session-id)))
          (after-id (and anchor (nth 0 anchor)))
          (rows (and session-id (superchat-service-call nil 'session 'entries session-id after-id)))
-         (rows (cl-remove-if-not
-                (lambda (row)
-                  (and (member (nth 2 row) '("user" "assistant"))
-                       (not (memql (nth 0 row) superseded))))
-                rows))
+         (rows (cl-remove-if (lambda (row)
+                               (memql (nth 0 row) superseded))
+                             rows))
+         (tool-entries
+          (and session-id
+               (superchat-view-tool-observation-entries session-id rows)))
+         (tool-by-outcome
+          (mapcar (lambda (entry) (cons (plist-get entry :id) entry))
+                  tool-entries))
+         (tool-requested-ids
+          (mapcar (lambda (entry)
+                    (nth 0 (plist-get entry :source-ids)))
+                  tool-entries))
+         (entries
+          (let (collected)
+            (dolist (row rows)
+              (let* ((id (nth 0 row))
+                     (kind (nth 2 row))
+                     (tool (cdr (assq id tool-by-outcome))))
+                (cond
+                 (tool (push tool collected))
+                 ((memql id tool-requested-ids) nil)
+                 ((member kind '("user" "assistant"))
+                  (push (list :role (intern kind)
+                              :content (nth 3 row)
+                              :id id)
+                        collected)))))
+            (nreverse collected)))
          (context-budget (or context-budget
                              (superchat-compact--context-budget)))
-         (recent-rows (superchat-compact--keep-recent-messages
-                       rows context-budget))
-         (compaction-count (- (length rows) (length recent-rows)))
-         (rows (if (> compaction-count 0)
-                   (cl-subseq rows 0 compaction-count)
-                 nil)))
-    (mapcar
-     (lambda (row)
-       (list :role (intern (nth 2 row))
-             :content (nth 3 row)
-             :id (nth 0 row)))
-     rows)))
+         (recent-entries (superchat-compact--keep-recent-messages
+                          entries context-budget))
+         (compaction-count (- (length entries) (length recent-entries))))
+    (if (> compaction-count 0)
+        (cl-subseq entries 0 compaction-count)
+      nil)))
 
 (defun superchat-compact--build-compaction-prompt
     (messages &optional previous-summary)
@@ -526,22 +580,31 @@ that still contains replaced turns."
 MESSAGES is a list of message plists.  PREVIOUS-SUMMARY is folded into a
 new checkpoint instead of being silently discarded on repeated compaction."
   (let* ((conversation-text
-          (mapconcat
-           #'identity
-           (delq nil
-                 (mapcar
-                  (lambda (msg)
-                    (let ((role (plist-get msg :role))
-                          (content (string-trim
-                                    (or (plist-get msg :content) ""))))
-                      (when (not (string-empty-p content))
-                        (format "%s: %s"
-                                (capitalize (if (symbolp role)
-                                                (symbol-name role)
-                                              role))
-                                content))))
-                  messages))
-           "\n\n"))
+          (let ((tool-seen nil))
+            (mapconcat
+             #'identity
+             (delq nil
+                   (mapcar
+                    (lambda (msg)
+                      (let ((content (string-trim
+                                      (or (plist-get msg :content) ""))))
+                        (cond
+                         ((string-empty-p content) nil)
+                         ((superchat-compact--tool-entry-p msg)
+                          (prog1 (if tool-seen
+                                     content
+                                   (concat superchat-tape-tool-observation-note
+                                           "\n\n" content))
+                            (setq tool-seen t)))
+                         (t
+                          (let ((role (plist-get msg :role)))
+                            (format "%s: %s"
+                                    (capitalize (if (symbolp role)
+                                                    (symbol-name role)
+                                                  role))
+                                    content))))))
+                    messages))
+             "\n\n")))
          (has-previous
           (and (stringp previous-summary)
                (not (string-empty-p (string-trim previous-summary)))))
@@ -733,8 +796,13 @@ the Run was in flight are preserved by ID in front of the new Anchor."
                           (superchat-service-call nil 'session 'anchor-source-ids
                            previous-anchor)
                           nil))
-                    (mapcar (lambda (message) (plist-get message :id))
-                            messages)))))
+                    (let (ids)
+                      (dolist (message messages)
+                        (let ((sources (plist-get message :source-ids)))
+                          (if sources
+                              (dolist (source sources) (push source ids))
+                            (push (plist-get message :id) ids))))
+                      (nreverse ids))))))
          (anchor-id
           (superchat-service-call nil 'tape 'append-anchor
            session-id summary source-ids :message-count (length source-ids))))
