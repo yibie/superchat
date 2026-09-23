@@ -131,7 +131,7 @@ S14 updates `docs/plugin-guide.md`, `docs/architecture.md` and the Telega plugin
   id        ; string; `superchat-sink-create' fills "sink-<8 hex>" when nil
   live-p    ; nil (always live) or (lambda () BOOL)
   stream    ; nil or (lambda (RUN CHUNK))     CHUNK = (:kind text|reasoning :text STRING)
-  status    ; nil or (lambda (RUN STATUS))    STATUS = waiting|typing|calling-tool|ready|error|stopped|orphaned
+  status    ; nil or (lambda (RUN STATUS))    STATUS = waiting|typing|calling-tool|retrying|ready|error|stopped|orphaned
   final     ; nil or (lambda (RUN RESULT))    RESULT  = (:text STRING :tape-id ID-or-nil)
   error     ; nil or (lambda (RUN FAILURE))   FAILURE = (:status failed|timed-out|audit-incomplete|cancelled :text STRING :reason STRING-or-nil :tape-id ID-or-nil)
   orphaned) ; nil or (lambda (RUN REASON))    REASON = sink-lost
@@ -144,7 +144,7 @@ storage ID when that row was appended, else for `cancelled` the
 
 `RUN` is the callback projection built by `superchat-runtime-sink-run RUN-ID`:
 exactly the keys `:run-id :turn-id :session-id :surface :status :parent-run-id
-:started-at :completed-at :error :pending-steer-count :sink-id`, taken from
+:started-at :completed-at :error :pending-steer-count :retry :sink-id`, taken from
 `superchat-runtime--public-status` (`superchat-runtime.el:240-271`) and passed
 through `copy-tree` (pure symbols, strings, numbers, lists only).  It contains
 no buffer, marker, function, timer or process; the only opaque live objects a
@@ -173,7 +173,7 @@ capture-and-re-signal rule of §3.3; `superchat-sink-emit` takes a keyword
 
 | Point | Rule |
 |---|---|
-| Active emissions | `:status waiting` after `run.started`; `:stream` zero or more; `:status typing` on first text; `:status calling-tool` per tool round.  Only while the Run is `running-model`; late chunks are dropped. |
+| Active emissions | `:status waiting` after `run.started`; `:stream` zero or more; `:status calling-tool` when a tool body starts and `:status waiting` when the Run's last open tool body settles ([tool status](../decisions/accepted/2026-09-23-surfaces-are-told-when-a-tool-runs.md)); `:status retrying` when a transient provider retry is scheduled, with RUN's `:retry` = `(:attempt N :limit M :delay SECONDS :at SEND-TIME :error SUMMARY)`, and `:status waiting` when the retried request is sent ([retry notice](../decisions/accepted/2026-09-23-retry-transient-provider-errors.md)).  `typing` is a Sink's own state on its first stream chunk; Runtime does not send it.  Only while the Run is `running-model`; late chunks are dropped; RUN's `:retry` is nil except during a retry wait. |
 | Pre-seal target loss | Liveness false before sealing wins: cancel provider work, seal as cancelled with `:reason sink-lost`, emit `:status orphaned` then `:orphaned` exactly once; never `:status stopped`.  **Applies only to a Sink that declares `:live-p`** (envelope Sinks such as the inline overlay and rewrite preview).  Legacy-bridge Sinks (the `:delivery-function`/`:stream-function` wrapper and the chat View Sink) declare no `:live-p`: as today, a Run whose buffer or View died keeps running and records its durable result (`superchat-runtime.el:1044-1047`: "Runtime keeps the durable result even when a View was cleared while the Run was in flight"); their callbacks check the buffer/View themselves and do nothing when it is gone (leader ruling R3-L7, after S01). |
 | Terminal sequence | seal (§7.2) → terminal `:status` (advisory, guarded separately) → exactly one payload callback (`:final`, `:error` or `:orphaned`) attempted even if the status callback failed → completion hooks → quiesce → queue dispatch-next (§7.5). |
 | Terminal `quit` | A `quit` from the terminal status callback is captured (not propagated immediately); the payload callback is then attempted inside `unwind-protect`; the aggregate receipt is appended if Tape allows; finally the **original** quit is re-signalled.  A `quit` from the payload callback is handled the same way (receipt, then re-signal).  Active (non-terminal) emissions keep plain propagation. |
