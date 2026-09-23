@@ -224,7 +224,7 @@ Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/2
 
 ### Act entry acceptance on the current commit (`accepted` 2026-09-23)
 
-The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
+Accepted by the user on 2026-09-23 ("我觉得可以验收"). The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
 
 ### Chat entry acceptance on the current commit (`accepted` 2026-09-22)
 
