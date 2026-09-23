@@ -2,6 +2,17 @@
 
 All notable changes to superchat.
 
+## Unreleased — one finish check when a task stops half-way
+
+- In the chat window and `superchat-act`, when the model has used tools and
+  then stops with a reply that is empty or ends by announcing its own next
+  step ("Let me also confirm…", "接下来我…") without doing it, Superchat
+  sends it one note: do the step now, or give the final report. This
+  happens at most once per task, never while you are steering the task and
+  never after the tool-round budget asked for a final answer. The note is
+  recorded as coming from Superchat, not from you. Turn it off with
+  `superchat-llm-finish-check`.
+
 ## Unreleased — later turns remember what the tools returned
 
 - The model now remembers, in later turns of the same conversation, what its

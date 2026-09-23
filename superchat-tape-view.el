@@ -567,7 +567,10 @@ An unavailable payload signals rather than inventing historical text."
                    (plist-get payload :source)
                    (not (plist-get payload :omitted)))
         (error "Admitted material at Tape row %s is unavailable" (car row)))
-      (list :role 'user
+      (list :role (if (equal "finish-check"
+                          (format "%s" (plist-get (plist-get payload :source) :origin)))
+                      'system
+                    'user)
             :content (concat "[Injected material] " (plist-get payload :text))
             :id (car row)
             :event-id (plist-get event :event-id)

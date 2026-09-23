@@ -111,6 +111,23 @@ disable the round limit."
                  (integer :tag "Rounds"))
   :group 'superchat)
 
+(defcustom superchat-llm-finish-check t
+  "Whether a tool-using chat Run gets one finish check.
+When a text-only reply is empty or its last sentence announces the
+model's own next action, one system-originated note is queued for the
+Run's next Step and the Run takes one more request.  The check fires at
+most once per Run and can cost one extra request."
+  :type 'boolean
+  :group 'superchat)
+
+(defconst superchat-llm--finish-check-note
+  (concat "Your last message has no tool call, so the task would end here. "
+          "If a step you described is still undone, do it now with a tool; "
+          "do not retry a call the user refused. "
+          "If everything is done, give your final report: what you changed "
+          "and where, what is unsaved, and what you did not verify.")
+  "The one note the finish check queues for the Run's next Step.")
+
 (defcustom superchat-llm-unknown-tool-retries 2
   "How many invalid tool calls the main loop recovers from.
 
@@ -787,6 +804,8 @@ the slot, and a late answer must not bring anything back."
 (declare-function superchat-tape-request-record "superchat-tape"
                   (session-id request-id system tools model message-items receipt
                               &optional resumed execution))
+(declare-function superchat-runtime-steer "superchat-runtime"
+                  (run-id text &optional origin))
 (declare-function llm-tool-function "llm" (tool))
 (declare-function llm-tool-async "llm" (tool))
 (declare-function make-llm-tool "llm" (&rest args))
@@ -1859,6 +1878,97 @@ and no tool calls."
            (plist-get result :tool-results))
        t))
 
+(defun superchat-llm--finish-check-cleaned (text)
+  "Return TEXT without fenced code blocks, quoted passages and quoted lines."
+  (let ((cleaned (or text "")))
+    (setq cleaned (replace-regexp-in-string "```[^`]*```" "" cleaned))
+    (setq cleaned (replace-regexp-in-string "\"[^\"]*\"" "" cleaned))
+    (setq cleaned (replace-regexp-in-string "“[^”]*”" "" cleaned))
+    (setq cleaned (replace-regexp-in-string "「[^」]*」" "" cleaned))
+    (setq cleaned (replace-regexp-in-string "^[ \t]*>.*$" "" cleaned))
+    cleaned))
+
+(defun superchat-llm--finish-check-last-sentence (text)
+  "Return TEXT's last sentence, trimmed."
+  (let* ((trimmed (string-trim (or text "")))
+         (length (length trimmed))
+         (index (1- length))
+         end)
+    ;; Skip trailing terminators and whitespace so the last sentence keeps
+    ;; its own final punctuation out of the walk-back below.
+    (while (and (>= index 0)
+                (memq (aref trimmed index)
+                      '(?. ?! ?? ?？ ?！ ?。 ?\s ?\t ?\n)))
+      (setq index (1- index)))
+    (setq end (1+ index))
+    ;; Walk back to the previous terminator; the sentence starts after it.
+    (while (and (>= index 0)
+                (not (memq (aref trimmed index)
+                           '(?. ?! ?? ?？ ?！ ?。))))
+      (setq index (1- index)))
+    (string-trim (substring trimmed (1+ index) end))))
+
+(defun superchat-llm--finish-check-announces-p (sentence)
+  "Return non-nil when SENTENCE announces the model's own next action."
+  (let ((lower (downcase sentence)))
+    (and (not (string-prefix-p "let me know" lower))
+         (not (string-prefix-p "you " lower))
+         (not (string-prefix-p "please " lower))
+         (not (string-prefix-p "请你" sentence))
+         (not (string-prefix-p "你可以" sentence))
+         ;; "让我知道" asks the user to tell; it announces nothing.
+         (not (string-prefix-p "让我知道" sentence))
+         (or (string-prefix-p "let me " lower)
+             (string-prefix-p "i'll " lower)
+             (string-prefix-p "i will " lower)
+             (string-prefix-p "now i'll " lower)
+             (string-prefix-p "now i will " lower)
+             (string-prefix-p "next, i " lower)
+             (string-prefix-p "next i " lower)
+             (string-prefix-p "让我" sentence)
+             (string-prefix-p "我先" sentence)
+             (string-prefix-p "我再" sentence)
+             (string-prefix-p "我来" sentence)
+             (string-prefix-p "我将" sentence)
+             (string-prefix-p "接下来我" sentence)))))
+
+(defun superchat-llm--finish-check-trigger (text)
+  "Return `empty', `announced', or nil for the text-only reply TEXT.
+`empty' is an explicit empty string; `announced' is a last sentence in which
+the model announces its own next action, after code and quotes are removed."
+  (cond
+   ((not (stringp text)) nil)
+   ((string-empty-p text) 'empty)
+   (t
+    (let* ((cleaned (string-trim (superchat-llm--finish-check-cleaned text)))
+           (sentence (and (not (string-empty-p cleaned))
+                          (superchat-llm--finish-check-last-sentence cleaned))))
+      (when (and sentence
+                 (not (string-empty-p sentence))
+                 (superchat-llm--finish-check-announces-p sentence))
+        'announced)))))
+
+(defun superchat-llm--finish-check-chat-run-p (request-context)
+  "Return non-nil when REQUEST-CONTEXT's Run has the `chat' surface."
+  (let ((run-id (plist-get request-context :run-id)))
+    (and (stringp run-id)
+         (eq 'chat (plist-get (superchat-runtime-status run-id) :surface)))))
+
+(defun superchat-llm--finish-check-fires-p
+    (request-context run-active tool-rounds tool-round-limit
+                     final-answer-requested fired reply)
+  "Return the trigger symbol when this Step fires its one finish check.
+All of the conditions are stated here so a caller cannot half-apply them."
+  (when (and superchat-llm-finish-check
+             (not fired)
+             (not final-answer-requested)
+             (> tool-rounds 0)
+             (or (not (numberp tool-round-limit))
+                 (< tool-rounds tool-round-limit))
+             (funcall run-active)
+             (superchat-llm--finish-check-chat-run-p request-context))
+    (superchat-llm--finish-check-trigger reply)))
+
 (defun superchat--llm-tool-result-entries (result)
   "Return RESULT's tool-result alist, or nil for ordinary text.
 
@@ -2513,6 +2623,8 @@ requests until it receives text, bounded by
            (tool-rounds 0)
            (tool-round-limit superchat-llm-max-tool-rounds)
            (final-answer-requested nil)
+           ;; The finish check fires at most once per Run.
+           (finish-check-fired nil)
            ;; Reference pages this loop has already pointed the model at.
            (reference-pointed nil)
            (completed nil)
@@ -3110,19 +3222,67 @@ requests until it receives text, bounded by
                                (and (consp response)
                                     (stringp (plist-get response :text)))
                                response-parts)
-                           (funcall finalize
-                                    (cond
-                                     ((and (consp response)
-                                           (stringp (plist-get response :text))
-                                           (not (string-empty-p
-                                                 (plist-get response :text))))
-                                      (plist-get response :text))
-                                     ((and (stringp response)
-                                           (not (string-empty-p response)))
-                                      response)
-                                     (response-parts
-                                      (string-join (nreverse response-parts) ""))
-                                     (t "[Empty response from llm]")))
+                           (let* ((reply
+                                   (cond
+                                    ((and (consp response)
+                                          (stringp (plist-get response :text)))
+                                     (plist-get response :text))
+                                    ((stringp response) response)
+                                    (response-parts
+                                     (string-join (reverse response-parts) ""))
+                                    (t "")))
+                                  (trigger
+                                   (superchat-llm--finish-check-fires-p
+                                    request-context run-active-p
+                                    tool-rounds tool-round-limit
+                                    final-answer-requested finish-check-fired
+                                    reply)))
+                             ;; One finish check: the note is queued through the
+                             ;; existing steering path, so it reaches the model
+                             ;; and the Tape like any steer, and the next reply
+                             ;; either does the announced step or is final.
+                             ;; A note that cannot be queued (the Run stopped
+                             ;; accepting input between the checks and now) must
+                             ;; not send a request with nothing new in it: the
+                             ;; reply is then final, as without the check.
+                             (if (and trigger
+                                      (superchat-runtime-steer
+                                       (plist-get request-context :run-id)
+                                       superchat-llm--finish-check-note
+                                       'finish-check))
+                                 (progn
+                                   (setq finish-check-fired t)
+                                   (cl-incf tool-rounds)
+                                   (when (and (buffer-live-p request-buffer)
+                                              (fboundp 'superchat--response-region-close))
+                                     (with-current-buffer request-buffer
+                                       (superchat--response-region-close
+                                        nil nil transcript-owner)))
+                                   (setq response-parts '())
+                                   (setq cumulative ""
+                                         reasoning-cumulative "")
+                                   (condition-case err
+                                       (funcall send-request 'tool-followup)
+                                     (superchat-llm-evidence-recording-error
+                                      (signal (car err) (cdr err)))
+                                     (error
+                                      (funcall finalize
+                                               (format "[llm-chat-streaming error: %s]"
+                                                       (error-message-string err))
+                                               'failed))))
+                               (funcall finalize
+                                        (cond
+                                         ((and (consp response)
+                                               (stringp (plist-get response :text))
+                                               (not (string-empty-p
+                                                     (plist-get response :text))))
+                                          (plist-get response :text))
+                                         ((and (stringp response)
+                                               (not (string-empty-p response)))
+                                          response)
+                                         (response-parts
+                                          (string-join (nreverse response-parts) ""))
+                                         (t "[Empty response from llm]")))))
                          (funcall finalize
                                   "[Missing final response from llm]" 'failed)))))))))
 

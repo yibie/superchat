@@ -974,7 +974,12 @@ injections stay in the inbox under their Run marker until settlement."
                           injections)
                   (mapcar (lambda (steer)
                             (cons (or (plist-get steer :seq) 0)
-                                  (list :source (list :kind 'steer :run-id run-id)
+                                  (list :source
+                                        (append
+                                         (list :kind 'steer :run-id run-id)
+                                         (when (plist-get steer :origin)
+                                           (list :origin
+                                                 (plist-get steer :origin))))
                                         :text (plist-get steer :text)
                                         :steer-id (plist-get steer :id))))
                           steers))
@@ -1093,8 +1098,11 @@ Returns the number of injections actually dropped."
   "Return how many injections SESSION-ID is holding."
   (length (gethash session-id superchat-runtime--pending-injections)))
 
-(defun superchat-runtime-steer (run-id text)
+(defun superchat-runtime-steer (run-id text &optional origin)
   "Persist TEXT and queue it for RUN-ID's next model attempt.
+ORIGIN, when non-nil, marks the steer as system-originated (for example
+`finish-check'): it is recorded on the `run.steered' payload and on the
+material's `:source', so the View can present it as a system line.
 Return the Tape identity record on acceptance, or nil when RUN-ID is
 unknown, terminalizing, or terminal."
   (unless (and (stringp text) (not (string-empty-p (string-trim text))))
@@ -1109,7 +1117,7 @@ unknown, terminalizing, or terminal."
          ;; ordered claim preserves insertion order across both kinds.
          (seq (cl-incf superchat-runtime--injection-sequence))
          (queued (list :id (format "steer-%06x" seq) :seq seq
-                       :text instruction)))
+                       :text instruction :origin origin)))
     (if (and entry
              (superchat-runtime-effect-capable-p
               run-id))
@@ -1123,7 +1131,8 @@ unknown, terminalizing, or terminal."
                   (superchat-runtime--append-event
                    (superchat-runtime--entry run-id) "run.steered"
                    (append (superchat-runtime--content-metadata instruction)
-                           (list :instruction instruction))
+                           (list :instruction instruction)
+                           (when origin (list :origin origin)))
                    (format "run.steered: %s" run-id)
                    nil t)
                 (error nil))
