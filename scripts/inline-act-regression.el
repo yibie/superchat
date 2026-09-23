@@ -325,5 +325,33 @@ No chat buffer is created: the whole Run stays in the source buffer."
                       (superchat-tape-replay-events session)))
                    5)))))))
 
+;;;; The menu
+
+(ert-deftest inline-act/keys/menu-offers-diff-and-replies-on-inline-act ()
+  "`M-RET' and a click on an inline act overlay open the inline act menu.
+Its reply stays on the `inline-act' surface, so tools remain available, and it
+offers the diff.  The inline-ask menu it used to inherit replied read-only and
+had no diff."
+  (should (eq #'superchat-inline-act-menu
+              (lookup-key superchat-inline-act--keymap (kbd "M-RET"))))
+  (should (eq #'superchat-inline-act-menu
+              (lookup-key superchat-inline-act--keymap [mouse-1])))
+  (let (called)
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) '(?r "reply")))
+              ((symbol-function 'superchat-inline-act-reply)
+               (lambda (&rest _) (push 'act-reply called)))
+              ((symbol-function 'superchat-inline-reply)
+               (lambda (&rest _) (push 'ask-reply called))))
+      (superchat-inline-act-menu 'an-overlay))
+    (should (equal '(act-reply) called)))
+  (let (called)
+    (cl-letf (((symbol-function 'read-multiple-choice)
+               (lambda (&rest _) '(?d "diff")))
+              ((symbol-function 'superchat-inline-act-diff)
+               (lambda (&rest _) (push 'diff called))))
+      (superchat-inline-act-menu 'an-overlay))
+    (should (equal '(diff) called))))
+
 (provide 'inline-act-regression)
 ;;; inline-act-regression.el ends here

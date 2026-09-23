@@ -1,6 +1,6 @@
-# Proposal: M8 — inline act: a task from the source buffer, finished and reported in place
+# Decision: M8 — inline act: a task from the source buffer, finished and reported in place
 
-Status: proposed (leader's proposal of 2026-09-22, after the design-goal review recorded in `.scratch/discussions/2026-09-22-design-goal-review.md`; not yet accepted by the user)
+Status: implemented — proposed by the leader on 2026-09-22 after the design-goal review (`.scratch/discussions/2026-09-22-design-goal-review.md`) and built the same day in three worker slices at the user's request ("你来提出一个新的方案，然后启用 pi 作为 worker agent"); the user accepted the design after it was built ("非常同意", 2026-09-22). Implementation state is in [the roadmap](../../roadmap.md#milestones).
 
 ## Problem
 
@@ -18,7 +18,7 @@ What already exists and is reused, verified in the source:
 - The inline overlay, its Sink and its keymap (`superchat-inline.el:300-470`) already stream text, show a status header and offer reply / visit / clear / copy.
 - A surface is a plugin row that registers its name and loads its code (`superchat-default-plugins.el:48-56`); the tool baseline for an unlisted surface is the ordinary default baseline (`superchat-select-tools.el:78-80, 224-239`).
 
-## Decision (proposed)
+## Decision
 
 Add one surface, `inline-act`, and one command, `superchat-inline-act`: an instruction typed at point in any buffer runs a full tool Turn (default tool baseline, ordinary permission levels and approval) and reports in an overlay at point. The chat window is not opened. Follow-ups, cancel, and a review of what the Run edited are reachable from the overlay.
 

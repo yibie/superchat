@@ -146,8 +146,33 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
     (set-keymap-parent map superchat-inline--keymap)
     (define-key map (kbd "d") #'superchat-inline-act-diff)
     (define-key map (kbd "r") #'superchat-inline-act-reply)
+    (define-key map (kbd "M-RET") #'superchat-inline-act-menu)
+    (define-key map [mouse-1] #'superchat-inline-act-menu)
     map)
-  "Transient keymap of an inline act overlay.")
+  "Transient keymap of an inline act overlay.
+It inherits inline ask's keys and replaces the ones whose inline ask meaning
+would be wrong here: `r' and the menu reply on the `inline-act' surface, so
+tools stay available, and the menu also offers the diff.")
+
+(defun superchat-inline-act-menu (&optional overlay)
+  "Show the inline act menu for OVERLAY (default the one at point)."
+  (interactive)
+  (let* ((overlay (or overlay (superchat-inline--overlay)))
+         (choice (read-multiple-choice
+                  "Superchat inline act: "
+                  '((?r "reply" "ask a follow-up; tools stay available")
+                    (?d "diff" "show how an edited buffer differs from its file")
+                    (?v "visit" "open the conversation as a Session View")
+                    (?c "clear" "cancel a Run still going and remove this answer")
+                    (?w "copy" "copy the answer to the kill ring")
+                    (?q "quit" "leave it as is")))))
+    (pcase (car choice)
+      (?r (superchat-inline-act-reply overlay))
+      (?d (superchat-inline-act-diff overlay))
+      (?v (superchat-inline-visit-session overlay))
+      (?c (superchat-inline-clear overlay))
+      (?w (superchat-inline-copy overlay))
+      (?q nil))))
 
 (defun superchat-inline-act-diff (&optional overlay)
   "Show how the buffer OVERLAY's Run edited differs from its file."

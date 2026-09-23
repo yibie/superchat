@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — inline act (M8)
+
+- New command `superchat-inline-act`: give an instruction in the buffer you are
+  editing and the AI does the task there, with the default tools, the ordinary
+  permission levels and approval questions.  Progress and the answer appear in
+  an overlay under the line; the chat window does not open.  At the end the
+  overlay states how many tool calls the Run made and which buffers it left
+  edited and unsaved.  On the overlay `d` shows the diff, `r` follows up with
+  tools still available, `q` cancels, `M-RET` opens the menu.
+  `superchat-act` still works through the chat window.
+- Fixed: a Run started from a non-chat buffer (inline ask, Org Babel, Magit)
+  had its tool-call log inserted into that buffer, and an inline edit could fail
+  on the text of its own log.  Tool logs now go only to a chat window.
+
 ## Unreleased — Emacs 30.1 is the minimum
 
 - The declared minimum is now Emacs 30.1 (`Package-Requires`, `superchat-pkg.el`,
