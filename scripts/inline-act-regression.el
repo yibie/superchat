@@ -140,20 +140,25 @@ No chat buffer is created: the whole Run stays in the source buffer."
             (should (member "read_buffer" tools))))))))
 
 (ert-deftest inline-act/run/status-header-shows-working-during-a-tool-call ()
-  "The row installs the header advice; a `working' state shows Working."
+  "The live overlay says Working inside the actual edit tool body."
   (with-temp-buffer
     (insert "alpha\n")
     (goto-char (point-min))
     (let ((target (buffer-name)))
       (inline-act--fixture (inline-act--edit-script target)
-        (let ((overlay (superchat-inline-act "replace alpha with beta")))
-          (inline-act--settle overlay)
-          (should (advice-member-p #'superchat-inline-act--status-header
-                                   'superchat-inline--status-header))
-          (should (string-match-p
-                   "Working"
-                   (superchat-inline--status-header '(:status working))))
-          (should (eq 'ready (plist-get (inline-act--state overlay) :status))))))))
+        (let ((overlay nil)
+              (during nil)
+              (original (symbol-function 'superchat-tool-edit-buffer)))
+          (cl-letf (((symbol-function 'superchat-tool-edit-buffer)
+                     (lambda (&rest args)
+                       (push (overlay-get overlay 'after-string) during)
+                       (apply original args))))
+            (setq overlay (superchat-inline-act "replace alpha with beta"))
+            (inline-act--settle overlay)
+            (should (equal 1 (length during)))
+            (should (string-match-p "Working: tool" (car during)))
+            (should (string-match-p "Ready" (overlay-get overlay 'after-string)))
+            (should (eq 'ready (plist-get (inline-act--state overlay) :status)))))))))
 
 ;;;; The Run footer
 

@@ -287,6 +287,21 @@ continuation -- reads the postponed value.  See docs/decisions/implemented/
           (unless (superchat-runtime--terminal-p (plist-get entry :status))
             (superchat-runtime--arm-deadline (superchat-runtime--entry run-id)))))))))
 
+(defun superchat-runtime--emit-live-status (run-id status &optional capture-quit)
+  "Send STATUS to RUN-ID's live Sink in its execution Scope.
+Return the Sink emission result, or nil when the Sink is no longer live.
+CAPTURE-QUIT is forwarded for status changes made inside a tool body."
+  (let ((entry (superchat-runtime--entry run-id)))
+    (when (and entry
+               (not (superchat-runtime--terminal-p (plist-get entry :status))))
+      (let ((superchat-execution-scope
+             (superchat-runtime--execution-scope entry))
+            (sink (plist-get entry :sink)))
+        (when (superchat-sink-live-p sink)
+          (superchat-sink-emit sink 'status
+                               (superchat-runtime-sink-run run-id)
+                               status :capture-quit capture-quit))))))
+
 (defun superchat-runtime--note-open-work (run-id execution-id action)
   "Account ACTION for EXECUTION-ID under RUN-ID.
 ACTION is one of `effect-entered', `effect-settled', `approval-entered' and
@@ -302,6 +317,10 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
       (let* ((work (or (plist-get entry :open-tool-work)
                        (make-hash-table :test #'equal)))
              (marks (and (hash-table-p work) (gethash execution-id work)))
+             (had-effect (plist-get marks :effect))
+             (any-effect-before
+              (cl-loop for value being the hash-values of work
+                       thereis (plist-get value :effect)))
              settle-key)
         (pcase action
           ('effect-entered
@@ -322,6 +341,20 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                 (puthash execution-id remaining work)
               (remhash execution-id work))))
         (superchat-runtime--update run-id :open-tool-work work)
+        (when (and (eq 'running-model
+                       (plist-get (superchat-runtime--entry run-id) :status))
+                   (not (plist-get (superchat-runtime--entry run-id) :terminalizing)))
+          (cond
+           ((and (eq action 'effect-entered) (not any-effect-before))
+            (superchat-runtime--update run-id :model-phase 'calling-tool)
+            ;; Sink faults are diagnosed by `superchat-sink-emit'; they must
+            ;; not turn a tool body into an execution failure.
+            (superchat-runtime--emit-live-status run-id 'calling-tool t))
+           ((and (eq action 'effect-settled) had-effect
+                 (not (cl-loop for value being the hash-values of work
+                               thereis (plist-get value :effect))))
+            (superchat-runtime--update run-id :model-phase 'waiting-first-token)
+            (superchat-runtime--emit-live-status run-id 'waiting t))))
         ;; A question a person has to answer stops the Run's deadline, and the
         ;; last one settled lets it continue.
         (when (memq action '(approval-entered approval-settled))
@@ -3908,14 +3941,11 @@ Absent options preserve legacy behavior; result delivery retains three args."
                               (plist-get request :workspace-root)))
                 (let ((superchat-execution-scope
                        (superchat-runtime--execution-scope entry)))
-                  (when (superchat-sink-live-p (plist-get entry :sink))
-                    (let ((status-emit
-                           (superchat-sink-emit
-                            (plist-get entry :sink) 'status
-                            (superchat-runtime-sink-run run-id) 'waiting)))
-                      (when (plist-get status-emit :condition)
-                        (signal (car (plist-get status-emit :condition))
-                                (cdr (plist-get status-emit :condition)))))))
+                  (let ((status-emit
+                         (superchat-runtime--emit-live-status run-id 'waiting)))
+                    (when (plist-get status-emit :condition)
+                      (signal (car (plist-get status-emit :condition))
+                              (cdr (plist-get status-emit :condition))))))
                 ;; `live-p' and the waiting status callback are public code.
                 ;; A retirement from either path has already cancelled this
                 ;; published Run; do not enter the first provider attempt.

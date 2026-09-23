@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — the inline act overlay shows when a tool is running
+
+- While the model's tool is running, the inline act overlay now says
+  "Working: tool…" and goes back to "Waiting…" when the tool is done.
+  Before, it said "Waiting…" all the way through on providers that do not
+  stream tool calls. Runtime now tells every surface when a tool starts and
+  ends; the chat window looks exactly as before.
+
 ## Unreleased — a network glitch no longer ends the task
 
 - When the connection to the model provider fails for a moment (a timeout,

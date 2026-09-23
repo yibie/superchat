@@ -1599,24 +1599,28 @@ or replaced still completes durably without ever declaring the Sink dead."
     (superchat-sink-create
      :id (format "view-%s" (buffer-name buffer))
      :status
-     (lambda (_run status)
-       (when (current-p)
-         (with-current-buffer buffer
-           (let ((superchat-buffer-name (buffer-name buffer)))
-             (pcase status
-               ('waiting
-                (when (fboundp 'superchat--update-status)
-                  (superchat--response-region-begin transcript-owner t)
-                  (superchat--update-status
-                   "Prefill / waiting first token… 0s" transcript-owner)))
-               ((or 'ready 'error 'stopped 'orphaned)
-                ;; Establish/select OWNER first: clearing a status line it
-                ;; never had would otherwise leave a fresh, unselected empty
-                ;; state behind (via `--state-for-owner's explicit-lookup
-                ;; auto-create), which then blocks `--response-region-begin'
-                ;; from ever selecting this owner as current later on.
-                (superchat--response-region-begin transcript-owner)
-                (superchat--response-region-clear-status transcript-owner)))))))
+     (let ((waiting-seen (make-hash-table :test #'equal)))
+       (lambda (run status)
+         (when (current-p)
+           (with-current-buffer buffer
+             (let ((superchat-buffer-name (buffer-name buffer)))
+               (pcase status
+                 ('waiting
+                  (let ((run-id (plist-get run :run-id)))
+                    (unless (gethash run-id waiting-seen)
+                      (puthash run-id t waiting-seen)
+                      (when (fboundp 'superchat--update-status)
+                        (superchat--response-region-begin transcript-owner t)
+                        (superchat--update-status
+                         "Prefill / waiting first token… 0s" transcript-owner)))))
+                 ((or 'ready 'error 'stopped 'orphaned)
+                  ;; Establish/select OWNER first: clearing a status line it
+                  ;; never had would otherwise leave a fresh, unselected empty
+                  ;; state behind (via `--state-for-owner's explicit-lookup
+                  ;; auto-create), which then blocks `--response-region-begin'
+                  ;; from ever selecting this owner as current later on.
+                  (superchat--response-region-begin transcript-owner)
+                  (superchat--response-region-clear-status transcript-owner))))))))
      :stream
      (lambda (_run chunk)
        (when (current-p)
