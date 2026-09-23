@@ -289,6 +289,8 @@ The database is at `~/.emacs.d/superchat/superchat.db` (or your `superchat-data-
 sqlite3 ~/.emacs.d/superchat/superchat.db "SELECT title FROM memory LIMIT 5"
 ```
 
+**What the database keeps about tool calls.** Each tool call the model makes is recorded with the arguments it sent and the result it got back (or the refusal it received), up to 2000 characters each. That includes text of files the model read and values of Lisp it evaluated. Superchat redacts fields with conventionally secret names, but it does not scan text for secrets, so a password inside a file the model read is stored as it is. Later turns of the same conversation see these results as one `Tool:` line per call, so the model remembers what it observed. Set `superchat-tape-store-tool-material` to nil to store none of it; the model then forgets tool results after each turn, as before.
+
 Memory tuning is under `M-x customize-group RET superchat-memory RET`.
 
 ### MCP

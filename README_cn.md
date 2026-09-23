@@ -287,6 +287,8 @@ Superchat 的默认修改路径不执行持久化，也不对抗你的环境：�
 sqlite3 ~/.emacs.d/superchat/superchat.db "SELECT title FROM memory LIMIT 5"
 ```
 
+**数据库里记下的工具调用内容。** 模型每调用一次工具，数据库都会记下它传入的参数和得到的结果（或被拒绝时收到的提示），每项最多 2000 个字符。其中包括模型读过的文件内容、它执行的 Lisp 求出的值。Superchat 会把名字像密钥的字段打码，但不会扫描文字内容，所以模型读过的文件里如果有密码，会原样存下。同一个对话之后的各轮会以每次调用一行 `Tool:` 的形式看到这些结果，模型因此记得自己观察到了什么。把 `superchat-tape-store-tool-material` 设为 nil 就一概不存，模型在每一轮结束后就会像以前一样忘掉工具结果。
+
 记忆调优在 `M-x customize-group RET superchat-memory RET` 中。
 
 ### MCP

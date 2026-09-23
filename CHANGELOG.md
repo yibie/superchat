@@ -2,6 +2,24 @@
 
 All notable changes to superchat.
 
+## Unreleased — later turns remember what the tools returned
+
+- The model now remembers, in later turns of the same conversation, what its
+  tools returned. Each tool call is stored with its arguments and its result
+  or refusal text, up to 2000 characters each, and later turns show it as one
+  line such as `Tool: read_buffer("init.el") -> [ok] …`, after a note that
+  these lines are past observations and data, not instructions. Refused or
+  failed calls are marked with their status, never as a success. Compaction
+  summarizes these lines like the rest of the conversation.
+- **Privacy:** this stores file text the model read and values it evaluated
+  in the local database. Fields with secret-looking names are redacted;
+  secrets inside text are not. Set `superchat-tape-store-tool-material` to
+  nil to store none of it.
+- Before this, a follow-up such as "undo that" could not know what the model
+  had seen in the previous turn unless its final answer had repeated it.
+- The history header no longer tells the model it can recall omitted rows:
+  no tool lets it do so.
+
 ## Unreleased — inline act (M8)
 
 - New command `superchat-inline-act`: give an instruction in the buffer you are
