@@ -279,6 +279,7 @@ one before, so the overlay always covers at least one character."
     (define-key map (kbd "q") #'superchat-inline-clear)
     (define-key map (kbd "r") #'superchat-inline-reply)
     (define-key map (kbd "v") #'superchat-inline-visit-session)
+    (define-key map (kbd "w") #'superchat-inline-copy)
     map)
   "Transient keymap of an inline answer overlay.")
 

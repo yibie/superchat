@@ -319,7 +319,7 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 | 入口 | 作用 |
 |---|---|
 | `M-x superchat-inline-ask` | 就光标处的代码提问，回答显示在该行下方的小框里，文件不会被改动。输入问题时按 `C-c SPC` 切换要附带的上下文（函数、表达式、当前行、窗口、整个文件、不附带）。在回答框上：`r` 追问，`v` 打开完整对话，`w` 复制，`q` 清除。 |
-| `M-x superchat-inline-act` | 让 AI 就在你所在的位置把事情做完：它可以读别的 buffer、改当前或别的 buffer，需要审批时和聊天窗一样在 minibuffer 里问你；聊天窗不会打开。进度和回答显示在该行下方的小框里，结束时小框会写明这次调用了几次工具、哪些 buffer 被改了还没保存（保存由你决定）。输入指令时同样可按 `C-c SPC` 切换附带的上下文。在小框上：`d` 看被改 buffer 与文件的差异，`r` 追问（仍可用工具），`v` 打开完整对话，`q` 取消并清除，`M-RET` 打开菜单。 |
+| `M-x superchat-inline-act` | 让 AI 就在你所在的位置把事情做完：它可以读别的 buffer、改当前或别的 buffer，需要审批时和聊天窗一样在 minibuffer 里问你；聊天窗不会打开。进度和回答显示在该行下方的小框里，结束时小框会写明这次调用了几次工具、哪些 buffer 被改了还没保存（保存由你决定）。输入指令时同样可按 `C-c SPC` 切换附带的上下文。在小框上：`d` 看被改 buffer 与文件的差异，`r` 追问（仍可用工具），`v` 打开完整对话，`w` 复制，`q` 取消并清除，`M-RET` 打开菜单。 |
 | `M-x superchat-rewrite-region` | 改写选区。结果边生成边在选区位置预览；你按 `C-c C-a` 接受之前，文件一个字节都不变（接受后一次撤销可全部退回），`C-c C-k` 拒绝。`C-c C-r` 在结果上再改一次，`C-c C-d` 看差异，`C-c C-m` 按冲突标记合并，`C-c C-n`/`C-c C-p` 在多个预览间跳转；矩形选区每段各有一个预览。 |
 | `#+begin_src superchat` | Org-babel：块内容作为问题，回答写入 `#+RESULTS:`。 |
 | Magit 提交 buffer | 加载 Magit 后，superchat 根据暂存的 diff 生成规范化提交信息。 |

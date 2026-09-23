@@ -353,5 +353,13 @@ had no diff."
       (superchat-inline-act-menu 'an-overlay))
     (should (equal '(diff) called))))
 
+(ert-deftest inline-act/keys/w-copies-on-both-overlays ()
+  "`w' copies the answer on an inline ask overlay and, through the parent
+keymap, on an inline act overlay, as both READMEs say."
+  (should (eq #'superchat-inline-copy
+              (lookup-key superchat-inline--keymap (kbd "w"))))
+  (should (eq #'superchat-inline-copy
+              (lookup-key superchat-inline-act--keymap (kbd "w")))))
+
 (provide 'inline-act-regression)
 ;;; inline-act-regression.el ends here
