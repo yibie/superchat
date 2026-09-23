@@ -6,7 +6,7 @@
 ;;
 ;; Soul (identity document) stays as org-mode file — it is human-authored.
 ;;
-;; Requires Emacs 29+ (built-in sqlite support — no package needed).
+;; Requires built-in sqlite support (Emacs 29+); the package as a whole requires Emacs 30.1.
 ;;
 ;; Schema:
 ;;   tape    — append-only conversation event log

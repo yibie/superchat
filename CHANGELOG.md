@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — Emacs 30.1 is the minimum
+
+- The declared minimum is now Emacs 30.1 (`Package-Requires`, `superchat-pkg.el`,
+  both READMEs).  Superchat was run on a locally built Emacs 29.4: it loads and
+  completes real tasks, but two behaviours differ from Emacs 30, both because an
+  Emacs function changed its behaviour rather than its name.  `copy-tree` does
+  not copy records on 29, so recording request evidence rewrote the live prompt
+  (the system text moved into a system message); and an approval question asked
+  from a provider callback could not be cancelled with C-g on 29 (you had to
+  answer `n`).  Rather than carry fixes for a version nobody here runs, the
+  floor moves to the version the code is written and tested against.
+
 ## Unreleased — reference pages read on demand
 
 - New default tool `read_reference` and a short index of Superchat's bundled

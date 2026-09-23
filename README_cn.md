@@ -31,7 +31,7 @@ superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，以共享 Runtim
 
 ## 安装
 
-**依赖：** Emacs 29.1 或更高版本，[llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1（GNU ELPA）。
+**依赖：** Emacs 30.1 或更高版本，[llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1（GNU ELPA）。
 
 用 Emacs 自带的 `package.el` 从 GNU ELPA 安装 `llm.el` 及其依赖：
 

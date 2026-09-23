@@ -31,7 +31,7 @@ Pick gptel or ellama when your needs are simpler: single-model, single-provider,
 
 ## Install
 
-**Requirements:** Emacs 29.1 or higher, and [llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1 from GNU ELPA.
+**Requirements:** Emacs 30.1 or higher, and [llm.el](https://github.com/ahyatt/llm) ≥ 0.31.1 from GNU ELPA.
 
 Install `llm.el` and its dependencies from GNU ELPA with Emacs' built-in
 `package.el`:

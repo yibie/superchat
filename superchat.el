@@ -6,7 +6,7 @@
 ;; It includes a command system for custom prompts and session-saving features.
 
 ;; Version: 1.4.0
-;; Package-Requires: ((emacs "29.1") (llm "0.31.1"))
+;; Package-Requires: ((emacs "30.1") (llm "0.31.1"))
 
 ;; Author: Yibie <yibie@outlook.com>
 ;; URL: https://github.com/yibie/superchat
