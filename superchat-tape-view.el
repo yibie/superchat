@@ -899,6 +899,11 @@ digest it."
         (format "%s#%d" session-id first-id)
       (format "%s#%d-%d" session-id first-id last-id))))
 
+(defvar superchat-view-model-can-recall nil
+  "Non-nil when the request offers the model a tool that performs raw recall
+of omitted rows.  Contract v0 offers none, so the rendered header says
+`recall none'.  `:disclosure :recallable' is computed regardless.")
+
 (defun superchat-view--continuity-prompt
     (items covered omitted-count recall-available &optional line-function
             represented-count)
@@ -1169,7 +1174,9 @@ turn must leave neither context nor recallable disclosure behind."
           :prompt (if (null all-records)
                       ""
                    (superchat-view--continuity-prompt
-                    items covered omitted-count (> (length recallable) 0)
+                    items covered omitted-count
+                    (and superchat-view-model-can-recall
+                         (> (length recallable) 0))
                     nil represented-count))
           :scope (list :session-id session-id
                        :purpose purpose

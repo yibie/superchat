@@ -223,6 +223,10 @@ SQLite error; it produces a non-success status and evidence in the envelope.
 
 ### 5.2 Recall
 
+> Status (2026-09-22): specified, **not implemented**.  No `superchat-view-recall`
+> exists in the tree, and no model-facing tool performs raw recall.  The
+> selectors in `:disclosure :recallable` are computed, but nothing consumes them.
+
 ```elisp
 (cl-defun superchat-view-recall
     (session-id selector &key reason max-entries max-chars))
@@ -566,7 +570,7 @@ The future prompt Adapter is intentionally shallow:
 The rendered prompt begins with one canonical disclosure line:
 
 ```text
-[Context v0 | raw session-1#121-140 | represented 26 | omitted 94 | recall available]
+[Context v0 | raw session-1#121-140 | represented 26 | omitted 94 | recall none]
 ```
 
 The grammar is fixed for v0:
@@ -580,13 +584,21 @@ A raw segment is `SESSION-ID#FROM-TO`; a singleton is
 are row counts, not range counts.  The body follows after exactly one blank
 line.  Raw user, assistant, and system facts use the literal role labels
 `User:`, `Assistant:`, and `System:`.  Items are separated by one newline.
-The header says `recall available` if and only if `:disclosure :recallable`
-is non-empty; omissions known not to be recoverable do not advertise recall.
+The header's recall field tells the model reading the prompt whether *it* can
+recall omitted rows.  Amended 2026-09-22 (user-approved direction "按照你的建议"):
+the header says `recall available` if and only if `:disclosure :recallable` is
+non-empty **and** the request offers the model a tool that performs raw recall;
+otherwise it says `recall none`.  v0 offers no such tool, so the rendered header
+always says `recall none`.  `:disclosure :recallable` is unchanged: it still
+lists every recallable selector for callers that can act on it.  Before the
+amendment the header advertised recall whenever recallable rows existed, which
+told the model about a capability it did not have; omissions known not to be
+recoverable never advertised recall.
 The prompt ends with the final item and has no trailing newline.
 When no item is selected, the header uses `raw none` and is the entire prompt:
 there is no following blank line or body.  For example, two eligible rows
 excluded by a zero budget render exactly
-`[Context v0 | raw none | represented none | omitted 2 | recall available]`.
+`[Context v0 | raw none | represented none | omitted 2 | recall none]`.
 For the no-omission, no-representation case, the exact rendering is:
 
 ```text
