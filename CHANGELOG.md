@@ -10,18 +10,20 @@ All notable changes to superchat.
   stream tool calls. Runtime now tells every surface when a tool starts and
   ends; the chat window looks exactly as before.
 
-## Unreleased — a network glitch no longer ends the task
+## Unreleased — a network glitch or a busy provider no longer ends the task
 
 - When the connection to the model provider fails for a moment (a timeout,
-  a failed TLS handshake, a refused or reset connection), Superchat now
-  waits and tries the same request again, up to five times (0.5 s, then
-  doubling, at most 10 s), instead of ending the task with an API error.
-  It never retries once part of the answer has already been shown, and a
-  cancelled task sends nothing more. Set `superchat-llm-transient-retries`
-  to 0 for the old behaviour.
-- Not yet: rate-limit (429) and server (5xx) errors. The llm library does
-  not pass the HTTP status on, so Superchat cannot tell them apart from a
-  rejected request and does not guess.
+  a failed TLS handshake, a refused or reset connection), or the provider
+  answers "too many requests" (HTTP 429) or with a server error (HTTP 5xx),
+  Superchat now waits 30 seconds and sends the same request again, up to ten
+  times, instead of ending the task with an API error. It never retries once
+  part of the answer has already been shown, and a cancelled task sends
+  nothing more. Any other HTTP error (for example 400 or 401) still ends the
+  task at once. Set `superchat-llm-transient-retries` to 0 for the old
+  behaviour, or `superchat-llm-transient-retry-interval` to wait a different
+  number of seconds.
+- The HTTP status is read where the llm library handles the failed request;
+  Superchat never guesses it from the provider's message text.
 
 ## Unreleased — one finish check when a task stops half-way
 

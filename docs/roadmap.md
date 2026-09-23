@@ -226,6 +226,18 @@ Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/2
 
 Accepted by the user on 2026-09-23 ("我觉得可以验收"). The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
 
+### Fixes from the 2026-09-23 round (four `implemented`, one `accepted`)
+
+The act entry's failing and passing runs and the user's 2026-09-23 decisions produced five accepted records. What each one has in the tree:
+
+| Decision | State |
+|---|---|
+| [The next turn sees what earlier tools returned](decisions/accepted/2026-09-23-the-next-turn-sees-previous-tool-results.md) | implemented (`1711be1c`, `2d16c144`, `3ac45cec`): tool events keep bounded argument and result text, later turns see one line per tool call, compaction summarizes those lines and covers their rows |
+| [One finish check after a text-only reply](decisions/accepted/2026-09-23-one-finish-check-after-a-text-only-reply.md) | implemented in its narrowed form (`7133d4ab`): chat window and act only, not inline act; request evidence does not yet contain the note (last row) |
+| [Retry a transient provider error](decisions/accepted/2026-09-23-retry-transient-provider-errors.md) | implemented: transport failures first (`afba469b`), then the user's amendment, 10 retries 30 s apart and HTTP 429/5xx retried too. The status comes from a hook on llm's plz error handler; a test drives llm's real error chain with a stubbed transport, so an llm upgrade that breaks the hook fails that test. Not yet seen against a real rate limit |
+| [Surfaces are told when a tool runs](decisions/accepted/2026-09-23-surfaces-are-told-when-a-tool-runs.md) | implemented (`9c39d99f`): the inline act overlay shows "Working: tool…" during a tool body; the chat window is unchanged |
+| [Request evidence includes Step material](decisions/accepted/2026-09-23-request-evidence-includes-step-material.md) | accepted, not built |
+
 ### Chat entry acceptance on the current commit (`accepted` 2026-09-22)
 
 The configuration apply/undo acceptance was re-run on the chat entry at product commit `a7879950`, DeepSeek `deepseek-chat`, with the user answering every approval and doing the saves: both phases completed and passed all eleven state checks, and the user ruled the undo phase valid although its answer wrongly said the disk already held `#'ignore` (the user had saved `#'describe-function` after apply). That blemish, and both answers calling `lookup-key`'s `2` "a prefix", stay on record. DeepSeek reported the served model as `deepseek-flash` in every response. The act entry was then run on the same commit and did not pass (`m8-attended-act-deepseek-01`): apply ended on a reply that announced a check and called no tool (acceptance issue 03, third occurrence), and undo, which sees only the previous turn's user and final assistant text, did not know the original binding and restored "unbound" instead of `ignore`. The act entry's last pass is still `9c0c3c3e`. Report: [chat entry acceptance on the current commit](reports/2026-09-22-chat-entry-acceptance-current-commit.md).

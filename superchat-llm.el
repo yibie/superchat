@@ -140,25 +140,58 @@ keep the fatal behaviour."
   :type 'natnum
   :group 'superchat)
 
-(defcustom superchat-llm-transient-retries 5
-  "Maximum consecutive transport retries within one Run.
+(defcustom superchat-llm-transient-retries 10
+  "Maximum consecutive transient provider retries within one Run.
 The count resets after a successful provider response.  Set to zero to
-fail immediately on a transport error."
+fail immediately on a retryable transport or HTTP error."
   :type 'natnum
   :group 'superchat)
 
-(defvar superchat--llm-transient-retry-base-delay 0.5
-  "Initial transport retry delay in seconds, before exponential backoff.")
+(defcustom superchat-llm-transient-retry-interval 30
+  "Fixed delay in seconds before each transient provider retry.
+Every retry waits this interval; there is no backoff or jitter."
+  :type 'number
+  :group 'superchat)
 
-(defun superchat--llm-transient-error-p (type err)
-  "Return non-nil if llm.el's TYPE and ERR identify a transport failure.
-llm 0.32.1 forwards chat errors as `error' plus a string; HTTP status is
-lost at that boundary, so provider response bodies are never guessed at."
+(defvar superchat--llm-http-status nil
+  "HTTP status of the failed provider request being reported, or nil.")
+
+(declare-function plz-error-response "plz")
+(declare-function plz-response-status "plz")
+
+(defun superchat--llm-capture-http-status (original error on-error)
+  "Call ORIGINAL with ERROR and ON-ERROR while retaining its HTTP status.
+The binding spans llm.el's synchronous chat error callback and then ends."
+  (let ((superchat--llm-http-status
+         (condition-case nil
+             (when (and (fboundp 'plz-error-p) (plz-error-p error))
+               (let ((response (plz-error-response error)))
+                 (when (and response
+                            (fboundp 'plz-response-p)
+                            (plz-response-p response))
+                   (plz-response-status response))))
+           (error nil))))
+    (funcall original error on-error)))
+
+(with-eval-after-load 'llm-request-plz
+  (when (and (fboundp 'llm-request-plz--handle-error)
+             (not (advice-member-p #'superchat--llm-capture-http-status
+                                   'llm-request-plz--handle-error)))
+    (advice-add 'llm-request-plz--handle-error :around
+                #'superchat--llm-capture-http-status)))
+
+(defun superchat--llm-transient-error-p (type err &optional http-status)
+  "Return non-nil when TYPE, ERR and HTTP-STATUS identify a retryable error.
+Only HTTP 429 and 5xx retry.  Without an HTTP status, recognize the pinned
+llm transport strings; never infer HTTP status from a response body."
   (and (eq type 'error)
-       (stringp err)
-       (or (equal err "Operation timeout.")
-           (string-match-p
-            "\\`curl error code \\(6\\|7\\|35\\|52\\|55\\|56\\): " err))))
+       (if (numberp http-status)
+           (or (= http-status 429)
+               (<= 500 http-status 599))
+         (and (stringp err)
+              (or (equal err "Operation timeout.")
+                  (string-match-p
+                   "\\`curl error code \\(6\\|7\\|35\\|52\\|55\\|56\\): " err))))))
 
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
@@ -3056,11 +3089,9 @@ requests until it receives text, bounded by
                        (not response-parts)
                        (string-empty-p reasoning-cumulative)
                        (< transient-retries superchat-llm-transient-retries)
-                       (superchat--llm-transient-error-p type err))
-                  (let* ((delay (* (min 10.0
-                                        (* superchat--llm-transient-retry-base-delay
-                                           (expt 2 transient-retries)))
-                                   (+ 0.9 (/ (random 2001) 10000.0)))))
+                       (superchat--llm-transient-error-p
+                        type err superchat--llm-http-status))
+                  (let ((delay superchat-llm-transient-retry-interval))
                     (cl-incf transient-retries)
                     (funcall cancel-wait-timeout)
                     (run-at-time
