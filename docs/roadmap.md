@@ -222,6 +222,10 @@ Delivered (`current`): unmounting a default row withdraws what that row contribu
 
 Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/21, inline-act 11/11, smoke 0 mismatches, kernel check 0 fails, re-run by the leader.
 
+### Act entry acceptance on the current commit (`accepted` 2026-09-23)
+
+The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
+
 ### Chat entry acceptance on the current commit (`accepted` 2026-09-22)
 
 The configuration apply/undo acceptance was re-run on the chat entry at product commit `a7879950`, DeepSeek `deepseek-chat`, with the user answering every approval and doing the saves: both phases completed and passed all eleven state checks, and the user ruled the undo phase valid although its answer wrongly said the disk already held `#'ignore` (the user had saved `#'describe-function` after apply). That blemish, and both answers calling `lookup-key`'s `2` "a prefix", stay on record. DeepSeek reported the served model as `deepseek-flash` in every response. The act entry was then run on the same commit and did not pass (`m8-attended-act-deepseek-01`): apply ended on a reply that announced a check and called no tool (acceptance issue 03, third occurrence), and undo, which sees only the previous turn's user and final assistant text, did not know the original binding and restored "unbound" instead of `ignore`. The act entry's last pass is still `9c0c3c3e`. Report: [chat entry acceptance on the current commit](reports/2026-09-22-chat-entry-acceptance-current-commit.md).
