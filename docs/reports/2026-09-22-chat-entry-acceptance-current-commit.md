@@ -12,7 +12,7 @@
 |---|---|
 | 运行 | `.scratch/m5-config-acceptance/runs/m8-attended-chat-deepseek-01`（不入库），审阅见其中 `REVIEW.md` |
 | 产品 | 提交 `a7879950`；运行冻结的 57 个 `.el` 与该提交逐个相同 |
-| 模型 | `deepseek-chat`，llm.el 原生 DeepSeek 提供方，`superchat-llm-reasoning` 为 `none`（关闭 thinking） |
+| 模型 | 请求 `deepseek-chat`，llm.el 原生 DeepSeek 提供方，`superchat-llm-reasoning` 为 `none`（关闭 thinking）；DeepSeek 在全部 16 次响应里报告的模型名是 `deepseek-flash` |
 | apply | completed，51 秒；4 次 `eval_elisp` 均由用户批准，等待 13.6 秒；用户审阅后保存 `init.el`；自动检查 11/11；重启检查读到 `describe-function` |
 | undo | completed，236 秒；3 次 `eval_elisp` 均由用户批准，等待 217 秒；用户审阅后保存 `init.el`；自动检查 11/11；重启检查读到 `ignore` |
 
@@ -37,6 +37,6 @@ apply 答复说明了改的是 `user-init-file` 指向的 `init.el` 以及为什
 
 **不保证**：
 
-- act 入口在这个提交上的结果（没有运行）。
+- act 入口在这个提交上的结果。收口之后 act 入口在同一提交上跑了一次（`m8-attended-act-deepseek-01`），**没有通过**：apply 以一句"我再确认一下……"却不发工具调用的回复结束（验收问题 03 第三次出现），undo 因为拿不到上一轮观察到的原绑定 `ignore`，把键恢复成了未绑定。详见该运行 `REVIEW.md`。
 - 成功率。之前同一标签序列里还有一次 qwen 运行 `m8-attended-chat-01`，因命令未指定 DeepSeek 而用了 LM Studio 的 `qwen/qwen3.8-27b`，在 apply 用满 1200 秒实验上限后被取消，未完成、不计入。这是运行历史，不是成功率估计。
 - 其他模型、长期稳定性，以及模型在用户保存之后能否始终以新观察更正自己先前的说法。
