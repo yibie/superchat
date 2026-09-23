@@ -83,6 +83,20 @@ This interface inherits the request lifecycle and ADR-0006 rather than restating
 
 Rows written before M6 also carry `:effects`, `:policy`, `:policy-version`, `:attendance` and `:request-hash`; nothing reads them, and new rows do not have them. Old `authority.policy.selected` Session events stay on the Tape as inert history.
 
+### Stored tool material (accepted 2026-09-23)
+
+Decision: [the next turn sees previous tool results](../decisions/accepted/2026-09-23-the-next-turn-sees-previous-tool-results.md). While `superchat-tape-store-tool-material` is non-nil (the default), ordinary tool events keep what the model sent and what it got back, in the event payload:
+
+| Event | Fields |
+|---|---|
+| `tool.requested` | `:arguments-text`: the positional arguments as the model supplied them (the provider arguments before normalization), JSON-encoded as an array |
+| `tool.completed` | `:result-text`: the result as delivered to the model, after the post-execute stage |
+| `tool.failed` | `:result-text`: the refusal or failure text delivered to the model (for example `[Tool call denied: …]`) |
+
+Each text keeps at most `superchat-tape-tool-material-max-chars` characters (default 2000). A cut text carries `:arguments-truncated t` / `:result-truncated t` and the original length in characters as `:arguments-chars` / `:result-chars`; the stored text itself has no marker. The writer then checks the whole encoded payload against `superchat-tape-max-inline-bytes` and shortens the text further until it fits, so the new fields never cause the Tape to replace the payload with its size and hash, and never make a `requires-payload` event fail. Payloads that were already too large without the new fields behave as before.
+
+What is and is not protected: the texts pass through the Tape's keyed-field redaction like every payload, which redacts sensitive *keys*; a secret inside a string (file text a tool read, a Lisp expression, an evaluated value) is stored as it is. The texts are never written to the row's `content`, so the 500-column summary and full-text search do not see them. They are readable wherever a payload is readable: the `tool_history`, `file_history`, `recent_errors` and `sql` tools (off by default) return whole rows. With the option nil, events carry the same fields as before. Rows written before this change have no texts.
+
 ### Absent dependencies
 
 Without the `tape` plugin there is no audit, and a call is blocked rather than executed without its evidence. Without `tools-builtin` no built-in tool is a selectable descriptor. Without any answerer (a batch Emacs with the default minibuffer answerer) an `ask` is `unavailable` and the call is refused.
