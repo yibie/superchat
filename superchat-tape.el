@@ -28,6 +28,21 @@ Larger payloads are replaced with byte-size and SHA-256 metadata."
   :type 'natnum
   :group 'superchat-tape)
 
+(defcustom superchat-tape-store-tool-material t
+  "Whether ordinary tool events keep argument and result text in their payload.
+The text is bounded by `superchat-tape-tool-material-max-chars' and by the
+Tape's own `superchat-tape-max-inline-bytes' fit.  File text and evaluated
+results are stored as is: secrets inside strings are not redacted.  Nil
+stores none."
+  :type 'boolean
+  :group 'superchat-tape)
+
+(defcustom superchat-tape-tool-material-max-chars 2000
+  "Maximum characters of tool argument or result text kept in a payload.
+A cut text carries a `:*-truncated' flag and its original length as `:*-chars'."
+  :type 'natnum
+  :group 'superchat-tape)
+
 (defconst superchat-tape--legacy-kind-map
   '(("intent.received" . "user")
     ("response.completed" . "assistant")
@@ -387,6 +402,58 @@ payload pass admission that the actual codec cannot store inline."
             :size size
             :content_hash
             (concat "sha256:" (secure-hash 'sha256 encoded))))))
+
+(defun superchat-tape-fit-tool-material (payload)
+  "Return PAYLOAD with its tool argument and result text made to fit.
+PAYLOAD is a plist that may carry `:arguments-text' and `:result-text'.
+Each text is cut to `superchat-tape-tool-material-max-chars', flagged
+`:arguments-truncated'/`:result-truncated' and given its original length in
+`:arguments-chars'/`:result-chars'.  The payload is then re-encoded against
+`superchat-tape-max-inline-bytes' and the longest text is halved until the
+encoded payload fits.  When no text can fit, the text fields are removed and
+the rest is returned as it was.  Pure: PAYLOAD is not modified."
+  (let ((fields '((:arguments-text :arguments-truncated :arguments-chars)
+                  (:result-text :result-truncated :result-chars)))
+        (fitted (copy-sequence payload))
+        (max-chars superchat-tape-tool-material-max-chars))
+    (dolist (field fields)
+      (let ((text (plist-get fitted (nth 0 field))))
+        (when (and (stringp text) (> (length text) max-chars))
+          (setq fitted (plist-put fitted (nth 0 field)
+                                  (substring text 0 max-chars)))
+          (setq fitted (plist-put fitted (nth 1 field) t))
+          (setq fitted (plist-put fitted (nth 2 field) (length text))))))
+    (while (and (> (car (superchat-tape--encoded-payload-compiled fitted))
+                   superchat-tape-max-inline-bytes)
+                (cl-some (lambda (field)
+                           (let ((text (plist-get fitted (nth 0 field))))
+                             (and (stringp text) (> (length text) 0))))
+                         fields))
+      (let ((longest nil))
+        (dolist (field fields)
+          (let ((text (plist-get fitted (nth 0 field))))
+            (when (and (stringp text) (> (length text) 0)
+                       (or (null longest)
+                           (> (length text)
+                              (length (plist-get fitted (nth 0 longest))))))
+              (setq longest field))))
+        (let* ((text (plist-get fitted (nth 0 longest)))
+               (halved (substring text 0 (/ (length text) 2))))
+          (setq fitted (plist-put fitted (nth 0 longest) halved))
+          (unless (plist-get fitted (nth 1 longest))
+            (setq fitted (plist-put fitted (nth 1 longest) t)))
+          (unless (plist-get fitted (nth 2 longest))
+            (setq fitted (plist-put fitted (nth 2 longest) (length text)))))))
+    (when (> (car (superchat-tape--encoded-payload-compiled fitted))
+             superchat-tape-max-inline-bytes)
+      (setq fitted
+            (cl-loop for (key value) on fitted by #'cddr
+                     unless (memq key '(:arguments-text :arguments-truncated
+                                         :arguments-chars
+                                         :result-text :result-truncated
+                                         :result-chars))
+                     append (list key value))))
+    fitted))
 
 (defun superchat-tape-exact-json (value)
   "Return an exact JSON receipt for structured VALUE, or reject it.

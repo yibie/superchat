@@ -216,15 +216,39 @@ or from the model prompt."
         (setq event (plist-put event key (plist-get context key)))))
     event))
 
+(defun superchat-tool-execution--material (key value)
+  "Return (KEY TEXT) for tool material VALUE, or nil when not stored.
+TEXT is the positional arguments JSON-encoded for `:arguments-text', and the
+normalized delivered text for `:result-text'.  Bounding happens later in
+`superchat-tape-fit-tool-material'."
+  (when (and superchat-tape-store-tool-material value)
+    (list key
+          (pcase key
+            (:arguments-text
+             (condition-case nil
+                 (json-encode (vconcat value))
+               (error (prin1-to-string value))))
+            (:result-text
+             (let ((normalized
+                    (superchat-tool-execution--normalize-tool-result value)))
+               (if (stringp normalized)
+                   normalized
+                 (prin1-to-string normalized))))
+            (_ (prin1-to-string value))))))
+
 (defun superchat-tool-execution--append-event
     (type tool-name context payload &optional summary requires-payload
           return-record)
   "Append a tool event and return its logical event identity."
   (superchat-tool-execution--require-current-evidence-origin context)
-  (let* ((event
+  (let* ((payload (append (list :tool-name tool-name) payload))
+         (payload (if (member type '("tool.requested" "tool.completed"
+                                     "tool.failed"))
+                      (superchat-tape-fit-tool-material payload)
+                    payload))
+         (event
           (superchat-tool-execution--event-base
-           type context
-           (append (list :tool-name tool-name) payload)
+           type context payload
            (or summary (format "%s: %s" type tool-name))))
          (event
           (if requires-payload
@@ -419,6 +443,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
           (append
            (list :execution-id execution-id
                  :status status)
+           (superchat-tool-execution--material :result-text result)
            metadata
            (when-let* ((block-reason (plist-get context :block-reason)))
              (list :block-reason block-reason))
@@ -535,6 +560,7 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
                                  (when (plist-get target :file)
                                    (list :buffer-file (plist-get target :file)))))
                        (superchat-tool-execution--result-fingerprint result)
+                       (superchat-tool-execution--material :result-text result)
                        (superchat-tool-execution--evidence-fields context)
                        (when evidence
                          (superchat-tool-execution--exact-fields
@@ -723,14 +749,21 @@ The native callback is intentionally not used to acknowledge waiting."
            (when (eq claim 'answer)
              (setq result (superchat-tool-execution--snapshot-value
                            (superchat-tool-execution--filter-result tool-name args result))))
-           (let* ((event (superchat-tool-execution--event-base
-                          (if (eq claim 'answer) "tool.completed" "tool.failed") context
-                          (append
-                           (list :tool-name tool-name :execution-id execution-id
-                                 :status (if (eq claim 'answer) "succeeded" "failed"))
-                           (if (eq claim 'answer)
-                               (superchat-tool-execution--result-fingerprint result)
-                             (list :error-type "input-stopped" :reason result)))))
+           (let* ((event-payload
+                   (append
+                    (list :tool-name tool-name :execution-id execution-id
+                          :status (if (eq claim 'answer) "succeeded" "failed"))
+                    (if (eq claim 'answer)
+                        (append (superchat-tool-execution--result-fingerprint result)
+                                (superchat-tool-execution--material
+                                 :result-text result))
+                      (append (list :error-type "input-stopped" :reason result)
+                              (superchat-tool-execution--material
+                               :result-text result)))))
+                  (event-payload (superchat-tape-fit-tool-material event-payload))
+                  (event (superchat-tool-execution--event-base
+                          (if (eq claim 'answer) "tool.completed" "tool.failed")
+                          context event-payload))
                   (payload (superchat-tape--encoded-payload (plist-get event :payload))))
              (when (plist-get payload :omitted) (error "Input receipt payload omitted"))
              (setq event (plist-put event :schema 1)
@@ -1150,6 +1183,7 @@ that must be asked about goes to the approval seam."
                   (when disposition (list :disposition disposition))
                   (when block-reason
                     (list :block-reason block-reason))
+                  (superchat-tool-execution--material :arguments-text provider-args)
                   (superchat-tool-execution--evidence-fields context)
                   evidence-action)
                  nil (and evidence-action t)))
