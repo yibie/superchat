@@ -393,6 +393,11 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
       (setq status
             (plist-put status :child-run-ids
                        (plist-get entry :children)))
+      (setq status
+            (plist-put status :retry
+                       (unless (superchat-runtime--terminal-p
+                                (plist-get entry :status))
+                         (plist-get entry :retry))))
       (when (plist-member entry :undelivered-steer-count)
         (setq status
               (plist-put status :undelivered-steer-count
@@ -410,7 +415,7 @@ expiry cause, cancellation, receipt judgment, or running permission flag."
   "Return RUN-ID's callback-safe projection for its Sink.
 
 Exactly the keys :run-id :turn-id :session-id :surface :status
-:parent-run-id :started-at :completed-at :error :pending-steer-count
+:parent-run-id :started-at :completed-at :error :pending-steer-count :retry
 :sink-id, taken from `superchat-runtime--public-status' (plus :sink-id) and
 passed through `copy-tree'.  It contains no buffer, marker, function, timer
 or process."
@@ -420,7 +425,7 @@ or process."
     (when status
       (dolist (key '(:run-id :turn-id :session-id :surface :status
                      :parent-run-id :started-at :completed-at :error
-                     :pending-steer-count))
+                     :pending-steer-count :retry))
         (setq projection (plist-put projection key (plist-get status key))))
       (setq projection
             (plist-put projection :sink-id
@@ -3805,36 +3810,51 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                 (superchat-runtime--abort-transport value))
                             (superchat-runtime--update
                              run-id :transport-request value)))))
+                    ('retry-scheduled
+                      (let ((current (superchat-runtime--entry run-id)))
+                        (when (and current
+                                   (eq 'running-model (plist-get current :status))
+                                   (superchat-runtime-effect-capable-p run-id))
+                          (superchat-runtime--update
+                           run-id :retry (plist-put (copy-sequence value) :at
+                                                    (+ (float-time)
+                                                       (plist-get value :delay)))
+                           :model-phase 'retry-wait)
+                          (superchat-runtime--emit-live-status run-id 'retrying))))
                     ('attempt-started
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current
                                    (superchat-runtime-effect-capable-p
                                     run-id))
-                          (superchat-runtime--update
-                           run-id
-                           :status 'running-model
-                           :model (or (plist-get value :model)
-                                      (plist-get current :model))
-                           :model-phase
-                           (or (plist-get value :model-phase)
-                               'waiting-first-token)
-                           :attempt (plist-get value :attempt)
-                           :attempt-reason (plist-get value :attempt-reason)
-                           :context-recovery nil
-                           :context-used (plist-get value :context-used)
-                           :context-limit (plist-get value :context-limit)
-                           :context-limit-source
-                           (plist-get value :context-limit-source)
-                           :context-estimated-p t
-                           :capability-source
-                           (plist-get value :capability-source)
-                           ;; Contract §4.2's Run-status record requirement
-                           ;; (S09-fix-1): which tool names this attempt's
-                           ;; prompt actually carries, and why.
-                           :runtime-selected-tools
-                           (plist-get value :runtime-selected-tools)
-                           :runtime-tool-decision
-                           (plist-get value :runtime-tool-decision)))))
+                          (let ((retrying (plist-get current :retry)))
+                            (superchat-runtime--update
+                             run-id
+                             :status 'running-model
+                             :retry nil
+                             :model (or (plist-get value :model)
+                                        (plist-get current :model))
+                             :model-phase
+                             (or (plist-get value :model-phase)
+                                 'waiting-first-token)
+                             :attempt (plist-get value :attempt)
+                             :attempt-reason (plist-get value :attempt-reason)
+                             :context-recovery nil
+                             :context-used (plist-get value :context-used)
+                             :context-limit (plist-get value :context-limit)
+                             :context-limit-source
+                             (plist-get value :context-limit-source)
+                             :context-estimated-p t
+                             :capability-source
+                             (plist-get value :capability-source)
+                             ;; Contract §4.2's Run-status record requirement
+                             ;; (S09-fix-1): which tool names this attempt's
+                             ;; prompt actually carries, and why.
+                             :runtime-selected-tools
+                             (plist-get value :runtime-selected-tools)
+                             :runtime-tool-decision
+                             (plist-get value :runtime-tool-decision))
+                            (when retrying
+                              (superchat-runtime--emit-live-status run-id 'waiting))))))
                      ('model-phase
                       (let ((current (superchat-runtime--entry run-id)))
                         (when (and current

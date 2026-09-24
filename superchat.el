@@ -465,7 +465,11 @@ registry is empty.  A live Run always comes from
     (pcase (plist-get status :status)
       ('accepted "starting")
       ('running-model
-       (or (superchat--model-phase-label (plist-get status :model-phase))
+       (or (when (eq 'retry-wait (plist-get status :model-phase))
+             (let ((retry (plist-get status :retry)))
+               (format "retrying %s/%s"
+                       (plist-get retry :attempt) (plist-get retry :limit))))
+           (superchat--model-phase-label (plist-get status :model-phase))
            "thinking"))
       ('delivering "finishing")
       (value (format "%s" (or value "active")))))
@@ -663,17 +667,21 @@ become a third recurrence."
 
 (defun superchat--thinking-status-message (status latest)
   "Return the dynamic waiting message for STATUS and latest reasoning line."
-  (concat (pcase (plist-get status :model-phase)
-            ('waiting-first-token "Prefill / waiting first token… ")
-            ('reasoning "Reasoning… ")
-            ('tool-streaming "Receiving tool call… ")
-            ('answer-streaming "Answer streaming… ")
-            (_ "Thinking… "))
-          (or (superchat--runtime-elapsed-label status)
-              (superchat--format-duration 0))
-          (when (and (stringp latest)
-                     (not (string-empty-p (string-trim latest))))
-            (concat " · " (string-trim latest)))))
+  (if (eq 'retry-wait (plist-get status :model-phase))
+      (let ((retry (plist-get status :retry)))
+        (concat (superchat-sink-retry-text retry) " · "
+                (plist-get retry :error)))
+    (concat (pcase (plist-get status :model-phase)
+              ('waiting-first-token "Prefill / waiting first token… ")
+              ('reasoning "Reasoning… ")
+              ('tool-streaming "Receiving tool call… ")
+              ('answer-streaming "Answer streaming… ")
+              (_ "Thinking… "))
+            (or (superchat--runtime-elapsed-label status)
+                (superchat--format-duration 0))
+            (when (and (stringp latest)
+                       (not (string-empty-p (string-trim latest))))
+              (concat " · " (string-trim latest))))))
 
 (defun superchat--refresh-thinking-status (&optional owner)
   "Refresh the current Run's waiting status, optionally selected by OWNER."

@@ -95,15 +95,20 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
              (and (overlayp overlay)
                   (overlay-buffer overlay)
                   (buffer-live-p (overlay-buffer overlay))))
-   :status (lambda (_run status)
+   :status (lambda (run status)
+             (when (eq status 'retrying)
+               (superchat-inline--set-state overlay :retry (plist-get run :retry)))
              (superchat-inline--set-state
               overlay :status
               (pcase status
                 ('waiting 'waiting)
+                ('retrying 'retrying)
                 ('typing 'typing)
                 ('calling-tool 'working)
                 ('ready 'ready)
-                (_ 'error))))
+                (_ 'error)))
+             (unless (eq status 'retrying)
+               (superchat-inline--set-state overlay :retry nil)))
    :stream (lambda (_run chunk)
              (let* ((payload (if (and (listp chunk) (plist-member chunk :kind))
                                  chunk

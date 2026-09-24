@@ -188,7 +188,9 @@ Non-HTTP steps still use smoke's scripted network."
                     (lambda (&rest args)
                       (let* ((else (plist-get (cddr args) :else))
                              (status (plist-get (car smoke--requests) :http-status))
-                             (body "{\"error\":{\"type\":\"provider_error\",\"message\":\"busy\"}}")
+                             (body (format
+                                    "{\"error\":{\"type\":\"provider_error\",\"message\":\"busy%s\"}}"
+                                    (make-string 120 ?x)))
                              (buffer (generate-new-buffer " *retry-http-transport*")))
                         (push (run-at-time
                                0.01 nil
@@ -238,6 +240,129 @@ Non-HTTP steps still use smoke's scripted network."
       (should-not superchat--llm-http-status)
       (should (string-match-p "rate limit: retry later"
                               (with-current-buffer view (buffer-string)))))))
+
+(defun transient-retry--notice-wait (run)
+  "Wait until RUN has scheduled its first retry, then return its status."
+  (should (smoke--wait
+           (lambda () (eq 'retry-wait
+                          (plist-get (superchat-runtime-status run) :model-phase))) 3))
+  (superchat-runtime-status run))
+
+(ert-deftest transient-retry/notice-sink-sequence ()
+  (transient-retry--fixture
+      (list '(:error (error . "Operation timeout.")) '(:text "ok"))
+    (let ((superchat-llm-transient-retry-interval 0.5)
+          (events nil)
+          (emit (symbol-function 'superchat-sink-emit)))
+      (cl-letf (((symbol-function 'superchat-sink-emit)
+                 (lambda (sink slot run payload &rest options)
+                   (when (eq slot 'status)
+                     (push (list payload (copy-tree run)) events))
+                   (apply emit sink slot run payload options))))
+        (let* ((view (smoke--open-chat)) (run (smoke--send view "answer"))
+               (during (transient-retry--notice-wait run)))
+          (should (equal 1 (plist-get (plist-get during :retry) :attempt)))
+          (should (eq 'completed (plist-get (transient-retry--settle run) :status)))
+          (setq events (nreverse events))
+          (should (equal '(waiting retrying waiting ready) (mapcar #'car events)))
+          (let ((retry (plist-get (cadr (nth 1 events)) :retry)))
+            (should (= 1 (plist-get retry :attempt)))
+            (should (= 10 (plist-get retry :limit)))
+            (should (equal "Operation timeout." (plist-get retry :error)))
+            (should (numberp (plist-get retry :at))))
+          (should-not (plist-get (cadr (nth 2 events)) :retry))
+          (should-not (plist-get (cadr (nth 3 events)) :retry))
+          (should-not (plist-get (superchat-runtime-status run) :retry)))))))
+
+(ert-deftest transient-retry/notice-chat-window ()
+  (transient-retry--fixture
+      (list '(:error (error . "Operation timeout.")) '(:text "ok"))
+    (let* ((superchat-llm-transient-retry-interval 0.8)
+           (view (smoke--open-chat)) (run (smoke--send view "answer")))
+      (transient-retry--notice-wait run)
+      (with-current-buffer view
+        (superchat--status-refresh-tick view)
+        (should (string-match-p
+                 "Provider error; retrying in [0-9]+s (1/10)… · Operation timeout\."
+                 (buffer-string)))
+        (should (string-match-p "retrying 1/10" (superchat--header-line-run-state))))
+      (should (eq 'completed (plist-get (transient-retry--settle run) :status)))
+      (with-current-buffer view
+        (should-not (string-match-p "Provider error; retrying" (buffer-string)))
+        (should (string-match-p "ok" (buffer-string)))))))
+
+(defun transient-retry--notice-inline-case (surface)
+  "Check the live SURFACE overlay during retry and after completion."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (transient-retry--fixture
+        (list '(:error (error . "Operation timeout."))
+              (if (eq surface 'rewrite) '(:text "```text\nbeta\n```") '(:text "ok")))
+      (let* ((superchat-llm-transient-retry-interval 0.7)
+             (overlay (pcase surface
+                        ('ask (superchat-inline-ask "answer"))
+                        ('act (superchat-inline-act "answer"))
+                        ('rewrite (superchat-rewrite--start-overlay
+                                   (point-min) (point-max) "change" "text"))))
+             (property (if (eq surface 'rewrite) 'superchat-rewrite 'superchat-inline))
+             (state (lambda () (overlay-get overlay property))))
+        (should (smoke--wait (lambda () (plist-get (funcall state) :run-id)) 3))
+        (let ((run (plist-get (funcall state) :run-id)))
+          (transient-retry--notice-wait run)
+          (should (string-match-p
+                   "Provider error; retrying in [0-9]+s (1/10)…"
+                   (or (overlay-get overlay
+                                    (if (eq surface 'rewrite) 'before-string 'after-string)) "")))
+          (should (eq 'completed (plist-get (transient-retry--settle run) :status)))
+          (should (smoke--wait (lambda ()
+                                 (eq 'ready (plist-get (funcall state) :status))) 3))
+          (should-not (string-match-p
+                       "Provider error; retrying"
+                       (or (overlay-get overlay
+                                        (if (eq surface 'rewrite) 'before-string 'after-string)) ""))))))))
+
+(ert-deftest transient-retry/notice-inline-ask ()
+  (transient-retry--notice-inline-case 'ask))
+(ert-deftest transient-retry/notice-inline-act ()
+  (transient-retry--notice-inline-case 'act))
+(ert-deftest transient-retry/notice-rewrite ()
+  (transient-retry--notice-inline-case 'rewrite))
+
+(ert-deftest transient-retry/notice-http-summary ()
+  (transient-retry--http-fixture
+      (list (transient-retry--http-step 429) '(:text "ok"))
+    (let* ((superchat-llm-transient-retry-interval 0.5)
+           (view (smoke--open-chat)) (run (smoke--send view "answer"))
+           (retry (plist-get (transient-retry--notice-wait run) :retry)))
+      (should (equal "HTTP 429" (plist-get retry :error)))
+      (should-not (string-match-p "provider_error\\|busy" (format "%s" retry)))
+      (should (eq 'completed (plist-get (transient-retry--settle run) :status))))))
+
+(ert-deftest transient-retry/notice-cleared-on-cancel ()
+  (transient-retry--fixture
+      (list '(:error (error . "Operation timeout.")) '(:text "wrong"))
+    (let ((superchat-llm-transient-retry-interval 0.5)
+          (events nil) (emit (symbol-function 'superchat-sink-emit)))
+      (cl-letf (((symbol-function 'superchat-sink-emit)
+                 (lambda (sink slot run payload &rest options)
+                   (when (eq slot 'status) (push (list payload (copy-tree run)) events))
+                   (apply emit sink slot run payload options))))
+        (let* ((view (smoke--open-chat)) (run (smoke--send view "answer")))
+          (transient-retry--notice-wait run)
+          (superchat-runtime-cancel run "[cancelled]")
+          (sleep-for 0.7)
+          (setq events (nreverse events))
+          (should (equal '(waiting retrying stopped) (mapcar #'car events)))
+          (should-not (plist-get (cadr (car (last events))) :retry))
+          (should-not (plist-get (superchat-runtime-status run) :retry))
+          (should-not (plist-get (superchat-runtime-sink-run run) :retry))
+          (should (= 1 (length smoke--requests))))))))
+
+(ert-deftest transient-retry/notice-emacsclient-stays-waiting ()
+  (should (eq 'waiting
+              (superchat-emacsclient--public-status
+               '(:status running-model :model-phase retry-wait)))))
 
 (provide 'transient-retry-regression)
 ;;; transient-retry-regression.el ends here

@@ -287,6 +287,8 @@ one before, so the overlay always covers at least one character."
   "Return the viewport status header line for STATE."
   (pcase (plist-get state :status)
     ('waiting "superchat inline · Waiting…")
+    ('retrying (concat "superchat inline · "
+                       (superchat-sink-retry-text (plist-get state :retry))))
     ('typing "superchat inline · Typing…")
     ('ready "superchat inline · Ready · M-RET menu")
     ('error (format "superchat inline · Error: %s"
@@ -346,14 +348,19 @@ becomes the Ready answer, and an error is shown for
              (and (overlayp overlay)
                   (overlay-buffer overlay)
                   (buffer-live-p (overlay-buffer overlay))))
-   :status (lambda (_run status)
+   :status (lambda (run status)
+             (when (eq status 'retrying)
+               (superchat-inline--set-state overlay :retry (plist-get run :retry)))
              (superchat-inline--set-state
               overlay :status
               (pcase status
                 ('waiting 'waiting)
+                ('retrying 'retrying)
                 ((or 'typing 'calling-tool) 'typing)
                 ('ready 'ready)
-                (_ 'error))))
+                (_ 'error)))
+             (unless (eq status 'retrying)
+               (superchat-inline--set-state overlay :retry nil)))
    :stream (lambda (_run chunk)
              (let* ((payload (if (and (listp chunk) (plist-member chunk :kind))
                                  chunk

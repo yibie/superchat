@@ -176,6 +176,10 @@ the region itself, which is marked with <<<REGION>>> / <<<END>>>."
     ('waiting (let ((model (plist-get state :model)))
                 (if model (format "REWRITE  Waiting… [%s]" model)
                   "REWRITE  Waiting…")))
+    ('retrying (let ((model (plist-get state :model)))
+                 (concat "REWRITE  "
+                         (superchat-sink-retry-text (plist-get state :retry))
+                         (if model (format " [%s]" model) ""))))
     ('typing "REWRITE  Typing…")
     ('ready "REWRITE  Ready  C-c C-a accept  C-c C-k reject")
     ('error (format "REWRITE  Error: %s" (or (plist-get state :error) "failed")))
@@ -195,7 +199,7 @@ original text stays visible and only the status bar changes."
            (text (plist-get state :text))
            (preview
             (pcase status
-              ('waiting (propertize original 'face 'shadow))
+              ((or 'waiting 'retrying) (propertize original 'face 'shadow))
               ('typing (if (and text (not (string-empty-p text))) text
                          (propertize original 'face 'shadow)))
               ('ready (or text original))
@@ -242,9 +246,14 @@ and then removes the overlay; a cancellation removes it at once."
              (and (overlayp overlay)
                   (overlay-buffer overlay)
                   (buffer-live-p (overlay-buffer overlay))))
-   :status (lambda (_run status)
+   :status (lambda (run status)
              (pcase status
-               ('waiting (superchat-rewrite--set-state overlay :status 'waiting))
+               ('waiting
+                (superchat-rewrite--set-state overlay :status 'waiting)
+                (superchat-rewrite--set-state overlay :retry nil))
+               ('retrying
+                (superchat-rewrite--set-state overlay :retry (plist-get run :retry))
+                (superchat-rewrite--set-state overlay :status 'retrying))
                ((or 'typing 'calling-tool)
                 (superchat-rewrite--set-state overlay :status 'typing))))
    :stream (lambda (_run chunk)

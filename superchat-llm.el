@@ -3094,6 +3094,17 @@ requests until it receives text, bounded by
                   (let ((delay superchat-llm-transient-retry-interval))
                     (cl-incf transient-retries)
                     (funcall cancel-wait-timeout)
+                    (when (functionp runtime-observer)
+                      (funcall runtime-observer 'retry-scheduled
+                               (list :attempt transient-retries
+                                     :limit superchat-llm-transient-retries
+                                     :delay delay
+                                     :error (if (numberp superchat--llm-http-status)
+                                                (format "HTTP %d" superchat--llm-http-status)
+                                              (let ((line (car (split-string
+                                                                (format "%s" err)
+                                                                "\n"))))
+                                                (substring line 0 (min 80 (length line))))))))
                     (run-at-time
                      delay nil
                      (lambda ()

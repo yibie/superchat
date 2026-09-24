@@ -33,6 +33,12 @@ All notable changes to superchat.
   number of seconds.
 - The HTTP status is read where the llm library handles the failed request;
   Superchat never guesses it from the provider's message text.
+- While it waits, the wait is visible instead of a bare "Waiting…": the chat
+  window's status line counts down ("Provider error; retrying in 23s (1/10)…
+  · Operation timeout.") and its header says "retrying 1/10"; inline ask,
+  inline act and the rewrite preview show the same notice until the request
+  is sent again. The notice names the HTTP status or a short error line,
+  never the provider's full response.
 
 ## Unreleased — one finish check when a task stops half-way
 

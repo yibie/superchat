@@ -20,7 +20,7 @@
   id        ; string; `superchat-sink-create' fills "sink-<8 hex>" when nil
   live-p    ; nil (always live) or (lambda () BOOL)
   stream    ; nil or (lambda (RUN CHUNK))     CHUNK = (:kind text|reasoning :text STRING)
-  status    ; nil or (lambda (RUN STATUS))    STATUS = waiting|typing|calling-tool|ready|error|stopped|orphaned
+  status    ; nil or (lambda (RUN STATUS))    STATUS = waiting|typing|calling-tool|retrying|ready|error|stopped|orphaned
   final     ; nil or (lambda (RUN RESULT))    RESULT  = (:text STRING :tape-id ID-or-nil)
   error     ; nil or (lambda (RUN FAILURE))   FAILURE = (:status failed|timed-out|audit-incomplete|cancelled :text STRING :reason STRING-or-nil :tape-id ID-or-nil)
   orphaned) ; nil or (lambda (RUN REASON))    REASON = sink-lost
@@ -29,6 +29,12 @@
   "Bounded ring of the last 100 Sink callback failures.
 Each entry is a plist `(:sink-id ID :callback SLOT :condition CONDITION)'.
 Internal to this file; read it only through `superchat-sink-diagnostics'.")
+
+(defun superchat-sink-retry-text (retry &optional now)
+  "Return the shared visible retry notice for RETRY at time NOW."
+  (format "Provider error; retrying in %ds (%s/%s)…"
+          (max 0 (ceiling (- (plist-get retry :at) (or now (float-time)))))
+          (plist-get retry :attempt) (plist-get retry :limit)))
 
 (defun superchat-sink--record-diagnostic (sink-id callback condition)
   "Push one diagnostic for SINK-ID/CALLBACK/CONDITION, capped at 100 entries."
