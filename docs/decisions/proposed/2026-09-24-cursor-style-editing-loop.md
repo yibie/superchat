@@ -32,12 +32,12 @@ Status: proposed — Claude's recommendation of 2026-09-24, after the user asked
 
 ### 3. 逐块取舍：diffs.el 审阅
 
-- 一个命令（暂名 `superchat-review`；`/changes`、Run 结束提示、inline act 的 `d` 都能进入）把本会话（或本 Run）改过且未存的 Buffer 放进一个 [diffs.el](https://github.com/LuciusChen/diffs.el) 审阅：每个 Buffer 一个补丁条目（磁盘文件对 Buffer），`:directory` 取仓库根，文件分属多个根时取共同父目录。
+- 一个命令（暂名 `superchat-review`；`/changes`、Run 结束提示、inline act 的 `d` 都能进入）把本会话（或本 Run）改过且未存、并且**已在磁盘上有文件**的 Buffer 放进一个 [diffs.el](https://github.com/LuciusChen/diffs.el) 审阅：每个 Buffer 一个补丁条目（磁盘文件对 Buffer）。补丁里的路径相对于传给 `diffs-items` 的 `:directory`，且不传 `:backend`：这时 diffs.el 的审阅根就是 `:directory` 本身（它用 `vc-root-dir` 定根，而 `vc-root-dir` 在 diff 类 Buffer 里读的是 `diff-vc-backend`，不传就为空）。`:directory` 取这些文件的共同父目录。
 - 逐块 `A` 保留、`R` 撤回、`U` 重置；`C-c C-c`（`diffs-review-apply-decisions`）把撤回的块写回 Buffer，不存盘、不暂存。存盘仍是用户的 `save-buffer` 或 `superchat-changes-save`。批处理探针已验证：撤回的块回到 live Buffer，另一块不动，磁盘逐字节不变，Buffer 仍是"已修改"（报告第 5 节）。
 - 基线见问题 3，建议保持今天的规则：和磁盘文件比，"保留"的最终确认就是存盘。这与 buffer-first 已接受的 `/changes` 推导与局限一致。
 - diffs.el 的 `g` 重放创建时的补丁（`diffs.el:12105`），所以 superchat 在审阅里提供自己的"按当前 Buffer 重建"键。
-- 磁盘上还没有的新文件：审阅里显示为整文件新增；撤回等于放弃这个 Buffer，沿用 `superchat-changes-revert` 的做法。
-- 没装 diffs.el：退回今天的 `diff-buffer-with-file` 与整 Buffer 存/撤。
+- 不放进 diffs.el 审阅、保持今天处理的两类：磁盘上还没有的新文件（diffs.el 对"整文件新增"撤回后的行为没有验证），以及不访问文件的 Buffer（diffs.el 写回时要求有源文件）。它们照旧在 `/changes` 里列出，照旧可以显示、整体保存或放弃（`superchat-changes-revert` 对新文件是放弃并关闭这个 Buffer）。
+- 没装 diffs.el：全部退回今天的 `diff-buffer-with-file` 与整 Buffer 存/撤。
 - dsh 没有逐块审阅（改完即落盘，diff 卡只是展示）。需要来自 superchat 自己的 buffer-first；这是对 `/changes` 的升级，不是新子系统。
 
 ### 4. 指着行提意见：批注发回给 AI
@@ -73,7 +73,7 @@ Status: proposed — Claude's recommendation of 2026-09-24, after the user asked
 
 ## 待用户决定
 
-1. **布局默认值**：(A，建议) 默认侧栏，整窗保留为选项；(B) 默认仍整窗，侧栏为选项；(C) 只要侧栏。
+1. **布局默认值**：用户 2026-09-10 定义的场景一是"像 ChatGPT 桌面应用的聊天窗"；选 A 就是把默认改成"代码旁边的侧栏"，整窗降为一个选项，场景一的定义随之修改。(A，建议) 默认侧栏，整窗保留为选项；(B) 默认仍整窗，侧栏为选项；(C) 只要侧栏。
 2. **在哪里审阅**：(A，建议) 先做 diffs.el 审阅窗口；(B) 先做 avante 式、直接在代码 Buffer 里显示旧行和保留/撤回键；(C) 两个一起做。
 3. **"改之前"以什么为准**：(A，建议) 磁盘上的文件（今天的规则，"保留"即存盘）；(B) AI 第一次改这个 Buffer 之前的文本（只存在内存里、挂在 Buffer 上），存盘后也能看到 AI 改了什么。
 4. **批注怎么交给 AI**：(A，建议) 在审阅里按一个键才发送；(B) 随下一条聊天消息自动带上。
@@ -101,7 +101,7 @@ Status: proposed — Claude's recommendation of 2026-09-24, after the user asked
 
 1. **侧栏**：从文件 Buffer 打开聊天，聊天在右侧、代码仍可见、没有新 tab；开关键能隐藏和恢复；`frame` 设置下行为与今天逐字节一致（canonical smoke 不变）。
 2. **看它改**：让 AI 在可见文件里改两处：两处在代码窗口闪过；聊天里出现两个 diff 块，回车跳到对应行；没有任何存盘；光标和选中窗口没被移动。
-3. **取舍**：审阅里两处各为一块；撤回一块、保留一块、`C-c C-c`：Buffer 只含保留的那处且仍未存；存盘后磁盘只含那处。没装 diffs.el 时 `/changes` 与今天一致。
+3. **取舍**：审阅里两处各为一块；撤回一块、保留一块、`C-c C-c`：Buffer 只含保留的那处且仍未存；存盘后磁盘只含那处。新文件与不访问文件的 Buffer 不进审阅、处理与今天一致；没装 diffs.el 时 `/changes` 与今天一致。
 4. **提意见**：在审阅里选两行写"这里用 let"，按发送键：下一次请求里有文件、行号、那两行原文和这句话；AI 改完后重建审阅能看到新改动。
 5. **引用标签**：在任一 Buffer 选一段，加入聊天并附备注，再打一句问题发送：请求里有 Buffer、文件、行号、带行号原文和备注；按发送之前没有任何请求发出。
 6. **不增 token**：每片的回归断言同一 Run 相邻请求前缀逐字相同，系统消息与工具定义与本提案之前一致。
@@ -109,7 +109,9 @@ Status: proposed — Claude's recommendation of 2026-09-24, after the user asked
 ## Risks
 
 - diffs.el 还年轻（0.x，不在 ELPA/MELPA，用 `package-vc` 安装），接口可能变：只用 README 公开的函数，集成代码集中在一个文件，作为可选依赖。
-- diffs.el 用 `vc-root-dir` 或 `default-directory` 定审阅的根（`diffs.el:6802-6806`）；补丁路径必须相对于同一个根。批处理探针在普通目录、仓库根、仓库子目录三种情况下都通过，交互环境没有验证。
+- diffs.el 用 `vc-root-dir` 或 `default-directory` 定审阅的根（`diffs.el:6802-6806`）；不传 `:backend` 时 `vc-root-dir` 为空，根就是 `:directory`，补丁路径必须相对于它。批处理探针在普通目录、仓库根、仓库子目录三种情况下都通过，交互环境没有验证。
+- diffs.el 默认旧侧来自版本库里的某个版本：新侧它优先读 live Buffer（`diffs--worktree-lines`），旧侧的上下文展开（`e`）和旧侧语法着色要走 VC 后端（`diffs--revision-lines`）。本提案的旧侧是磁盘文件、又不传 `:backend`，这两项可能不可用或退回无着色显示，没有验证。
+- `superchat-plan` 已经占用一个侧窗口（计划审阅与进度）；两个右侧面板需要约定槽位，第一片一起定。
 - 跟随会打扰：规则写死"不选中窗口、不移动用户正在使用的窗口的光标"，并可关闭。
 - 侧栏与会话 tab、EditorWorkspace 所有权的配合没有设计验证；第一片实现前对照 ADR 0004 与关闭协议。
 - 若默认改为侧栏（问题 1 选 A），已接受的聊天入口验收是在整窗布局下做的，需在新布局下重跑。
