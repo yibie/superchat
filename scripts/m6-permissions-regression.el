@@ -1031,35 +1031,62 @@ in for the keyboard underneath it."
     (load (locate-library "rmc.el" t) nil t)
     (put 'm6p--load-rmc-source 'done t)))
 
+(defun m6p--rmc-uses-minibuffer-p ()
+  "Return non-nil when `read-multiple-choice' reads its answer in the minibuffer.
+Emacs 31 and later do, with a modal `read-key' path beside it; Emacs 30 reads
+every key with `read-event' and has no other path."
+  (m6p--load-rmc-source)
+  (fboundp 'read-multiple-choice--from-minibuffer))
+
+(defun m6p--help-text ()
+  "Return the text of the help buffer `read-multiple-choice' shows, or nil."
+  (and (get-buffer "*Multiple Choice Help*")
+       (with-current-buffer "*Multiple Choice Help*" (buffer-string))))
+
 (defun m6p--confirm-with-keys (request keys)
   "Answer `superchat-approval-confirm' for REQUEST by typing KEYS.
 `read-multiple-choice' is the real one.  Only its lowest input primitive is
-replaced, because a batch Emacs reads the minibuffer from stdin: each key is
-looked up in the keymap the real function built and its command is run, as
-the command loop would.  Return (ANSWER . LOG); LOG holds, for every key
-that left the question open, the text of the help buffer it displayed."
-  (m6p--load-rmc-source)
+replaced, because a batch Emacs reads its input from stdin.  On the minibuffer
+path each key is looked up in the keymap the real function built and its
+command is run, as the command loop would; on Emacs 30's `read-event' path
+each call hands over the next key.  Return (ANSWER . LOG); LOG holds, for
+every key that left the question open, the text of the help buffer it
+displayed."
   (let ((log nil)
         (read-char-choice-use-read-key nil))
-    (cl-letf (((symbol-function 'read-from-minibuffer)
-               (lambda (_prompt _initial map &rest _)
-                 (catch 'm6p-answered
-                   (dolist (key keys)
-                     (let ((last-command-event key)
-                           (command (lookup-key map (vector key)))
-                           (exited t))
-                       (catch 'exit
-                         (call-interactively command)
-                         (setq exited nil))
-                       (if exited
-                           (throw 'm6p-answered nil)
-                         (push (cons key
-                                     (and (get-buffer "*Multiple Choice Help*")
-                                          (with-current-buffer "*Multiple Choice Help*"
-                                            (buffer-string))))
-                               log))))
-                   (error "m6p: the question was still open after %S" keys)))))
-      (cons (superchat-approval-confirm request) (nreverse log)))))
+    (if (m6p--rmc-uses-minibuffer-p)
+        (cl-letf (((symbol-function 'read-from-minibuffer)
+                   (lambda (_prompt _initial map &rest _)
+                     (catch 'm6p-answered
+                       (dolist (key keys)
+                         (let ((last-command-event key)
+                               (command (lookup-key map (vector key)))
+                               (exited t))
+                           (catch 'exit
+                             (call-interactively command)
+                             (setq exited nil))
+                           (if exited
+                               (throw 'm6p-answered nil)
+                             (push (cons key (m6p--help-text)) log))))
+                       (error "m6p: the question was still open after %S" keys)))))
+          (cons (superchat-approval-confirm request) (nreverse log)))
+      ;; Emacs 30 calls `read-event' once per key and swallows its errors, so
+      ;; running out of keys leaves by `throw', never by `error'.
+      (let* ((pending keys)
+             (previous nil)
+             (outcome
+              (catch 'm6p-still-open
+                (cl-letf (((symbol-function 'read-event)
+                           (lambda (&rest _)
+                             (when previous
+                               (push (cons previous (m6p--help-text)) log))
+                             (unless pending
+                               (throw 'm6p-still-open nil))
+                             (setq previous (pop pending)))))
+                  (list (superchat-approval-confirm request))))))
+        (unless outcome
+          (error "m6p: the question was still open after %S" keys))
+        (cons (car outcome) (nreverse log))))))
 
 (ert-deftest m6-permissions/chain/question-mark-shows-the-arguments-and-decides-nothing ()
   "Through the real `read-multiple-choice' and the keymap it builds: `?'
@@ -1088,9 +1115,11 @@ displays the tool, the reason and the whole arguments -- the code an
 
 (ert-deftest m6-permissions/chain/the-modal-key-path-shows-the-same-details ()
   "With `read-char-choice-use-read-key' the other input path of the real
-`read-multiple-choice' runs; `?' shows the same details there."
+`read-multiple-choice' runs; `?' shows the same details there.  Emacs 30 has
+no such second path (every key comes from `read-event'), so there is nothing
+to run; the question-mark test covers its one path."
   (skip-when (getenv "SMOKE_REAL"))
-  (m6p--load-rmc-source)
+  (skip-unless (m6p--rmc-uses-minibuffer-p))
   (let* ((keys (list ?? ?y))
          (seen nil)
          (read-char-choice-use-read-key t)

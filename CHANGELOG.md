@@ -94,6 +94,11 @@ All notable changes to superchat.
   from a provider callback could not be cancelled with C-g on 29 (you had to
   answer `n`).  Rather than carry fixes for a version nobody here runs, the
   floor moves to the version the code is written and tested against.
+- Correction, after running it on a locally built Emacs 30.1: the C-g problem
+  was not Emacs 29's alone. Emacs 30 also reads that answer key by key, so on
+  30.1 too C-g could not cancel an approval question; only `n` worked. Fixed:
+  C-g now cancels the question on every supported Emacs. Everything else,
+  including a real DeepSeek chat session, passed on 30.1 unchanged.
 
 ## Unreleased — reference pages read on demand
 

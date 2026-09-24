@@ -226,6 +226,10 @@ Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/2
 
 Accepted by the user on 2026-09-23 ("我觉得可以验收"). The configuration apply/undo acceptance passed on the act entry at product commit `afba469b`, DeepSeek, attended: both phases 11/11 and both answers consistent with the observations under the leader's review. The undo request carried the apply turn's tool observations, which the earlier failing run lacked. The chat entry was not re-run on this commit (its last pass is `a7879950`), so this is not an acceptance of both entries on one version. Report: [act entry acceptance on the current commit](reports/2026-09-23-act-entry-acceptance-current-commit.md).
 
+### Minimum Emacs 30.1 (`implemented`, verified 2026-09-23)
+
+[The minimum Emacs is 30.1](decisions/implemented/2026-09-22-minimum-emacs-30-1.md), the user's ruling of 2026-09-22 after the Emacs 29.4 run. On a locally built 30.1 every suite, the canonical smoke, the kernel check and a real DeepSeek chat session (read, edit, undo, refused `eval_elisp`) pass; the run found one product fault, C-g not cancelling an approval question asked from a callback, which also affected 30.1 and is fixed for every supported Emacs. Evidence: `.scratch/g3-emacs30/README.md`. Not verified: a GUI Emacs 30.1, Emacs 30.2.
+
 ### Fixes from the 2026-09-23 round (`implemented`)
 
 The act entry's failing and passing runs and the user's 2026-09-23 decisions produced five accepted records, all built on 2026-09-23. What each one has in the tree:

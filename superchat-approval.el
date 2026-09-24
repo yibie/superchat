@@ -132,14 +132,23 @@ answered by input that came after it\")."
      ;; A running keyboard macro is not a person: its keys are not read.
      (not executing-kbd-macro)
      (eq ?y
-        (car (read-multiple-choice
-              (format "Allow `%s' once?%s "
-                      (plist-get request :tool-name)
-                      (if (and (stringp reason) (not (string-empty-p reason)))
-                          (format " (%s)" reason)
-                        ""))
-              '((?y "yes, allow once") (?n "no"))
-              (superchat-approval--details request)))))))
+        (car
+         ;; C-g must quit the question wherever it is asked.  Tool calls, and
+         ;; so this question, usually run from a timer or a process filter,
+         ;; where `inhibit-quit' is t.  Emacs 31 and later read the answer in
+         ;; the minibuffer, which quits anyway; Emacs 30 reads it with
+         ;; `read-event', which under `inhibit-quit' returns C-g as a
+         ;; character that `read-multiple-choice' rejects as an invalid choice
+         ;; and asks again, so the question could only be answered with `n'.
+         (let ((inhibit-quit nil))
+           (read-multiple-choice
+            (format "Allow `%s' once?%s "
+                    (plist-get request :tool-name)
+                    (if (and (stringp reason) (not (string-empty-p reason)))
+                        (format " (%s)" reason)
+                      ""))
+            '((?y "yes, allow once") (?n "no"))
+            (superchat-approval--details request))))))))
 
 ;;;; A question does not outlive its Run ---------------------------------------
 ;; decision of 2026-09-19, "a question is dismissed when its Run ends".
