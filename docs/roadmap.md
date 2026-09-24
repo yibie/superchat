@@ -36,6 +36,7 @@ Batch 4C-3 (an automatic Run Scope) is not started and is not scheduled on its o
 | Following DeepSeek Harness, Closure and Claims are deleted, Experience loses its context collector and review entry and stays in the default set, and a Run cancelled during a tool still seals `audit-incomplete` at once ([record](decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md)) | Implemented and verified under M3a; the record moved to `docs/decisions/implemented/` |
 | Reference material the model may read must not apply a Preset: a superchat skill returns one, so invoking it switches model, tools and often the View's Capability, which is a mode change rather than something read to inform one thought ([record](decisions/proposed/2026-09-16-emacs-operating-context-and-reference-contract.md), slices 1 and 2 accepted 2026-09-16) | Slices 1 and 2 delivered under M5; the reading interface and guide stay `proposed`. The reviewed comparison supports origin context but does not establish the benefit of reference reading |
 | Documentation follows one spec per component with a fixed structure, decision records with mandatory alternatives, present tense, one home per fact ([record](decisions/accepted/2026-09-12-documentation-regime.md)) | Scaffold in place (`docs/README.md`, `components/`, `decisions/`, `postmortems/`); component specs follow as modules land; M0 finishes the alignment |
+| One conversation in two modes — a side panel while editing files, the conversation's own full tab while operating Emacs, one key between them; the attended-run s/n review of unsaved buffers in the product, colored, appearing by itself without taking focus; in-buffer entry points join the conversation shown ([record](decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md)) | Not built; slices under M10 |
 
 Still not decided by the user: whether the model-facing tool surface drops path-file tools for Emacs-object tools. M5 approaches the surface question from the other end — what the model knows about the machine it is on, and which verbs it already has — and answers nothing about that swap. Until it is decided, no existing tool, plugin or feature (workflow, MCP, memory, plans, teams, workspace, GenUI, emacsclient) is removed from the default set, apart from what the M3a removal decision names.
 
@@ -221,6 +222,19 @@ Record: [the light M9 decision](decisions/accepted/2026-09-22-spine-loads-withou
 Delivered (`current`): unmounting a default row withdraws what that row contributes. For the seven non-surface rows (memory, changes, subagent, workflow, workspace, plan, compact) their projections, Services and listeners go and come back on remount. The built-in tools of `subagent`, `workspace` and `memory` are registered by those rows, so an unmounted row's tools are not offered to the model, cannot be selected by an explicit tool list, and a copy materialized earlier is refused before its body runs; the default tool surface is unchanged. Entry points that start new work refuse naming the row: `>>`, `superchat-workflow-execute-async` (and so `/workflow NAME`), `superchat-research-workflow` and its resume, `/subagent`, `superchat-agents-panel-show`. Listing recipes, running work's callbacks, cancel and cleanup are not blocked.
 
 Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/21, inline-act 11/11, smoke 0 mismatches, kernel check 0 fails, re-run by the leader.
+
+### M10 — Editor mode, agent mode and the review screen (`accepted` 2026-09-24; not built)
+
+Goal: the two ways the user works — editing files, and operating Emacs itself — each get the layout they want over one conversation, and the unsaved changes a Run leaves are reviewed on the screen the user already found clear, now in color. The record is [the editor-mode/agent-mode decision](decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md); the investigation, reference reading (avante.nvim, unreal-agent, diffs.el, gptel, gptel-agent, gptel-inline, DeepSeek Harness) and batch probes are in `.scratch/cursor-like-integration/REPORT.md`.
+
+| Slice | What it delivers | State |
+|---|---|---|
+| 1a | The review screen: one unsaved buffer at a time, `s`/`n`/`q`, `diff-mode` colors and `diffs-minor-mode` when diffs.el is present, opening by itself at Run end without taking focus; `/changes` and `superchat-changes-diff` open it | not built |
+| 1b | Editor mode: the chat View in a side window of the current tab; closing a Session shown only there | not built |
+| 1c | The switch key between editor mode and agent mode (today's Session tab), remembered within an Emacs session | not built |
+| 2 | In-buffer entry points (inline ask, inline act, region rewrite) join the conversation the chat View shows; the View shows Turns started elsewhere | not built |
+
+Not in M10: per-block keep/reject, line annotations sent back to the model, reference tags, chat diff cards, follow-along (set aside by the user's answers, see the record). The attended both-entries acceptance is re-run under the new layout and review screen after slices 1b, 1c and 2.
 
 ### Act entry acceptance on the current commit (`accepted` 2026-09-23)
 

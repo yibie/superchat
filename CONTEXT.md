@@ -37,14 +37,19 @@ the tool execution pipeline, is `superchat-tool-execution.el` (named
 _Avoid_: Authority, authority policy, attendance
 
 **Session**:
-A durable logical context spanning multiple Turns and Runs.
-_Avoid_: Buffer, Run
+A durable logical context spanning multiple Turns and Runs.  The chat View
+shows one Session at a time, either beside the file being edited (editor mode)
+or in the Session's own tab (agent mode); both modes show the same Session.
+Entry points invoked from an ordinary buffer — inline ask, inline act, region
+rewrite — join the Session the chat View is showing, not one chosen by project.
+_Avoid_: Buffer, Run, project session
 
 **Session EditorWorkspace**:
 The live set of Emacs buffers one Session owns.  Ownership comes from exact
-markers on the buffer, never from its name, tab, project or directory.  It is
-distinct from the durable Artifact Workspace; Runtime borrows a buffer from
-it and never closes one.
+markers on the buffer, never from its name, tab, project or directory.  Where a
+buffer is displayed (the Session's tab, or a side window of another tab) is
+not ownership.  It is distinct from the durable Artifact Workspace; Runtime
+borrows a buffer from it and never closes one.
 _Avoid_: Session buffer, Artifact Workspace, HostLease
 
 **Owned Editor Buffer**:
