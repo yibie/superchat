@@ -806,6 +806,17 @@ text, not execution, reader effects or successful evaluation values.")
                     marker)))
     (concat "Error: evaluating expression: " details)))
 
+(defconst superchat-tools--eval-asked-the-user
+  (concat "Error: evaluating expression: it tried to ask the user for input "
+          "(a minibuffer prompt, a question or a key), which eval_elisp does not "
+          "do.  Find the value yourself instead: (commandp 'COMMAND) tells "
+          "whether a command exists, key-binding in the target buffer what a key "
+          "does, read_buffer or read_file what a text says.  Ask the user only "
+          "what only the user can answer, with ask_user or in your reply.  What "
+          "the expression did before that point was not undone.")
+  "The `eval_elisp' result when its expression tried to interact.
+Decision of 2026-09-24, \"eval_elisp never asks the user\".")
+
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate one complete Elisp EXPRESSION and return its value as a string.
 Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
@@ -814,11 +825,32 @@ The returned value is not verification of the user's requested outcome.
 The expression has full access to the Emacs process, so no attempt is made
 to classify it: the permission level treats every `eval_elisp' call as full
 Emacs control -- asked about per call under `edit-buffers', refused under
-`read-only', free under `danger-full-access'."
-  (condition-case err
-      (let ((result (eval (superchat-tools--read-one-expression expression) t)))
-        (format "Result: %S" result))
-    (error (superchat-tools--eval-error-result err))))
+`read-only', free under `danger-full-access'.
+
+The expression never asks the user anything: it runs with
+`inhibit-interaction', so a minibuffer prompt or a `read-char' or
+`read-event' stops it, and the model is told to find the value itself or to
+ask with `ask_user' (decision of 2026-09-24).  The stop leaves the whole
+expression at once, through `signal-hook-function', because code that asks
+inside `condition-case' and retries -- Emacs 30's `read-multiple-choice' --
+would otherwise catch it and loop for ever.  `read-key-sequence', which
+Emacs does not stop that way, is outside this.  The approval question for
+the call is asked before this function runs and is not affected."
+  (let* ((asked (make-symbol "asked"))
+         (outer-hook signal-hook-function)
+         (leave-on-prompt
+          (lambda (symbol data)
+            (if (eq symbol 'inhibited-interaction)
+                (throw asked superchat-tools--eval-asked-the-user)
+              (when outer-hook (funcall outer-hook symbol data))))))
+    (catch asked
+      (condition-case err
+          (let ((result (let ((inhibit-interaction t)
+                              (signal-hook-function leave-on-prompt))
+                          (eval (superchat-tools--read-one-expression expression) t))))
+            (format "Result: %S" result))
+        (inhibited-interaction superchat-tools--eval-asked-the-user)
+        (error (superchat-tools--eval-error-result err))))))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.

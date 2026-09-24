@@ -31,3 +31,7 @@ Emacs's `inhibit-interaction` stops minibuffer reads and `read-char`, `read-even
 - A user who asks the model to run an interactive command for them (install a package, answer a question the command asks) gets an explanation instead and runs it themselves; that interaction is the user's own.
 - An expression that loads code which asks a question (a file's risky local variables, a lock on a file) fails with the same explanation instead of asking.
 - Test: `scripts/eval-elisp-regression.el`.
+
+## Recorded at implementation (2026-09-24)
+
+`inhibit-interaction` alone was not enough. On Emacs 30.1 `read-multiple-choice` reads each key with `read-event` inside `(condition-case nil … (error nil))` and asks again when nothing came back, so it caught the stop and looped for ever, printing its prompt; inside a tool call that is an Emacs that no longer answers. The tool therefore also binds `signal-hook-function` for the duration of the expression: the first `inhibited-interaction` throws straight out of the whole expression, past the expression's own handlers, and every other signal goes to the previous hook as before. Found by running the new tests on the Emacs 30.1 build; `eval-elisp/a-prompt-that-swallows-errors-still-ends` pins it on every version.

@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — `eval_elisp` never asks you anything
+
+- Code the model runs through `eval_elisp` can no longer pop up a question
+  for you. In an acceptance run the model "checked" a command by running it,
+  which opened a "Describe function:" prompt you had to answer. Now such
+  code stops at the prompt, and the model is told to look the answer up
+  itself (`commandp`, `key-binding`, reading the buffer or file), or to ask
+  you with `ask_user` when only you know. The approval question for an
+  `eval_elisp` call is asked as before. The key-binding how-to page now also
+  says to check a command with `commandp` instead of running it.
+- Limit: a bare key read (`read-key`, as `describe-key` uses) is not stopped
+  this way and still reaches you.
+
 ## Unreleased — a reopened conversation reads like the live one
 
 - `superchat-open-session` rebuilds a past conversation from the database.

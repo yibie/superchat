@@ -47,7 +47,7 @@ This page is advice. The user's instructions and the permission decisions of thi
 Check each one you talk about: (buffer-modified-p) for the buffer, read_file for the disk, key-binding for the session.
 
 3. Make the change.
-- Put the form in the configuration buffer, for example (with-eval-after-load 'org (define-key org-mode-map (kbd \"C-c t h\") #'COMMAND)), or a plain (define-key MAP ...) when the map exists at startup. Check that the map and the command exist.
+- Put the form in the configuration buffer, for example (with-eval-after-load 'org (define-key org-mode-map (kbd \"C-c t h\") #'COMMAND)), or a plain (define-key MAP ...) when the map exists at startup. Check that the map and the command exist: (boundp 'MAP) and (commandp 'COMMAND). Do not run the command to test it: a command that asks for input would stop the task to wait for the user, and eval_elisp refuses it.
 - To make it live now, evaluate only the forms you changed, with eval_elisp, one expression per call (wrap several in progn). Do not evaluate the whole buffer: that reruns the user's entire configuration.
 - Then observe: key-binding in the target buffer must now answer your command.
 
