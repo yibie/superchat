@@ -250,5 +250,45 @@
                                    (step-material--items event))
                            (plist-get evidence :messages)))))))))
 
+(ert-deftest step-material/each-attempt-rebuilds-by-step ()
+  "Every attempt of a Run shares its request id; STEP rebuilds any one of
+them, not only the last (`.scratch/issues/2026-09-23-request-evidence-
+rebuilds-only-the-last-attempt.md')."
+  (step-material--fixture
+      (list (step-material--read-round 0.1)
+            (step-material--read-round 0.1) '(:text "done"))
+    (let* ((view (smoke--open-chat))
+           (session (step-material--session view))
+           (run (smoke--send view "read twice")))
+      (should (superchat-runtime-steer run "E1-ONE"))
+      (should (smoke--wait (lambda () (= 2 (length smoke--requests))) 5))
+      (should (superchat-runtime-steer run "E1-TWO"))
+      (step-material--settle run)
+      (let* ((lists (step-material--lists session))
+             (request-id (plist-get (plist-get (car lists) :payload) :request-id))
+             (contents (lambda (step)
+                         (let ((evidence (superchat-tape-request-evidence
+                                          session request-id step)))
+                           (should (eq 'reproduced (plist-get evidence :status)))
+                           (mapcar (lambda (m) (plist-get m :content))
+                                   (plist-get evidence :messages))))))
+        (should (= 3 (length lists)))
+        (should (equal '(1 2 3)
+                       (mapcar (lambda (event)
+                                 (plist-get (plist-get (plist-get event :payload)
+                                                       :execution)
+                                            :step))
+                               lists)))
+        (should (null (funcall contents 1)))
+        (should (equal '("E1-ONE") (funcall contents 2)))
+        (should (equal '("E1-ONE" "E1-TWO") (funcall contents 3)))
+        ;; Without STEP: the last attempt, as before.
+        (should (equal (superchat-tape-request-evidence session request-id 3)
+                       (superchat-tape-request-evidence session request-id)))
+        ;; A Step with no recorded attempt is unknown, never a neighbour.
+        (should (eq 'unknown (plist-get (superchat-tape-request-evidence
+                                         session request-id 9)
+                                        :status)))))))
+
 (provide 'step-material-regression)
 ;;; step-material-regression.el ends here

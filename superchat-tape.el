@@ -1384,7 +1384,7 @@ missing, a missing `:result-text', or differing execution ids is `:unknown'."
                  (plist-get outcome-payload :result-truncated)
                  (plist-get outcome-payload :result-chars))))))))
 
-(defun superchat-tape-request-evidence (session-id request-id)
+(defun superchat-tape-request-evidence (session-id request-id &optional step)
   "Rebuild REQUEST-ID's provider request from the Tape, or report why not.
 Returns `(:status reproduced :system S :messages M :tools T)' when the header
 and every named storage id resolve, and `(:status unknown :reason R)' otherwise.
@@ -1392,14 +1392,21 @@ A reconstruction never guesses: an unresolvable header reference, a message row
 that no longer exists, or a header whose payload was bounded away reports
 `unknown' instead of comparing against a shorter request.
 
+Every provider attempt of a Run records its own message list under the Run's
+one REQUEST-ID, told apart by the Step in its `:execution'.  STEP selects the
+attempt of that Step; without it the last attempt recorded is rebuilt.
+
 This is the check the accepted request-header decision requires; a recorded
 `prompt.assembled' receipt alone is not evidence that a request can be rebuilt."
   (let* ((events (superchat-tape-replay-events session-id))
          (lists (cl-remove-if-not
                  (lambda (event)
-                   (and (equal "request.message-list" (plist-get event :type))
-                        (equal request-id
-                               (plist-get (plist-get event :payload) :request-id))))
+                   (let ((payload (plist-get event :payload)))
+                     (and (equal "request.message-list" (plist-get event :type))
+                          (equal request-id (plist-get payload :request-id))
+                          (or (null step)
+                              (equal step (plist-get (plist-get payload :execution)
+                                                     :step))))))
                  events))
          (row-at (lambda (storage-id)
                    (car (superchat-db-tape-select
