@@ -182,6 +182,10 @@ no Emacs-changing tool gets no note.  Found while building the reference index
     ;; whether it works made the user answer its prompt.
     (dolist (needle '("commandp" "never run a command to test it"))
       (should (string-match-p (regexp-quote needle) text)))
+    ;; 2026-09-24 (user: "都按建议"): a number from lookup-key means that map
+    ;; has no binding for the sequence; the old wording said the opposite.
+    (should (string-match-p (regexp-quote "that map has no binding for it") text))
+    (should-not (string-match-p "not that the key is unbound" text))
     (should-not (string-match-p "(with-current-buffer NAME (eval-buffer))\\|say it is unsaved"
                                 text))
     (should-not (string-match-p

@@ -72,3 +72,12 @@ Status: implemented（2026-09-20；同日 accepted——用户选定：先内容
 验收第 5 条相应改为：含"只执行改动的表达式、不执行整个 Buffer"和 `buffer-modified-p` 的表述；不含无条件的 `eval-buffer` 用法和"say it is unsaved"。`operating-note/the-built-in-text-keeps-to-its-contract` 先红（缺 "only the forms you changed"）后绿。canonical smoke 基线变化仍只有 `A.txt`、`A.full.txt` 各一行里的这三处措辞。
 
 **这仍是未经真实模型验证的文字。** 2026-09-19 通过的 DeepSeek 运行里，模型正是用 `eval-buffer` 让修改生效的；改成"只执行改动的表达式"之后模型做得更好还是更差，没有运行过。
+
+## 之后的修改（2026-09-24）
+
+内置文字又改过两处，上文引用的原文与字数记录的是 2026-09-20 的版本：
+
+1. 第一行加上"用 `commandp` 查命令、不要为了试能不能用就去运行命令"，同时删掉几处措辞（其中包括 `apropos`）以守住 1024 字符。见 [eval_elisp 永不向用户提问](../accepted/2026-09-24-eval-elisp-never-asks-the-user.md) 的补充一节。
+2. 第二行关于 `lookup-key` 的话，原来写的是"返回数字表示序列对该键位表太长，而不是键没绑定"。后半句说反了：数字的意思恰恰是"这串键在该键位表里没有绑定"。干净的 `emacs -Q` 里，`C-c t` 空着时 `(lookup-key global-map (kbd "C-c t h"))` 返回 2。本来想说的是"别的键位表里仍可能有绑定"，这由同一行的 `key-binding` 负责。现改为 "A number from lookup-key means that map has no binding for it"。
+
+现长 985 字符。两处都没有经过真实模型运行验证。
