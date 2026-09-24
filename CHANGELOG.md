@@ -2,6 +2,25 @@
 
 All notable changes to superchat.
 
+## Unreleased — the chat opens beside the file you are editing
+
+- `M-x superchat` now shows the chat in a side window on the right of the
+  tab you are in, beside the file you are editing, instead of in a new tab
+  that it fills. Your windows stay open, only narrower. Starting, opening or
+  branching a conversation shows it in that same window;
+  `superchat-act` shows it there without taking focus, and
+  `superchat-send-region` shows it there and moves you into it. The plan
+  panel, when open, keeps its own place below the chat.
+- Set `superchat-display-style` to `agent` for the old layout: each
+  conversation in its own tab, filling it. `superchat-display-single-window`
+  now applies only there.
+- `M-x superchat-close-session-workspace` run in the chat window closes that
+  conversation even when it has no tab of its own; if a Run is still working
+  it asks first, as closing the tab does.
+- Not yet: a key to switch between the two layouts. `superchat-act` and
+  `superchat-send-region` still go to the main chat buffer, which is not the
+  one beside the file if you opened another conversation there.
+
 ## Unreleased — the review screen for unsaved changes, in color
 
 - When a Run leaves buffers it edited unsaved, a review screen now appears in

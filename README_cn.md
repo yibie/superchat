@@ -95,7 +95,9 @@ buffer，但发送第一条消息时请求会被拒绝，并在发送时报告�
 
 ## 5 分钟上手
 
-使用 `M-x superchat` 打开聊天界面。以下是你能在首次会话中做的五件事：
+使用 `M-x superchat` 打开聊天界面。它出现在当前 tab 右侧的侧窗口里，挨着你正在编辑的文件（编辑模式），原有的窗口都还在，只是变窄一些。把 `superchat-display-style` 设为 `agent`，每段对话就改为占满它自己的 tab（agent 模式）。关闭一段对话：在它的聊天窗口里 `M-x superchat-close-session-workspace`，agent 模式下关掉它的 tab 也行；还有 Run 在跑时会先问你。
+
+以下是你能在首次会话中做的五件事：
 
 **1. 普通流式对话**
 
@@ -380,7 +382,9 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
-- `superchat-display-single-window` — 将 Emacs frame 专用于 superchat（默认 `t`）。
+- `superchat-display-style` — 聊天在哪里打开：`editor`（默认）在代码旁的侧窗口，`agent` 在这段对话自己的 tab。
+- `superchat-display-single-window` — agent 模式下，聊天是它那个 tab 里唯一的窗口（默认 `t`）；编辑模式从不关窗口。
+- `superchat-side-window-width` — 右侧侧窗口（聊天与计划面板）的宽度（默认占 frame 的 `0.42`）。
 
 常用新选项：
 

@@ -49,6 +49,7 @@
 (require 'superchat-agent-loop)
 (require 'superchat-workspace)
 (require 'superchat-editor-workspace)
+(require 'superchat-widgets)
 (require 'superchat-change-set)
 (require 'superchat-synthesis)
 (require 'superchat-prompt-hooks)
@@ -235,8 +236,20 @@ Only files with these extensions are shown in the file picker."
   :type 'string
   :group 'superchat)
 
+(defcustom superchat-display-style 'editor
+  "Where the chat View opens.
+`editor' (editor mode): in a side window on the right of the current tab,
+beside the buffer being edited; no tab is added and no window is closed.
+`agent' (agent mode): in the Session's own tab, which
+`superchat-display-single-window' gives to the chat View alone."
+  :type '(choice (const :tag "Beside the code (editor mode)" editor)
+                 (const :tag "In the Session's own tab (agent mode)" agent))
+  :group 'superchat)
+
 (defcustom superchat-display-single-window t
-  "If non-nil, make the superchat window the only one in its frame."
+  "If non-nil, the chat View is the only window of its Session's tab.
+It applies to agent mode only; editor mode (see `superchat-display-style')
+never closes a window."
   :type 'boolean
   :group 'superchat)
 
@@ -3390,10 +3403,39 @@ rematerializes the same View itself, exactly once."
         (delete-other-windows))))
   buffer)
 
+(defun superchat--chat-view-beside-code-p (session-id)
+  "Non-nil when SESSION-ID's chat View is to open beside the code now.
+That is editor mode (`superchat-display-style'), except in SESSION-ID's own
+tab: that tab is where agent mode shows it, and it is not shown beside itself."
+  (and (eq superchat-display-style 'editor)
+       (not (and session-id
+                 (equal session-id
+                        (superchat-editor-workspace--tab-session-id
+                         (superchat-editor-workspace--current-tab)))))))
+
+(defun superchat--show-chat-view (buffer &optional select)
+  "Show chat View BUFFER and return its window; SELECT also selects it.
+Beside the code (`superchat--chat-view-beside-code-p') it takes the chat's
+side window on the right of the current tab and closes no window, not even
+another one showing BUFFER; otherwise it is plain `display-buffer'."
+  (let ((window
+         (if (superchat--chat-view-beside-code-p
+              (buffer-local-value 'superchat--session-id buffer))
+             (superchat-side-window-show buffer 'chat t)
+           (display-buffer buffer))))
+    (when (and select (window-live-p window))
+      (select-window window))
+    window))
+
 (defun superchat--display-session-view (buffer session-id)
-  "Select SESSION-ID's stable tab, display BUFFER there, and return BUFFER."
-  (superchat-editor-workspace--select-session-tab session-id)
-  (superchat--display-chat-view buffer))
+  "Display BUFFER, SESSION-ID's chat View, select it, and return BUFFER.
+In editor mode it is shown beside the code in the current tab; in agent mode
+SESSION-ID's own tab is selected, or made, and BUFFER displayed there."
+  (if (superchat--chat-view-beside-code-p session-id)
+      (superchat--show-chat-view buffer t)
+    (superchat-editor-workspace--select-session-tab session-id)
+    (superchat--display-chat-view buffer))
+  buffer)
 
 (defun superchat--render-session-rows (buffer rows)
   "Render Tape ROWS into BUFFER as a rebuilt Session View.
@@ -4154,7 +4196,7 @@ puts the View back instead of leaving a user row with no Run."
               (when superchat-show-ttft
                 (setq superchat--ttft-start-time (float-time)))
               (superchat--prepare-for-response)))
-          (display-buffer buffer)
+          (superchat--show-chat-view buffer)
           (with-current-buffer buffer
             (superchat-execute-request-plan plan)))
       (superchat--send-transaction-settle))))
@@ -4489,8 +4531,7 @@ View is already open and has its own buffer-local value."
         (insert inst)
         (goto-char (point-max))))
     ;; Display and select the buffer
-    (let ((window (display-buffer buffer)))
-      (select-window window)
+    (when (window-live-p (superchat--show-chat-view buffer t))
       (goto-char (point-max)))
     ;; Auto-send: behave as if the user pressed C-c C-c, but only when a
     ;; backend is actually configured — otherwise leave the text in the

@@ -35,6 +35,11 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 - **切换键**：从编辑模式切到这段对话自己的 tab（没有就建）；在 agent 模式切回最近使用的那个编辑 tab，对话出现在它的侧窗口里。切换靠界面上的一个键，不靠设置项。
 - **所有权与关闭**：会话 Buffer 的所有权（[ADR 0004](../../adr/0004-session-editor-workspace-authority.md)）不变，侧窗口只是显示位置；agent 模式的 tab 仍是今天的会话 tab，关掉它走[关闭协议](../../protocols/session-editor-workspace-close.md)。一段只在侧窗口里显示过、没有自己 tab 的对话，由 `superchat-close-session-workspace` 在对话窗口里调用时，从该 Buffer 自己的所有权标记取得会话——协议已规定"live buffer-local ownership markers are the close authority"，这是在"直接给出"与"当前 tab"之外的第三个取得方式；协议第 1 步在编辑模式那一片随之修改。
 - 同一个对话 Buffer 可能同时显示在侧窗口和它自己的 tab 里；输入区等状态在 Buffer 上，各窗口的光标位置互不影响。与 `superchat-plan` 已占用的侧窗口按槽位分开。
+- **选项与各片的分工**（编辑模式那一片定）：`superchat-display-style` 取 `editor`（默认）或 `agent`。编辑模式那一片里，模式就是这个选项的值；切换键那一片加上键与"同一次 Emacs 里用上次的模式"，选项从此只给初始值。
+- **侧窗口的槽位与宽度**：对话用 `superchat-side-window-slots` 里自己的一项 `chat`，槽位 -1，在计划面板（`plan`，0）之上；宽度就是 `superchat-side-window-width`——同一侧的侧窗口共用一列，另设一个宽度选项不会生效。打开对话时不关掉别处已经显示这个 Buffer 的窗口（共用的侧窗口函数替其它面板关掉），因为同一段对话可以同时显示在几处，另一个 frame 里的也算。
+- **已经在这段对话自己的 tab 里**：编辑模式下，当前 tab 正是要显示的这段对话的 tab 时，按 agent 模式显示（占满这个 tab），不在它自己的 tab 里再开一个侧窗口显示它自己。
+- **哪些操作把对话放上屏幕**：`superchat`、`superchat-new-session`、`superchat-open-session` 与 `superchat-send-region` 显示并选中对话窗口，`superchat-act` 显示但不选中，与今天相同；编辑模式下它们都用上面那个侧窗口。它们送进哪一段对话不在本片改动：`superchat-act` 与 `superchat-send-region` 今天进主对话 Buffer（`superchat-buffer-name`），侧窗口若显示着另一段对话，两者会不一致，由共用对话那一片定。
+- **关闭时取得会话的顺序**：直接给出的编号；否则当前 Buffer 属于某段对话时（对话 Buffer 就是），用它自己的所有权标记；否则用当前 tab 的会话参数。
 
 ## 审阅屏
 
@@ -67,7 +72,7 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 每片先写红测试（各自独立的测试文件，不进 `scripts/m3-regression.el`），单独验收，leader 提交。
 
 1. **1a 审阅屏**：一次 Run 留下两个未存 Buffer 时，审阅屏自动出现在另一个窗口、焦点不动，显示"1/2"与第一个的彩色 diff；`s` 之后磁盘文件等于 Buffer 并显示"2/2"；`n` 之后第二个仍未存；`q` 结束且不存任何东西；停用的键不改动源 Buffer；装了 diffs.el 时开着 `diffs-minor-mode`；新文件显示为整文件新增并可保存；不访问文件的 Buffer 不进审阅屏而仍在 `/changes` 清单里；`/changes` 与 `superchat-changes-diff` 打开同一块屏并选中它，打开前积压的按键不会存盘；关掉选项后不自动出现，echo 提示照旧。
-2. **1b 编辑模式**：在一个文件里打开对话，对话在右侧侧窗口、代码仍可见、没有新 tab；从对话发起的操作不挪动代码窗口；在对话窗口里关闭会话按关闭协议进行；`frame` 设置下行为与今天一致（canonical smoke 不变）。
+2. **1b 编辑模式**：在一个文件里打开对话，对话在右侧侧窗口、代码仍可见、没有新 tab；从对话发起的操作不挪动代码窗口；在对话窗口里关闭会话按关闭协议进行；`superchat-display-style` 为 `agent` 时行为与今天一致；canonical smoke 不变（它逐字比较发给模型的请求）。（这一条原先写作"`frame` 设置下"，`frame` 是提案早先一稿里这个选项的值名。）
 3. **1c 切换键**：编辑模式按键进入对话自己的 tab 并占满，再按回到刚才的编辑 tab、对话在侧栏，输入框里没打完的字还在；同一次 Emacs 里再打开用上次的模式。
 4. **2 共用一段对话**：在 `~/Documents` 下一个不在 git 里的文件里就地做一件事，对话窗口（无论哪种模式）里出现这一轮并能跳回那一行；对话在跑任务时就地问，问题排队并在前一个 Run 结束后执行；选"不带历史"时请求里没有这段对话的历史；审阅屏与 `/changes` 列出就地做改过的 Buffer。
 

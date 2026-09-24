@@ -97,7 +97,9 @@ Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for MCP server tool i
 
 ## 5-minute tour
 
-Open the chat with `M-x superchat`. Here are five things you can do in your first session:
+Open the chat with `M-x superchat`. It opens in a side window on the right of the tab you are in, beside the file you are editing (editor mode); your windows stay open, only narrower. Set `superchat-display-style` to `agent` to give each conversation its own tab that it fills instead (agent mode). To close a conversation, run `M-x superchat-close-session-workspace` in its chat window, or close its tab in agent mode; if a Run is still working you are asked first.
+
+Here are five things you can do in your first session:
 
 **1. Plain chat with streaming**
 
@@ -386,7 +388,9 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
-- `superchat-display-single-window` — dedicate the frame to superchat (default `t`).
+- `superchat-display-style` — where the chat opens: `editor` (default) in a side window beside the code, `agent` in the conversation's own tab.
+- `superchat-display-single-window` — in agent mode, the chat is the only window of its tab (default `t`); editor mode never closes a window.
+- `superchat-side-window-width` — width of the right side windows, the chat's and the plan panel's (default `0.42` of the frame).
 
 The built-in edit and eval tools report operations separately from task completion. `edit_buffer` changes one unique match in a live buffer; it does not save or evaluate the file. An edit that would leave a Lisp buffer with unbalanced parentheses or an unterminated string is not applied: the buffer stays as it was and the model is told where the mismatch is, so it can submit the edit again. `eval_elisp` accepts one complete expression (`progn` or `let` for multiple operations) and reports its return value or a bounded tool error recognized by the tool loop. Code run through `eval_elisp` never asks you anything: if it would open a prompt (a question, a minibuffer, a key read), it stops there and the model is told to look the answer up itself, or to ask you through `ask_user` when only you know. Configuration work still needs verification of the effective setting. Making it last is a division of labour: the model edits the buffer of the configuration file Emacs actually loads, and you save it; no tool description asks the model to save. See [edit and evaluation results](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results).
 

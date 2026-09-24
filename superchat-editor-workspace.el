@@ -668,14 +668,18 @@ unmaterialized or already closed workspace is an idempotent success."
 (defun superchat-close-session-workspace (&optional session-id)
   "Close SESSION-ID through the shared EditorWorkspace authority.
 
-Interactively, use the stable Session ID stored on the current tab."
+Without SESSION-ID, close the Session that owns the current buffer, by the
+buffer's own ownership marker -- its chat View, for one, which has no Session
+tab when it is shown only in a side window -- or else the one stored on the
+current tab."
   (interactive)
   (let ((target
           (or session-id
+              (superchat-editor-workspace-owner-session (current-buffer))
               (superchat-editor-workspace--tab-session-id
                (superchat-editor-workspace--current-tab)))))
     (unless target
-      (user-error "Current tab is not a Superchat Session tab"))
+      (user-error "This buffer and this tab belong to no Superchat Session"))
     (superchat-session-workspace-close target)))
 
 (defun superchat-editor-workspace-prevent-tab-close (tab only-tab-p)

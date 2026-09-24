@@ -223,14 +223,14 @@ Delivered (`current`): unmounting a default row withdraws what that row contribu
 
 Evidence: `scripts/composition-regression.el` 22/22; M3 137/0, M6 62/62, M7 21/21, inline-act 11/11, smoke 0 mismatches, kernel check 0 fails, re-run by the leader.
 
-### M10 — Editor mode, agent mode and the review screen (`accepted` 2026-09-24; slice 1a implemented)
+### M10 — Editor mode, agent mode and the review screen (`accepted` 2026-09-24; slices 1a and 1b implemented)
 
 Goal: the two ways the user works — editing files, and operating Emacs itself — each get the layout they want over one conversation, and the unsaved changes a Run leaves are reviewed on the screen the user already found clear, now in color. The record is [the editor-mode/agent-mode decision](decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md); the investigation, reference reading (avante.nvim, unreal-agent, diffs.el, gptel, gptel-agent, gptel-inline, DeepSeek Harness) and batch probes are in `.scratch/cursor-like-integration/REPORT.md`.
 
 | Slice | What it delivers | State |
 |---|---|---|
 | 1a | The review screen: one unsaved buffer at a time, `s`/`n`/`q`, `diff-mode` colors and `diffs-minor-mode` when diffs.el is present, opening by itself at Run end without taking focus; `/changes` and `superchat-changes-diff` open it | implemented: `superchat-changes.el`; `scripts/review-screen-regression.el` 14 tests (the first 12 written first: 11 red at the missing screen, one guard green before and after; two more after, on a killed buffer and on `g`; eight mutants each red on their own tests); all other suites, the M3 set (untouched) and canonical smoke unchanged. Not tried in a real window or with a real model |
-| 1b | Editor mode: the chat View in a side window of the current tab; closing a Session shown only there | not built |
+| 1b | Editor mode: the chat View in a side window of the current tab; closing a Session shown only there | implemented: `superchat-display-style` (`editor` by default, `agent` for the Session's own tab as before) and one display path for the chat View in `superchat.el`, the `chat` slot above the plan panel in `superchat-widgets.el`, closing from a buffer the Session owns in `superchat-editor-workspace.el` and step 1 of the close protocol; `scripts/editor-mode-regression.el` 13 tests (nine red first at the missing editor mode, four guards green before and after; ten mutants each red on their own tests); every other suite, the M3 set (untouched) and canonical smoke unchanged. `superchat-act` and `superchat-send-region` still go to the main chat buffer, which is not the one beside the file if another conversation was opened there (slice 2). Seen in an interactive terminal Emacs with the tab bar on (screens in `.scratch/cursor-like-integration/slice-1b/real-window/`): the chat on the right beside the file, the review screen taking the file's window after a Run and `q` giving it back, closing from the chat, agent mode's own tab. Not tried in a GUI frame or with a real model |
 | 1c | The switch key between editor mode and agent mode (today's Session tab), remembered within an Emacs session | not built |
 | 2 | In-buffer entry points (inline ask, inline act, region rewrite) join the conversation the chat View shows; the View shows Turns started elsewhere | not built |
 

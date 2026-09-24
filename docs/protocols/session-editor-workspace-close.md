@@ -1,7 +1,7 @@
 # Session EditorWorkspace Close
 
 status: active
-scope: process-local buffers owned by one Session EditorWorkspace and its tagged Session tab
+scope: process-local buffers owned by one Session EditorWorkspace, and its tagged Session tab when it has one
 applies_when: code or a native tab close requests closure of a stable Session ID
 owner: `superchat-editor-workspace.el`
 source Evidence ID: `E-20260903-003`; `E-20260905-001`
@@ -9,9 +9,12 @@ verification: EditorWorkspace 34/34; Slice09 native UI 51/51; canonical ERT 1220
 
 ## Action contract
 
-1. Resolve the stable Session ID directly or from the current tab's Session
-   parameter.  Do not infer it from a tab name, selected window, buffer name,
-   directory, project, or correlation ID.
+1. Resolve the stable Session ID directly; otherwise, when the action is
+   invoked from a buffer a Session owns, from that buffer's own ownership
+   marker (a chat View shown only in a side window has no Session tab);
+   otherwise from the current tab's Session parameter.  Do not infer it from
+   a tab name, selected window, buffer name, directory, project, or
+   correlation ID.
 2. Read one public Runtime status projection and select active Runs whose
    Session ID equals the target.  When the snapshot is non-empty, prompt once.
 3. Rejection changes no Run, EditorWorkspace state, buffer, or tab.  It vetoes

@@ -40,21 +40,24 @@
   :group 'superchat-side-window)
 
 (defcustom superchat-side-window-slots
-  '((plan . 0) (generated-ui . 1) (agents . 2) (input . 3))
+  '((chat . -1) (plan . 0) (generated-ui . 1) (agents . 2) (input . 3))
   "Right side-window slot per Superchat panel kind.
-The ordering of panels is a user preference."
+The ordering of panels is a user preference.  `chat' is the chat View in
+editor mode (see `superchat-display-style')."
   :type '(alist :key-type symbol :value-type integer)
   :group 'superchat-side-window)
 
-(defun superchat-side-window-show (buffer kind)
+(defun superchat-side-window-show (buffer kind &optional keep-elsewhere)
   "Show BUFFER in the right side window assigned to panel KIND.
 KIND must be registered in `superchat-side-window-slots'.  An unregistered
 KIND is a programming error and signals an error instead of silently
-defaulting to a shared slot."
+defaulting to a shared slot.  In an interactive Emacs the other ordinary
+windows showing BUFFER, except the selected one, are closed first;
+KEEP-ELSEWHERE leaves them open."
   (let ((entry (assq kind superchat-side-window-slots)))
     (unless entry
       (error "Unregistered Superchat side-window kind: %S" kind))
-    (when (not noninteractive)
+    (when (and (not noninteractive) (not keep-elsewhere))
       (dolist (win (get-buffer-window-list buffer nil t))
         (unless (or (eq (window-parameter win 'window-side) 'right)
                     (eq win (selected-window)))
