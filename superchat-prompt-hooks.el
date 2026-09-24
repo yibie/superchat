@@ -276,12 +276,12 @@ tool surface.  It costs about 250 tokens on each such request."
 
 (defconst superchat-emacs-operating-note-text
   "Working in the user's Emacs:
-- Ask the running Emacs, do not guess: `user-init-file' is the init file it loaded. Check that a symbol exists (fboundp, boundp, apropos) before using it; fundamental-mode has no keymap variable.
+- Ask the running Emacs, do not guess: `user-init-file' is the init file it loaded. Check a symbol exists (fboundp, commandp, boundp); never run a command to test it. fundamental-mode has no keymap variable.
 - Keys: write (kbd \"C-c t h\"), never a bare string. A number from lookup-key means the sequence is too long for that map, not that the key is unbound; key-binding in the target buffer is the effective binding.
-- To change a file: open_file, then edit_buffer. The disk file is unchanged until the user saves, so (load FILE) reads the old text. To make your change live, evaluate only the forms you changed, not the whole buffer: eval-buffer reruns all of it.
+- To change a file: open_file, then edit_buffer. The disk file is unchanged until the user saves, so (load FILE) reads the old text. To make it live, evaluate only the forms you changed, not the whole buffer: eval-buffer reruns all of it.
 - eval_elisp takes one expression; wrap several in progn.
 - To undo, restore the value you observed before, not \"unbound\", and only what this task changed.
-- Report only what you checked: name the buffer you edited and whether it is unsaved (buffer-modified-p); saving is the user's. You did not restart Emacs; do not claim a restart works."
+- Report what you checked: name the buffer you edited and whether it is unsaved (buffer-modified-p); saving is the user's. You did not restart Emacs; do not claim a restart works."
   "The built-in Emacs operating note: at most 1024 characters.
 It must never tell the model to save or persist anything.")
 

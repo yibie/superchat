@@ -178,6 +178,10 @@ no Emacs-changing tool gets no note.  Found while building the reference index
     (dolist (needle '("only the forms you changed" "not the whole buffer"
                       "buffer-modified-p"))
       (should (string-match-p (regexp-quote needle) text)))
+    ;; 2026-09-24 (user: "A"): a check reads state; running a command to see
+    ;; whether it works made the user answer its prompt.
+    (dolist (needle '("commandp" "never run a command to test it"))
+      (should (string-match-p (regexp-quote needle) text)))
     (should-not (string-match-p "(with-current-buffer NAME (eval-buffer))\\|say it is unsaved"
                                 text))
     (should-not (string-match-p
