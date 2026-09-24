@@ -3243,6 +3243,14 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
           "\\(?:\\`\\|[[:space:]]\\)\\(?:run\\|turn\\|prompt\\|invariant\\)\\."
           text))))
 
+(defconst superchat--session-row-bookkeeping-events
+  '("step.started" "step.ended" "request.header" "request.message-list")
+  "Tape event types a reopened chat View does not show.
+They bracket model attempts (M3) and record what each request carried (M1):
+evidence for the Tape browser and the request rebuild, nothing a reader of
+the conversation acts on.  Shown, they sat between a question and its
+answer.")
+
 (defun superchat--insert-collapsed-runtime-audit-row (row)
   "Insert one read-only, initially folded Runtime audit ROW."
   (let* ((event (or (superchat--session-row-event-type row) "system"))
@@ -3438,6 +3446,23 @@ audit rows keep their collapsed line."
                      (when (and (stringp body) (not (string-empty-p body)))
                        (concat (org-escape-code-in-string body) "\n"))
                      "#+end_example\n"))
+           (stored-text (meta part)
+             ;; The bounded text the Tape keeps for an ordinary tool call
+             ;; (PART is "arguments" or "result"), marked when it was cut.
+             (let ((text (payload-get meta (intern (concat part "-text")))))
+               (when (stringp text)
+                 (let ((chars (payload-get meta (intern (concat part "-chars")))))
+                   (if (and (eq t (payload-get meta (intern (concat part "-truncated"))))
+                            (integerp chars)
+                            (> chars (length text)))
+                       (format "%s\n… [cut: %d more characters]"
+                               text (- chars (length text)))
+                     text)))))
+           (close-assistant ()
+             ;; A heading inserted inside an assistant section ends it, so the
+             ;; assistant text that follows opens its own heading instead of
+             ;; landing in that row's body -- folded, for an audit row.
+             (setq assistant-open nil))
            (render-call (meta)
              (let ((name (or (payload-get meta 'tool-name) "tool")))
                (open-assistant)
@@ -3446,7 +3471,8 @@ audit rows keep their collapsed line."
                                      'face 'font-lock-function-name-face)
                          "\n"
                          (block (format "Tool call: %s" name)
-                                (payload-get meta 'arguments-json)))
+                                (or (payload-get meta 'arguments-json)
+                                    (stored-text meta "arguments"))))
                  (puthash (call-key meta name)
                           (copy-marker start t)
                           pending))))
@@ -3467,7 +3493,8 @@ audit rows keep their collapsed line."
                  (insert (propertize heading 'face face) "\n"))
                (insert (block (format "Tool result: %s" name)
                               (or (payload-get meta 'result-json)
-                                  (payload-get meta 'error-json)))))))
+                                  (payload-get meta 'error-json)
+                                  (stored-text meta "result")))))))
         (dolist (row rows)
           (let ((id (nth 0 row))
                 (topic (nth 1 row))
@@ -3493,20 +3520,40 @@ audit rows keep their collapsed line."
                    ("tool.execution.started" nil)
                    ("tool.failed" (render-result meta t))
                    ("tool.completed" (render-result meta nil))
-                   (_ (insert "\n** System\n" content "\n")))))
+                   (_ (insert "\n** System\n" content "\n")
+                      (close-assistant)))))
               ("system"
                ;; Cancellation has no response.completed row to carry its
                ;; budget notice; other terminal rows share the assistant row.
                (when (equal (superchat--session-row-event-type row) "run.cancelled")
                  (budget-notice row))
-               (if (superchat--session-row-runtime-audit-p row)
-                   (superchat--insert-collapsed-runtime-audit-row row)
+               (cond
+                ((member (superchat--session-row-event-type row)
+                         superchat--session-row-bookkeeping-events)
+                 nil)
+                ;; Admitted material -- a steer, an injection, the finish
+                ;; check's note -- shows the text the model received; its
+                ;; row's content is only the summary "Injected model material".
+                ((when-let* ((material
+                              (and (equal "attachment.added"
+                                          (superchat--session-row-event-type row))
+                                   (fboundp 'superchat-tape--request-admitted-material-text)
+                                   (superchat-tape--request-admitted-material-text row))))
+                   (insert "\n** Injected material\n" material "\n")
+                   (close-assistant)
+                   t))
+                ((superchat--session-row-runtime-audit-p row)
+                 (superchat--insert-collapsed-runtime-audit-row row)
+                 (close-assistant))
+                (t
                  (insert (if (equal topic "attachment")
                              "\n** Attachment\n"
                            "\n** System\n")
-                         content "\n")))
+                         content "\n")
+                 (close-assistant))))
               ("anchor"
-               (insert "\n** System\n" content "\n")))))
+               (insert "\n** System\n" content "\n")
+               (close-assistant)))))
         ;; M1: the transcript above is a rendering of the Tape, and the list it
         ;; filled on the way is a cache of the same rows.  Settling it from the
         ;; derivation keeps the cache a regenerated view rather than a second

@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — a reopened conversation reads like the live one
+
+- `superchat-open-session` rebuilds a past conversation from the database.
+  It showed internal bookkeeping (Step starts and ends, request records) as
+  "System" entries between your question and the answer, tool calls with
+  empty "Tool call" / "Tool result" blocks, and a message you sent while the
+  model was working as "Injected model material". Now the bookkeeping is left
+  out, each tool block shows the arguments and the result that were stored
+  (up to 2000 characters each, saying how much was cut), and a message sent
+  mid-task shows its text. An answer that follows a folded entry gets its own
+  Assistant heading, so it can no longer end up folded out of sight.
+
 ## Unreleased — inline act gets the finish check; the next reply replaces the last
 
 - `superchat-inline-act` now gets the same one finish check as the chat
