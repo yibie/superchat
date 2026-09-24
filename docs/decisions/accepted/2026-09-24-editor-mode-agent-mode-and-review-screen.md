@@ -99,6 +99,7 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 
 - 场景一（2026-09-10 定义为"像 ChatGPT 桌面应用的聊天窗"）成为两种模式之一的 agent 模式；编辑文件时的默认是侧窗口。
 - 验收脚本自己的审阅屏被产品的审阅屏取代；有人值守验收在新布局与产品审阅屏下重跑。
+- 审阅屏在 Run 结束时自动出现，属于可卸下的 `changes` 行（它的 `turn-completed` 监听）；卸下这一行时不再自动出现。`/changes` 命令（由 `chat-commands` 注册）与 `superchat-changes-diff` 不经这一行，照旧可用，与以前一样。
 - `superchat-display-single-window` 只对 agent 模式有意义。
 - 关闭协议第 1 步多一个取得会话的方式（对话 Buffer 自己的所有权标记），在编辑模式那一片修改协议文档。
 - 就地命令不再产生 `inline:<仓库根>` 与 `inline:global` 会话；已存在的这类会话仍可打开，Tape 不改写。M8 的回归随之修改。

@@ -229,7 +229,7 @@ Goal: the two ways the user works — editing files, and operating Emacs itself 
 
 | Slice | What it delivers | State |
 |---|---|---|
-| 1a | The review screen: one unsaved buffer at a time, `s`/`n`/`q`, `diff-mode` colors and `diffs-minor-mode` when diffs.el is present, opening by itself at Run end without taking focus; `/changes` and `superchat-changes-diff` open it | implemented (`current`): `superchat-changes.el`; `scripts/review-screen-regression.el` 12 tests (11 red before at the missing screen, one guard green before and after; six mutants each red on their own test); all other suites, the M3 set (untouched) and canonical smoke unchanged. Not tried in a real window or with a real model |
+| 1a | The review screen: one unsaved buffer at a time, `s`/`n`/`q`, `diff-mode` colors and `diffs-minor-mode` when diffs.el is present, opening by itself at Run end without taking focus; `/changes` and `superchat-changes-diff` open it | implemented: `superchat-changes.el`; `scripts/review-screen-regression.el` 14 tests (the first 12 written first: 11 red at the missing screen, one guard green before and after; two more after, on a killed buffer and on `g`; eight mutants each red on their own tests); all other suites, the M3 set (untouched) and canonical smoke unchanged. Not tried in a real window or with a real model |
 | 1b | Editor mode: the chat View in a side window of the current tab; closing a Session shown only there | not built |
 | 1c | The switch key between editor mode and agent mode (today's Session tab), remembered within an Emacs session | not built |
 | 2 | In-buffer entry points (inline ask, inline act, region rewrite) join the conversation the chat View shows; the View shows Turns started elsewhere | not built |

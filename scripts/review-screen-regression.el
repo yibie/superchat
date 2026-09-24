@@ -269,6 +269,34 @@ accept/reject/apply and annotation keys."
       (should (buffer-modified-p (get-file-buffer a)))
       (should (equal "one\n" (review--disk a))))))
 
+(ert-deftest review/keys/s-on-a-buffer-that-is-gone-moves-on-without-saving ()
+  "When the buffer on screen was killed after the screen appeared, `s' saves
+nothing, signals nothing, and shows the next buffer."
+  (review--after-two-file-run (dir a b view)
+    (should (smoke--wait #'review--shown 5))
+    (let ((buffer-a (get-file-buffer a)))
+      (with-current-buffer buffer-a (set-buffer-modified-p nil))
+      (kill-buffer buffer-a))
+    (review--press "s")
+    (should (equal "one\n" (review--disk a)))
+    (should (string-match-p "2/2" (review--text)))
+    (should (string-match-p "b\\.txt" (review--text)))))
+
+(ert-deftest review/keys/g-redraws-from-the-buffer-as-it-is-now ()
+  "`g' redraws the same entry from the buffer's current text: the screen
+keeps its place across the redraw, and a later change shows up."
+  (review--after-two-file-run (dir a b view)
+    (should (smoke--wait #'review--shown 5))
+    (with-current-buffer (get-file-buffer a)
+      (goto-char (point-min))
+      (search-forward "ONE")
+      (replace-match "ONE-AGAIN" t t))
+    (review--press "g")
+    (should (string-match-p "1/2" (review--text)))
+    (should (string-match-p "^\\+ONE-AGAIN$" (review--text)))
+    (review--press "n")
+    (should (string-match-p "2/2" (review--text)))))
+
 ;;;; Which buffers are reviewed
 
 (ert-deftest review/candidates/a-buffer-without-a-file-is-listed-not-reviewed ()
