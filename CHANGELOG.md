@@ -2,6 +2,22 @@
 
 All notable changes to superchat.
 
+## Unreleased — the review screen for unsaved changes, in color
+
+- When a Run leaves buffers it edited unsaved, a review screen now appears in
+  another window, without taking focus: one buffer at a time, the diff of
+  its file against the buffer, `s` to save it, `n` to leave it unsaved and
+  see the next, `q` to stop. It is the screen the attended acceptance runs
+  used, now in the product and colored (`diff-mode`; diffs.el's renderer
+  with line numbers and word-level highlighting when diffs.el is installed).
+  Keys only work once you switch to it, and keys typed before are dropped,
+  so typing elsewhere never saves anything.
+- `/changes`, `M-x superchat-changes` and `M-x superchat-changes-diff` (and
+  inline act's `d`) open the same screen. Buffers that visit no file are
+  listed but not reviewed. `superchat-changes-review-after-run` turns the
+  automatic screen off; `superchat-changes-review-use-diffs` turns diffs.el
+  off.
+
 ## Unreleased — `eval_elisp` never asks you anything
 
 - Code the model runs through `eval_elisp` can no longer pop up a question

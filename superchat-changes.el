@@ -34,17 +34,47 @@
 ;; so they do not contradict "the model's default path performs no
 ;; persistence".  Nothing in this file is a model tool.
 ;; See docs/decisions/implemented/2026-09-18-buffer-first-mutation.md.
+;;
+;; The review screen shows the candidates one buffer at a time: the unified
+;; diff of the file against the buffer, `s' to save it (the user's operation),
+;; `n' to leave it unsaved and see the next, `q' to stop.  It is the screen the
+;; attended acceptance runs used, brought into the product and colored with
+;; `diff-mode', and with diffs.el's `diffs-minor-mode' when diffs.el is
+;; installed.  When a Run leaves unsaved buffers it appears by itself in another
+;; window without being selected, so a key typed elsewhere never reaches it;
+;; `/changes' and `superchat-changes-diff' open it selected.  Keys typed before
+;; it is selected are dropped.  Buffers that visit no file have nothing to save
+;; to and are not on the screen.
+;; See docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'diff)
+(require 'diff-mode)
 (require 'superchat-plugin)
 (require 'superchat-event)
 (require 'superchat-tape)
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
+(declare-function diffs-minor-mode "diffs" (&optional arg))
+(defvar diffs-minor-mode)
 (defvar superchat--session-id)
+
+(defcustom superchat-changes-review-after-run t
+  "Whether the review screen appears by itself when a Run leaves unsaved buffers.
+It is shown in a window other than the selected one and is not selected, so
+keys typed elsewhere never reach it.  `/changes' and `superchat-changes-diff'
+open it and select it whatever this says."
+  :type 'boolean
+  :group 'superchat)
+
+(defcustom superchat-changes-review-use-diffs t
+  "Whether the review screen is drawn by diffs.el when diffs.el is installed.
+Without diffs.el, or with this nil, the colors are `diff-mode''s own."
+  :type 'boolean
+  :group 'superchat)
 
 (defvar-local superchat-changes--edited-by nil
   "The structured edits made to this buffer: (BUFFER . PAIRS).
@@ -150,14 +180,225 @@ is not attributed."
   (message "superchat: %s" text))
 
 (defun superchat-changes--on-turn-completed (_run status)
-  "At a terminal Run, announce what it left unsaved."
+  "At a terminal Run, announce what it left unsaved and show the review screen.
+This runs inside the terminal emission, so the screen is shown from a timer."
   (when (and (listp status)
              (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status)))
     (when-let* ((session (plist-get status :session-id))
                 (run (plist-get status :run-id))
                 (text (ignore-errors (superchat-changes-run-summary session run))))
-      (superchat-changes--announce text))))
+      (superchat-changes--announce text)
+      (when superchat-changes-review-after-run
+        (run-at-time 0 nil #'superchat-changes--review-after-run session run)))))
+
+;;;; The review screen ----------------------------------------------------------
+
+(defconst superchat-changes-review-buffer-name "*superchat review*"
+  "Name of the review screen's buffer.")
+
+(defvar-local superchat-changes-review--state nil
+  "Where the review screen is: (ROWS . INDEX).
+ROWS are candidate plists, as `superchat-changes-candidates' returns them.")
+;; Every redraw runs `diff-mode', which would otherwise forget where it was.
+(put 'superchat-changes-review--state 'permanent-local t)
+
+(defvar-local superchat-changes-review--active nil
+  "Non-nil in the review buffer; enables its keys in
+`minor-mode-overriding-map-alist'.")
+
+(defvar superchat-changes-review-keys
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "s") #'superchat-changes-review-save)
+    (define-key map (kbd "n") #'superchat-changes-review-next)
+    (define-key map (kbd "q") #'superchat-changes-review-quit)
+    (define-key map (kbd "g") #'superchat-changes-review-refresh)
+    (define-key map (kbd "SPC") #'scroll-up-command)
+    (define-key map (kbd "DEL") #'scroll-down-command)
+    ;; Keys that would change the source buffer, edit this view, or start a
+    ;; per-block flow the review does not offer: `diff-mode''s hunk
+    ;; application, ediff patching and hunk kills; diffs.el's accept, reject,
+    ;; reset, apply and annotation keys.
+    (dolist (key '("a" "A" "R" "U" "v" "x" "c" "E" "k" "K" "M-k"
+                   "C-c C-a" "C-c C-c" "C-c C-e" "C-c C-s" "C-c C-r"
+                   "C-c C-d" "C-c C-u" "C-c C-w" "C-c C-n"))
+      (define-key map (kbd key) #'superchat-changes-review-unavailable))
+    map)
+  "Keys of the review screen.  They take precedence over `diff-mode''s and
+diffs.el's through `minor-mode-overriding-map-alist'.")
+
+(defun superchat-changes--review-diff (buffer)
+  "Return the unified diff of BUFFER's file against BUFFER's text.
+The labels are a/NAME and b/NAME relative to the file's directory.  A file not
+on disk yet is compared with the null device, so the whole text is added."
+  (let* ((file (buffer-file-name buffer))
+         (name (file-name-nondirectory file))
+         (exists (file-exists-p file))
+         (temp (make-temp-file "superchat-unsaved-diff-")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (save-restriction
+              (widen)
+              (write-region (point-min) (point-max) temp nil 'silent)))
+          (with-temp-buffer
+            (let ((status (call-process diff-command nil t nil "-u"
+                                        "-L" (if exists (concat "a/" name) null-device)
+                                        "-L" (concat "b/" name)
+                                        (if exists file null-device) temp)))
+              (cond
+               ((and (integerp status) (> status 1))
+                (format "(diff could not compare %s with the buffer: %s)\n"
+                        file (string-trim (buffer-string))))
+               ((zerop (buffer-size))
+                "(the buffer's text equals the file; saving only clears the modified mark)\n")
+               (t (buffer-string))))))
+      (delete-file temp))))
+
+(defun superchat-changes--review-row ()
+  "The candidate the review screen is showing."
+  (let ((state superchat-changes-review--state))
+    (nth (cdr state) (car state))))
+
+(defun superchat-changes--review-render (review)
+  "Draw the review buffer REVIEW for the candidate it is at."
+  (with-current-buffer review
+    (let* ((state superchat-changes-review--state)
+           (row (superchat-changes--review-row))
+           (buffer (plist-get row :buffer))
+           (live (buffer-live-p buffer))
+           (file (and live (buffer-file-name buffer)))
+           (inhibit-read-only t))
+      (when (bound-and-true-p diffs-minor-mode)
+        (diffs-minor-mode -1))
+      (erase-buffer)
+      (insert (format "Review %d/%d · %s%s\n"
+                      (1+ (cdr state)) (length (car state))
+                      (if live (buffer-name buffer) (plist-get row :name))
+                      (if file (format " (%s)" (abbreviate-file-name file)) "")))
+      (insert (cond ((not file) "That buffer is gone or no longer visits a file.\n")
+                    ((file-exists-p file)
+                     "Unsaved.  The diff below is what saving would write to disk.\n")
+                    (t "Not on disk yet.  Saving creates the file with the whole buffer.\n")))
+      (insert "s: save   n: leave unsaved, next   q: stop (the rest stay unsaved)   "
+              "g: refresh   SPC/DEL: scroll   M-n/M-p: next/previous change\n\n")
+      (when file
+        (insert (superchat-changes--review-diff buffer))
+        (setq default-directory (file-name-directory file)))
+      ;; Read-only before the mode starts, so `diff-mode' gives its read-only
+      ;; single-key navigation; the review's own keys still come first.
+      (setq buffer-read-only t)
+      (diff-mode)
+      (font-lock-mode 1)
+      (when (and file superchat-changes-review-use-diffs (require 'diffs nil t))
+        (condition-case err
+            (diffs-minor-mode 1)
+          (error (message "superchat: diffs.el could not draw the review: %s"
+                          (error-message-string err)))))
+      (setq-local superchat-changes-review--active t)
+      (setq-local minor-mode-overriding-map-alist
+                  (cons (cons 'superchat-changes-review--active
+                              superchat-changes-review-keys)
+                        minor-mode-overriding-map-alist))
+      (add-hook 'window-selection-change-functions
+                #'superchat-changes--review-selected nil t)
+      (goto-char (point-min)))))
+
+(defun superchat-changes--review-selected (window)
+  "Drop keys typed ahead when WINDOW, which shows the review screen, is selected.
+A key the user typed before the screen became theirs must not save anything."
+  (when (eq window (selected-window))
+    (discard-input)))
+
+(defun superchat-changes-review (rows &optional select)
+  "Show the review screen for ROWS, candidate plists, starting at the first.
+Rows whose buffer is gone or visits no file are not shown; the check is made
+now, since ROWS may have been computed before a timer ran.  Returns the review
+buffer, or nil when nothing is left to show.  The screen is displayed in a
+window other than the selected one; with SELECT it is also selected and keys
+typed ahead are dropped, otherwise the selected window stays as it was."
+  (let ((rows (cl-remove-if-not
+               (lambda (row)
+                 (let ((buffer (plist-get row :buffer)))
+                   (and (buffer-live-p buffer) (buffer-file-name buffer))))
+               rows)))
+    (when rows
+      (let ((review (get-buffer-create superchat-changes-review-buffer-name)))
+        (with-current-buffer review
+          (setq superchat-changes-review--state (cons rows 0)))
+        (superchat-changes--review-render review)
+        (let ((window (display-buffer
+                       review
+                       '((display-buffer-reuse-window
+                          display-buffer-use-some-window
+                          display-buffer-pop-up-window
+                          display-buffer-below-selected)
+                         (inhibit-same-window . t)))))
+          (when (and select (window-live-p window))
+            (select-window window)
+            (discard-input)))
+        review))))
+
+(defun superchat-changes--review-after-run (session run)
+  "Show the review screen for what RUN of SESSION left unsaved, unselected."
+  (when-let* ((rows (ignore-errors (superchat-changes-candidates session run))))
+    (superchat-changes-review rows)))
+
+(defun superchat-changes--review-buffer ()
+  (or (and (local-variable-p 'superchat-changes-review--state)
+           (current-buffer))
+      (get-buffer superchat-changes-review-buffer-name)
+      (user-error "No review screen is open")))
+
+(defun superchat-changes--review-advance (review)
+  "Show REVIEW's next candidate, or close it after the last."
+  (with-current-buffer review
+    (let ((state superchat-changes-review--state))
+      (if (< (1+ (cdr state)) (length (car state)))
+          (progn
+            (setq superchat-changes-review--state (cons (car state) (1+ (cdr state))))
+            (superchat-changes--review-render review))
+        (superchat-changes--review-close review)))))
+
+(defun superchat-changes--review-close (review)
+  "Close the review buffer REVIEW and give its windows back."
+  (dolist (window (get-buffer-window-list review nil t))
+    (quit-restore-window window 'bury))
+  (when (buffer-live-p review)
+    (kill-buffer review)))
+
+(defun superchat-changes-review-save ()
+  "Save the buffer on the review screen, then show the next one.
+Saving is the user's operation, the same `superchat-changes-save' offers."
+  (interactive)
+  (let* ((review (superchat-changes--review-buffer))
+         (buffer (plist-get (with-current-buffer review (superchat-changes--review-row))
+                            :buffer)))
+    (cond
+     ((not (buffer-live-p buffer)) (message "That buffer is gone; nothing to save"))
+     ((not (buffer-modified-p buffer)) (message "%s has no unsaved changes" (buffer-name buffer)))
+     (t (superchat-changes-save buffer)))
+    (superchat-changes--review-advance review)))
+
+(defun superchat-changes-review-next ()
+  "Leave the buffer on the review screen unsaved and show the next one."
+  (interactive)
+  (superchat-changes--review-advance (superchat-changes--review-buffer)))
+
+(defun superchat-changes-review-quit ()
+  "Stop reviewing.  Every buffer not saved on the screen stays unsaved."
+  (interactive)
+  (superchat-changes--review-close (superchat-changes--review-buffer)))
+
+(defun superchat-changes-review-refresh ()
+  "Redraw the review screen from the buffer's text as it is now."
+  (interactive)
+  (superchat-changes--review-render (superchat-changes--review-buffer)))
+
+(defun superchat-changes-review-unavailable ()
+  "Say that this key does nothing on the review screen."
+  (interactive)
+  (message "Not on the review screen: s saves, n leaves unsaved, q stops"))
 
 ;;;; The user's operations -----------------------------------------------------
 
@@ -168,10 +409,16 @@ is not attributed."
     (get-buffer (completing-read "Buffer: " names nil t))))
 
 (defun superchat-changes-diff (buffer)
-  "Show how BUFFER differs from its file.  Observation only."
+  "Open the review screen for BUFFER alone: how it differs from its file.
+`s' there saves it (the user's operation) and `q' leaves it unsaved.  A buffer
+that visits no file has nothing to compare with and is simply displayed."
   (interactive (list (superchat-changes--read-buffer superchat--session-id)))
   (if (buffer-file-name buffer)
-      (diff-buffer-with-file buffer)
+      (superchat-changes-review
+       (list (list :buffer buffer :name (buffer-name buffer)
+                   :file (buffer-file-name buffer)
+                   :new-file (not (file-exists-p (buffer-file-name buffer)))))
+       t)
     (display-buffer buffer)))
 
 (defun superchat-changes-save (buffer)
@@ -191,31 +438,37 @@ is not attributed."
 
 ;;;###autoload
 (defun superchat-changes ()
-  "List the unsaved buffers this Session's tools edited, with what to do next."
+  "List the unsaved buffers this Session's tools edited and open the review screen."
   (interactive)
   (let ((rows (superchat-changes-candidates superchat--session-id)))
     (message "%s"
              (if rows
-                 (format "%s\nM-x superchat-changes-diff / -save / -revert"
+                 (format "%s\nReview: s saves, n leaves unsaved, q stops"
                          (superchat-changes--lines rows))
-               "No unsaved buffers edited by this Session's tools"))))
+               "No unsaved buffers edited by this Session's tools"))
+    (when rows
+      (superchat-changes-review rows t))))
 
 (defun superchat--cmd-changes (_cmd _args _input _lang _target-model)
-  "The `/changes' command: this Session's unsaved, tool-edited buffers."
+  "The `/changes' command: this Session's unsaved, tool-edited buffers.
+Besides the list, it opens the review screen once the command has returned."
   (let ((rows (superchat-changes-candidates superchat--session-id)))
+    (when rows
+      (run-at-time 0 nil #'superchat-changes-review rows t))
     (list :type :echo
           :content
           (if rows
               (concat "Unsaved buffers edited by this Session's tools "
                       "(edits made through eval_elisp are not tracked):\n"
                       (superchat-changes--lines rows)
-                      "\nReview with M-x superchat-changes-diff; keep with M-x superchat-changes-save; "
-                      "discard with M-x superchat-changes-revert.  Saving is yours, not the model's.")
+                      "\nThe review screen shows each file's diff: s saves it, n leaves it unsaved, q stops.  "
+                      "Buffers that visit no file are listed here only.  Saving is yours, not the model's.")
             "No unsaved buffers edited by this Session's tools."))))
 
 (superchat-define-plugin changes
-  :doc "The unsaved-changes outlet's Run-end notice.  The /changes command is
-registered with the other built-in commands by `chat-commands'."
+  :doc "The unsaved-changes outlet's Run-end notice and review screen.  The
+/changes command is registered with the other built-in commands by
+`chat-commands'."
   :apply
   (lambda (scope _)
     (superchat-on scope 'turn-completed 'changes-notice
