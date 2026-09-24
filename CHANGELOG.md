@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — inline act gets the finish check; the next reply replaces the last
+
+- `superchat-inline-act` now gets the same one finish check as the chat
+  window: when the model has used tools and stops on a reply that announces a
+  step it did not take ("Let me also confirm…"), Superchat asks it once to do
+  the step or give its final report.
+- In the inline act and inline ask overlays, a reply that follows another in
+  the same task (after a tool call, or after the finish check) now replaces
+  the previous one on screen instead of being glued to its end ("…holds
+  beta.Final report: …"). The previous reply stays visible until the next one
+  starts. The chat window is unchanged.
+
 ## Unreleased — the request record includes what was added mid-task
 
 - Superchat's record of each model request (M1 request evidence) now names

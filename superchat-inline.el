@@ -336,6 +336,20 @@ shift."
 
 ;;; Sink
 
+(defun superchat-inline--add-reply-text (overlay text)
+  "Show streamed TEXT in OVERLAY as part of the reply being received.
+After a `waiting' status, the first text starts a new reply and replaces the
+previous one, which stays on screen until then: Runtime sends `waiting' when
+another model attempt of the Run begins, so without this the next reply
+would be glued to the one before it (stage contract §3.3)."
+  (let ((state (overlay-get overlay 'superchat-inline)))
+    (superchat-inline--set-state
+     overlay :text
+     (if (plist-get state :fresh-reply)
+         text
+       (concat (or (plist-get state :text) "") text)))
+    (superchat-inline--set-state overlay :fresh-reply nil)))
+
 (defun superchat-inline--sink (overlay)
   "Return OVERLAY's Sink (contract §3).
 `:live-p' is true only while OVERLAY and its buffer are live.  Stream
@@ -351,6 +365,8 @@ becomes the Ready answer, and an error is shown for
    :status (lambda (run status)
              (when (eq status 'retrying)
                (superchat-inline--set-state overlay :retry (plist-get run :retry)))
+             (when (eq status 'waiting)
+               (superchat-inline--set-state overlay :fresh-reply t))
              (superchat-inline--set-state
               overlay :status
               (pcase status
@@ -367,14 +383,13 @@ becomes the Ready answer, and an error is shown for
                                (superchat-sink-normalize-chunk chunk)))
                     (text (and payload (plist-get payload :text))))
                (when (and (stringp text) (not (string-empty-p text)))
-                 (let ((state (overlay-get overlay 'superchat-inline)))
-                   (superchat-inline--set-state
-                    overlay :text (concat (or (plist-get state :text) "") text)))
+                 (superchat-inline--add-reply-text overlay text)
                  (unless (eq 'ready
                              (plist-get (overlay-get overlay 'superchat-inline)
                                         :status))
                    (superchat-inline--set-state overlay :status 'typing)))))
    :final (lambda (_run result)
+            (superchat-inline--set-state overlay :fresh-reply nil)
             (superchat-inline--set-state overlay :text
                                          (or (plist-get result :text) ""))
             (superchat-inline--set-state overlay :status 'ready))

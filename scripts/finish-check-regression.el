@@ -275,15 +275,17 @@ records one system-originated steer."
                            (finish-check--session view))))))
       (kill-buffer target))))
 
-(ert-deftest finish-check/inline-act-gets-none ()
-  "The same announcing reply through inline act never fires the check."
+(ert-deftest finish-check/inline-act-non-streaming-gets-one ()
+  "The same announcing reply through inline act fires the check once, as in
+the chat window (inline act joined on 2026-09-23)."
   (let ((target (generate-new-buffer "finish-check-target")))
     (unwind-protect
         (progn
           (with-current-buffer target (insert "FC-TOKEN-G\n"))
           (finish-check--fixture
               (list (finish-check--read-round (buffer-name target))
-                    (list :text finish-check--half-answer))
+                    (list :text finish-check--half-answer)
+                    (list :text finish-check--final-report))
             (let* ((overlay (superchat-inline-act "read it")))
               (should (smoke--wait
                        (lambda ()
@@ -291,10 +293,13 @@ records one system-originated steer."
                              (plist-get (overlay-get overlay 'superchat-inline)
                                         :status)))
                        20))
-              (should (= 2 (length smoke--requests)))
-              (should-not (finish-check--note-events
-                           (plist-get (overlay-get overlay 'superchat-inline)
-                                      :session-id))))))
+              (should (= 3 (length smoke--requests)))
+              (should (finish-check--note-events
+                       (plist-get (overlay-get overlay 'superchat-inline)
+                                  :session-id)))
+              (should (string-prefix-p
+                       finish-check--final-report
+                       (plist-get (overlay-get overlay 'superchat-inline) :text))))))
       (kill-buffer target))))
 
 ;;;; Evidence and the chat View
@@ -448,6 +453,75 @@ carries nothing new."
                 (should (string-match-p "Let me also confirm"
                                         (finish-check--buffer-text view)))))))
       (kill-buffer target))))
+
+(defun finish-check--inline-settle (overlay property)
+  "Wait until OVERLAY's Run (state under PROPERTY) is terminal and settled."
+  (should (smoke--wait (lambda () (plist-get (overlay-get overlay property) :run-id)) 10))
+  (let ((run (plist-get (overlay-get overlay property) :run-id)))
+    (should (smoke--wait
+             (lambda ()
+               (superchat-runtime--terminal-p
+                (plist-get (superchat-runtime-status run) :status)))
+             20))
+    (should (smoke--wait
+             (lambda () (eq 'ready (plist-get (overlay-get overlay property) :status)))
+             5))
+    run))
+
+(ert-deftest finish-check/inline-act-half-answer-gets-one-continuation ()
+  "Inline act runs the finish check like the chat window, and its overlay
+shows the next reply in place of the half answer, never glued to it."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name))
+          (frames nil)
+          (render (symbol-function 'superchat-inline--render)))
+      (finish-check--fixture
+          (list `(:tool-uses (("edit_buffer" (buffer_name . ,target)
+                               (old_string . "alpha") (new_string . "beta"))))
+                (list :chunks (list "Edited. " finish-check--half-answer)
+                      :text (concat "Edited. " finish-check--half-answer))
+                (list :chunks (list finish-check--final-report)
+                      :text finish-check--final-report))
+        (cl-letf (((symbol-function 'superchat-inline--render)
+                   (lambda (overlay)
+                     (funcall render overlay)
+                     (push (substring-no-properties
+                            (or (overlay-get overlay 'after-string) ""))
+                           frames))))
+          (let ((overlay (superchat-inline-act "replace alpha with beta")))
+            (finish-check--inline-settle overlay 'superchat-inline)
+            (should (= 3 (length smoke--requests)))
+            (should (string-match-p (regexp-quote superchat-llm--finish-check-note)
+                                    (plist-get (car smoke--requests) :prompt-text)))
+            (should (string-prefix-p finish-check--final-report
+                                     (plist-get (overlay-get overlay 'superchat-inline)
+                                                :text)))
+            (should (equal "beta\n" (buffer-string)))
+            ;; The half answer was on screen, and never together with the
+            ;; reply that followed it.
+            (should (cl-some (lambda (frame) (string-match-p "Let me also confirm" frame))
+                             frames))
+            (should-not (cl-some (lambda (frame)
+                                   (and (string-match-p "Let me also confirm" frame)
+                                        (string-match-p "Final report" frame)))
+                                 frames))))))))
+
+(ert-deftest finish-check/inline-ask-never-triggers ()
+  "Inline ask answers a question; its half-looking reply is final."
+  (with-temp-buffer
+    (insert "FC-TOKEN-ASK\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (finish-check--fixture
+          (list (finish-check--read-round target)
+                (list :text finish-check--half-answer))
+        (let ((overlay (superchat-inline-ask "what does this buffer say?")))
+          (finish-check--inline-settle overlay 'superchat-inline)
+          (should (= 2 (length smoke--requests)))
+          (should-not (string-match-p (regexp-quote superchat-llm--finish-check-note)
+                                      (plist-get (car smoke--requests) :prompt-text))))))))
 
 (provide 'finish-check-regression)
 ;;; finish-check-regression.el ends here

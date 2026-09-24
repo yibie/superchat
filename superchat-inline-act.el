@@ -98,6 +98,8 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
    :status (lambda (run status)
              (when (eq status 'retrying)
                (superchat-inline--set-state overlay :retry (plist-get run :retry)))
+             (when (eq status 'waiting)
+               (superchat-inline--set-state overlay :fresh-reply t))
              (superchat-inline--set-state
               overlay :status
               (pcase status
@@ -115,14 +117,13 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
                                (superchat-sink-normalize-chunk chunk)))
                     (text (and payload (plist-get payload :text))))
                (when (and (stringp text) (not (string-empty-p text)))
-                 (let ((state (overlay-get overlay 'superchat-inline)))
-                   (superchat-inline--set-state
-                    overlay :text (concat (or (plist-get state :text) "") text)))
+                 (superchat-inline--add-reply-text overlay text)
                  (unless (eq 'ready
                              (plist-get (overlay-get overlay 'superchat-inline)
                                         :status))
                    (superchat-inline--set-state overlay :status 'typing)))))
    :final (lambda (_run result)
+            (superchat-inline--set-state overlay :fresh-reply nil)
             (superchat-inline--set-state
              overlay :text
              (superchat-inline-act--finish-text overlay (plist-get result :text)))

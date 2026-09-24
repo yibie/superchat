@@ -121,5 +121,38 @@
             (should-not (string-match-p "Prefill / waiting first token"
                                         (buffer-string)))))))))
 
+(defmacro tool-status--record-emissions (&rest body)
+  "Record Sink statuses and stream chunks, in order, during BODY in `emissions'.
+A run of consecutive chunks is recorded once, as `chunk'."
+  (declare (indent 0) (debug t))
+  `(let ((emissions nil)
+         (original (symbol-function 'superchat-sink-emit)))
+     (cl-letf (((symbol-function 'superchat-sink-emit)
+                (lambda (sink slot run payload &rest options)
+                  (pcase slot
+                    ('status (push payload emissions))
+                    ('stream (unless (eq 'chunk (car emissions))
+                               (push 'chunk emissions))))
+                  (apply original sink slot run payload options))))
+       ,@body)))
+
+(ert-deftest tool-status/a-new-attempt-after-a-reply-sends-waiting ()
+  "A streamed reply followed by another attempt of the same Run -- here the
+finish check's continuation -- gets `waiting' before the next reply's text,
+and the attempt after a tool body gets no second `waiting'."
+  (tool-status--fixture
+      (list (tool-status--read-round)
+            '(:chunks ("Checked. " "Let me also confirm the file on disk.")
+              :text "Checked. Let me also confirm the file on disk.")
+            '(:chunks ("Final report: nothing changed.")
+              :text "Final report: nothing changed."))
+    (tool-status--record-emissions
+      (let* ((view (smoke--open-chat))
+             (run (smoke--send view "read")))
+        (should (eq 'completed (plist-get (tool-status--settle run) :status)))
+        (should (= 3 (length smoke--requests)))
+        (should (equal '(waiting calling-tool waiting chunk waiting chunk ready)
+                       (reverse emissions)))))))
+
 (provide 'tool-status-regression)
 ;;; tool-status-regression.el ends here

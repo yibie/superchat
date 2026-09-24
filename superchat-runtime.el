@@ -290,7 +290,8 @@ continuation -- reads the postponed value.  See docs/decisions/implemented/
 (defun superchat-runtime--emit-live-status (run-id status &optional capture-quit)
   "Send STATUS to RUN-ID's live Sink in its execution Scope.
 Return the Sink emission result, or nil when the Sink is no longer live.
-CAPTURE-QUIT is forwarded for status changes made inside a tool body."
+CAPTURE-QUIT is forwarded for status changes made inside a tool body.
+STATUS becomes the Run's `:sink-phase', the last thing its Sink was sent."
   (let ((entry (superchat-runtime--entry run-id)))
     (when (and entry
                (not (superchat-runtime--terminal-p (plist-get entry :status))))
@@ -298,9 +299,16 @@ CAPTURE-QUIT is forwarded for status changes made inside a tool body."
              (superchat-runtime--execution-scope entry))
             (sink (plist-get entry :sink)))
         (when (superchat-sink-live-p sink)
-          (superchat-sink-emit sink 'status
-                               (superchat-runtime-sink-run run-id)
-                               status :capture-quit capture-quit))))))
+          (prog1 (superchat-sink-emit sink 'status
+                                      (superchat-runtime-sink-run run-id)
+                                      status :capture-quit capture-quit)
+            (superchat-runtime--update run-id :sink-phase status)))))))
+
+(defun superchat-runtime--note-sink-output (run-id)
+  "Record that RUN-ID's Sink was just sent a stream chunk."
+  (let ((entry (superchat-runtime--entry run-id)))
+    (unless (or (null entry) (eq 'output (plist-get entry :sink-phase)))
+      (superchat-runtime--update run-id :sink-phase 'output))))
 
 (defun superchat-runtime--note-open-work (run-id execution-id action)
   "Account ACTION for EXECUTION-ID under RUN-ID.
@@ -3826,7 +3834,12 @@ Absent options preserve legacy behavior; result delivery retains three args."
                         (when (and current
                                    (superchat-runtime-effect-capable-p
                                     run-id))
-                          (let ((retrying (plist-get current :retry)))
+                          ;; A Sink that was last sent a chunk, a tool body or
+                          ;; a retry wait is told this attempt begins, so it
+                          ;; can tell the coming reply from the previous one
+                          ;; (stage contract §3.3).  After a tool body settled
+                          ;; it was already told, and is not told twice.
+                          (let ((phase (plist-get current :sink-phase)))
                             (superchat-runtime--update
                              run-id
                              :status 'running-model
@@ -3853,7 +3866,7 @@ Absent options preserve legacy behavior; result delivery retains three args."
                              (plist-get value :runtime-selected-tools)
                              :runtime-tool-decision
                              (plist-get value :runtime-tool-decision))
-                            (when retrying
+                            (when (memq phase '(output calling-tool retrying))
                               (superchat-runtime--emit-live-status run-id 'waiting))))))
                      ('model-phase
                       (let ((current (superchat-runtime--entry run-id)))
@@ -4040,9 +4053,11 @@ Absent options preserve legacy behavior; result delivery retains three args."
                              ;; `(:kind text|reasoning :text STRING)'; a chunk
                              ;; that normalizes to nil is not emitted.
                              (if (plist-get current :stream-function)
-                                 (superchat-sink-emit
-                                  (plist-get current :sink) 'stream
-                                  (superchat-runtime-sink-run run-id) chunk)
+                                 (progn
+                                   (superchat-sink-emit
+                                    (plist-get current :sink) 'stream
+                                    (superchat-runtime-sink-run run-id) chunk)
+                                   (superchat-runtime--note-sink-output run-id))
                                (let ((payload
                                       (if (and (consp chunk) (plist-member chunk :kind))
                                           chunk
@@ -4050,7 +4065,8 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                  (when payload
                                    (superchat-sink-emit
                                     (plist-get current :sink) 'stream
-                                    (superchat-runtime-sink-run run-id) payload)))))))))
+                                    (superchat-runtime-sink-run run-id) payload)
+                                   (superchat-runtime--note-sink-output run-id)))))))))
                    (plist-get request :target-model)
                    (plist-get request :context-files)
                    (plist-get request :tools)

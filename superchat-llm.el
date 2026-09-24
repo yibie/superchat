@@ -2001,11 +2001,18 @@ the model announces its own next action, after code and quotes are removed."
                  (superchat-llm--finish-check-announces-p sentence))
         'announced)))))
 
-(defun superchat-llm--finish-check-chat-run-p (request-context)
-  "Return non-nil when REQUEST-CONTEXT's Run has the `chat' surface."
+(defconst superchat-llm--finish-check-surfaces '(chat inline-act)
+  "Surfaces whose Runs get the finish check.
+Both report what they changed: the chat window (and act) and inline act,
+whose overlay shows the next reply in place of the half answer.  Inline ask
+answers a question and other consumers have their own protocols.")
+
+(defun superchat-llm--finish-check-surface-p (request-context)
+  "Return non-nil when REQUEST-CONTEXT's Run has a finish-check surface."
   (let ((run-id (plist-get request-context :run-id)))
     (and (stringp run-id)
-         (eq 'chat (plist-get (superchat-runtime-status run-id) :surface)))))
+         (memq (plist-get (superchat-runtime-status run-id) :surface)
+               superchat-llm--finish-check-surfaces))))
 
 (defun superchat-llm--finish-check-fires-p
     (request-context run-active tool-rounds tool-round-limit
@@ -2019,7 +2026,7 @@ All of the conditions are stated here so a caller cannot half-apply them."
              (or (not (numberp tool-round-limit))
                  (< tool-rounds tool-round-limit))
              (funcall run-active)
-             (superchat-llm--finish-check-chat-run-p request-context))
+             (superchat-llm--finish-check-surface-p request-context))
     (superchat-llm--finish-check-trigger reply)))
 
 (defun superchat--llm-tool-result-entries (result)

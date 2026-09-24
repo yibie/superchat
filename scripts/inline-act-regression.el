@@ -366,5 +366,75 @@ keymap, on an inline act overlay, as both READMEs say."
   (should (eq #'superchat-inline-copy
               (lookup-key superchat-inline-act--keymap (kbd "w")))))
 
+(ert-deftest inline-act/overlay/next-reply-replaces-the-previous ()
+  "Text streamed before a tool call stays on screen while the tool runs and is
+replaced, not appended to, by the reply that follows."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name))
+          (frames nil)
+          (render (symbol-function 'superchat-inline--render)))
+      (inline-act--fixture
+          (list `(:chunks ("I will replace alpha now.")
+                  :text "I will replace alpha now."
+                  :tool-uses (("edit_buffer" (buffer_name . ,target)
+                               (old_string . "alpha") (new_string . "beta"))))
+                '(:chunks ("Done: " "alpha is beta.") :text "Done: alpha is beta."))
+        (cl-letf (((symbol-function 'superchat-inline--render)
+                   (lambda (overlay)
+                     (funcall render overlay)
+                     (push (substring-no-properties
+                            (or (overlay-get overlay 'after-string) ""))
+                           frames))))
+          (let ((overlay (superchat-inline-act "replace alpha with beta")))
+            (inline-act--settle overlay)
+            (should (smoke--wait
+                     (lambda () (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+            (should (equal "beta\n" (buffer-string)))
+            (should (string-prefix-p "Done: alpha is beta."
+                                     (plist-get (inline-act--state overlay) :text)))
+            (should (cl-some (lambda (frame)
+                               (and (string-match-p "Working: tool" frame)
+                                    (string-match-p "I will replace alpha now" frame)))
+                             frames))
+            (should-not (cl-some (lambda (frame)
+                                   (and (string-match-p "I will replace alpha now" frame)
+                                        (string-match-p "Done:" frame)))
+                                 frames))))))))
+
+(ert-deftest inline-act/overlay/inline-ask-does-the-same ()
+  "Inline ask's overlay also shows the next reply in place of the text streamed
+before a tool call."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name))
+          (frames nil)
+          (render (symbol-function 'superchat-inline--render)))
+      (inline-act--fixture
+          (list `(:chunks ("Let me read it first.")
+                  :text "Let me read it first."
+                  :tool-uses (("read_buffer" (buffer . ,target))))
+                '(:chunks ("It says " "alpha.") :text "It says alpha."))
+        (cl-letf (((symbol-function 'superchat-inline--render)
+                   (lambda (overlay)
+                     (funcall render overlay)
+                     (push (substring-no-properties
+                            (or (overlay-get overlay 'after-string) ""))
+                           frames))))
+          (let ((overlay (superchat-inline-ask "what does it say?")))
+            (inline-act--settle overlay)
+            (should (smoke--wait
+                     (lambda () (eq 'ready (plist-get (inline-act--state overlay) :status)))))
+            (should (string-prefix-p "It says alpha."
+                                     (plist-get (inline-act--state overlay) :text)))
+            (should (cl-some (lambda (frame) (string-match-p "Let me read it first" frame))
+                             frames))
+            (should-not (cl-some (lambda (frame)
+                                   (and (string-match-p "Let me read it first" frame)
+                                        (string-match-p "It says" frame)))
+                                 frames))))))))
+
 (provide 'inline-act-regression)
 ;;; inline-act-regression.el ends here
