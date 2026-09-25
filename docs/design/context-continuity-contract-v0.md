@@ -777,7 +777,7 @@ Decision: [earlier turns reach the model as real messages](../decisions/accepted
 
 **Tape.** A `tool.requested` row written after this amendment stores `:arguments-text` as a JSON object keyed by the tool's parameter names at the time of the call; readers accept the earlier positional array too.
 
-**Accounting.** An item costs its canonical rendered line, as before, so a budget selects the same items in both forms.
+**Accounting.** An item costs its canonical rendered line, as before, so the form the provider receives does not change which items a budget selects. A call stored after this amendment keeps its arguments named, so its line is longer by the parameter names and the object syntax, and a fixed budget may select fewer items than it would for the same calls stored as positional arrays.
 
 **Request evidence (M1).** `request.message-list` names the same items; `superchat-tape-request-evidence` rebuilds them as the messages above, and `prompt-reconstructable` compares messages.
 

@@ -345,6 +345,25 @@ user message that says it is a summary."
                                                (hm--text message)))
                              wire))))))
 
+(ert-deftest history-messages/the-summarizer-gets-one-text-message ()
+  "Compaction's own request keeps the text rendering: one user message holding
+the span to summarize, tool lines included, and no earlier-turn messages."
+  (hm--fixture (hm--compaction-script)
+    (let ((view (smoke--open-chat))
+          (superchat-context-max-chars 400))
+      (dolist (text '("ask one" "ask two" "ask three" "ask four"))
+        (hm--turn view text))
+      (let (done)
+        (with-current-buffer view
+          (superchat-compact-session (lambda (_ok _value) (setq done t))))
+        (should (smoke--wait (lambda () done) 30))))
+    (let ((wire (car hm--wires)))
+      (should (= 7 (length hm--wires)))
+      (should (equal '("user") (hm--roles wire)))
+      (should (string-match-p "ask one" (hm--text (car (hm--body wire)))))
+      (should (string-match-p (regexp-quote "Tool: read_buffer(")
+                              (hm--text (car (hm--body wire))))))))
+
 ;;;; Recovery after a request that is too long
 
 (ert-deftest history-messages/a-recovered-request-carries-the-summary ()
