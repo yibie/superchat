@@ -396,9 +396,19 @@ exact event sequence cannot."
               (cons "compaction-prompt-has-history"
                     (and (string-match-p "aaaa" (plist-get (car smoke--requests) :prompt-text)) t)))))))
 
+(defconst smoke--general-template "SMOKE-GENERAL-TEMPLATE: $input"
+  "A marked general-answer template for cases S and T.
+The default template is the input as typed (context contract, amendment
+2026-09-25), which cannot show whether a turn applied it; this one can.")
+
+(defun smoke--general-template-p (prompt-text)
+  "Non-nil when PROMPT-TEXT shows `smoke--general-template' applied."
+  (and (string-match-p "SMOKE-GENERAL-TEMPLATE: " prompt-text) t))
+
 (defun smoke-case-S ()
   "a prompt-type skill and an agent-type skill through the chat"
   (smoke--with-fixture (list (list :text "skill answer 1") (list :text "skill answer 2"))
+   (let ((superchat-general-answer-prompt smoke--general-template))
     (make-directory superchat-skills-directory t)
     (with-temp-file (expand-file-name "smokeskill.md" superchat-skills-directory)
       (insert "---\nname: smokeskill\ndescription: smoke\ntype: prompt\n---\nSKILL-BODY-MARKER\n"))
@@ -415,16 +425,17 @@ exact event sequence cannot."
           (let ((p2 (plist-get (car smoke--requests) :prompt-text)))
             (list (cons "events" (smoke--types session))
                   (cons "prompt-skill-body" (and (string-match-p "SKILL-BODY-MARKER" p1) t))
-                  (cons "prompt-skill-template" (and (string-match-p "helpful assistant" p1) t))
+                  (cons "prompt-skill-template" (smoke--general-template-p p1))
                   (cons "prompt-skill-input" (and (string-match-p "hello skill" p1) t))
                   (cons "agent-persona-in-prompt" (and (string-match-p "AGENT-PERSONA-MARKER" p2) t))
-                  (cons "agent-template" (and (string-match-p "helpful assistant" p2) t))
-                  (cons "agent-input" (and (string-match-p "hello agent" p2) t)))))))))
+                  (cons "agent-template" (smoke--general-template-p p2))
+                  (cons "agent-input" (and (string-match-p "hello agent" p2) t))))))))))
 
 (defun smoke-case-T ()
   "a user command template turn"
   (smoke--with-fixture (list (list :text "template answer"))
-    (let* ((view (smoke--open-chat))
+    (let* ((superchat-general-answer-prompt smoke--general-template)
+           (view (smoke--open-chat))
            (session (buffer-local-value 'superchat--session-id view)))
       (puthash "smoketpl" "TEMPLATE-MARKER: $input" superchat--user-commands)
       (unwind-protect
@@ -433,7 +444,7 @@ exact event sequence cannot."
             (let ((p (plist-get (car smoke--requests) :prompt-text)))
               (list (cons "events" (smoke--types session))
                     (cons "prompt-has-template" (and (string-match-p "TEMPLATE-MARKER: fill me" p) t))
-                    (cons "prompt-has-general-template" (and (string-match-p "helpful assistant" p) t))
+                    (cons "prompt-has-general-template" (smoke--general-template-p p))
                     (cons "provider-calls" (length smoke--requests)))))
         (remhash "smoketpl" superchat--user-commands)))))
 

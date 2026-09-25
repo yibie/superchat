@@ -18,7 +18,9 @@ All notable changes to superchat.
 - The request inspector (`superchat-act` with a prefix argument) shows the
   earlier turns read-only above the text you can edit, with the line saying
   how much history was included or left out; Copy includes them. Editing the
-  text no longer sends the request without its earlier turns.
+  text no longer sends the request without its earlier turns. To leave them
+  out, start a new conversation (`M-x superchat-new-session`) or branch after
+  an earlier turn (`M-x superchat-branch-session`).
 - New tool calls are stored with their arguments named
   (`{"buffer":"init.el"}` rather than `["init.el"]`); calls stored before
   are named by the tool's current parameters when they are sent again.

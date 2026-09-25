@@ -399,7 +399,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 新写入的用户消息和模型答复会完整保存，供后续对话读取。上下文预算可能整条省略较早的消息，但不会用显示摘要替换已保存的原文。旧版本已经裁掉的文字无法从指纹恢复。详见[对话历史](docs/decisions/implemented/2026-09-17-preserve-conversation-material.md)。
 
-`M-x superchat-act` 从当前 buffer 发出指令，加前缀参数则打开请求检查器。检查器按当前上下文预算发送最终编辑后的正文。之前几轮对话以只读形式显示在正文上方，并作为单独的消息发给模型，所以编辑正文既不会删掉也不会改动它们；你从正文里删除的附件和来源选区不会被重新加入。系统提示预览包含原始系统配置和收集到的指令，各组装一次。详见[请求准备](docs/protocols/request-lifecycle.md#submission-and-preparation)。
+`M-x superchat-act` 从当前 buffer 发出指令，加前缀参数则打开请求检查器。检查器按当前上下文预算发送最终编辑后的正文。之前几轮对话以只读形式显示在正文上方，并作为单独的消息发给模型，所以编辑正文既不会删掉也不会改动它们；想发一个不带它们的请求，就开一个新对话（`M-x superchat-new-session`），或者从更早的某一轮分支出去（`M-x superchat-branch-session`）。你从正文里删除的附件和来源选区不会被重新加入。系统提示预览包含原始系统配置和收集到的指令，各组装一次。详见[请求准备](docs/protocols/request-lifecycle.md#submission-and-preparation)。
 
 ## 配置速查
 

@@ -783,6 +783,6 @@ Decision: [earlier turns reach the model as real messages](../decisions/accepted
 
 **Recovery.** When compaction resumes a Run after its request was too long, the resumed request's earlier-turn messages are replaced by those of the View assembled after compaction; the current Turn's messages are unchanged.
 
-**Inspector.** The request inspector shows the messages read-only between the system text and the editable prompt, and Copy includes them; editing the prompt does not change them.
+**Inspector.** The request inspector shows the messages read-only between the system text and the editable prompt, and Copy includes them; editing the prompt does not change them. No switch leaves them out of one request: a request without them is a new Session or a branch.
 
 **Not changed.** Compaction's own summarizing request keeps the canonical text rendering of the span it summarizes.
