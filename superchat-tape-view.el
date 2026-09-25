@@ -665,6 +665,8 @@ STATUS is `ok' for `tool.completed' and the outcome's own `:status' else."
           :source-ids (vector (superchat-view--continuity-record-id requested)
                               (superchat-view--continuity-record-id outcome))
           :tool-name (plist-get requested-payload :tool-name)
+          :execution-id (plist-get requested-payload :execution-id)
+          :run-id (plist-get requested-event :run-id)
           :status (if (equal "tool.completed" (plist-get outcome-event :type))
                       "ok"
                     (plist-get outcome-payload :status))
@@ -675,6 +677,54 @@ STATUS is `ok' for `tool.completed' and the outcome's own `:status' else."
           :result-cut result-cut
           :result-chars (plist-get outcome-payload :result-chars)
           :lossy (or arguments-cut result-cut))))
+
+(declare-function llm-tool-name "llm" (tool))
+(declare-function llm-tool-args "llm" (tool))
+(declare-function superchat-get-llm-tools "superchat-tools" (&optional tool-names input-operation))
+
+(defun superchat-view--tool-parameter-names (tool-name)
+  "Return TOOL-NAME's parameter names from the current tools, or `:unknown'."
+  (let ((tool (and (fboundp 'superchat-get-llm-tools)
+                   (cl-find tool-name (ignore-errors (superchat-get-llm-tools))
+                            :key #'llm-tool-name :test #'equal))))
+    (if tool
+        (mapcar (lambda (arg) (plist-get arg :name)) (llm-tool-args tool))
+      :unknown)))
+
+(defun superchat-view-call-arguments (tool-name text cut-chars)
+  "Return (:arguments JSON :note NOTE) for a stored call of TOOL-NAME.
+TEXT is the call's stored `:arguments-text'; CUT-CHARS is its original
+length when the text was cut.  A complete JSON object is sent as stored; a
+complete positional array is named by TOOL-NAME's current parameter list; any
+other text -- cut, unreadable, absent, or of a tool no longer defined -- is
+sent as `{}' with NOTE `(Arguments not kept in full: TEXT)'."
+  (let* ((parsed (if (and (stringp text) (not cut-chars))
+                     (condition-case nil
+                         (json-parse-string text :object-type 'hash-table
+                                            :array-type 'array
+                                            :null-object :null :false-object :false)
+                       (error :unreadable))
+                   :unreadable))
+         (named
+          (cond
+           ((hash-table-p parsed) text)
+           ((and (vectorp parsed) (zerop (length parsed))) "{}")
+           ((vectorp parsed)
+            (let ((names (superchat-view--tool-parameter-names tool-name)))
+              (when (and (listp names) (<= (length parsed) (length names)))
+                (let ((object (make-hash-table :test #'equal)))
+                  (cl-loop for value across parsed
+                           for name in names
+                           unless (eq value :null)
+                           do (puthash name value object))
+                  (json-serialize object :null-object :null :false-object :false))))))))
+    (if named
+        (list :arguments named :note nil)
+      (list :arguments "{}"
+            :note (format "(Arguments not kept in full: %s)"
+                          (if (stringp text)
+                              (superchat-tape--history-cut-text text cut-chars cut-chars)
+                            "none"))))))
 
 (defun superchat-view-tool-observation-entries (session-id rows)
   "Return SESSION-ID's tool observation entries over Tape ROWS.
@@ -1415,6 +1465,11 @@ turn must leave neither context nor recallable disclosure behind."
          (recallable (superchat-view--continuity-recallable-ranges
                       classified-omissions)))
     (list :contract "context-continuity-v0"
+          ;; Amendment 2026-09-25: what the provider receives for this
+          ;; selection -- messages, not the `:prompt' text below.
+          :messages (and (> (length items) 0)
+                         (superchat-tape-history-messages
+                          items (superchat-tape-step-key-function session-id)))
           :status (cond
                    ((null all-records) 'empty)
                    (resource-omitted-p 'partial)

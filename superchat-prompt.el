@@ -28,6 +28,12 @@
 (defconst superchat-prompt--system-slots '(system instruction)
   "Slots whose fragment text goes to `:system' instead of the user message.")
 
+(defconst superchat-prompt--separate-slots '(history)
+  "Slots budgeted with the user message but not joined into its text.
+Earlier turns reach the provider as messages of their own (context contract,
+amendment 2026-09-25); their fragment text is the selection's canonical
+rendering, which still counts against the budget.")
+
 (defconst superchat-prompt--truncation-marker "…[truncated]"
   "Exact suffix appended to a soft fragment truncated to fit the budget.")
 
@@ -269,11 +275,14 @@ order."
          (hard-total (aref hard-totals 0)))
     (when (> hard-total budget)
       (signal 'superchat-prompt-over-budget (list :hard hard-total :budget budget)))
-    (let ((pieces nil) (selected-count 0) (used-length 0)
+    (let ((pieces nil) (separate nil) (selected-count 0) (used-length 0)
           (chosen nil) (omitted nil) (truncated nil) (refit-ids nil) (stopped nil))
       (cl-flet ((add-piece
-                 (text)
-                 (push text pieces)
+                 (text fragment)
+                 (push (cons text (and (memq (plist-get fragment :slot)
+                                             superchat-prompt--separate-slots)
+                                       t))
+                       pieces)
                  (setq used-length (if (zerop selected-count)
                                         (length text)
                                       (+ used-length 2 (length text))))
@@ -284,7 +293,7 @@ order."
                  do
                  (cond
                   ((superchat-prompt--hard-p fragment)
-                   (add-piece (plist-get fragment :text))
+                   (add-piece (plist-get fragment :text) fragment)
                    (push id chosen))
                   (stopped
                    (push id omitted))
@@ -308,29 +317,36 @@ order."
                            (superchat-prompt--invalid :refit-result new-text id))
                          (if (zerop (length new-text))
                              (push id omitted)
-                           (progn (add-piece new-text) (push id chosen)))))
+                           (progn
+                             (add-piece new-text fragment)
+                             (push id chosen)))))
                       ((>= remaining (length text))
-                       (add-piece text)
+                       (add-piece text fragment)
                        (push id chosen))
                       ((>= remaining 80)
                        (setq stopped t)
                        (let* ((prefix-len (- remaining (length superchat-prompt--truncation-marker)))
                               (new-text (concat (substring text 0 prefix-len)
                                                  superchat-prompt--truncation-marker)))
-                         (add-piece new-text)
+                         (add-piece new-text fragment)
                          (push id chosen)
                          (push id truncated)))
                       (t
                        (setq stopped t)
                        (push id omitted))))))))
-      (let ((user-message (mapconcat #'identity (nreverse pieces) "\n\n")))
-        (cl-assert (= used-length (length user-message)) t
+      (let* ((ordered-pieces (nreverse pieces))
+             (accounted (mapconcat #'car ordered-pieces "\n\n"))
+             (user-message (mapconcat #'car (cl-remove-if #'cdr ordered-pieces)
+                                      "\n\n")))
+        (setq separate (mapcar #'car (cl-remove-if-not #'cdr ordered-pieces)))
+        (cl-assert (= used-length (length accounted)) t
                    "superchat-prompt-assemble: tracked :used disagrees with the assembled message length")
         (cl-assert (<= used-length budget) t
                    "superchat-prompt-assemble: assembled message exceeds its budget")
         (list :system system-text
               :system-contributions system-contributions
               :messages (list (list :role 'user :content user-message))
+              :separate separate
               :receipt (list :budget budget :hard hard-total :used used-length
                               :chosen (append system-ids (nreverse chosen))
                               :omitted (nreverse omitted)

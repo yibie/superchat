@@ -3700,6 +3700,13 @@ Absent options preserve legacy behavior; result delivery retains three args."
                    (pcase event
                      ('step-id
                       (plist-get (superchat-runtime--entry run-id) :step))
+                     ('history-messages
+                      ;; Earlier turns as messages (context contract,
+                      ;; amendment 2026-09-25): the selection this request's
+                      ;; history was assembled from, in the provider-neutral
+                      ;; form `superchat-tape-history-messages' returns.
+                      (and (listp context-envelope)
+                           (copy-tree (plist-get context-envelope :messages))))
                      ('request-message-items
                       (append
                        (append (superchat-runtime--envelope-items context-envelope)

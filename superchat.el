@@ -228,11 +228,11 @@ Only files with these extensions are shown in the file picker."
   :type '(repeat string)
   :group 'superchat)
 
-(defcustom superchat-general-answer-prompt
-  (string-join
-   '("You are a helpful assistant. Please provide a clear and comprehensive answer to the user's question: $input")
-   "\n")
-  "The prompt template used for general questions."
+(defcustom superchat-general-answer-prompt "$input"
+  "The template a chat or act input is sent through.
+`$input' is the input as typed and `$lang' is `superchat-lang'.  The default
+sends the input unchanged; a template such as \"Answer in $lang: $input\"
+wraps it."
   :type 'string
   :group 'superchat)
 
@@ -4050,12 +4050,50 @@ association-time snapshot would."
             (or (plist-get image :mime-type) "context")
             (if size (format "%d bytes" size) "missing"))))
 
+(defun superchat--request-history-text (plan)
+  "Return the earlier turns PLAN sends, as text for a person to read, or nil.
+They go as messages before the prompt (context contract, amendment
+2026-09-25).  The first line is the selection's disclosure, which is not
+sent; each message follows as a bracketed label line and its text as sent.
+Nil when the Session has nothing earlier."
+  (let* ((envelope (plist-get (plist-get plan :chat-prepared-context)
+                              :context-envelope))
+         (prompt (plist-get envelope :prompt))
+         (messages (plist-get envelope :messages)))
+    (when (and (stringp prompt) (not (string-empty-p prompt)))
+      (concat
+       "Selection (not sent): " (car (split-string prompt "\n")) "\n"
+       (if messages
+           (superchat--request-history-messages-text messages)
+         "(no earlier turn selected)")))))
+
+(defun superchat--request-history-messages-text (messages)
+  "Return MESSAGES as bracketed label lines, each followed by its text."
+  (mapconcat
+   (lambda (message)
+     (cond
+      ((plist-get message :tool-calls)
+       (concat "[assistant: tool calls]\n"
+               (mapconcat (lambda (call)
+                            (format "%s %s (call %s)"
+                                    (plist-get call :name)
+                                    (plist-get call :arguments)
+                                    (plist-get call :id)))
+                          (plist-get message :tool-calls) "\n")))
+      ((equal "tool" (plist-get message :kind))
+       (format "[tool result: %s, call %s]\n%s"
+               (plist-get message :name) (plist-get message :tool-call-id)
+               (or (plist-get message :content) "")))
+      (t (format "[%s]\n%s" (plist-get message :kind)
+                 (or (plist-get message :content) "")))))
+   messages "\n"))
+
 (defun superchat--request-plan-copy-text (plan)
   "Return a credential-free textual representation of PLAN."
   (format
    (concat "Session: %s\nModel: %s\nPreset: %s\nOrigin: %S\n"
            "Tools: %s\nAttachments: %s\n\n"
-           "System prompt:\n%s\n\nPrompt:\n%s\n")
+           "System prompt:\n%s\n\n%sPrompt:\n%s\n")
    (or (plist-get plan :session-id) "")
    (or (plist-get plan :target-model) "backend default")
    (let ((preset (plist-get plan :preset)))
@@ -4068,6 +4106,8 @@ association-time snapshot would."
     "\n             ")
    (or (plist-get plan :preview-system-prompt)
        (plist-get plan :system-prompt) "")
+   (let ((history (superchat--request-history-text plan)))
+     (if history (format "Earlier turns:\n%s\n\n" history) ""))
    (or (plist-get plan :prompt) "")))
 
 (defun superchat--display-request-plan (plan)
@@ -4098,6 +4138,12 @@ association-time snapshot would."
           (insert "System prompt (read-only):\n")
           (insert (or (plist-get plan :preview-system-prompt)
                       (plist-get plan :system-prompt) ""))
+          ;; Earlier turns go as their own messages, not inside the prompt
+          ;; (context contract, amendment 2026-09-25): shown, not editable.
+          (when-let* ((history (superchat--request-history-text plan)))
+            (insert "\n\nEarlier turns (read-only; sent as separate messages "
+                    "before the prompt):\n")
+            (insert history))
           (insert "\n\nPrompt (editable):\n")
           (add-text-properties
            start (point) '(read-only t rear-nonsticky (read-only))))

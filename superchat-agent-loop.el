@@ -329,8 +329,10 @@ hooks.  Non-string values pass through untouched."
 
 (defun superchat--agent-wrap-function
     (tool-name original-fn async &optional guardrails counter target-buffer
-               runtime-context)
-  "Wrap ORIGINAL-FN with accounting, rendering, and the shared executor."
+               runtime-context argument-names)
+  "Wrap ORIGINAL-FN with accounting, rendering, and the shared executor.
+ARGUMENT-NAMES, the tool's parameter names in order, lets the executor record
+a call's arguments by name."
   (let* ((isolated-counter counter)
          (render-identity
           (condition-case nil
@@ -396,6 +398,9 @@ hooks.  Non-string values pass through untouched."
                   (plist-put context :actor-id
                              (or (plist-get context :actor-id) "lead")))
                  (context (plist-put context :guardrails guardrails))
+                 (context (if argument-names
+                              (plist-put context :argument-names argument-names)
+                            context))
                  ;; S21-fix-1: the real provider tool-call id when this call
                  ;; came from a provider tool round, else a freshly minted id
                  ;; -- never the tool's name, so overlapping same-name calls
@@ -476,6 +481,9 @@ hooks.  Non-string values pass through untouched."
                 (plist-put context :actor-id
                            (or (plist-get context :actor-id) "lead")))
                (context (plist-put context :guardrails guardrails))
+               (context (if argument-names
+                            (plist-put context :argument-names argument-names)
+                          context))
                ;; S21-fix-1: see the async branch's own comment above.
                (execution-id
                 (or (plist-get context :tool-call-id)
@@ -520,7 +528,9 @@ hooks.  Non-string values pass through untouched."
                    (llm-tool-name tool)
                    (llm-tool-function tool)
                    (llm-tool-async tool)
-                   guardrails counter target-buffer runtime-context))
+                   guardrails counter target-buffer runtime-context
+                   (mapcar (lambda (arg) (plist-get arg :name))
+                           (llm-tool-args tool))))
          (function
           (if (llm-tool-async tool)
               (lambda (callback &rest args)

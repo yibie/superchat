@@ -771,7 +771,7 @@ Decision: [request evidence includes Step material](../decisions/accepted/2026-0
 
 Decision: [earlier turns reach the model as real messages](../decisions/accepted/2026-09-25-earlier-turns-as-real-tool-messages.md). It replaces, for provider requests, section 10's rendering and the tool-observation *Rendering* of the 2026-09-23 amendment; selection, accounting, disclosure and recall are unchanged.
 
-**What a provider request carries.** The selected items become messages placed before the current user message, in Tape order: a raw user item a user message, a raw assistant item an assistant message, a selected compact Anchor one user message first saying it is a model's summary of the earlier conversation, an admitted Step-material row a user message `[Injected material] TEXT`. The tool-observation items of one Step become one assistant message whose calls are those items in order, followed by one tool message per call. The disclosure header, the body's role labels and the tool-observation note are not sent; `:prompt` keeps the canonical text rendering for accounting, the inspector's summary and compaction's input.
+**What a provider request carries.** The selected items become messages placed before the current user message, in Tape order: a raw user item a user message, a raw assistant item an assistant message, a selected compact Anchor one user message first saying it is a model's summary of the earlier conversation, an admitted Step-material row a user message `[Injected material] TEXT`. The tool-observation items of one Step become one assistant message whose calls are those items in order, followed by one tool message per call. The disclosure header, the body's role labels and the tool-observation note are not sent; `:prompt` keeps the canonical text rendering for accounting and compaction's input.
 
 **A call.** Its wire id is the call's `:execution-id`, which both rows carry and the tool-observation item gains as `:execution-id`; it is on the call and on its tool message. Its arguments are a JSON object keyed by parameter name: the stored `:arguments-text` when it reads as a complete object; a positional array named by the tool's current parameter list when it reads as a complete array and the tool is defined; otherwise empty, and the tool message begins with `(Arguments not kept in full: TEXT)` (TEXT the stored text with its cut mark, or `none`). The tool message carries `:result-text`, a cut text ending with ` … [cut: N more characters]`.
 
@@ -780,5 +780,9 @@ Decision: [earlier turns reach the model as real messages](../decisions/accepted
 **Accounting.** An item costs its canonical rendered line, as before, so a budget selects the same items in both forms.
 
 **Request evidence (M1).** `request.message-list` names the same items; `superchat-tape-request-evidence` rebuilds them as the messages above, and `prompt-reconstructable` compares messages.
+
+**Recovery.** When compaction resumes a Run after its request was too long, the resumed request's earlier-turn messages are replaced by those of the View assembled after compaction; the current Turn's messages are unchanged.
+
+**Inspector.** The request inspector shows the messages read-only between the system text and the editable prompt, and Copy includes them; editing the prompt does not change them.
 
 **Not changed.** Compaction's own summarizing request keeps the canonical text rendering of the span it summarizes.

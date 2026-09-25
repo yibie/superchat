@@ -2,6 +2,30 @@
 
 All notable changes to superchat.
 
+## Unreleased — earlier turns reach the model as real messages
+
+- A later turn now sends the earlier ones to the model as real messages:
+  each question, each tool call the model made with the arguments it sent,
+  what each call returned, and each answer, in the same form as the calls
+  it is making now. Before, they arrived as a transcript inside your new
+  message (`User:`, `Tool:` and `Assistant:` lines under a `[Context v0 …]`
+  header), and in one test run the model answered by writing tool records of
+  its own instead of calling the tools.
+- Your message is sent as you typed it: `superchat-general-answer-prompt`
+  now defaults to `$input`. Before, every message was wrapped in "You are a
+  helpful assistant. Please provide a clear and comprehensive answer to the
+  user's question: …".
+- The request inspector (`superchat-act` with a prefix argument) shows the
+  earlier turns read-only above the text you can edit, with the line saying
+  how much history was included or left out; Copy includes them. Editing the
+  text no longer sends the request without its earlier turns.
+- New tool calls are stored with their arguments named
+  (`{"buffer":"init.el"}` rather than `["init.el"]`); calls stored before
+  are named by the tool's current parameters when they are sent again.
+- Earlier turns take about as much room as before: on one recorded
+  conversation the messages were about 5% shorter than the old transcript
+  (ids and message framing added; header, labels and escaped newlines gone).
+
 ## Unreleased — the chat opens beside the file you are editing
 
 - `M-x superchat` now shows the chat in a side window on the right of the

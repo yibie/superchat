@@ -216,18 +216,29 @@ or from the model prompt."
         (setq event (plist-put event key (plist-get context key)))))
     event))
 
-(defun superchat-tool-execution--material (key value)
+(defun superchat-tool-execution--material (key value &optional names)
   "Return (KEY TEXT) for tool material VALUE, or nil when not stored.
-TEXT is the positional arguments JSON-encoded for `:arguments-text', and the
-normalized delivered text for `:result-text'.  Bounding happens later in
+TEXT is, for `:arguments-text', the arguments as a JSON object keyed by NAMES,
+the tool's parameter names in order (context contract, amendment
+2026-09-25), or the positional JSON array when NAMES does not cover them; for
+`:result-text' the normalized delivered text.  Bounding happens later in
 `superchat-tape-fit-tool-material'."
   (when (and superchat-tape-store-tool-material value)
     (list key
           (pcase key
             (:arguments-text
-             (condition-case nil
-                 (json-encode (vconcat value))
-               (error (prin1-to-string value))))
+             (or (and names (<= (length value) (length names))
+                      (condition-case nil
+                          (let ((object (make-hash-table :test #'equal)))
+                            (cl-loop for argument in value
+                                     for name in names
+                                     when argument
+                                     do (puthash name argument object))
+                            (decode-coding-string (json-serialize object) 'utf-8))
+                        (error nil)))
+                 (condition-case nil
+                     (json-encode (vconcat value))
+                   (error (prin1-to-string value)))))
             (:result-text
              (let ((normalized
                     (superchat-tool-execution--normalize-tool-result value)))
@@ -1183,7 +1194,9 @@ that must be asked about goes to the approval seam."
                   (when disposition (list :disposition disposition))
                   (when block-reason
                     (list :block-reason block-reason))
-                  (superchat-tool-execution--material :arguments-text provider-args)
+                  (superchat-tool-execution--material
+                   :arguments-text provider-args
+                   (plist-get context :argument-names))
                   (superchat-tool-execution--evidence-fields context)
                   evidence-action)
                  nil (and evidence-action t)))

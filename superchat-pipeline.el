@@ -334,12 +334,10 @@ pointing at the selection that actually happened."
          (turn (and (listp context) (plist-get context :chat-turn)))
          (state (and turn (superchat-turn-state turn))))
     (if prepared
-        ;; An edited body is opaque user text.  Keep its original preview on
-        ;; the plan, but do not assert the old history selection still occurs
-        ;; in the request or use it as an overflow-replacement target.
-        (and (equal (plist-get context :chat-prompt-override)
-                    (plist-get prepared :prompt))
-             (plist-get prepared :context-envelope))
+        ;; The selection is sent as its own messages, never inside the
+        ;; editable body (context contract, amendment 2026-09-25), so an
+        ;; edited body is sent with the same earlier turns as an unedited one.
+        (plist-get prepared :context-envelope)
       (and (listp state) (plist-get state :context-envelope)))))
 
 (defun superchat-pipeline--dispatch-to-runtime

@@ -37,16 +37,20 @@
          :owner 'm5rc :id "m5rc-system-note" :slot 'system
          :text m5rc--static-note :budget-class 'hard)))
 
+(defun m5rc--role-contents (prompt role)
+  "Copy the contents of PROMPT's interactions with ROLE, in order."
+  (cl-loop for interaction in (llm-chat-prompt-interactions prompt)
+           when (equal role
+                       (format "%s" (llm-chat-prompt-interaction-role interaction)))
+           collect (copy-tree (llm-chat-prompt-interaction-content interaction))))
+
 (defun m5rc--snapshot-prompt (prompt)
-  "Copy the provider-visible system and user roles from PROMPT."
+  "Copy the provider-visible system, user and assistant roles from PROMPT.
+Earlier turns are their own user and assistant messages (context contract,
+amendment 2026-09-25)."
   (list :system (copy-sequence (or (llm-chat-prompt-context prompt) ""))
-        :users
-        (cl-loop for interaction in (llm-chat-prompt-interactions prompt)
-                 when (equal "user"
-                             (format "%s"
-                                     (llm-chat-prompt-interaction-role interaction)))
-                 collect (copy-tree
-                          (llm-chat-prompt-interaction-content interaction)))))
+        :users (m5rc--role-contents prompt "user")
+        :assistants (m5rc--role-contents prompt "assistant")))
 
 (defmacro m5rc--fixture (script &rest body)
   "Run BODY with SCRIPT and real, scoped context collection."
@@ -147,6 +151,11 @@
   (with-current-buffer inspector
     (buffer-substring-no-properties superchat--request-prompt-start
                                     superchat--request-prompt-end)))
+
+(defun m5rc--read-only-part (inspector)
+  "Read what INSPECTOR shows before its editable body."
+  (with-current-buffer inspector
+    (buffer-substring-no-properties (point-min) superchat--request-prompt-start)))
 
 (defun m5rc--replace-body (inspector text)
   "Replace the actual inspector's editable body with TEXT."
@@ -251,7 +260,9 @@ The original application, active-View lookup and all assembly still run."
            (m5rc--assert-system (plist-get (m5rc--settle 1) :system) 2)))))))
 
 (ert-deftest m5-request-context/edited-inspector-does-not-restore-context ()
-  "Deleting real history, attachment and origin leaves exactly the edited body."
+  "Deleting the attachment and origin leaves exactly the edited body.  The
+earlier turn was never part of the body: it is shown read-only and still goes
+as its own messages (context contract, amendment 2026-09-25)."
   (m5rc--fixture '((:text "M5RC_PRIOR_ASSISTANT") (:text "done"))
     (let* ((source (m5rc--source "M5RC_OLD_SELECTION\n" t))
            (view (m5rc--open source))
@@ -261,10 +272,13 @@ The original application, active-View lookup and all assembly still run."
       (m5rc--attachment view)
       (let* ((inspector (m5rc--inspect source "M5RC_INSPECT_REQUEST"))
              (body (m5rc--body inspector)))
-        (dolist (marker '("M5RC_PRIOR_USER" "M5RC_PRIOR_ASSISTANT"
-                          "M5RC_ATTACHMENT_BODY" "M5RC_OLD_SELECTION"
+        (dolist (marker '("M5RC_ATTACHMENT_BODY" "M5RC_OLD_SELECTION"
                           "[Emacs origin]"))
           (should (string-match-p (regexp-quote marker) body)))
+        (dolist (marker '("M5RC_PRIOR_USER" "M5RC_PRIOR_ASSISTANT"))
+          (should-not (string-match-p (regexp-quote marker) body))
+          (should (string-match-p (regexp-quote marker)
+                                  (m5rc--read-only-part inspector))))
         (m5rc--replace-body inspector edited)
         (should (equal edited (m5rc--body inspector)))
         (let ((copied (m5rc--copy inspector)))
@@ -275,12 +289,16 @@ The original application, active-View lookup and all assembly still run."
           (insert "M5RC_NEW_SELECTION\n"))
         (with-current-buffer inspector (superchat-request-send))
         (let ((request (m5rc--settle 2)))
-          ;; Compare the actual user-role content, not a whole-prompt substring.
-          (should (equal (list edited) (plist-get request :users)))
-          ;; Runtime must not treat deleted history as a valid replacement
-          ;; target or claim that the old selection describes this edited body.
+          ;; Compare the actual role contents, not a whole-prompt substring:
+          ;; the earlier turn, then exactly the edited body.
+          (should (equal (list "M5RC_PRIOR_USER" edited) (plist-get request :users)))
+          (should (equal '("M5RC_PRIOR_ASSISTANT") (plist-get request :assistants)))
+          ;; The edited body goes to Runtime as typed, with the selection the
+          ;; earlier-turn messages were built from.
           (should (equal edited (plist-get (car m5rc--submissions) :prompt)))
-          (should-not (plist-get (car m5rc--submissions) :context-envelope))
+          (let ((context (plist-get (car m5rc--submissions) :context-envelope)))
+            (should context)
+            (should (string-match-p "M5RC_PRIOR_USER" (plist-get context :prompt))))
           (m5rc--assert-system (plist-get request :system)))))))
 
 (ert-deftest m5-request-context/unedited-act-keeps-one-frozen-context ()
@@ -293,15 +311,19 @@ The original application, active-View lookup and all assembly still run."
       (m5rc--settle 1)
       (let* ((inspector (m5rc--inspect source "M5RC_SECOND_REQUEST"))
              (body (m5rc--body inspector)))
+        ;; Shown once, read-only, outside the body (context contract,
+        ;; amendment 2026-09-25).
         (dolist (marker '("M5RC_PRIOR_USER" "M5RC_PRIOR_ASSISTANT"))
-          (should (= 1 (m5rc--count marker body))))
+          (should (= 1 (m5rc--count marker (m5rc--read-only-part inspector))))
+          (should (= 0 (m5rc--count marker body))))
         (should (string-match-p "M5RC_ATTACHMENT_BODY" body))
         ;; The plugin/file now return other data: the accepted preview is frozen.
         (setq m5rc--static-note "M5RC_CHANGED_SYSTEM_AFTER_PREVIEW")
         (with-temp-file file (insert "M5RC_CHANGED_ATTACHMENT_AFTER_PREVIEW\n"))
         (with-current-buffer inspector (superchat-request-send))
         (let ((request (m5rc--settle 2)))
-          (should (equal (list body) (plist-get request :users)))
+          (should (equal (list "M5RC_PRIOR_USER" body) (plist-get request :users)))
+          (should (equal '("M5RC_PRIOR_ASSISTANT") (plist-get request :assistants)))
           ;; An unedited body still carries its actual history selection to
           ;; Runtime; removing all receipts would make the edited case pass.
           (let ((context (plist-get (car m5rc--submissions) :context-envelope)))
@@ -327,7 +349,10 @@ The original application, active-View lookup and all assembly still run."
       (smoke--send view ">m5rc-skill M5RC_SKILL_ARGUMENT")
       (let* ((request (m5rc--settle 2))
              (users (plist-get request :users))
-             (text (mapconcat #'identity users "\n")))
+             ;; The earlier turn is its own user and assistant messages.
+             (text (mapconcat #'identity
+                              (append users (plist-get request :assistants))
+                              "\n")))
         (dolist (marker '("M5RC_PRIOR_USER" "M5RC_PRIOR_ASSISTANT"
                           "M5RC_ATTACHMENT_BODY" "M5RC_SKILL_BODY"
                           "M5RC_SKILL_ARGUMENT"))

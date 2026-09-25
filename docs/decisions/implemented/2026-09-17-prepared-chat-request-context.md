@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded in part (2026-09-25): history is no longer part of the editable body. The earlier turns are their own messages ([earlier turns reach the model as real messages](../accepted/2026-09-25-earlier-turns-as-real-tool-messages.md)), shown read-only in the inspector, so an edited body is sent with the same history selection as an unedited one; attachments and source selections deleted from the body still stay deleted.
+
 ## Decision
 
 The act entry and its optional inspector collect context once. The request plan keeps the original system configuration separate from the assembled display text, and carries the collected system fragments and exact assembled user body to submission. The driver preserves that body, including explicit inspector edits, and applies the normal hard-content budget. The [request lifecycle](../../protocols/request-lifecycle.md#submission-and-preparation) owns the current behavior and its evidence boundary.

@@ -5,10 +5,14 @@
 ;; Offline coverage for the T2 slice of the accepted decision
 ;; docs/decisions/accepted/2026-09-23-the-next-turn-sees-previous-tool-results.md
 ;; and the contract amendment "Amendment 2026-09-23: tool observations"
-;; (docs/design/context-continuity-contract-v0.md): a later turn's history
-;; carries one `Tool: NAME(ARGS) -> [STATUS] RESULT' line per paired tool call
-;; (tool.requested + tool.completed/tool.failed joined by execution id), the
-;; request evidence rebuilds the same line, and both rows stay accounted once.
+;; (docs/design/context-continuity-contract-v0.md): a later turn sees each
+;; paired tool call (tool.requested + tool.completed/tool.failed joined by
+;; execution id), the request evidence rebuilds it, and both rows stay
+;; accounted once.  Since the amendment of 2026-09-25 (earlier turns as
+;; messages) the provider receives the call as an assistant tool call and its
+;; result as the tool message answering it; the canonical
+;; `Tool: NAME(ARGS) -> [STATUS] RESULT' line remains what an item costs and
+;; what compaction summarizes, so its renderer is still pinned here.
 ;;
 ;; This standalone suite reuses canonical smoke helpers as a library.  It
 ;; neither loads nor modifies the leader-owned M3/M5 sets.  All model calls
@@ -27,6 +31,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
+(require 'json)
 
 (when (getenv "SMOKE_REAL")
   (error "Tool observation regression tests are offline; unset SMOKE_REAL"))
@@ -42,6 +47,18 @@
       ert-batch-print-length 16
       ert-batch-backtrace-right-margin 160)
 
+(defvar tool-observation--wires nil
+  "Provider requests of the current test, newest first, as wire messages.")
+
+(defun tool-observation--wire-of (provider prompt)
+  "Return PROMPT as the messages llm.el sends to an OpenAI-style PROVIDER."
+  (let* ((request (llm-provider-chat-request provider prompt nil))
+         (messages (or (plist-get request :messages)
+                       (alist-get 'messages request))))
+    (json-parse-string (json-encode messages)
+                       :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil)))
+
 (defmacro tool-observation--fixture (script &rest body)
   "Run BODY with SCRIPT through the canonical isolated product fixture."
   (declare (indent 1) (debug t))
@@ -50,8 +67,17 @@
          (superchat-event-faults nil)
          (superchat-llm-reasoning nil)
          (superchat-llm-tool-names superchat-llm-default-tool-names)
-         (superchat-llm-tools-list nil))
-     (smoke--with-fixture ,script ,@body)))
+         (superchat-llm-tools-list nil)
+         (tool-observation--wires nil))
+     (smoke--with-fixture ,script
+       (let ((network (symbol-function 'smoke--fake-network)))
+         (cl-letf (((symbol-function 'smoke--fake-network)
+                    (lambda (mode provider prompt partial response error multi)
+                      (push (tool-observation--wire-of provider prompt)
+                            tool-observation--wires)
+                      (funcall network mode provider prompt
+                               partial response error multi))))
+           ,@body)))))
 
 (defun tool-observation--script (name)
   "Script: turn 1 reads buffer NAME, then two answers."
@@ -87,16 +113,32 @@
   "Return SESSION's first replayed TYPE event's storage id."
   (plist-get (car (tool-observation--replayed session type)) :storage-id))
 
-(defun tool-observation--prompt ()
-  "Return the newest provider request's prompt text."
-  (plist-get (car smoke--requests) :prompt-text))
+(defun tool-observation--messages ()
+  "Return the newest provider request's messages, without the system one."
+  (let ((wire (car tool-observation--wires)))
+    (if (equal "system" (alist-get 'role (car wire))) (cdr wire) wire)))
 
-(defun tool-observation--count (needle text)
-  "Count non-overlapping occurrences of NEEDLE in TEXT."
-  (let ((start 0) (count 0))
-    (while (string-match (regexp-quote needle) text start)
-      (setq start (match-end 0) count (1+ count)))
-    count))
+(defun tool-observation--text (message)
+  "MESSAGE's content as a string (empty when it has none)."
+  (let ((content (alist-get 'content message)))
+    (if (stringp content) content "")))
+
+(defun tool-observation--calls (messages)
+  "Return every tool call carried by MESSAGES, in order."
+  (cl-loop for message in messages append (alist-get 'tool_calls message)))
+
+(defun tool-observation--answer (messages call)
+  "Return the tool message in MESSAGES answering CALL, or nil."
+  (cl-find-if (lambda (message)
+                (and (equal "tool" (alist-get 'role message))
+                     (equal (alist-get 'id call) (alist-get 'tool_call_id message))))
+              messages))
+
+(defun tool-observation--call-named (messages name)
+  "Return the first call in MESSAGES to the tool NAME, or nil."
+  (cl-find-if (lambda (call)
+                (equal name (alist-get 'name (alist-get 'function call))))
+              (tool-observation--calls messages)))
 
 (defun tool-observation--tool-line (text)
   "Return TEXT's first `Tool:' line, or nil."
@@ -135,10 +177,11 @@
   (list (superchat-view--continuity-record-id (plist-get pair :requested))
         (superchat-view--continuity-record-id (plist-get pair :outcome))))
 
-;;;; A later turn sees the tool line
+;;;; A later turn sees the call and what it returned
 
-(ert-deftest tool-observation/next-turn-sees-the-tool-line ()
-  "Turn 2's prompt carries the note once and the turn-1 tool line."
+(ert-deftest tool-observation/next-turn-sees-the-call-and-its-result ()
+  "Turn 2's request carries turn 1's call as an assistant tool call and what
+it returned as the tool message answering it; no tool line and no note."
   (let ((target (generate-new-buffer "tool-observation-target")))
     (unwind-protect
         (progn
@@ -147,23 +190,24 @@
               (tool-observation--script (buffer-name target))
             (let ((view (smoke--open-chat)))
               (tool-observation--run view "read it")
-              (let ((session (tool-observation--session view)))
-                (tool-observation--run view "and now?")
-                (let ((prompt (tool-observation--prompt)))
-                  (should (string-match-p
-                           (concat (regexp-quote superchat-tape-tool-observation-note)
-                                   "\nUser: read it")
-                           prompt))
-                  (should (= 1 (tool-observation--count
-                                superchat-tape-tool-observation-note prompt)))
-                  (should (string-match-p "Tool: read_buffer(" prompt))
-                  (should (string-match-p "-> \\[ok\\]" prompt))
-                  (should (string-match-p "TO-TOKEN-8421" prompt))
-                  (should (tool-observation--tool-line prompt)))))))
+              (tool-observation--run view "and now?")
+              (let* ((messages (tool-observation--messages))
+                     (call (tool-observation--call-named messages "read_buffer"))
+                     (answer (and call (tool-observation--answer messages call))))
+                (should call)
+                (should answer)
+                (should (string-match-p "TO-TOKEN-8421" (tool-observation--text answer)))
+                (dolist (message messages)
+                  (should-not (string-match-p
+                               (regexp-quote superchat-tape-tool-observation-note)
+                               (tool-observation--text message)))
+                  (should-not (tool-observation--tool-line
+                               (tool-observation--text message))))))))
       (kill-buffer target))))
 
-(ert-deftest tool-observation/refusal-is-rendered-with-its-status ()
-  "A refused call renders with its recorded status, never `ok'."
+(ert-deftest tool-observation/refusal-is-sent-as-the-model-saw-it ()
+  "A refused call's tool message in a later turn carries the refusal the
+model received in its own Run, byte for byte, never a success."
   (tool-observation--fixture
       (list `(:tool-uses (("eval_elisp"
                            (expression . "(setq tool-observation-probe 'ran)"))))
@@ -172,17 +216,26 @@
     (let* ((superchat-approval-function (lambda (_request) nil))
            (view (smoke--open-chat)))
       (tool-observation--run view "try it")
-      (tool-observation--run view "and now?")
-      (let ((prompt (tool-observation--prompt)))
-        (should (string-match-p "Tool: eval_elisp(" prompt))
-        (should (string-match-p "-> \\[cancelled\\]" prompt))
-        (should (string-match-p "Tool call cancelled by user" prompt))
-        (should-not (string-match-p "Tool: eval_elisp(.*-> \\[ok\\]" prompt))))))
+      (let* ((in-run (tool-observation--messages))
+             (seen (tool-observation--answer
+                    in-run (tool-observation--call-named in-run "eval_elisp"))))
+        (should seen)
+        (should (string-match-p "Tool call cancelled by user"
+                                (tool-observation--text seen)))
+        (tool-observation--run view "and now?")
+        (let* ((messages (tool-observation--messages))
+               (call (tool-observation--call-named messages "eval_elisp"))
+               (answer (and call (tool-observation--answer messages call))))
+          (should call)
+          (should answer)
+          (should (equal (tool-observation--text seen)
+                         (tool-observation--text answer))))))))
 
 ;;;; Storage off: no line, the rows stay plain omissions
 
-(ert-deftest tool-observation/no-text-no-line ()
-  "Without stored text no pair exists: no line, no note, plain omissions."
+(ert-deftest tool-observation/no-text-no-earlier-call ()
+  "Without stored text no pair exists: no earlier call or tool message is
+sent, and the rows are plain omissions."
   (let ((target (generate-new-buffer "tool-observation-off")))
     (unwind-protect
         (progn
@@ -196,11 +249,11 @@
                      (requested (tool-observation--id session "tool.requested"))
                      (completed (tool-observation--id session "tool.completed")))
                 (tool-observation--run view "and now?")
-                (let ((prompt (tool-observation--prompt)))
-                  (should-not (string-match-p "Tool:" prompt))
-                  (should-not (string-match-p
-                               (regexp-quote superchat-tape-tool-observation-note)
-                               prompt)))
+                (let ((messages (tool-observation--messages)))
+                  (should-not (tool-observation--calls messages))
+                  (should-not (cl-find "tool" messages
+                                       :key (lambda (m) (alist-get 'role m))
+                                       :test #'equal)))
                 (let ((envelope
                        (superchat-view-assemble session :max-entries 50
                                                 :max-chars 6000)))
@@ -240,7 +293,8 @@
 ;;;; The budget omits the pair whole
 
 (ert-deftest tool-observation/budget-omits-the-pair-whole ()
-  "A budget too small for the pair leaves no partial line, reason budget."
+  "A budget too small for the pair sends neither the call nor its result,
+reason budget."
   (let ((target (generate-new-buffer "tool-observation-budget")))
     (unwind-protect
         (progn
@@ -262,7 +316,7 @@
                 ;; room for it, so selection stops at it (not oversized).
                 (let ((superchat-context-max-chars (+ (length line) 5)))
                   (tool-observation--run view "and now?"))
-                (should-not (string-match-p "Tool:" (tool-observation--prompt)))
+                (should-not (tool-observation--calls (tool-observation--messages)))
                 (let ((envelope
                        (superchat-view-assemble
                         session :max-entries 50
@@ -275,10 +329,10 @@
                   (should-not (tool-observation--represented-p envelope completed)))))))
       (kill-buffer target))))
 
-;;;; M1: the request evidence rebuilds the same line
+;;;; M1: the request evidence rebuilds the same call
 
-(ert-deftest tool-observation/request-evidence-rebuilds-the-line ()
-  "The rebuilt tool line is string-equal to the line in the prompt."
+(ert-deftest tool-observation/request-evidence-rebuilds-the-call ()
+  "The rebuilt call and tool message equal what the provider received."
   (let ((target (generate-new-buffer "tool-observation-evidence")))
     (unwind-protect
         (progn
@@ -294,15 +348,30 @@
                        (request-id (plist-get (plist-get (car (last lists)) :payload)
                                               :request-id))
                        (evidence (superchat-tape-request-evidence session request-id))
-                       (message (cl-find-if
-                                 (lambda (entry)
-                                   (equal "tool-observation" (plist-get entry :kind)))
-                                 (plist-get evidence :messages))))
+                       (rebuilt (plist-get evidence :messages))
+                       (rebuilt-call
+                        (car (plist-get (cl-find-if (lambda (m) (plist-get m :tool-calls))
+                                                    rebuilt)
+                                        :tool-calls)))
+                       (rebuilt-answer (cl-find "tool" rebuilt
+                                                :key (lambda (m) (plist-get m :kind))
+                                                :test #'equal))
+                       (messages (tool-observation--messages))
+                       (call (tool-observation--call-named messages "read_buffer"))
+                       (answer (and call (tool-observation--answer messages call))))
                   (should (eq 'reproduced (plist-get evidence :status)))
-                  (should message)
-                  (should (equal (tool-observation--tool-line
-                                  (tool-observation--prompt))
-                                 (plist-get message :content))))))))
+                  (should rebuilt-call)
+                  (should answer)
+                  (should (equal (alist-get 'id call) (plist-get rebuilt-call :id)))
+                  (should (equal "read_buffer" (plist-get rebuilt-call :name)))
+                  (should (equal (alist-get 'arguments (alist-get 'function call))
+                                 (plist-get rebuilt-call :arguments)))
+                  (should (equal (alist-get 'id call)
+                                 (plist-get rebuilt-answer :tool-call-id)))
+                  ;; llm.el's OpenAI serializer frames every tool result, live
+                  ;; or earlier, as "Result of tool call is TEXT".
+                  (should (string-suffix-p (plist-get rebuilt-answer :content)
+                                           (tool-observation--text answer))))))))
       (kill-buffer target))))
 
 (ert-deftest tool-observation/evidence-is-unknown-without-text ()

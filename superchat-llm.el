@@ -818,6 +818,9 @@ the slot, and a late answer must not bring anything back."
 (declare-function llm-chat-prompt-tools "llm" (prompt))
 (declare-function llm-chat-prompt-p "llm" (prompt))
 (declare-function llm-chat-prompt-interactions "llm" (prompt))
+(declare-function make-llm-chat-prompt-interaction "llm" (&rest args))
+(declare-function make-llm-chat-prompt-tool-result "llm" (&rest args))
+(declare-function make-llm-provider-utils-tool-use "llm-provider-utils" (&rest args))
 (declare-function llm-chat-prompt-interaction-role "llm" (interaction))
 (declare-function llm-chat-prompt-interaction-content "llm" (interaction))
 (declare-function llm-chat-prompt-interaction-tool-results "llm" (interaction))
@@ -1118,9 +1121,11 @@ exists to summarize."
 (defun superchat--llm-replace-prompt-context
     (prompt old-context new-context)
   "Replace OLD-CONTEXT in PROMPT's initial input with NEW-CONTEXT.
-Return non-nil when the provider prompt was rewritten."
+The earlier turns PROMPT leads with are not searched.  Return non-nil when
+the provider prompt was rewritten."
   (catch 'replaced
-    (dolist (interaction (llm-chat-prompt-interactions prompt))
+    (dolist (interaction (nthcdr (superchat--llm-history-count prompt)
+                                 (llm-chat-prompt-interactions prompt)))
       (let ((content (llm-chat-prompt-interaction-content interaction)))
         (cond
          ((stringp content)
@@ -1153,12 +1158,14 @@ Return non-nil when the provider prompt was rewritten."
   "Replace PROMPT's initial user input OLD-INPUT with NEW-INPUT once.
 
 Prefer an exact initial-user replacement so a retry can also rewrite an empty
-input.  Multipart input and assembled inputs which only contain OLD-INPUT use
-the established context replacement fallback.  This mutates only the private
-provider prompt retained by the active LLM invocation."
+input.  The earlier turns PROMPT leads with are skipped: one of them may carry
+the same text.  Multipart input and assembled inputs which only contain
+OLD-INPUT use the established context replacement fallback.  This mutates only
+the private provider prompt retained by the active LLM invocation."
   (or
    (catch 'replaced
-     (dolist (interaction (llm-chat-prompt-interactions prompt))
+     (dolist (interaction (nthcdr (superchat--llm-history-count prompt)
+                                  (llm-chat-prompt-interactions prompt)))
        (when (and (eq (llm-chat-prompt-interaction-role interaction) 'user)
                   (equal (llm-chat-prompt-interaction-content interaction)
                          old-input))
@@ -2232,6 +2239,85 @@ non-nil when a record was dropped."
             (aset prompt slot value)))
         t))))
 
+(defun superchat--llm-history-interactions (messages)
+  "Return MESSAGES, earlier turns in the provider-neutral form of
+`superchat-tape-history-messages', as llm.el interactions.
+Text messages become user or assistant interactions; an assistant message with
+calls becomes an assistant interaction carrying tool uses, and the tool
+messages that follow it one `tool-results' interaction, as llm.el records a
+live tool round."
+  (let (interactions results)
+    (cl-flet ((flush ()
+                (when results
+                  (push (make-llm-chat-prompt-interaction
+                         :role 'tool-results :tool-results (nreverse results))
+                        interactions)
+                  (setq results nil))))
+      (dolist (message messages)
+        (let ((kind (plist-get message :kind)))
+          (if (equal kind "tool")
+              (push (make-llm-chat-prompt-tool-result
+                     :call-id (plist-get message :tool-call-id)
+                     :tool-name (plist-get message :name)
+                     :result (plist-get message :content))
+                    results)
+            (flush)
+            (push
+             (if (plist-get message :tool-calls)
+                 (make-llm-chat-prompt-interaction
+                  :role 'assistant
+                  :content
+                  (mapcar (lambda (call)
+                            (make-llm-provider-utils-tool-use
+                             :id (plist-get call :id)
+                             :name (plist-get call :name)
+                             :args (json-parse-string
+                                    (plist-get call :arguments)
+                                    :object-type 'hash-table :array-type 'array
+                                    :null-object :null :false-object :false)))
+                          (plist-get message :tool-calls)))
+               (make-llm-chat-prompt-interaction
+                :role (if (equal kind "assistant") 'assistant 'user)
+                :content (plist-get message :content)))
+             interactions))))
+      (flush))
+    (nreverse interactions)))
+
+(defvar superchat--llm-history-counts
+  (make-hash-table :test #'eq :weakness 'key)
+  "Provider prompts mapped to how many leading interactions are earlier turns.")
+
+(defun superchat--llm-history-count (prompt)
+  "Return how many of PROMPT's leading interactions are earlier turns."
+  (gethash prompt superchat--llm-history-counts 0))
+
+(defun superchat--llm-set-history (prompt messages)
+  "Make MESSAGES, earlier turns, PROMPT's leading interactions; return PROMPT.
+The earlier turns PROMPT already leads with are replaced and the rest is kept,
+so a Run resumed after compaction sends the new View's turns and its own.
+Context contract, amendment 2026-09-25: earlier turns are real messages, not a
+transcript inside the user message."
+  (let* ((history (superchat--llm-history-interactions messages))
+         (slot (cl-struct-slot-offset 'llm-chat-prompt 'interactions))
+         (value (append history
+                        (nthcdr (superchat--llm-history-count prompt)
+                                (llm-chat-prompt-interactions prompt)))))
+    (if (eq (cl-struct-sequence-type 'llm-chat-prompt) 'list)
+        (setf (nth slot prompt) value)
+      (aset prompt slot value))
+    (puthash prompt (length history) superchat--llm-history-counts)
+    prompt))
+
+(defun superchat--llm-replace-recovered-context (prompt old-context new-context)
+  "Put NEW-CONTEXT, rebuilt after compaction, in PROMPT; non-nil on success.
+NEW-CONTEXT is the Context View envelope assembled after compaction, whose
+`:messages' replace PROMPT's earlier turns (context contract, amendment
+2026-09-25), or a text replacing OLD-CONTEXT inside PROMPT's input."
+  (if (stringp new-context)
+      (superchat--llm-replace-prompt-context prompt old-context new-context)
+    (superchat--llm-set-history prompt (plist-get new-context :messages))
+    t))
+
 (defun superchat--image-attachment-info (file)
   "Return supported image metadata for FILE, or nil."
   (when-let* ((mime-type
@@ -2623,8 +2709,11 @@ requests until it receives text, bounded by
                      (and (plist-get streaming-capabilities :streaming)
                           (plist-get streaming-capabilities :streaming-tool-use))
                    (plist-get streaming-capabilities :streaming))))
-           (real-prompt (superchat--build-llm-prompt
-                         prompt tools system-prompt preset context-files))
+           (real-prompt (superchat--llm-set-history
+                         (superchat--build-llm-prompt
+                          prompt tools system-prompt preset context-files)
+                         (and (functionp runtime-observer)
+                              (funcall runtime-observer 'history-messages nil))))
            ;; Runtime has already folded the initial request.  These lexical
            ;; values track the latest provider-facing inputs so an async retry
            ;; can apply its own Scope-correct fold without rebuilding or
@@ -4000,8 +4089,10 @@ requests until it receives text, bounded by
                                   (setq context-recovery-active nil)
                                   (when (and (not completed)
                                              (funcall run-active-p))
-                                    (if (not (and (stringp new-context)
-                                                  (not (string-empty-p new-context))))
+                                    (if (not (or (and (stringp new-context)
+                                                      (not (string-empty-p new-context)))
+                                                 (and (consp new-context)
+                                                      (plist-member new-context :messages))))
                                         (funcall
                                          finalize
                                          "[Context recovery could not rebuild the provider prompt]"
@@ -4016,10 +4107,13 @@ requests until it receives text, bounded by
                                       ;; `delivery.failed' warning on that Run while
                                       ;; this Run never finalized at all.
                                       (condition-case rebuild-err
-                                          (if (superchat--llm-replace-prompt-context
+                                          (if (superchat--llm-replace-recovered-context
                                                real-prompt context-prefix new-context)
                                               (progn
-                                                (setq context-prefix new-context
+                                                (setq context-prefix
+                                                      (if (stringp new-context)
+                                                          new-context
+                                                        (plist-get new-context :prompt))
                                                       response-parts '()
                                                       cumulative ""
                                                       reasoning-cumulative "")

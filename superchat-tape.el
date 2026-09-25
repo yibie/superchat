@@ -1137,6 +1137,111 @@ newlines inside either text become the two characters `\\n'."
           (superchat-tape--tool-observation-text
            result-text result-cut result-chars)))
 
+;;; ── Earlier turns as messages (context contract, amendment 2026-09-25) ─────
+;;
+;; The Context View's selected items reach the provider as messages, not as a
+;; transcript inside the user message.  This one builder serves the request
+;; and its evidence rebuild, so the two cannot disagree.
+
+(defconst superchat-tape-summary-message-prefix
+  "[Summary of the earlier conversation, written by a model] "
+  "Framing of a compaction Anchor sent as a user message.")
+
+(defconst superchat-tape-system-note-prefix "[System note] "
+  "Framing of a raw system fact sent as a user message.")
+
+(declare-function superchat-view-call-arguments "superchat-tape-view"
+                  (tool-name text cut-chars))
+
+(defun superchat-tape--history-cut-text (text cut chars)
+  "Return TEXT, ending with ` … [cut: N more characters]' when CUT."
+  (let ((body (or text "")))
+    (if (and cut (integerp chars) (> chars (length body)))
+        (concat body (format " … [cut: %d more characters]" (- chars (length body))))
+      body)))
+
+(defun superchat-tape-step-key-function (session-id)
+  "Return a function (RUN-ID REQUESTED-ID) naming the Step a tool call is in.
+The key is RUN-ID with the storage id of that Run's last `step.started' row
+stored before REQUESTED-ID, the model reply that made the call; nil when none."
+  (let ((starts (cl-loop for event in (superchat-tape-replay-events session-id)
+                         when (equal "step.started" (plist-get event :type))
+                         collect (cons (plist-get event :run-id)
+                                       (plist-get event :storage-id)))))
+    (lambda (run-id requested-id)
+      (let (best)
+        (dolist (start starts)
+          (when (and (equal (car start) run-id)
+                     (integerp (cdr start)) (integerp requested-id)
+                     (< (cdr start) requested-id)
+                     (or (null best) (> (cdr start) best)))
+            (setq best (cdr start))))
+        (and best (cons run-id best))))))
+
+(defun superchat-tape--history-call (item)
+  "Return (CALL . TOOL-MESSAGE) for the tool-observation ITEM."
+  (let* ((id (plist-get item :execution-id))
+         (name (plist-get item :tool-name))
+         (arguments (superchat-view-call-arguments
+                     name (plist-get item :arguments-text)
+                     (and (plist-get item :arguments-cut)
+                          (plist-get item :arguments-chars))))
+         (result (superchat-tape--history-cut-text
+                  (plist-get item :result-text) (plist-get item :result-cut)
+                  (plist-get item :result-chars)))
+         (note (plist-get arguments :note)))
+    (cons (list :id id :name name :arguments (plist-get arguments :arguments))
+          (list :kind "tool" :tool-call-id id :name name
+                :content (if note (concat note "\n" result) result)))))
+
+(defun superchat-tape-history-messages (items step-of)
+  "Return ITEMS, the Context View's selection, as provider-neutral messages.
+ITEMS are normalized continuity items in Tape order.  STEP-OF, a function
+of a tool item's run id and requested storage id, keys the model reply that
+made the call: consecutive tool items with one key become one assistant
+message carrying their calls, followed by one tool message per call.  A
+message is `(:kind \"user\"|\"assistant\" :content TEXT)', `(:kind
+\"assistant\" :tool-calls ((:id ID :name NAME :arguments JSON) ...))' or
+`(:kind \"tool\" :tool-call-id ID :name NAME :content TEXT)'.  A compaction
+Anchor summarizes the oldest part of the history, so its message comes first,
+where the span it replaces began, although its row is stored after that span."
+  (let* ((items (append items nil))
+         (anchor-p (lambda (item) (eq (plist-get item :class) 'model-interpretation)))
+         (items (append (cl-remove-if-not anchor-p items) (cl-remove-if anchor-p items)))
+         (messages nil) (calls nil) (results nil) (key nil))
+    (cl-flet ((flush ()
+                (when calls
+                  (push (list :kind "assistant" :tool-calls (nreverse calls)) messages)
+                  (dolist (result (nreverse results)) (push result messages))
+                  (setq calls nil results nil key nil))))
+      (dolist (item items)
+        (pcase (plist-get item :class)
+          ('tool-observation
+           (let ((this (funcall step-of (plist-get item :run-id)
+                                (aref (plist-get item :source-ids) 0)))
+                 (pair (superchat-tape--history-call item)))
+             (when (or (null this) (not (equal this key))) (flush))
+             (setq key this)
+             (push (car pair) calls)
+             (push (cdr pair) results)))
+          ('model-interpretation
+           (flush)
+           (push (list :kind "user"
+                       :content (concat superchat-tape-summary-message-prefix
+                                        (plist-get item :content)))
+                 messages))
+          (_
+           (flush)
+           (let ((kind (plist-get item :kind)))
+             (push (if (equal kind "system")
+                       (list :kind "user"
+                             :content (concat superchat-tape-system-note-prefix
+                                              (plist-get item :content)))
+                     (list :kind kind :content (plist-get item :content)))
+                   messages)))))
+      (flush))
+    (nreverse messages)))
+
 ;;; ── Request evidence (M1): what the provider was actually sent ─────────────
 ;;
 ;; M1's acceptance requires an independent reconstruction of the
@@ -1152,7 +1257,7 @@ newlines inside either text become the two characters `\\n'."
   "Schema version of the `request.header' payload.")
 (defconst superchat-tape-request-message-list-schema 1
   "Schema version of the `request.message-list' payload.")
-(defconst superchat-tape-request-template-version 1
+(defconst superchat-tape-request-template-version 2
   "Version of the continuity rendering the message list was composed under.
 A reconstruction that does not know this version reports `unknown' rather than
 comparing against the renderer it happens to have.")
@@ -1384,6 +1489,71 @@ missing, a missing `:result-text', or differing execution ids is `:unknown'."
                  (plist-get outcome-payload :result-truncated)
                  (plist-get outcome-payload :result-chars))))))))
 
+(defun superchat-tape--request-tool-observation-item (item row-at)
+  "Rebuild ITEM's tool observation as a continuity item, or `:unknown'.
+The same rows and checks as `superchat-tape--request-tool-observation-message',
+returned in the item form `superchat-tape-history-messages' takes."
+  (let* ((source-ids (append (plist-get item :source-ids) nil))
+         (requested-row (and (nth 0 source-ids) (funcall row-at (nth 0 source-ids))))
+         (outcome-row (and (nth 1 source-ids) (funcall row-at (nth 1 source-ids)))))
+    (if (or (null requested-row) (null outcome-row))
+        :unknown
+      (let* ((requested-event (superchat-tape--row-event requested-row))
+             (outcome-event (superchat-tape--row-event outcome-row))
+             (requested (and requested-event (plist-get requested-event :payload)))
+             (outcome (and outcome-event (plist-get outcome-event :payload))))
+        (if (or (not (stringp (plist-get outcome :result-text)))
+                (not (member (plist-get outcome-event :type)
+                             '("tool.completed" "tool.failed")))
+                (not (equal (plist-get requested :execution-id)
+                            (plist-get outcome :execution-id))))
+            :unknown
+          (list :class 'tool-observation
+                :source-ids (vconcat source-ids)
+                :tool-name (plist-get requested :tool-name)
+                :execution-id (plist-get requested :execution-id)
+                :run-id (plist-get requested-event :run-id)
+                :arguments-text (plist-get requested :arguments-text)
+                :arguments-cut (plist-get requested :arguments-truncated)
+                :arguments-chars (plist-get requested :arguments-chars)
+                :result-text (plist-get outcome :result-text)
+                :result-cut (plist-get outcome :result-truncated)
+                :result-chars (plist-get outcome :result-chars)))))))
+
+(defun superchat-tape--request-history-item (item row-at)
+  "Rebuild the history ITEM of a version 2 message list, or `:unknown'."
+  (cond
+   ((superchat-tape--tool-observation-message-p item)
+    (superchat-tape--request-tool-observation-item item row-at))
+   (t
+    (let ((row (funcall row-at (plist-get item :storage-id))))
+      (cond
+       ((null row) :unknown)
+       ((eq (plist-get item :class) 'model-interpretation)
+        (list :class 'model-interpretation :content (nth 3 row)))
+       ((and (equal "inject" (nth 1 row)) (equal "system" (nth 2 row)))
+        (let ((text (superchat-tape--request-admitted-material-text row)))
+          (if (stringp text)
+              (list :class 'raw-fact :kind "user"
+                    :content (superchat-tape-injected-material-line text))
+            :unknown)))
+       (t (list :class 'raw-fact :kind (nth 2 row) :content (nth 3 row))))))))
+
+(defun superchat-tape--request-messages-v2 (session-id items row-at)
+  "Rebuild a version 2 message list's ITEMS as messages, or `:unknown'.
+History items become the messages the provider received, through the one
+builder `superchat-tape-history-messages'; Step material follows as before."
+  (let* ((material-p (lambda (item) (equal "step-material" (plist-get item :kind))))
+         (history (mapcar (lambda (item) (superchat-tape--request-history-item item row-at))
+                          (cl-remove-if material-p items)))
+         (material (mapcar (lambda (item) (superchat-tape--request-material-message item row-at))
+                           (cl-remove-if-not material-p items))))
+    (if (or (memq :unknown history) (memq :unknown material))
+        :unknown
+      (append (superchat-tape-history-messages
+               history (superchat-tape-step-key-function session-id))
+              material))))
+
 (defun superchat-tape-request-evidence (session-id request-id &optional step)
   "Rebuild REQUEST-ID's provider request from the Tape, or report why not.
 Returns `(:status reproduced :system S :messages M :tools T)' when the header
@@ -1431,6 +1601,19 @@ This is the check the accepted request-header decision requires; a recorded
          ;; bounded away by `superchat-tape--bound-payload' keeps only
          ;; `:omitted'/`:size'/`:content_hash', so the marker separates
          ;; "recorded with no tools" from "not recorded at all".
+         ((and (or (plist-get header-payload :schema)
+                   (plist-get header-payload :template-version))
+               (equal 2 (plist-get payload :template-version)))
+          (let ((messages (superchat-tape--request-messages-v2 session-id items row-at)))
+            (if (eq messages :unknown)
+                (list :status 'unknown
+                      :reason "a named storage id or tool observation does not resolve")
+              (list :status 'reproduced
+                    :system (plist-get header-payload :system)
+                    :tools (plist-get header-payload :tools)
+                    :messages messages
+                    :receipt (plist-get payload :receipt)
+                    :template-version 2))))
          ((or (plist-get header-payload :schema)
               (plist-get header-payload :template-version))
           (let* ((rows (mapcar (lambda (item)

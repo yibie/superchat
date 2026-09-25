@@ -344,7 +344,11 @@ runs in another buffer, not the View that owns the Run."
                                                       (not (string-empty-p context))
                                                       (superchat-compact--context-usable-p
                                                        envelope))
-                                                 (funcall resume context)
+                                                 ;; The whole View: its messages
+                                                 ;; replace the request's earlier
+                                                 ;; turns (context contract,
+                                                 ;; amendment 2026-09-25).
+                                                 (funcall resume envelope)
                                                (let ((failure
                                                       "[Compaction produced no usable Context View]"))
                                                  (when (fboundp 'superchat--insert-system-message)

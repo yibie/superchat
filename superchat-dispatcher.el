@@ -1048,9 +1048,9 @@ active-Run match (C12/C12b) depends on."
            :clean-input clean-input
            :workspace-id (plist-get composed :workspace-id)
            :workspace-root (plist-get composed :workspace-root)
-           ;; Prepared context is selected after checking whether the final
-           ;; body still matches its preview.  Do not pass stale history
-           ;; evidence through the legacy extras when the user edited it.
+           ;; A prepared (inspected) request's selection is the one its plan
+           ;; saved, read by `superchat-pipeline--context-envelope'; the
+           ;; legacy extra carries none for it.
            :context-envelope
            (unless (plist-get composed :chat-prepared-context)
              (plist-get composed :context-envelope))

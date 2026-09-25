@@ -3,7 +3,9 @@
 ;;; Commentary:
 ;; Actual Runtime/SQLite/provider regression for display summaries replacing
 ;; user and assistant material.  Canonical smoke fixture; no real model and
-;; no protected regression-set loading.
+;; no protected regression-set loading.  Since the context contract's
+;; amendment of 2026-09-25 an earlier turn reaches the provider as its own
+;; user and assistant messages, so the raw material is checked there.
 ;; Run: -l scripts/m5-history-material-regression.el
 ;;      --eval '(ert-run-tests-batch-and-exit "^m5-history-material/")'
 
@@ -45,15 +47,17 @@
            (cl-letf (((symbol-function 'smoke--fake-network)
                       (lambda (mode provider prompt partial response error multi)
                         (push (list :system (or (llm-chat-prompt-context prompt) "")
-                                    :users
-                                    (cl-loop
-                                     for item in (llm-chat-prompt-interactions prompt)
-                                     when (equal "user"
-                                                 (format "%s" (llm-chat-prompt-interaction-role item)))
-                                     collect (llm-chat-prompt-interaction-content item)))
+                                    :users (m5hm--role-contents prompt "user")
+                                    :assistants (m5hm--role-contents prompt "assistant"))
                               m5hm--requests)
                         (funcall network mode provider prompt partial response error multi))))
              ,@body))))))
+
+(defun m5hm--role-contents (prompt role)
+  "Return the contents of PROMPT's interactions with ROLE, in order."
+  (cl-loop for item in (llm-chat-prompt-interactions prompt)
+           when (equal role (format "%s" (llm-chat-prompt-interaction-role item)))
+           collect (llm-chat-prompt-interaction-content item)))
 
 (defun m5hm--settle (run)
   "Wait for actual RUN completion and its durable Turn seal."
@@ -83,6 +87,11 @@
   "Return user-role text from the actual second provider request."
   (should (= 2 (length m5hm--requests)))
   (mapconcat #'identity (plist-get (car m5hm--requests) :users) "\n"))
+
+(defun m5hm--second-assistants ()
+  "Return the assistant messages of the actual second provider request."
+  (should (= 2 (length m5hm--requests)))
+  (plist-get (car m5hm--requests) :assistants))
 
 (defun m5hm--contains (needle text)
   "Match literal NEEDLE in TEXT, preserving whitespace and raw Markdown."
@@ -126,7 +135,8 @@
                                   :content))))
       (let ((second (m5hm--settle (smoke--send view "M5HM_UNDO"))))
         (should-not (equal first second))
-        (should (m5hm--contains m5hm--answer (m5hm--second-user-text)))
+        ;; The earlier answer is its own assistant message, byte for byte.
+        (should (member m5hm--answer (m5hm--second-assistants)))
         (should (= 2 (length (m5hm--rows session "assistant"))))
         (let ((responses
                (cl-remove-if-not
@@ -162,7 +172,7 @@
         (with-current-buffer view (setq superchat--conversation-history nil))
         (should (= row-id (caar (m5hm--rows session "assistant"))))
         (m5hm--settle (smoke--send view "M5HM_AFTER_REOPEN"))
-        (should (m5hm--contains m5hm--answer (m5hm--second-user-text)))
+        (should (member m5hm--answer (m5hm--second-assistants)))
         (should (equal m5hm--answer (nth 3 (car (m5hm--rows session "assistant")))))))))
 
 (ert-deftest m5-history-material/budget-omits-whole-item-and-larger-budget-retains-it ()
@@ -193,8 +203,9 @@
           (should (eq 'raw-fact (plist-get item :class)))
           (should-not (plist-get item :lossy)))))))
 
-(ert-deftest m5-history-material/inspector-shows-full-history-and-honors-deletion ()
-  "The inspector gets the full material; Send preserves an explicit deletion."
+(ert-deftest m5-history-material/inspector-shows-full-history-and-sends-the-edit ()
+  "The inspector shows the full material read-only; Send keeps the edited body
+exactly and still sends the earlier turn, which was never part of it."
   (m5hm--fixture (list (list :text m5hm--answer) '(:text "done"))
     (let ((view (smoke--open-chat)))
       (m5hm--settle (smoke--send view "M5HM_INSPECT_APPLY"))
@@ -204,6 +215,11 @@
           (should
            (m5hm--contains
             m5hm--answer
+            (buffer-substring-no-properties (point-min)
+                                            superchat--request-prompt-start)))
+          (should-not
+           (m5hm--contains
+            "M5HM_FULL_ANSWER_START"
             (buffer-substring-no-properties superchat--request-prompt-start
                                             superchat--request-prompt-end)))
           (let ((inhibit-read-only t))
@@ -216,7 +232,8 @@
                    (and (= 2 (length m5hm--requests))
                         (null (superchat-runtime-active-runs))))
                  15))
-        (should (equal (list edited) (plist-get (car m5hm--requests) :users)))))))
+        (should (equal edited (car (last (plist-get (car m5hm--requests) :users)))))
+        (should (member m5hm--answer (plist-get (car m5hm--requests) :assistants)))))))
 
 (ert-deftest m5-history-material/structural-event-summary-remains-bounded ()
   "Preserving conversation facts must not unbound tool/audit event summaries."

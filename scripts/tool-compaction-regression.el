@@ -9,6 +9,9 @@
 ;; the summarizer's input carries the same Tool: line (note first), the new
 ;; Anchor's sources include both rows of a summarized pair, expansion renders
 ;; one entry per pair, and a pair left in the recent window is untouched.
+;; Since the amendment of 2026-09-25 (earlier turns as messages) the next
+;; turn receives the retained pair as a call and its tool message, while the
+;; summarizer's own request keeps the Tool: line.
 ;;
 ;; This standalone suite reuses canonical smoke helpers as a library.  It
 ;; neither loads nor modifies the leader-owned M3/M5 sets.  All model calls
@@ -27,6 +30,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
+(require 'json)
 
 (when (getenv "SMOKE_REAL")
   (error "Tool compaction regression tests are offline; unset SMOKE_REAL"))
@@ -43,6 +47,18 @@
       ert-batch-print-length 16
       ert-batch-backtrace-right-margin 160)
 
+(defvar tool-compaction--wires nil
+  "Provider requests of the current test, newest first, as wire messages.")
+
+(defun tool-compaction--wire-of (provider prompt)
+  "Return PROMPT as the messages llm.el sends to an OpenAI-style PROVIDER."
+  (let* ((request (llm-provider-chat-request provider prompt nil))
+         (messages (or (plist-get request :messages)
+                       (alist-get 'messages request))))
+    (json-parse-string (json-encode messages)
+                       :object-type 'alist :array-type 'list
+                       :null-object nil :false-object nil)))
+
 (defmacro tool-compaction--fixture (script &rest body)
   "Run BODY with SCRIPT through the canonical isolated product fixture."
   (declare (indent 1) (debug t))
@@ -51,8 +67,17 @@
          (superchat-event-faults nil)
          (superchat-llm-reasoning nil)
          (superchat-llm-tool-names superchat-llm-default-tool-names)
-         (superchat-llm-tools-list nil))
-     (smoke--with-fixture ,script ,@body)))
+         (superchat-llm-tools-list nil)
+         (tool-compaction--wires nil))
+     (smoke--with-fixture ,script
+       (let ((network (symbol-function 'smoke--fake-network)))
+         (cl-letf (((symbol-function 'smoke--fake-network)
+                    (lambda (mode provider prompt partial response error multi)
+                      (push (tool-compaction--wire-of provider prompt)
+                            tool-compaction--wires)
+                      (funcall network mode provider prompt
+                               partial response error multi))))
+           ,@body)))))
 
 (defun tool-compaction--script (name-a name-b)
   "Script: a tool pair on NAME-A, three answers, a pair on NAME-B, summary."
@@ -195,11 +220,12 @@ is left out."
       (kill-buffer a)
       (kill-buffer b))))
 
-;;;; After compaction: summary, no double line, recent pair still visible
+;;;; After compaction: summary, no double call, recent pair still visible
 
-(ert-deftest tool-compaction/next-turn-has-no-double-line ()
-  "The next turn shows the Anchor summary and no line for the summarized
-pair, while the retained recent pair still renders."
+(ert-deftest tool-compaction/next-turn-has-no-double-call ()
+  "The next turn's request carries the Anchor summary and nothing of the
+summarized pair, while the retained recent pair still arrives, once, as a call
+and the tool message answering it."
   (let ((a (generate-new-buffer "tool-compaction-a"))
         (b (generate-new-buffer "tool-compaction-b")))
     (unwind-protect
@@ -212,11 +238,27 @@ pair, while the retained recent pair still renders."
                    (superchat-context-max-chars 400))
               (tool-compaction--prepare view t)
               (tool-compaction--run view "after compaction")
-              (let ((prompt (tool-compaction--prompt)))
-                (should (string-match-p "SUMMARY-T3" prompt))
-                (should-not (string-match-p "T3-TOKEN-A" prompt))
-                (should (tool-compaction--tool-line prompt "T3-TOKEN-B"))
-                (should (= 1 (tool-compaction--count "Tool: read_buffer(" prompt)))))))
+              (let* ((wire (car tool-compaction--wires))
+                     (texts (mapcar (lambda (message)
+                                      (let ((content (alist-get 'content message)))
+                                        (if (stringp content) content "")))
+                                    wire))
+                     (calls (cl-loop for message in wire
+                                     append (alist-get 'tool_calls message)))
+                     (answers (cl-remove-if-not
+                               (lambda (message)
+                                 (equal "tool" (alist-get 'role message)))
+                               wire)))
+                (should (cl-some (lambda (text) (string-match-p "SUMMARY-T3" text))
+                                 texts))
+                (should-not (cl-some (lambda (text) (string-match-p "T3-TOKEN-A" text))
+                                     texts))
+                (should (= 1 (length calls)))
+                (should (= 1 (length answers)))
+                (should (equal (alist-get 'id (car calls))
+                               (alist-get 'tool_call_id (car answers))))
+                (should (string-match-p "T3-TOKEN-B"
+                                        (alist-get 'content (car answers))))))))
       (kill-buffer a)
       (kill-buffer b))))
 

@@ -144,7 +144,9 @@
         (should (eq 'reproduced (plist-get evidence :status)))
         (should (cl-find '(:kind "user" :content "[Injected material] E1-HISTORY")
                          (plist-get evidence :messages) :test #'equal))
-        (should (string-match-p "User: \\[Injected material\\] E1-HISTORY"
+        ;; Its own user message (context contract, amendment 2026-09-25):
+        ;; llm.el's text form shows each interaction as "User: Content: ...".
+        (should (string-match-p "User: Content: \\[Injected material\\] E1-HISTORY"
                                 (plist-get (car smoke--requests) :prompt-text)))))))
 
 (ert-deftest step-material/missing-or-omitted-row-is-unknown ()
