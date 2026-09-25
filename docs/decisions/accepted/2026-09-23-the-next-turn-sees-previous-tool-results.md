@@ -2,6 +2,8 @@
 
 Status: accepted (user, 2026-09-23: "按照你的建议", after the codex review). Built first; the finish check follows. The mechanism below is settled; its exact contract is written into `docs/design/context-continuity-contract-v0.md` and the Tape event specs before code.
 
+Superseded in part (2026-09-25): item 2's rendering — one `Tool:` line per call inside the history text — is replaced by [earlier turns reach the model as real messages](2026-09-25-earlier-turns-as-real-tool-messages.md); what is stored and selected stays as decided here.
+
 ## Problem
 
 A new turn's prompt carries each earlier turn's user message and final assistant text, plus admitted injections and compaction Anchors, but never tool rows (`superchat-view--derive-message`, `superchat-tape-view.el:714-733`; tool rows are never messages). Whatever the model observed through tools survives only if its final text restated it. In `runs/m8-attended-act-deepseek-01` the apply turn observed that the key was bound to `ignore`, ended on a half sentence, and the undo turn, not knowing the original value, left the key unbound.

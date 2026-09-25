@@ -766,3 +766,19 @@ Decision: [request evidence includes Step material](../decisions/accepted/2026-0
 **Request evidence (M1).** Each attempt's `request.message-list` names the history items, then every material the Run's Steps admitted so far, in insertion order: `(:kind "step-material" :storage-id ATTACHMENT-ROW-ID :form "prompt-block"|"message")`. `superchat-tape-request-evidence` rebuilds it from the `attachment.added` payload's text: `(:kind "user" :content TEXT)` for `message`, `(:kind "user" :content "[Injected material] TEXT" :form "prompt-block")` for `prompt-block`. A history item that names an admitted material row rebuilds as `(:kind "user" :content "[Injected material] TEXT")`, the line the fragment carried, not the row's summary column. The rebuild reports `unknown` when the row is missing, is not an `attachment.added` row written by Runtime (schema 1, actor `runtime`, a string `:text`, a `:source`), or its payload was omitted; it never falls back to the row's content.
 
 **Not changed.** The current prompt and the Run's own tool calls are not items (M1's scope). All attempts of one Run share a request id and are told apart by the Step in each list's `:execution`; each attempt's list is checked by `prompt-reconstructable` when it is recorded, and `superchat-tape-request-evidence SESSION REQUEST-ID &optional STEP` rebuilds the attempt of STEP, or the last one recorded when STEP is omitted; a STEP with no recorded list is `unknown`.
+
+## Amendment 2026-09-25: earlier turns as messages
+
+Decision: [earlier turns reach the model as real messages](../decisions/accepted/2026-09-25-earlier-turns-as-real-tool-messages.md). It replaces, for provider requests, section 10's rendering and the tool-observation *Rendering* of the 2026-09-23 amendment; selection, accounting, disclosure and recall are unchanged.
+
+**What a provider request carries.** The selected items become messages placed before the current user message, in Tape order: a raw user item a user message, a raw assistant item an assistant message, a selected compact Anchor one user message first saying it is a model's summary of the earlier conversation, an admitted Step-material row a user message `[Injected material] TEXT`. The tool-observation items of one Step become one assistant message whose calls are those items in order, followed by one tool message per call. The disclosure header, the body's role labels and the tool-observation note are not sent; `:prompt` keeps the canonical text rendering for accounting, the inspector's summary and compaction's input.
+
+**A call.** Its wire id is the call's `:execution-id`, which both rows carry and the tool-observation item gains as `:execution-id`; it is on the call and on its tool message. Its arguments are a JSON object keyed by parameter name: the stored `:arguments-text` when it reads as a complete object; a positional array named by the tool's current parameter list when it reads as a complete array and the tool is defined; otherwise empty, and the tool message begins with `(Arguments not kept in full: TEXT)` (TEXT the stored text with its cut mark, or `none`). The tool message carries `:result-text`, a cut text ending with ` … [cut: N more characters]`.
+
+**Tape.** A `tool.requested` row written after this amendment stores `:arguments-text` as a JSON object keyed by the tool's parameter names at the time of the call; readers accept the earlier positional array too.
+
+**Accounting.** An item costs its canonical rendered line, as before, so a budget selects the same items in both forms.
+
+**Request evidence (M1).** `request.message-list` names the same items; `superchat-tape-request-evidence` rebuilds them as the messages above, and `prompt-reconstructable` compares messages.
+
+**Not changed.** Compaction's own summarizing request keeps the canonical text rendering of the span it summarizes.
