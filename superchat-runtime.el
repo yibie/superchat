@@ -3707,6 +3707,21 @@ Absent options preserve legacy behavior; result delivery retains three args."
                       ;; form `superchat-tape-history-messages' returns.
                       (and (listp context-envelope)
                            (copy-tree (plist-get context-envelope :messages))))
+                     ('context-envelope-replaced
+                      ;; Compaction resumed this Run with the View rebuilt
+                      ;; after it (context contract, amendment 2026-09-25,
+                      ;; Recovery).  Its selection becomes the Run's, so the
+                      ;; next attempts' evidence and earlier-turn messages
+                      ;; name what the provider receives; keys the View does
+                      ;; not produce stay as they were.
+                      (when (listp value)
+                        (let ((next (copy-tree context-envelope t))
+                              (rest value))
+                          (while rest
+                            (setq next (plist-put next (car rest)
+                                                  (copy-tree (cadr rest) t))
+                                  rest (cddr rest)))
+                          (setq context-envelope next))))
                      ('request-message-items
                       (append
                        (append (superchat-runtime--envelope-items context-envelope)

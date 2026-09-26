@@ -254,15 +254,37 @@ present; recovery compaction with a target model derives its own budget."
          (and turn (superchat-turn-prompt turn))
          target-model))))
 
-(defun superchat-compact--context-envelope (session-id)
-  "Return SESSION-ID's current bounded Context View envelope."
-  (superchat-service-call nil 'session 'assemble-view
-   session-id
-   :max-entries (and (boundp 'superchat-context-message-count)
-                     superchat-context-message-count)
-   :max-chars (superchat-compact--context-budget)
-   :expanded-anchor-ids
-   (vconcat superchat--expanded-compaction-anchor-ids)))
+(defun superchat-compact--run-storage-ids (session-id run-id)
+  "Return the storage ids of the rows RUN-ID wrote in SESSION-ID."
+  (and (stringp run-id)
+       (delq nil
+             (mapcar (lambda (event)
+                       (and (equal run-id (plist-get event :run-id))
+                            (plist-get event :storage-id)))
+                     (superchat-service-call nil 'tape 'replay session-id)))))
+
+(defun superchat-compact--context-envelope (session-id &optional run-id)
+  "Return SESSION-ID's current bounded Context View envelope.
+With RUN-ID, the View is rebuilt to resume that Run: it leaves out the rows
+the Run wrote -- its question, its tool calls, its admitted material --
+which the resumed request carries as the current Turn's own messages, as
+well as the rows the Session replaced, like the View built at a Turn's
+start (context contract, amendment 2026-09-25, Recovery).  A failed read
+of either signals; the View is never assembled without its exclusions."
+  (apply #'superchat-service-call nil 'session 'assemble-view
+         session-id
+         :max-entries (and (boundp 'superchat-context-message-count)
+                           superchat-context-message-count)
+         :max-chars (superchat-compact--context-budget)
+         :expanded-anchor-ids
+         (vconcat superchat--expanded-compaction-anchor-ids)
+         (and run-id
+              (list :excluded-storage-ids
+                    (delete-dups
+                     (append
+                      (superchat-service-call nil 'session 'superseded-ids
+                                              session-id)
+                      (superchat-compact--run-storage-ids session-id run-id)))))))
 
 (defun superchat-compact--context-usable-p (envelope)
   "Return non-nil when ENVELOPE contains substantive context material."
@@ -338,7 +360,8 @@ runs in another buffer, not the View that owns the Run."
                                                 (equal session-id superchat--session-id)))
                                          (with-current-buffer buffer
                                            (let* ((envelope (superchat-compact--context-envelope
-                                                             session-id))
+                                                             session-id
+                                                             (plist-get details :run-id)))
                                                   (context (plist-get envelope :prompt)))
                                              (if (and (stringp context)
                                                       (not (string-empty-p context))

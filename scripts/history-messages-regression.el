@@ -370,8 +370,8 @@ the span to summarize, tool lines included, and no earlier-turn messages."
   "When the provider refuses a request as too long, compaction resumes the Run:
 the resumed request starts with the summary instead of the earlier turns it
 replaced, still ends with the current question, and the Run completes.
-\(That the View rebuilt after compaction also holds the current question is an
-older, separate issue: 2026-09-25-a-recovered-request-repeats-the-question.)"
+\(That the question is sent once, and the system text kept, is pinned in
+scripts/context-recovery-regression.el.)"
   (hm--fixture (append (butlast (hm--compaction-script) 2)
                        (list '(:error (llm-context-length-exceeded
                                        . "context length exceeded"))
@@ -415,6 +415,23 @@ message, never an earlier user message with the same text."
     (should (equal '("HM-SAME" "HM-EARLIER-ANSWER" "HM-NEW")
                    (mapcar #'llm-chat-prompt-interaction-content
                            (llm-chat-prompt-interactions prompt))))))
+
+(ert-deftest history-messages/a-later-rewrite-still-skips-earlier-turns ()
+  "After a first request has put the system text at the front of the list, a
+rewrite before a later attempt still replaces the current user message, not
+an earlier one with the same text."
+  (let ((prompt (llm-make-chat-prompt "HM-SAME" :context "HM-SYSTEM"))
+        (provider (make-llm-openai-compatible :url "http://127.0.0.1:9/v1"
+                                              :chat-model "hm-model")))
+    (superchat--llm-set-history prompt (list (list :kind "user" :content "HM-SAME")))
+    ;; What building the first request does to the prompt.
+    (llm-provider-chat-request provider prompt nil)
+    (should (equal 'system (llm-chat-prompt-interaction-role
+                            (car (llm-chat-prompt-interactions prompt)))))
+    (should (superchat--llm-replace-prompt-input prompt "HM-SAME" "HM-NEW"))
+    (should (equal '("HM-SAME" "HM-NEW")
+                   (mapcar #'llm-chat-prompt-interaction-content
+                           (cdr (llm-chat-prompt-interactions prompt)))))))
 
 ;;;; The request inspector
 

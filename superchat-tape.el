@@ -1529,7 +1529,8 @@ returned in the item form `superchat-tape-history-messages' takes."
     (let ((row (funcall row-at (plist-get item :storage-id))))
       (cond
        ((null row) :unknown)
-       ((eq (plist-get item :class) 'model-interpretation)
+       ;; A recorded item's class comes back from the Tape as a string.
+       ((equal "model-interpretation" (format "%s" (plist-get item :class)))
         (list :class 'model-interpretation :content (nth 3 row)))
        ((and (equal "inject" (nth 1 row)) (equal "system" (nth 2 row)))
         (let ((text (superchat-tape--request-admitted-material-text row)))

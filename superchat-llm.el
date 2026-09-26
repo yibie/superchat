@@ -1124,8 +1124,7 @@ exists to summarize."
 The earlier turns PROMPT leads with are not searched.  Return non-nil when
 the provider prompt was rewritten."
   (catch 'replaced
-    (dolist (interaction (nthcdr (superchat--llm-history-count prompt)
-                                 (llm-chat-prompt-interactions prompt)))
+    (dolist (interaction (superchat--llm-current-interactions prompt))
       (let ((content (llm-chat-prompt-interaction-content interaction)))
         (cond
          ((stringp content)
@@ -1164,8 +1163,7 @@ OLD-INPUT use the established context replacement fallback.  This mutates only
 the private provider prompt retained by the active LLM invocation."
   (or
    (catch 'replaced
-     (dolist (interaction (nthcdr (superchat--llm-history-count prompt)
-                                  (llm-chat-prompt-interactions prompt)))
+     (dolist (interaction (superchat--llm-current-interactions prompt))
        (when (and (eq (llm-chat-prompt-interaction-role interaction) 'user)
                   (equal (llm-chat-prompt-interaction-content interaction)
                          old-input))
@@ -2283,29 +2281,46 @@ live tool round."
       (flush))
     (nreverse interactions)))
 
-(defvar superchat--llm-history-counts
+(defvar superchat--llm-history-of
   (make-hash-table :test #'eq :weakness 'key)
-  "Provider prompts mapped to how many leading interactions are earlier turns.")
+  "Provider prompts mapped to their interactions that are earlier turns.")
 
-(defun superchat--llm-history-count (prompt)
-  "Return how many of PROMPT's leading interactions are earlier turns."
-  (gethash prompt superchat--llm-history-counts 0))
+(defun superchat--llm-history-p (prompt interaction)
+  "Non-nil when INTERACTION is one of PROMPT's earlier turns."
+  (memq interaction (gethash prompt superchat--llm-history-of)))
+
+(defun superchat--llm-current-interactions (prompt)
+  "Return PROMPT's interactions that are not earlier turns."
+  (cl-remove-if (lambda (interaction)
+                  (superchat--llm-history-p prompt interaction))
+                (llm-chat-prompt-interactions prompt)))
 
 (defun superchat--llm-set-history (prompt messages)
-  "Make MESSAGES, earlier turns, PROMPT's leading interactions; return PROMPT.
-The earlier turns PROMPT already leads with are replaced and the rest is kept,
-so a Run resumed after compaction sends the new View's turns and its own.
-Context contract, amendment 2026-09-25: earlier turns are real messages, not a
-transcript inside the user message."
+  "Make MESSAGES, earlier turns, PROMPT's earlier turns; return PROMPT.
+They go where PROMPT's earlier turns are, replacing them, or first -- after a
+system interaction, which llm.el puts at the front once a request was built.
+The rest is kept, so a Run resumed after compaction sends its system text,
+the new View's turns and its own.  The earlier turns are known by identity,
+not by position.  Context contract, amendment 2026-09-25: earlier turns are
+real messages, not a transcript inside the user message."
   (let* ((history (superchat--llm-history-interactions messages))
+         (interactions (llm-chat-prompt-interactions prompt))
+         (at (or (cl-position-if (lambda (interaction)
+                                   (superchat--llm-history-p prompt interaction))
+                                 interactions)
+                 (if (and interactions
+                          (eq 'system (llm-chat-prompt-interaction-role
+                                       (car interactions))))
+                     1 0)))
+         (kept (superchat--llm-current-interactions prompt))
          (slot (cl-struct-slot-offset 'llm-chat-prompt 'interactions))
-         (value (append history
-                        (nthcdr (superchat--llm-history-count prompt)
-                                (llm-chat-prompt-interactions prompt)))))
+         (value (append (cl-subseq kept 0 (min at (length kept)))
+                        history
+                        (nthcdr (min at (length kept)) kept))))
     (if (eq (cl-struct-sequence-type 'llm-chat-prompt) 'list)
         (setf (nth slot prompt) value)
       (aset prompt slot value))
-    (puthash prompt (length history) superchat--llm-history-counts)
+    (puthash prompt history superchat--llm-history-of)
     prompt))
 
 (defun superchat--llm-replace-recovered-context (prompt old-context new-context)
@@ -4117,6 +4132,22 @@ requests until it receives text, bounded by
                                                       response-parts '()
                                                       cumulative ""
                                                       reasoning-cumulative "")
+                                                ;; The rebuilt View is now the
+                                                ;; Run's: later attempts'
+                                                ;; evidence names its items and
+                                                ;; receipt (context contract,
+                                                ;; amendment 2026-09-25,
+                                                ;; Recovery).
+                                                (when (consp new-context)
+                                                  (setq request-context
+                                                        (plist-put
+                                                         (copy-sequence request-context)
+                                                         :message-receipt
+                                                         (plist-get new-context :receipt)))
+                                                  (when (functionp runtime-observer)
+                                                    (funcall runtime-observer
+                                                             'context-envelope-replaced
+                                                             new-context)))
                                                 (condition-case err
                                                     (funcall send-request attempt-reason (and input-tool t))
                                                   (error
@@ -4200,7 +4231,10 @@ requests until it receives text, bounded by
                                      (list :reason reason
                                            :resume-function resume
                                            :fail-function fail
-                                           :session-id recovery-session-id)))
+                                           :session-id recovery-session-id
+                                           ;; The rebuilt View leaves out
+                                           ;; this Run's own rows.
+                                           :run-id recovery-run-id)))
                           (error
                            (message "Context recovery hook failed: %s"
                                     (error-message-string hook-error))

@@ -781,7 +781,7 @@ Decision: [earlier turns reach the model as real messages](../decisions/implemen
 
 **Request evidence (M1).** `request.message-list` names the same items; `superchat-tape-request-evidence` rebuilds them as the messages above, and `prompt-reconstructable` compares messages.
 
-**Recovery.** When compaction resumes a Run after its request was too long, the resumed request's earlier-turn messages are replaced by those of the View assembled after compaction; the current Turn's messages are unchanged.
+**Recovery.** When compaction resumes a Run after its request was too long, the resumed request's earlier-turn messages are replaced by those of the View assembled after compaction; the current Turn's messages are unchanged. That View leaves out the Session's replaced rows (`turn.superseded`) and every row the resumed Run wrote — its `intent.received` question, its tool calls and results, its admitted Step material — since the request already carries them as the current Turn's messages; the `context-budget-exceeded` details name the Run as `:run-id` for this. A failed read of either set of rows fails the recovery: the View is never assembled without its exclusions. When the resume puts the rebuilt View in the request, the Runtime adopts it as the Run's View: every later attempt's `request.message-list` names its items and receipt, and the Run's earlier-turn messages are its messages, so the evidence of a resumed attempt rebuilds what the provider received (amended 2026-09-25).
 
 **Inspector.** The request inspector shows the messages read-only between the system text and the editable prompt, and Copy includes them; editing the prompt does not change them. No switch leaves them out of one request: a request without them is a new Session or a branch.
 
