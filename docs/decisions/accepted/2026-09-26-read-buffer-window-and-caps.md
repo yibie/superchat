@@ -61,4 +61,5 @@ The user took the recommendation on each of the three questions ("follow", 2026-
 ## Consequences
 
 - Inline ask's fixed tool baseline includes `read_buffer`: a source buffer over 2000 lines or 50 KiB now takes more than one read. Fewer tokens per request, more requests for a very large buffer.
-- Tests and fixtures that read `*scratch*` through `read_buffer` get a header in the result. The known ones (smoke B and L, the M3 fixtures) do not assert on the result text; the sweep checks the rest.
+- Every `read_buffer` result carries the header, about 70 characters more for a small buffer. The stored result is what later turns see as the call's `Tool:` line, so that line grows from about 70 to about 140 characters: with a real budget this is noise, but compaction's kept part (thirty percent of the budget) holds fewer entries when it is tiny. Three offline fixtures sized with a 400-character budget moved to 620 where such a line sits in the kept part, which keeps exactly the entries 400 kept before (compared entry by entry, 2026-09-26).
+- Two suites pinned the old whole-text result and were updated (`m5-tool-feedback` reads the text after `Content:`; `session-view` shows the stored result starting with the header). Smoke B and L and the M3 fixtures do not assert on the result text.
