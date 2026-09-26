@@ -79,6 +79,21 @@ delegated execution, explicitly reference their direct parent Run, and do not
 create a separate Runtime.
 _Avoid_: Agent, Session
 
+**Region rewrite**:
+One instruction applied to exactly the Rewrite target; its answer is the
+replacement text alone, and it changes the buffer only when the user accepts it.
+_Avoid_: inline edit, refactor
+
+**Rewrite target**:
+The text the user selected for a Region rewrite, and the only text its answer
+may replace.
+_Avoid_: region (when the surrounding text is meant), context
+
+**Rewrite reference**:
+Text around the Rewrite target sent so the model understands its setting; the
+model may read it but never changes or returns it.
+_Avoid_: context (the Context View is something else)
+
 **Preset**:
 A portable configuration source that can describe prompts, workflows,
 Capabilities, and Plugin composition for a kind of work.  A Preset of type
