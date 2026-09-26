@@ -2061,6 +2061,25 @@ append can be looked up by identity without writing twice."
           :payload (superchat-runtime--attachment-payload
                     material (plist-get entry :turn-id)))))
 
+(defun superchat-runtime-admit-between-turns (session-id source text)
+  "Admit TEXT from SOURCE to SESSION-ID's Tape outside any Run.
+It is admitted material like a Step's -- `attachment.added', actor `runtime'
+-- so the next Turn's history carries it as `[Injected material] TEXT' in
+Tape order (context contract, amendment 2026-09-25 (b)).  Returns the
+storage id, or nil when SESSION-ID is not a Session id."
+  (when (and (stringp session-id) (not (string-empty-p session-id)))
+    (superchat-tape-append-event
+     (list :type "attachment.added"
+           :session-id session-id
+           :actor-id "runtime"
+           :topic "inject"
+           :summary "Injected model material"
+           :requires-payload t
+           :payload (superchat-runtime--attachment-payload
+                     (list :source source :text text
+                           :inject-id nil :steer-id nil :input-ids nil)
+                     nil)))))
+
 (defun superchat-runtime--injection-material-too-large-p (material)
   "Return non-nil when MATERIAL is already over the inline payload limit.
 This entry check uses the real payload builder and Tape codec.  It passes nil

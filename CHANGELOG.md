@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — the model learns what you saved
+
+- When you save a buffer the model edited and left unsaved (with `C-x C-s`,
+  the review screen's `s`, or any other way), or throw its unsaved edits
+  away, the next turn starts with one line telling the model so. Before, it
+  was never told, found the file changed on disk, and could make up a reason.
+  A save the model itself makes with `save_buffer` is not reported as yours.
+
 ## Unreleased — one key between the two layouts; the review screen takes the cursor
 
 - `C-c C-w` in the chat moves the conversation into its own tab, filling it,

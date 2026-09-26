@@ -1,6 +1,14 @@
 # Decision: the next turn learns what the user saved
 
-Status: proposed — design only, no code. Issue `.scratch/issues/2026-09-25-the-next-turn-is-not-told-what-the-user-saved.md`. Open for the user's decision.
+Status: accepted — user, 2026-09-25: "A". The user did not answer the sub-question; the leader took the recommended A1 (any save counts) and says so here; narrowing to A2 is a one-line change. Issue `.scratch/issues/2026-09-25-the-next-turn-is-not-told-what-the-user-saved.md`.
+
+## Decision (as built)
+
+1. **A save note.** When the user saves a buffer that a Session's tools edited and left unsaved — it is one of that Session's review candidates just before the save — each such Session's Tape gets one admitted-material row (`attachment.added`, actor `runtime`, topic `inject`, source `(:kind user-save)`), outside any Run or Turn, whose text is "The user saved BUFFER (FILE); the file on disk now holds the buffer's text." Any save counts (A1): `C-x C-s`, the review screen's `s`, `superchat-changes-save`; a save made while a tool runs does not (the model's `save_buffer`, or code it evaluated), since that is not the user.
+2. **A discard note.** When the user throws those unsaved edits away — `revert-buffer`, including `superchat-changes-revert`, or, for a new file that was never saved, `superchat-changes-revert` killing the buffer — the text is "The user discarded your unsaved edits to BUFFER (FILE); the buffer holds the file's text again." (for a new file: "…; the file was never written.").
+3. **Once per settled edit.** After the note the buffer no longer carries that Session's edit marks, so a later save of the same buffer is not reported until the model edits it again.
+4. **How the model gets it.** Like any admitted material: a user message `[Injected material] TEXT` among the earlier turns, in Tape order, so in the next Turn it comes after the previous answer and before the new question; from then on it is history, selected and accounted like any raw item, and the request evidence rebuilds it. The system text and the tool definitions do not change; the request prefix stays append-only.
+5. **Off with the `changes` row.** When the `changes` plugin row is unmounted, nothing is recorded.
 
 ## In one paragraph
 

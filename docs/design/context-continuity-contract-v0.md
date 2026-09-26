@@ -786,3 +786,9 @@ Decision: [earlier turns reach the model as real messages](../decisions/implemen
 **Inspector.** The request inspector shows the messages read-only between the system text and the editable prompt, and Copy includes them; editing the prompt does not change them. No switch leaves them out of one request: a request without them is a new Session or a branch.
 
 **Not changed.** Compaction's own summarizing request keeps the canonical text rendering of the span it summarizes.
+
+## Amendment 2026-09-25 (b): what the user saved
+
+Decision: [the next turn learns what the user saved](../decisions/accepted/2026-09-25-the-next-turn-learns-what-the-user-saved.md).
+
+**Admitted material between Turns.** Besides material a Run admits at a Step, the Runtime may admit material outside any Run: an `attachment.added` row (actor `runtime`, topic `inject`, a `:source` and a `:text`, no Run or Turn id). It is a raw fact like any admitted material: rendered as `[Injected material] TEXT`, a user message among the earlier turns in Tape order, selected whole under the budget, accounted once, rebuilt by the request evidence. The first such material is the user's save or discard of a buffer a Session's tools edited and left unsaved (source `(:kind user-save)`).

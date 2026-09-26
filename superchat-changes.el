@@ -59,6 +59,10 @@
 (require 'superchat-tape)
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
+(declare-function superchat-runtime-admit-between-turns "superchat-runtime"
+                  (session-id source text))
+(declare-function superchat-plugin-row-active-p "superchat-plugin" (name))
+(defvar superchat--tool-execution-context)
 (declare-function diffs-minor-mode "diffs" (&optional arg))
 (defvar diffs-minor-mode)
 (defvar superchat--session-id)
@@ -99,6 +103,63 @@ buffer is not a mark.")
   "Return the (SESSION-ID . RUN-ID) pairs BUFFER is marked with."
   (let ((mark (buffer-local-value 'superchat-changes--edited-by buffer)))
     (and (consp mark) (eq buffer (car mark)) (cdr mark))))
+
+(defvar-local superchat-changes--settling nil
+  "Sessions whose unsaved tool edits the save or revert under way settles.")
+(put 'superchat-changes--settling 'permanent-local t)
+
+(defun superchat-changes--pending-sessions (buffer)
+  "Return the Sessions whose tools' unsaved edits BUFFER holds, if it is the
+user who acts on it now: no tool is running and the `changes' row is on."
+  (when (and (buffer-modified-p buffer)
+             (buffer-file-name buffer)
+             (null superchat--tool-execution-context)
+             (fboundp 'superchat-plugin-row-active-p)
+             (superchat-plugin-row-active-p 'changes))
+    (delete-dups (mapcar #'car (superchat-changes--marks buffer)))))
+
+(defun superchat-changes--tell-sessions (buffer sessions text)
+  "Tell SESSIONS' next Turn TEXT about BUFFER; the edits are then settled.
+The note is admitted material outside any Run (decision \"the next turn
+learns what the user saved\"); BUFFER keeps no mark of those Sessions, so a
+later save is not reported until their tools edit it again."
+  (dolist (session sessions)
+    (ignore-errors
+      (superchat-runtime-admit-between-turns
+       session (list :kind 'user-save) text)))
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((pairs (cl-remove-if (lambda (pair) (member (car pair) sessions))
+                                 (superchat-changes--marks buffer))))
+        (setq superchat-changes--edited-by (and pairs (cons buffer pairs)))))))
+
+(defun superchat-changes--before-settle ()
+  "Before a save or revert, note whose unsaved tool edits it settles."
+  (setq superchat-changes--settling
+        (superchat-changes--pending-sessions (current-buffer))))
+
+(defun superchat-changes--after-save ()
+  "After the user saved a buffer Sessions' tools edited, tell their next Turn."
+  (when-let* ((sessions (prog1 superchat-changes--settling
+                          (setq superchat-changes--settling nil))))
+    (superchat-changes--tell-sessions
+     (current-buffer) sessions
+     (format "The user saved %s (%s); the file on disk now holds the buffer's text."
+             (buffer-name) (buffer-file-name)))))
+
+(defun superchat-changes--after-revert ()
+  "After the user threw away Sessions' unsaved tool edits, tell their next Turn."
+  (when-let* ((sessions (prog1 superchat-changes--settling
+                          (setq superchat-changes--settling nil))))
+    (superchat-changes--tell-sessions
+     (current-buffer) sessions
+     (format "The user discarded your unsaved edits to %s (%s); the buffer holds the file's text again."
+             (buffer-name) (buffer-file-name)))))
+
+(add-hook 'before-save-hook #'superchat-changes--before-settle)
+(add-hook 'after-save-hook #'superchat-changes--after-save)
+(add-hook 'before-revert-hook #'superchat-changes--before-settle)
+(add-hook 'after-revert-hook #'superchat-changes--after-revert)
 
 (defun superchat-changes--child-sessions (run-ids)
   "Return the ids of Sessions whose Runs were started by one of RUN-IDS.
@@ -475,6 +536,11 @@ that visits no file has nothing to compare with and is simply displayed."
     (if (and (buffer-file-name) (file-exists-p (buffer-file-name)))
         (revert-buffer t t t)
       ;; A new file that was never saved has nothing to go back to.
+      (when-let* ((sessions (superchat-changes--pending-sessions buffer)))
+        (superchat-changes--tell-sessions
+         buffer sessions
+         (format "The user discarded your unsaved edits to %s (%s); the file was never written."
+                 (buffer-name) (buffer-file-name))))
       (set-buffer-modified-p nil)
       (kill-buffer buffer))))
 
