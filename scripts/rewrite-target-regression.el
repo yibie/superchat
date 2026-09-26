@@ -299,6 +299,49 @@ section within 20 lines above it, and a next section below.")
     (should (string-match-p "C-c C-a" line))
     (should (string-match-p "C-c C-d" line))))
 
+;;;; Keys: inside the preview or right after it (amendment 2026-09-26) ------
+
+(ert-deftest rewrite-target/keys-reach-the-preview-from-right-after-it ()
+  "After a forward selection point sits at the preview's end; the preview's
+keys work there, and org's own keys everywhere else."
+  (rt--with-rewrite (#'org-mode "* H\n前文 ⟦目标文字⟧\n下一行\n" '((:text "新文字")))
+    (should (eq 'ready (rt--state overlay :status)))
+    (let ((start (overlay-start overlay)) (end (overlay-end overlay)))
+      (dolist (key '("C-c C-a" "C-c C-k" "C-c C-d" "C-c C-r"))
+        ;; Inside, as before.
+        (goto-char start)
+        (should (string-prefix-p "superchat-rewrite-"
+                                 (symbol-name (key-binding (kbd key)))))
+        ;; Right after it: the gap.
+        (goto-char end)
+        (should (string-prefix-p "superchat-rewrite-"
+                                 (symbol-name (key-binding (kbd key)))))
+        ;; Anywhere else the key is org's.
+        (goto-char (1+ end))
+        (should-not (string-prefix-p "superchat-rewrite-"
+                                     (symbol-name (key-binding (kbd key)))))
+        (goto-char (1- start))
+        (should-not (string-prefix-p "superchat-rewrite-"
+                                     (symbol-name (key-binding (kbd key))))))
+      ;; From right after it, C-c C-a accepts this preview.
+      (goto-char end)
+      (call-interactively (key-binding (kbd "C-c C-a")))
+      (should (string-match-p "前文 新文字\n下一行" (buffer-string)))
+      ;; With no preview left the key is org's again at the same place.
+      (goto-char (+ start (length "新文字")))
+      (should (eq 'org-attach (key-binding (kbd "C-c C-a")))))))
+
+(ert-deftest rewrite-target/return-opens-the-menu-inside-only ()
+  "RET inside the preview opens its menu; right after it RET is the mode's
+own (a new line), and the ready line says RET opens the menu."
+  (rt--with-rewrite (#'org-mode "* H\n前文 ⟦目标文字⟧\n下一行\n" '((:text "新文字")))
+    (goto-char (overlay-start overlay))
+    (should (eq 'superchat-rewrite-menu (key-binding (kbd "RET"))))
+    (goto-char (overlay-end overlay))
+    (should-not (eq 'superchat-rewrite-menu (key-binding (kbd "RET"))))
+    (should (string-match-p "RET menu" (superchat-rewrite--status-line
+                                        (superchat-rewrite--state overlay))))))
+
 ;;;; Unchanged ----------------------------------------------------------------
 
 (ert-deftest rewrite-target/no-selection-no-rewrite ()

@@ -39,6 +39,15 @@ Unchanged and not asked again: a rewrite joins the Session the chat View is show
 
 A user-set `superchat-rewrite-system-prompt` string still replaces the built-in system text; its default becomes nil, meaning the built-in text for the buffer's kind.
 
+## Amendment 2026-09-26: the keys reach the preview from right after it
+
+The user's first real rewrite on this design worked (only the selected line changed), and showed that `C-c C-a` ran `org-attach`: after a forward selection point sits at the preview's end, just outside the overlay, where its keymap does not apply, so Org's own `C-c C-a`/`C-c C-k`/`C-c C-d`/`C-c C-r` ran. gptel's rewrite uses the same keys on an overlay keymap and has the same limit. The user chose, as recommended ("按建议"):
+
+- **Q1 B**: the preview's `C-c` keys work inside the preview and right after it (point at its end); anywhere else the keys are the major mode's. A buffer-local minor mode, on while the buffer has a preview, binds them through a filter that yields nothing away from a preview.
+- **Q2 A**: the menu on RET and a click, which already existed inside the preview (`superchat-rewrite-menu`; the question wrongly offered it as new), is named on the ready line (`RET menu`). RET right after a preview stays the mode's own, a new line.
+
+Rejected: the keys buffer-wide while a preview is pending (hides Org's attach, deadline and folding keys meanwhile); moving point into the preview (it jumps, and moving away loses the keys again); other keys (Org uses nearly every `C-c C-letter`).
+
 ## Alternatives considered
 
 **Send only the target (gptel's way).** The simplest and the least likely to go wrong. Lost to the reference because a code rewrite often needs the names around it and a text rewrite its tone; the check in 4 is what keeps the reference from leaking into the answer.

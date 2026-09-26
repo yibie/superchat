@@ -263,9 +263,44 @@ around it. Keep the markup of the text (links, lists, emphasis) as it is." kind)
   "Keymap active on a rewrite preview overlay.")
 
 (defun superchat-rewrite--overlay-at-point ()
-  "Return the rewrite preview overlay at point, or nil."
-  (cl-find-if (lambda (overlay) (overlay-get overlay 'superchat-rewrite))
-              (overlays-at (point))))
+  "Return the rewrite preview overlay at point or ending right at point, or nil.
+After a forward selection point sits at the preview's end, just outside it."
+  (or (cl-find-if (lambda (overlay) (overlay-get overlay 'superchat-rewrite))
+                  (overlays-at (point)))
+      (cl-find-if (lambda (overlay)
+                    (and (overlay-get overlay 'superchat-rewrite)
+                         (= (overlay-end overlay) (point))))
+                  (overlays-in (max (point-min) (1- (point))) (point)))))
+
+(defun superchat-rewrite--when-at-preview (command)
+  "Return COMMAND when point is on a rewrite preview or right after it."
+  (and (superchat-rewrite--overlay-at-point) command))
+
+(defvar superchat-rewrite-preview-mode-map
+  (let ((map (make-sparse-keymap)))
+    (dolist (binding '(("C-c C-a" . superchat-rewrite-accept)
+                       ("C-c C-k" . superchat-rewrite-reject)
+                       ("C-c C-c" . superchat-rewrite-cancel)
+                       ("C-c C-r" . superchat-rewrite-iterate)
+                       ("C-c C-d" . superchat-rewrite-diff)
+                       ("C-c C-m" . superchat-rewrite-merge)
+                       ("C-c C-n" . superchat-rewrite-next)
+                       ("C-c C-p" . superchat-rewrite-previous)))
+      (define-key map (kbd (car binding))
+                  `(menu-item "" ,(cdr binding)
+                              :filter superchat-rewrite--when-at-preview)))
+    map)
+  "The preview's `C-c' keys for point right after a preview.
+Inside a preview its overlay keymap already applies; elsewhere each key
+filters to nothing, so the major mode's own binding is used.  RET is not
+here: right after a preview it stays the mode's (a new line).")
+
+(define-minor-mode superchat-rewrite-preview-mode
+  "Reach a rewrite preview's keys from right after it.
+On while the buffer has a rewrite preview; see
+`superchat-rewrite-preview-mode-map'."
+  :lighter nil
+  :keymap superchat-rewrite-preview-mode-map)
 
 (defun superchat-rewrite--overlay ()
   "Return the rewrite overlay a command addresses, or signal."
@@ -292,7 +327,7 @@ around it. Keep the markup of the text (links, lists, emphasis) as it is." kind)
                       (when times
                         (format " (%d× longer than the selection: check it before accepting)"
                                 times)))
-                    "  C-c C-a accept  C-c C-k reject  C-c C-d diff"))
+                    "  C-c C-a accept  C-c C-k reject  C-c C-d diff  RET menu"))
     ('error (format "REWRITE  Error: %s" (or (plist-get state :error) "failed")))
     ('cancelled "REWRITE  Cancelled")
     (_ "REWRITE")))
@@ -337,6 +372,8 @@ original text stays visible and only the status bar changes."
     (overlay-put overlay 'evaporate t)
     (overlay-put overlay 'priority superchat-rewrite--overlay-priority)
     (superchat-rewrite--render overlay)
+    (with-current-buffer (overlay-buffer overlay)
+      (superchat-rewrite-preview-mode 1))
     overlay))
 
 (defun superchat-rewrite--delete-overlay (overlay)
@@ -344,7 +381,13 @@ original text stays visible and only the status bar changes."
   (when (overlayp overlay)
     (let ((timer (plist-get (superchat-rewrite--state overlay) :error-timer)))
       (when (timerp timer) (cancel-timer timer)))
-    (delete-overlay overlay)))
+    (let ((buffer (overlay-buffer overlay)))
+      (delete-overlay overlay)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (unless (cl-some (lambda (other) (overlay-get other 'superchat-rewrite))
+                           (overlays-in (point-min) (point-max)))
+            (superchat-rewrite-preview-mode -1)))))))
 
 (defun superchat-rewrite--unfence (text)
   "Return TEXT without one code fence around all of it."
