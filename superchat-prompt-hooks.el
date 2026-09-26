@@ -350,10 +350,12 @@ parallel-tool-calls blurb, the `define_tool' blurb, the `render_ui' blurb.")
 `superchat-prompt--system-instruction-specs', computed by running each
 block's hook on its own empty scratch turn — none of the four read
 anything from the turn itself, only from global tool/preset state.
-Chat and inline-ask only: producers that prepare their own prompt
-\(subagent, workflow, skills, compaction) never received these blocks."
+Chat, inline-ask and inline-act only (inline-act was left out when it was
+added; its record gives it the chat window's operating note and tool text):
+producers that prepare their own prompt \(subagent, workflow, skills,
+compaction) never received these blocks."
   (let (fragments)
-    (dolist (spec (and (memq (plist-get env :surface) '(chat inline-ask))
+    (dolist (spec (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
                        superchat-prompt--system-instruction-specs))
       (cl-destructuring-bind (id fn priority) spec
         (let* ((scratch (superchat-turn-new ""))

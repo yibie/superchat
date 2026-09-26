@@ -32,7 +32,7 @@ Explicitly not proposed: any change to `superchat-act` (it keeps sending to the 
 4. **Result in place.** At `final` or `error` the overlay body ends with a short footer: the number of tool calls the Run made (counted from `tool.completed` / `tool.failed` events on the Tape for this Run) and, when the Run left buffers edited and unsaved, the text of `superchat-changes-run-summary`. The footer states facts recorded on the Tape; it does not say the task succeeded.
 5. **Keys on a ready overlay.** `r` follow-up in the same Session (reuses the inline reply path with `:surface 'inline-act`), `d` diff of an edited buffer against its file (`superchat-changes-diff`), `v` visit the Session, `q` clear (which cancels a live Run, as inline-ask does), `M-RET` menu.
 
-The prompt sees the reference block through the existing `inline-reference` collector, so nothing is added to prompt assembly; the operating note and tool descriptions are the same as in the chat window.
+The prompt sees the reference block through the existing `inline-reference` collector, so nothing is added to prompt assembly; the operating note and tool descriptions are the same as in the chat window. (Until 2026-09-25 they were not: the system-instructions collector listed only `chat` and `inline-ask`, so in-place act requests went without any system text; found while preparing M10 slice 2's acceptance and fixed, issue `2026-09-25-in-place-act-gets-no-system-instructions`.)
 
 ## Alternatives considered
 

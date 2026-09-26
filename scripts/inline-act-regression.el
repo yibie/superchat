@@ -142,6 +142,24 @@ that conversation's buffer may exist, but it is not displayed.)"
             (should (member "edit_buffer" tools))
             (should (member "read_buffer" tools))))))))
 
+(ert-deftest inline-act/run/request-carries-the-chat-window-s-system-text ()
+  "The Run's request carries the system instructions the chat window's do --
+the Emacs operating note among them -- as the in-place act record says
+(docs/decisions/implemented/2026-09-22-inline-act.md; issue
+2026-09-25-in-place-act-gets-no-system-instructions)."
+  (with-temp-buffer
+    (insert "alpha\n")
+    (goto-char (point-min))
+    (let ((target (buffer-name)))
+      (inline-act--fixture (inline-act--edit-script target)
+        (let ((overlay (superchat-inline-act "replace alpha with beta")))
+          (inline-act--settle overlay)
+          (let ((text (plist-get (car (last smoke--requests)) :prompt-text)))
+            (should (string-prefix-p "Context: " text))
+            (should (string-match-p
+                     (regexp-quote (substring superchat-emacs-operating-note-text 0 40))
+                     text))))))))
+
 (ert-deftest inline-act/run/status-header-shows-working-during-a-tool-call ()
   "The live overlay says Working inside the actual edit tool body."
   (with-temp-buffer

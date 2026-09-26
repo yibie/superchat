@@ -2,6 +2,13 @@
 
 All notable changes to superchat.
 
+## Unreleased — in-place act gets the chat window's system text
+
+- `superchat-inline-act` requests now carry the same system instructions as
+  the chat window's (tool guidance, the Emacs operating note, the reference
+  pages index), as its documentation always said. Since it was added they
+  had carried none.
+
 ## Unreleased — a switch for llm's "not free software" warning
 
 - `superchat-llm-warning-message`: set it to nil and superchat's requests no
