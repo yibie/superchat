@@ -4,8 +4,10 @@
 ;; Region rewriting: select code → instruct the model → the rewritten text
 ;; streams into a preview overlay over the region (source untouched) →
 ;; accept as one atomic Change Set, reject, refine, diff, or merge as
-;; conflict markers.  No tool-calling; the answer is parsed for fenced code
-;; blocks.  A rectangle / non-contiguous region gets one overlay and one
+;; conflict markers.  No tool-calling.  Only the selected text (the Rewrite
+;; target) is rewritten; the text around it goes along as a read-only
+;; Rewrite reference, and the answer is the replacement alone
+;; (docs/decisions/accepted/2026-09-26-region-rewrite-target-and-reference.md).  A rectangle / non-contiguous region gets one overlay and one
 ;; Run per segment.  `superchat-rewrite-apply-code-block-at-point' applies
 ;; a chat reply's code block as a patch.
 
@@ -41,7 +43,9 @@ confirmed the same way."
   :group 'superchat-rewrite)
 
 (defcustom superchat-rewrite-context-lines 20
-  "Lines before and after the region sent to the model as context."
+  "Lines of Rewrite reference on each side of the target.
+In a `prog-mode' buffer they widen the definition the target is in; in
+Org and Markdown the reference is the target's heading section instead."
   :type 'integer
   :group 'superchat-rewrite)
 
@@ -54,15 +58,22 @@ confirmed the same way."
 (defconst superchat-rewrite--overlay-priority 2000
   "Overlay priority of a rewrite preview, above every source overlay.")
 
-(defcustom superchat-rewrite-system-prompt
-  "You are a precise code editor. Rewrite the provided code according \
-to the user's instruction. Return ONLY the rewritten code inside a \
-fenced code block with the appropriate language tag. Do not include \
-explanations, apologies, or markdown outside the code fence. \
-Preserve the original indentation style."
-  "System prompt used for region rewrites."
-  :type 'string
+(defcustom superchat-rewrite-system-prompt nil
+  "System text of a region rewrite, or nil for the built-in one.
+The built-in text depends on the buffer: code in a `prog-mode' buffer, an
+editor of that kind of text anywhere else (see
+`superchat-rewrite--system-text').  A string replaces it for every buffer."
+  :type '(choice (const :tag "Built-in, by the buffer's kind" nil)
+                 string)
   :group 'superchat-rewrite)
+
+(defconst superchat-rewrite--reference-max-chars 8000
+  "Most characters of Rewrite reference sent on each side of the target.
+The part nearest the target is kept.")
+
+(defconst superchat-rewrite--marker-regexp "<<<[A-Z][A-Z ]*>>>"
+  "Matches the labels a rewrite request puts around its parts.
+An answer that contains one has returned more than the replacement.")
 
 ;; ── Source tracking (for apply-code-block-at-point) ──
 
@@ -89,8 +100,9 @@ is `auto', a ready rewrite is accepted automatically (still undo-able)."
   (interactive
    (if (use-region-p)
        (list (region-beginning) (region-end)
-             (read-string "Rewrite instruction: " nil
-                          'superchat-rewrite-instruction-history))
+             (read-string (superchat-rewrite--instruction-prompt
+                           (region-beginning) (region-end))
+                          nil 'superchat-rewrite-instruction-history))
      (user-error "No active region")))
   (superchat-plugin-require-active-row 'inline-rewrite)
   (unless superchat-llm-backend
@@ -124,22 +136,116 @@ Returns nil when `region-noncontiguous-p' is false or unsupported."
 
 ;; ── Overlay preview (S17a; S17b adds iterate / diff / merge / navigation) ──
 
-(defun superchat-rewrite--context-text (beg end)
-  "Return the model input for rewriting BEG..END with its surrounding lines.
-`superchat-rewrite-context-lines' lines before and after the region wrap
-the region itself, which is marked with <<<REGION>>> / <<<END>>>."
-  (let* ((n (max 0 superchat-rewrite-context-lines))
-         (before-start (save-excursion (goto-char beg)
-                                       (forward-line (- n))
-                                       (point)))
-         (after-end (save-excursion (goto-char end)
-                                    (forward-line n)
-                                    (line-end-position))))
-    (concat (buffer-substring-no-properties before-start beg)
-            "<<<REGION>>>\n"
-            (buffer-substring-no-properties beg end)
-            "\n<<<END>>>"
-            (buffer-substring-no-properties end after-end))))
+(defun superchat-rewrite--instruction-prompt (beg end)
+  "Return the instruction prompt naming the target BEG..END.
+It says how much is selected and how it begins, so a wrong selection is
+seen before anything is sent."
+  (let* ((text (buffer-substring-no-properties beg end))
+         (lines (length (split-string (string-trim-right text "\n+") "\n")))
+         (size (if (> lines 1)
+                   (format "%d lines" lines)
+                 (format "%d character%s" (length text)
+                         (if (= 1 (length text)) "" "s"))))
+         (shown (truncate-string-to-width
+                 (replace-regexp-in-string "\n" "⏎" (string-trim text))
+                 30 nil nil "…")))
+    (format "Rewrite %s «%s» — instruction: " size shown)))
+
+(defun superchat-rewrite--heading-regexp ()
+  "Return the heading regexp of the current buffer's markup, or nil."
+  (cond ((derived-mode-p 'org-mode) "^\\*+[ \t]")
+        ((derived-mode-p 'markdown-mode) "^#+[ \t]")))
+
+(defun superchat-rewrite--enclosing-definition (pos)
+  "Return (START . END) of the top-level definition containing POS, or nil."
+  (save-excursion
+    (ignore-errors
+      (goto-char pos)
+      (end-of-defun)
+      (let ((end (point)))
+        (beginning-of-defun)
+        (when (and (<= (point) pos) (< pos end))
+          (cons (point) end))))))
+
+(defun superchat-rewrite--reference-bounds (beg end)
+  "Return (START . STOP) of the Rewrite reference around BEG..END.
+In Org and Markdown it is the target's heading section, never crossing into
+another one.  In a `prog-mode' buffer it is the definition the target is
+in, widened by `superchat-rewrite-context-lines' lines on each side.
+Elsewhere it is that many lines on each side."
+  (save-excursion
+    (let ((n (max 0 superchat-rewrite-context-lines))
+          (heading (superchat-rewrite--heading-regexp)))
+      (cond
+       (heading
+        (cons (progn (goto-char beg)
+                     (beginning-of-line)
+                     (cond ((looking-at heading) (point))
+                           ((re-search-backward heading nil t) (point))
+                           (t (point-min))))
+              (progn (goto-char end)
+                     (cond ((and (bolp) (looking-at heading)) (point))
+                           ((re-search-forward heading nil t) (match-beginning 0))
+                           (t (point-max))))))
+       (t
+        (let ((code (derived-mode-p 'prog-mode)))
+          (cons (progn (goto-char (or (and code (car (superchat-rewrite--enclosing-definition beg)))
+                                      beg))
+                       (forward-line (- n))
+                       (point))
+                (progn (goto-char (or (and code (cdr (superchat-rewrite--enclosing-definition
+                                                           (max beg (1- end)))))
+                                      end))
+                       (forward-line n)
+                       (line-end-position)))))))))
+
+(defun superchat-rewrite--reference (beg end)
+  "Return (BEFORE . AFTER), the Rewrite reference around BEG..END, or nil.
+Each side is at most `superchat-rewrite--reference-max-chars' characters,
+cut at a line boundary, keeping the part nearest the target."
+  (let* ((bounds (superchat-rewrite--reference-bounds beg end))
+         (max superchat-rewrite--reference-max-chars)
+         (before (buffer-substring-no-properties (min (car bounds) beg) beg))
+         (after (buffer-substring-no-properties end (max (cdr bounds) end))))
+    (when (> (length before) max)
+      (setq before (substring before (- max)))
+      (when (string-match "\n" before)
+        (setq before (substring before (match-end 0)))))
+    (when (> (length after) max)
+      (setq after (substring after 0 max))
+      (when (string-match "\n[^\n]*\\'" after)
+        (setq after (substring after 0 (match-beginning 0)))))
+    (setq before (string-trim before "\n+" "\n+")
+          after (string-trim after "\n+" "\n+"))
+    (unless (and (string-empty-p before) (string-empty-p after))
+      (cons before after))))
+
+(defun superchat-rewrite--kind-name ()
+  "Return a readable name for the current buffer's kind of text."
+  (let ((name (string-remove-suffix "-mode" (symbol-name major-mode))))
+    (pcase name
+      ("org" "Org")
+      ((or "markdown" "gfm") "Markdown")
+      ((or "emacs-lisp" "lisp-interaction" "lisp-data") "Emacs Lisp")
+      ("fundamental" "plain")
+      (_ (capitalize (replace-regexp-in-string "-" " " name))))))
+
+(defun superchat-rewrite--system-text ()
+  "Return the built-in system text for a rewrite in the current buffer."
+  (let ((kind (superchat-rewrite--kind-name)))
+    (if (derived-mode-p 'prog-mode)
+        (format "You are a precise editor of %s code. The user selects a piece of \
+code (the target) and gives an instruction. Rewrite only the target according \
+to the instruction. Code marked as reference is there so you understand the \
+setting: never change it and never include it in your answer. Reply with only \
+the replacement for the target: no explanation, no markers, and no code fence \
+around it. Keep the indentation style of the surrounding code." kind)
+      (format "You are an editor of %s text. The user selects a passage (the \
+target) and gives an instruction. Rewrite only the target according to the \
+instruction. Text marked as reference is there so you understand the setting: \
+never change it and never include it in your answer. Reply with only the \
+replacement for the target: no explanation, no markers, and no code fence \
+around it. Keep the markup of the text (links, lists, emphasis) as it is." kind))))
 
 (defvar superchat-rewrite--overlay-keymap
   (let ((map (make-sparse-keymap)))
@@ -181,7 +287,12 @@ the region itself, which is marked with <<<REGION>>> / <<<END>>>."
                          (superchat-sink-retry-text (plist-get state :retry))
                          (if model (format " [%s]" model) ""))))
     ('typing "REWRITE  Typing…")
-    ('ready "REWRITE  Ready  C-c C-a accept  C-c C-k reject")
+    ('ready (concat "REWRITE  Ready"
+                    (let ((times (plist-get state :longer)))
+                      (when times
+                        (format " (%d× longer than the selection: check it before accepting)"
+                                times)))
+                    "  C-c C-a accept  C-c C-k reject  C-c C-d diff"))
     ('error (format "REWRITE  Error: %s" (or (plist-get state :error) "failed")))
     ('cancelled "REWRITE  Cancelled")
     (_ "REWRITE")))
@@ -200,8 +311,9 @@ original text stays visible and only the status bar changes."
            (preview
             (pcase status
               ((or 'waiting 'retrying) (propertize original 'face 'shadow))
-              ('typing (if (and text (not (string-empty-p text))) text
-                         (propertize original 'face 'shadow)))
+              ('typing (let ((shown (and text (superchat-rewrite--stream-text text))))
+                         (if (and shown (not (string-empty-p shown))) shown
+                           (propertize original 'face 'shadow))))
               ('ready (or text original))
               (_ original))))
       (overlay-put overlay 'before-string
@@ -234,12 +346,43 @@ original text stays visible and only the status bar changes."
       (when (timerp timer) (cancel-timer timer)))
     (delete-overlay overlay)))
 
-(defun superchat-rewrite--sink (overlay lang-tag)
+(defun superchat-rewrite--unfence (text)
+  "Return TEXT without one code fence around all of it."
+  (if (string-match "\\`[ \t\n]*```[^`\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n?```[ \t\n]*\\'" text)
+      (match-string 1 text)
+    text))
+
+(defun superchat-rewrite--stream-text (text)
+  "Return the streamed TEXT so far without an opening or closing fence."
+  (if (string-match "\\`[ \t\n]*```[^`\n]*\\(?:\n\\|\\'\\)" text)
+      (replace-regexp-in-string "\n?```[ \t\n]*\\'" "" (substring text (match-end 0)))
+    text))
+
+(defun superchat-rewrite--answer (answer original)
+  "Check and clean the model's ANSWER for replacing ORIGINAL.
+Return (:error MESSAGE) when ANSWER contains the request's markers, else
+\(:text TEXT :longer TIMES): TEXT without a fence around it and ending in a
+newline exactly when ORIGINAL does; TIMES, when TEXT is more than three
+times as long as ORIGINAL and more than 200 characters longer, is how many
+times longer it is."
+  (if (string-match-p superchat-rewrite--marker-regexp answer)
+      (list :error "the answer contains the request's markers (<<<…>>>), so it is not a replacement for the selection")
+    (let ((text (superchat-rewrite--unfence answer)))
+      (cond ((and (string-suffix-p "\n" original) (not (string-suffix-p "\n" text)))
+             (setq text (concat text "\n")))
+            ((and (not (string-suffix-p "\n" original)) (string-suffix-p "\n" text))
+             (setq text (substring text 0 -1))))
+      (list :text text
+            :longer (let ((new (length text)) (old (max 1 (length original))))
+                      (when (and (> new (* 3 old)) (> (- new old) 200))
+                        (round (/ new (float old)))))))))
+
+(defun superchat-rewrite--sink (overlay _lang-tag)
   "Return the preview Sink for OVERLAY (contract §3).
-Stream chunks accumulate into the preview; the final text is parsed for a
-fenced LANG-TAG code block, which becomes the ready preview (no block →
-error); a failure shows its text for `superchat-rewrite--error-display-seconds'
-and then removes the overlay; a cancellation removes it at once."
+Stream chunks accumulate into the preview; the final text, checked and
+cleaned by `superchat-rewrite--answer', becomes the ready preview; a failure
+shows its text for `superchat-rewrite--error-display-seconds' and then
+removes the overlay; a cancellation removes it at once."
   (superchat-sink-create
    :id (format "rewrite-%08x" (random #x100000000))
    :live-p (lambda ()
@@ -270,12 +413,15 @@ and then removes the overlay; a cancellation removes it at once."
                                                    text))))
                  (superchat-rewrite--set-state overlay :status 'typing))))
    :final (lambda (run result)
-            (let ((code (superchat-rewrite--extract-code-block
-                         (or (plist-get result :text) "") lang-tag)))
-              (if (null code)
-                  (superchat-rewrite--fail overlay "no code block in the answer")
+            (let* ((state (superchat-rewrite--state overlay))
+                   (answer (superchat-rewrite--answer
+                            (or (plist-get result :text) "")
+                            (plist-get state :original))))
+              (if (plist-get answer :error)
+                  (superchat-rewrite--fail overlay (plist-get answer :error))
                 (overlay-put overlay 'superchat-rewrite
-                             (plist-put (superchat-rewrite--state overlay) :text code))
+                             (plist-put (plist-put state :text (plist-get answer :text))
+                                        :longer (plist-get answer :longer)))
                 (superchat-rewrite--set-state overlay :status 'ready)
                 (superchat-rewrite--tell-conversation overlay run)
                 (when (eq superchat-rewrite-confirmation 'auto)
@@ -317,18 +463,32 @@ and then removes the overlay; a cancellation removes it at once."
   (and (fboundp 'superchat--provider-chat-model)
        (ignore-errors (superchat--provider-chat-model superchat-llm-backend))))
 
-(defun superchat-rewrite--content (buffer beg end instruction lang-tag base)
-  "Return the model input for rewriting BASE (the text at BEG..END of BUFFER
-on a first ask, or the previous answer when iterating) under INSTRUCTION.
-A first ask wraps the region with `superchat-rewrite-context-lines' lines of
-surrounding context; an iteration sends the previous answer alone."
+(defun superchat-rewrite--content (buffer beg end instruction base)
+  "Return the model input for rewriting BASE under INSTRUCTION.
+BASE is the text at BEG..END of BUFFER on a first ask, which then carries
+the Rewrite reference around it, or the previous answer when iterating,
+which goes alone.  The reference, the target and the instruction are
+labelled parts, the instruction last."
   (with-current-buffer buffer
-    (let ((region-text (buffer-substring-no-properties beg end)))
-      (format "Rewrite the following %s code according to this instruction: %s\n\n%s"
-              lang-tag instruction
-              (if (equal base region-text)
-                  (superchat-rewrite--context-text beg end)
-                (concat "<<<REGION>>>\n" base "\n<<<END>>>"))))))
+    (let* ((first-ask (equal base (buffer-substring-no-properties beg end)))
+           (reference (and first-ask (superchat-rewrite--reference beg end))))
+      (concat
+       (when reference
+         (concat
+          "Reference: the text around the target, so you understand its setting. "
+          "Read it; do not change it and do not include it in your answer.\n"
+          (unless (string-empty-p (car reference))
+            (concat "<<<REFERENCE BEFORE>>>\n" (car reference)
+                    "\n<<<END REFERENCE BEFORE>>>\n"))
+          (unless (string-empty-p (cdr reference))
+            (concat "<<<REFERENCE AFTER>>>\n" (cdr reference)
+                    "\n<<<END REFERENCE AFTER>>>\n"))
+          "\n"))
+       "The target, the only text to rewrite:\n<<<TARGET>>>\n"
+       (string-remove-suffix "\n" base)
+       "\n<<<END TARGET>>>\n\n"
+       "Instruction: " instruction "\n\n"
+       "Reply with the replacement for the target only."))))
 
 (defun superchat-rewrite--submit (overlay instruction base)
   "Submit a rewrite Run for OVERLAY: rewrite BASE under INSTRUCTION.
@@ -344,12 +504,11 @@ streams into it through `superchat-rewrite--sink'.  Returns OVERLAY."
          (envelope
           (list :surface 'inline-rewrite
                 :session-id session-id
-                :content (superchat-rewrite--content buffer beg end instruction
-                                                     lang-tag base)
+                :content (superchat-rewrite--content buffer beg end instruction base)
                 :tools 'none
                 :system-prompt
-                (format "%s\n\nUse language tag `%s' for the code fence."
-                        superchat-rewrite-system-prompt lang-tag)
+                (or superchat-rewrite-system-prompt
+                    (with-current-buffer buffer (superchat-rewrite--system-text)))
                 :sink (superchat-rewrite--sink overlay lang-tag)
                 :context (list :rewrite-buffer buffer
                                :rewrite-region (cons (copy-marker beg)
@@ -582,42 +741,6 @@ One Change Set replaces the region with `<<<<<<< original' / `=======' /
            (cl-remove-if-not (lambda (overlay)
                                (overlay-get overlay 'superchat-rewrite))
                              (overlays-in (point-min) (point-max)))))))
-
-;; ── Code block extraction ──
-
-(defun superchat-rewrite--extract-code-block (text lang-tag)
-  "Extract the first fenced code block from TEXT.
-Prefer blocks tagged with LANG-TAG; fall back to any fenced block.
-Returns the code content (without fences), or nil."
-  (when (stringp text)
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      (let ((pattern (format "```%s\\s-*\n\\(\\(?:.\\|\n\\)*?\\)\n```"
-                             (regexp-quote lang-tag)))
-            (fallback "```[a-z-]*\\s-*\n\\(\\(?:.\\|\n\\)*?\\)\n```"))
-        (if (re-search-forward pattern nil t)
-            (match-string 1)
-          (goto-char (point-min))
-          (when (re-search-forward fallback nil t)
-            (match-string 1)))))))
-
-(defun superchat-rewrite--extract-all-code-blocks (text lang-tag)
-  "Extract ALL fenced code blocks from TEXT.
-Prefer blocks tagged with LANG-TAG; fall back to any fenced blocks.
-Returns a list of code strings (without fences), in order of appearance."
-  (when (stringp text)
-    (let ((blocks nil))
-      (with-temp-buffer
-        (insert text)
-        (goto-char (point-min))
-        (let ((pattern (format "```%s\\s-*\n\\(\\(?:.\\|\n\\)*?\\)\n```"
-                               (regexp-quote lang-tag)))
-              (fallback "```[a-z-]*\\s-*\n\\(\\(?:.\\|\n\\)*?\\)\n```"))
-          (while (or (re-search-forward pattern nil t)
-                     (re-search-forward fallback nil t))
-            (push (match-string 1) blocks))))
-      (nreverse blocks))))
 
 (defun superchat-rewrite--diff-text (before after)
   "Return a full unified diff from BEFORE to AFTER, via `diff-no-select'."
