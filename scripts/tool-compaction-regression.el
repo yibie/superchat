@@ -27,6 +27,11 @@
 
 ;;; Code:
 
+;; 620, not 400: read_buffer's result carries a header since
+;; 2026-09-26, so its Tool line grew from about 70 to about 140 characters;
+;; 620 keeps the same recent entries raw that 400 kept before.  With tool
+;; text not stored there is no Tool line, and 400 still holds.
+
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
@@ -150,7 +155,7 @@
 (defun tool-compaction--prepare (view &optional store-material)
   "Four turns, then a compaction; return the Session id.
 STORE-MATERIAL, when nil, disables tool material storage."
-  (let ((superchat-context-max-chars 400)
+  (let ((superchat-context-max-chars (if store-material 620 400))
         (superchat-tape-store-tool-material store-material))
     (tool-compaction--run view "ask one")
     (tool-compaction--run view "ask two")
@@ -235,7 +240,7 @@ and the tool message answering it."
           (tool-compaction--fixture
               (tool-compaction--script (buffer-name a) (buffer-name b))
             (let* ((view (smoke--open-chat))
-                   (superchat-context-max-chars 400))
+                   (superchat-context-max-chars 620))
               (tool-compaction--prepare view t)
               (tool-compaction--run view "after compaction")
               (let* ((wire (car tool-compaction--wires))

@@ -270,7 +270,7 @@ Superchat 的默认修改路径不执行持久化，也不对抗你的环境：�
 
 `eval_elisp` 和 shell 是逃生口：你批准了某次调用，那段代码就什么都能做，包括保存和写文件——这正是它们每次都要问的原因。Superchat 自己的 buffer（聊天 View 和内部 buffer）在任何档位下都不会被工具修改。`save_buffer` 不在默认工具里；确实需要模型保存的 Preset 可以点名提供它，那时每次调用都会问你——在没法问人的地方（`read-only`，或批准策略为 `never`，也就是 `danger-full-access` 的默认）会被拒绝。原来叫 `workspace-write` 的档位现在叫 `edit-buffers`，旧名仍然接受。
 
-**读不受档位限制。** `read_buffer`、`read_file`（读磁盘字节，每次最多 2000 行／50 KiB，不创建 buffer）和 `open_file`（真正的 Emacs visit：major mode、你的 hook、文件局部变量都会运行，期间 Emacs 自己提的问题属于 Emacs，不是 Superchat 的批准）在任何档位下都不问人。文件能不能读，由你这个 Emacs 进程的操作系统权限决定，没有敏感路径名单。读出的内容会进入模型上下文，使用远程模型时就会发送给对应的服务商。插件可以用 `tools/pre-execute` 监听收紧这一切。
+**读不受档位限制。** `read_buffer`（读活 buffer 的文本，含未保存改动；每次最多 2000 行／50 KiB，narrow 过的 buffer 只读 narrow 出的部分，结果会写明）、`read_file`（读磁盘字节，每次最多 2000 行／50 KiB，不创建 buffer）和 `open_file`（真正的 Emacs visit：major mode、你的 hook、文件局部变量都会运行，期间 Emacs 自己提的问题属于 Emacs，不是 Superchat 的批准）在任何档位下都不问人。文件能不能读，由你这个 Emacs 进程的操作系统权限决定，没有敏感路径名单。读出的内容会进入模型上下文，使用远程模型时就会发送给对应的服务商。插件可以用 `tools/pre-execute` 监听收紧这一切。
 
 `/reset` 保留 Session 的档位和批准策略。
 

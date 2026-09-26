@@ -35,6 +35,10 @@
 
 ;;; Code:
 
+;; 620, not 400: read_buffer's result carries a header since
+;; 2026-09-26, so its Tool line grew from about 70 to about 140 characters;
+;; 620 keeps the same recent entries raw that 400 kept before.
+
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
@@ -131,7 +135,7 @@ REFUSED-TURN ends with the provider refusing a request as too long."
 (defun cr--resume (view)
   "Run four turns in VIEW, then CR-FIVE, whose request is refused as too long.
 Return CR-FIVE's Run id once it completed."
-  (let ((superchat-context-max-chars 400))
+  (let ((superchat-context-max-chars 620))
     (dolist (text '("ask one" "ask two" "ask three" "ask four"))
       (let ((run (smoke--send view text)))
         (should (stringp run))
@@ -176,7 +180,7 @@ provider received it: the first earlier message, framed as a summary."
                      (list :text (concat "CR-SUMMARY\n" superchat-compact--completion-marker))
                      '(:text "after compaction"))
     (let ((view (smoke--open-chat)))
-      (let ((superchat-context-max-chars 400))
+      (let ((superchat-context-max-chars 620))
         (dolist (text '("ask one" "ask two" "ask three" "ask four"))
           (let ((run (smoke--send view text)))
             (should (smoke--wait (lambda () (smoke--run-done-p run)) 20))))
@@ -272,6 +276,7 @@ rebuilt View's exclusions are the Session's replaced rows and the Run's own."
                                                  superchat-compact--completion-marker))
                              '(:text "after recovery")))
     (let ((view (smoke--open-chat))
+          ;; Its one read is in the first turn, summarized either way.
           (superchat-context-max-chars 400))
       (dolist (text '("ask one" "ask two" "ask three" "ask four"))
         (let ((run (smoke--send view text)))

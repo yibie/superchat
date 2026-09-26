@@ -226,6 +226,85 @@ no business in a local read."
                          (equal file (ignore-errors (file-truename visited))))))
                 (buffer-list))))
 
+(defun superchat-tools--line-window (first count noun &optional narrowed)
+  "Window COUNT lines of the current buffer's accessible text from line FIRST.
+Return (LINES . TEXT): LINES is the header line saying which lines TEXT holds
+out of how many and, when it is not all of them, every reason why and how to
+continue; TEXT is those lines without line numbers, a line longer than
+`superchat-tools-read-file-max-line-length' cut and marked, and no more than
+`superchat-tools-read-file-max-bytes' in all.  NOUN names what is read
+\(\"file\" or \"buffer\").  NARROWED non-nil says the accessible text is a
+narrowed part of a buffer, so even a full window is not the whole of it.
+Line numbers count from the start of the accessible text."
+  (let ((lines nil) (bytes 0) (cut-lines 0) (total 0) (last 0)
+        (byte-stopped nil))
+    (save-excursion
+      (goto-char (point-min))
+      ;; `count-lines' counts a last line that has no newline.
+      (setq total (count-lines (point-min) (point-max)))
+      (when (<= first total)
+        (forward-line (1- first))
+        (setq last (1- first))
+        (while (and (not (eobp)) (not byte-stopped) (< (length lines) count))
+          ;; `pos-eol', not `line-end-position': a field (a shell prompt)
+          ;; does not end a line.
+          (let* ((end (pos-eol))
+                 (text (buffer-substring-no-properties (point) end))
+                 (cut (> (length text) superchat-tools-read-file-max-line-length))
+                 (text (if cut
+                           (format "%s... (line truncated to %d chars)"
+                                   (substring text 0 superchat-tools-read-file-max-line-length)
+                                   superchat-tools-read-file-max-line-length)
+                         text))
+                 (piece (if (< end (point-max)) (concat text "\n") text))
+                 (size (string-bytes piece)))
+            (if (and lines (> (+ bytes size) superchat-tools-read-file-max-bytes))
+                (setq byte-stopped t)
+              ;; Counted only here: a line the byte limit keeps out was
+              ;; not returned cut.
+              (when cut (cl-incf cut-lines))
+              (push piece lines)
+              (cl-incf bytes size)
+              (cl-incf last)
+              (forward-line 1))))))
+    (let* ((returned (length lines))
+           (whole (if narrowed "narrowed part" noun))
+           (reasons
+            (delq nil
+                  (list
+                   (when narrowed "the buffer is narrowed")
+                   (when (and (> returned 0) (> first 1))
+                     (format "it starts at line %d" first))
+                   (when byte-stopped
+                     (format "stopped at the %d-byte limit; continue with offset %d"
+                             superchat-tools-read-file-max-bytes (1+ last)))
+                   (when (and (< last total) (not byte-stopped) (> returned 0))
+                     (format "more lines follow; continue with offset %d" (1+ last)))
+                   (when (> cut-lines 0)
+                     (format "%d line%s truncated to %d characters"
+                             cut-lines (if (= cut-lines 1) " was" "s were")
+                             superchat-tools-read-file-max-line-length))))))
+      (cons
+       (cond
+        ((= total 0) (format "Lines: none (the %s is empty)\n" whole))
+        ((= returned 0)
+         (format "Lines: none (offset %d is past the end; the %s has %d line%s)\n"
+                 first whole total (if (= total 1) "" "s")))
+        (reasons
+         (format "Lines: %d-%d of %d (NOT the complete %s: %s)\n"
+                 first last total noun (string-join reasons "; ")))
+        (t (format "Lines: %d-%d of %d (complete %s)\n" first last total noun)))
+       (apply #'concat (nreverse lines))))))
+
+(defun superchat-tools--line-window-arguments (offset limit)
+  "Return (FIRST . COUNT) from a read tool's OFFSET and LIMIT, or signal why not."
+  (let ((first (superchat-tools--read-file-integer offset "offset" 1))
+        (count (superchat-tools--read-file-integer
+                limit "limit" superchat-tools-read-file-line-limit)))
+    (when (> count superchat-tools-read-file-line-limit)
+      (error "limit must be at most %d" superchat-tools-read-file-line-limit))
+    (cons first count)))
+
 (defun superchat-tool-read-file (path &optional offset limit)
   "Return lines of the local text file PATH as it is on disk.
 OFFSET is the 1-based first line (default 1); LIMIT the number of lines
@@ -239,81 +318,28 @@ and how to continue, and never lets a partial result pass for the whole
 file.  A modified buffer visiting the file is named and left alone.  A
 failure is returned as a string starting with `Error:'."
   (condition-case err
-      (let* ((first (superchat-tools--read-file-integer offset "offset" 1))
-             (count (superchat-tools--read-file-integer
-                     limit "limit" superchat-tools-read-file-line-limit))
-             (_ (when (> count superchat-tools-read-file-line-limit)
-                  (error "limit must be at most %d"
-                         superchat-tools-read-file-line-limit)))
+      (let* ((window-arguments (superchat-tools--line-window-arguments offset limit))
              (file (superchat-tools--read-file-target path))
              (visitor (superchat-tools--read-file-unsaved-visitor file))
-             (lines nil) (bytes 0) (cut-lines 0) (total 0) (last 0)
-             (byte-stopped nil))
-        (with-temp-buffer
-          (let ((file-name-handler-alist nil)
-                (after-insert-file-functions nil)
-                (format-alist nil))
-            (insert-file-contents file))
-          (goto-char (point-min))
-          (when (search-forward "\0" nil t)
-            (error "%s looks binary (it contains NUL bytes); read_file reads text" file))
-          ;; `count-lines' counts a last line that has no newline.
-          (setq total (count-lines (point-min) (point-max)))
-          (goto-char (point-min))
-          (when (<= first total)
-            (forward-line (1- first))
-            (setq last (1- first))
-            (while (and (not (eobp)) (not byte-stopped) (< (length lines) count))
-              (let* ((end (line-end-position))
-                     (text (buffer-substring-no-properties (point) end))
-                     (cut (> (length text) superchat-tools-read-file-max-line-length))
-                     (text (if cut
-                               (format "%s... (line truncated to %d chars)"
-                                       (substring text 0 superchat-tools-read-file-max-line-length)
-                                       superchat-tools-read-file-max-line-length)
-                             text))
-                     (piece (if (< end (point-max)) (concat text "\n") text))
-                     (size (string-bytes piece)))
-                (if (and lines (> (+ bytes size) superchat-tools-read-file-max-bytes))
-                    (setq byte-stopped t)
-                  ;; Counted only here: a line the byte limit keeps out was
-                  ;; not returned cut.
-                  (when cut (cl-incf cut-lines))
-                  (push piece lines)
-                  (cl-incf bytes size)
-                  (cl-incf last)
-                  (forward-line 1))))))
-        (let* ((returned (length lines))
-               (reasons
-                (delq nil
-                      (list
-                       (when (and (> returned 0) (> first 1))
-                         (format "it starts at line %d" first))
-                       (when byte-stopped
-                         (format "stopped at the %d-byte limit; continue with offset %d"
-                                 superchat-tools-read-file-max-bytes (1+ last)))
-                       (when (and (< last total) (not byte-stopped) (> returned 0))
-                         (format "more lines follow; continue with offset %d" (1+ last)))
-                       (when (> cut-lines 0)
-                         (format "%d line%s truncated to %d characters"
-                                 cut-lines (if (= cut-lines 1) " was" "s were")
-                                 superchat-tools-read-file-max-line-length))))))
-          (concat
-           (format "File: %s\n" file)
-           (cond
-            ((= total 0) "Lines: none (the file is empty)\n")
-            ((= returned 0)
-             (format "Lines: none (offset %d is past the end; the file has %d line%s)\n"
-                     first total (if (= total 1) "" "s")))
-            (reasons
-             (format "Lines: %d-%d of %d (NOT the complete file: %s)\n"
-                     first last total (string-join reasons "; ")))
-            (t (format "Lines: %d-%d of %d (complete file)\n" first last total)))
-           (when visitor
-             (format "Note: buffer %s visits this file and has unsaved changes, so this version on disk may be behind it; use read_buffer to see the unsaved text.\n"
-                     (buffer-name visitor)))
-           "Content:\n"
-           (apply #'concat (nreverse lines)))))
+             (window
+              (with-temp-buffer
+                (let ((file-name-handler-alist nil)
+                      (after-insert-file-functions nil)
+                      (format-alist nil))
+                  (insert-file-contents file))
+                (goto-char (point-min))
+                (when (search-forward "\0" nil t)
+                  (error "%s looks binary (it contains NUL bytes); read_file reads text" file))
+                (superchat-tools--line-window
+                 (car window-arguments) (cdr window-arguments) "file"))))
+        (concat
+         (format "File: %s\n" file)
+         (car window)
+         (when visitor
+           (format "Note: buffer %s visits this file and has unsaved changes, so this version on disk may be behind it; use read_buffer to see the unsaved text.\n"
+                   (buffer-name visitor)))
+         "Content:\n"
+         (cdr window)))
     (error (format "Error: %s" (error-message-string err)))))
 
 ;;;; read_reference: a bundled reference page, by id
@@ -383,12 +409,42 @@ with nothing on disk.  A failure is a string starting with `Error:'."
                "Your edits stay in the buffer; saving it is the user's decision.")))))
     (error (format "Error: %s" (error-message-string err)))))
 
-(defun superchat-tool-read-buffer (buffer)
-  "Return the contents of BUFFER."
+(defun superchat-tool-read-buffer (buffer &optional offset limit)
+  "Return lines of the live text of BUFFER, unsaved changes included.
+OFFSET is the 1-based first line (default 1); LIMIT the number of lines
+\(default and at most `superchat-tools-read-file-line-limit'), with the
+limits and the header of `superchat-tool-read-file': the buffer's name, the
+lines returned out of the total, every truncation and how to continue, then
+a line reading `Content:' and the text without line numbers.  A narrowed
+buffer is read in its narrowed part -- the part `edit_buffer' can change --
+and the header says so; reading does not widen.  A buffer visiting a file
+with unsaved changes says its text is not what is on disk.  A buffer that is
+not live, or a bad OFFSET or LIMIT, signals an error."
   (unless (buffer-live-p (get-buffer buffer))
     (error "Error: buffer %s is not live." buffer))
-  (with-current-buffer buffer
-    (buffer-substring-no-properties (point-min) (point-max))))
+  (let ((window-arguments (superchat-tools--line-window-arguments offset limit)))
+    (with-current-buffer buffer
+      (let* ((narrowed (buffer-narrowed-p))
+             (window (superchat-tools--line-window
+                      (car window-arguments) (cdr window-arguments) "buffer" narrowed)))
+        (concat
+         (let ((print-escape-newlines t))
+           (format "Buffer: %S\n" (buffer-name)))
+         (car window)
+         (when narrowed
+           (let ((first (line-number-at-pos (point-min) t))
+                 (count (count-lines (point-min) (point-max)))
+                 (whole (save-restriction (widen) (count-lines (point-min) (point-max)))))
+             (if (= count 0)
+                 (format "Note: the buffer is narrowed to an empty part at line %d of %d.\n"
+                         first whole)
+               (format "Note: the buffer is narrowed to lines %d-%d of %d; line numbers here count from the start of the narrowed part.\n"
+                       first (+ first count -1) whole))))
+         (when (and buffer-file-name (buffer-modified-p))
+           (format "Note: this is the unsaved text of %s; the version on disk differs.\n"
+                   buffer-file-name))
+         "Content:\n"
+         (cdr window))))))
 
 (declare-function superchat-changes-mark-buffer "superchat-changes"
                   (buffer session-id run-id))
@@ -1435,10 +1491,18 @@ Useful after editing tool functions or adding new ones."
           :function #'superchat-tool-list-buffers)
          (superchat--maybe-make-llm-tool
           "read_buffer"
-          :description "Return the contents of an Emacs buffer"
+          :description "Read an Emacs buffer's live text, unsaved changes included, and return its lines. The result starts with a header naming the buffer, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large buffer with offset. A narrowed buffer is read only in its narrowed part, the part edit_buffer can change, and the header says so. For a file no buffer visits use read_file."
           :args (list (list :name "buffer"
                             :type 'string
-                            :description "The name of the buffer whose contents are to be retrieved"))
+                            :description "The name of the buffer to read, exactly as list_buffers gives it.")
+                      (list :name "offset"
+                            :type 'number
+                            :description "1-based first line to return. Defaults to 1."
+                            :optional t)
+                      (list :name "limit"
+                            :type 'number
+                            :description "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
+                            :optional t))
           :function #'superchat-tool-read-buffer)
 
          ;; A file no buffer visits.  A read: the tool itself asks for no

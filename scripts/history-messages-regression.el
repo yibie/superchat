@@ -28,6 +28,10 @@
 
 ;;; Code:
 
+;; 620, not 400: read_buffer's result carries a header since
+;; 2026-09-26, so its Tool line grew from about 70 to about 140 characters;
+;; 620 keeps the same recent entries raw that 400 kept before.
+
 (require 'ert)
 (require 'cl-lib)
 (require 'subr-x)
@@ -325,7 +329,7 @@ message, framed as injected material."
 user message that says it is a summary."
   (hm--fixture (hm--compaction-script)
     (let ((view (smoke--open-chat)))
-      (let ((superchat-context-max-chars 400))
+      (let ((superchat-context-max-chars 620))
         (dolist (text '("ask one" "ask two" "ask three" "ask four"))
           (hm--turn view text))
         (let (done)
@@ -350,7 +354,7 @@ user message that says it is a summary."
 the span to summarize, tool lines included, and no earlier-turn messages."
   (hm--fixture (hm--compaction-script)
     (let ((view (smoke--open-chat))
-          (superchat-context-max-chars 400))
+          (superchat-context-max-chars 620))
       (dolist (text '("ask one" "ask two" "ask three" "ask four"))
         (hm--turn view text))
       (let (done)
@@ -379,7 +383,7 @@ scripts/context-recovery-regression.el.)"
                                                  superchat-compact--completion-marker))
                              '(:text "after recovery")))
     (let ((view (smoke--open-chat))
-          (superchat-context-max-chars 400))
+          (superchat-context-max-chars 620))
       (dolist (text '("ask one" "ask two" "ask three" "ask four"))
         (hm--turn view text))
       (let ((run (smoke--send view "HM-FIVE question")))

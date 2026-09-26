@@ -134,7 +134,10 @@
                 ;; Feed the decoded output directly into the public read
                 ;; tool; using the fixture's original name would be a shortcut.
                 (should (equal (cdr (assoc name expected))
-                               (superchat-tool-read-buffer name)))
+                               (let ((result (superchat-tool-read-buffer name)))
+                                 ;; The text follows the header's `Content:' line.
+                                 (and (string-match "\nContent:\n" result)
+                                      (substring result (match-end 0))))))
                 (let* ((size-read (read-from-string row (cdr name-read)))
                        (mode-read (read-from-string row (cdr size-read))))
                   (should (= (length (cdr (assoc name expected))) (car size-read)))

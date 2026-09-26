@@ -88,7 +88,9 @@ starts its own Assistant heading instead of sitting in the folded row."
   (let ((text (session-view--reopen
                (list session-view--read-round '(:text "It says what it says.")))))
     (should (string-match-p "Tool call: read_buffer\n.*session-view-target" text))
-    (should (string-match-p "Tool result: read_buffer\nTARGET-TEXT" text))))
+    (should (string-match-p
+             "Tool result: read_buffer\nBuffer: \"session-view-target\"\n.*\nContent:\nTARGET-TEXT"
+             text))))
 
 (ert-deftest session-view/a-cut-result-says-so ()
   "A result the Tape kept only in part says how much was cut."
@@ -96,7 +98,8 @@ starts its own Assistant heading instead of sitting in the folded row."
          (text (session-view--reopen
                 (list session-view--read-round '(:text "It is long."))
                 (concat (make-string 40 ?x) "\n"))))
-    (should (string-match-p "Tool result: read_buffer\nxxxxxxxxxxxx" text))
+    ;; The Tape kept the first 12 characters: the start of the header.
+    (should (string-match-p (regexp-quote "Tool result: read_buffer\nBuffer: \"ses") text))
     (should (string-match-p "\\[cut: [0-9]+ more characters\\]" text))))
 
 (ert-deftest session-view/injected-material-shows-its-text ()
