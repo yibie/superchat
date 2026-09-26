@@ -481,6 +481,18 @@ Other provider types retain llm.el's native behavior."
   prompt)
 
 
+(defcustom superchat-llm-warning-message t
+  "Whether llm may warn that the model's API is not free software.
+llm warns on every request to such a provider (DeepSeek, OpenAI and the
+OpenAI-compatible ones, Claude, Gemini...), as `llm-warn-on-nonfree' says;
+each warning can bring up the *Warnings* window.  Non-nil leaves that to llm.
+Nil turns the warning off for superchat's own requests only: other uses of
+llm, and `llm-warn-on-nonfree' itself, are unchanged."
+  :type 'boolean
+  :group 'superchat)
+
+(defvar llm-warn-on-nonfree)
+
 (defcustom superchat-llm-reasoning nil
   "Reasoning (a.k.a. thinking) effort to request from the model.
 
@@ -3974,12 +3986,18 @@ requests until it receives text, bounded by
                                             (= generation request-generation)
                                             (funcall run-active-p))
                                  (error "Runtime Run stopped before provider dispatch"))
-                               (if streaming-request-p
-                                   (llm-chat-streaming effective-backend attempt-prompt
-                                                       attempt-stream-cb attempt-response-cb
-                                                       attempt-error-cb multi-output)
-                                 (llm-chat-async effective-backend attempt-prompt
-                                                 attempt-response-cb attempt-error-cb multi-output)))
+                               ;; llm checks its nonfree warning as the
+                               ;; request is made (`superchat-llm-warning-message').
+                               (let ((llm-warn-on-nonfree
+                                      (and superchat-llm-warning-message
+                                           (bound-and-true-p llm-warn-on-nonfree))))
+                                 (if streaming-request-p
+                                     (llm-chat-streaming effective-backend attempt-prompt
+                                                         attempt-stream-cb attempt-response-cb
+                                                         attempt-error-cb multi-output)
+                                   (llm-chat-async effective-backend attempt-prompt
+                                                   attempt-response-cb attempt-error-cb
+                                                   multi-output))))
                              (when input-tool
                                (lambda ()
                                  (when (and (funcall run-active-p)

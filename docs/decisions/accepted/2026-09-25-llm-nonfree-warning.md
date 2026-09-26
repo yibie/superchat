@@ -1,6 +1,11 @@
 # Decision: what superchat does about llm's "not free software" warning on every request
 
-Status: proposed — worker's design, 2026-09-25, from issue `.scratch/issues/2026-09-25-llm-nonfree-warning-each-request.md`; not yet decided by the user. No code.
+Status: accepted — user, 2026-09-25: "(setq llm-warn-on-nonfree nil) 我希望是这个，但这个配置项是 superchat 这边设置的所以，应该是 superchat-llm-warning-message 的开关". Not the proposal's option A: superchat gets its own switch. Issue `.scratch/issues/2026-09-25-llm-nonfree-warning-each-request.md`.
+
+## Decision
+
+- **A superchat option, `superchat-llm-warning-message`.** Non-nil (the default) leaves llm's warning to llm: it warns as `llm-warn-on-nonfree` says. Nil turns the warning off for superchat's own requests: while superchat makes a chat request, `llm-warn-on-nonfree` counts as nil. llm checks that variable at the moment of the call (its `:before` method on `llm-chat-streaming` / `llm-chat-async`), and superchat makes those calls in one place, so the option covers every request superchat sends and nothing else: other packages' use of llm, and llm's own setting, are unchanged.
+- **Default on**, so llm's deliberate notice stays what a new user sees; the user who wants it gone sets `(setq superchat-llm-warning-message nil)` in their superchat configuration.
 
 ## 一句话
 

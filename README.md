@@ -391,6 +391,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
 - `superchat-display-style` — where the chat opens first in an Emacs session: `editor` (default) in a side window beside the code, `agent` in the conversation's own tab; `C-c C-w` in the chat switches.
+- `superchat-llm-warning-message` — nil stops llm's "… API is not free software" warning (and its *Warnings* window) for superchat's requests; default t leaves it to llm (`llm-warn-on-nonfree`).
 - `superchat-display-single-window` — in agent mode, the chat is the only window of its tab (default `t`); editor mode never closes a window.
 - `superchat-side-window-width` — width of the right side windows, the chat's and the plan panel's (default `0.42` of the frame).
 

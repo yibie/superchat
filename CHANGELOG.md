@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — a switch for llm's "not free software" warning
+
+- `superchat-llm-warning-message`: set it to nil and superchat's requests no
+  longer trigger llm's "… API is not free software" warning, which llm
+  issues on every request to such a provider and which kept bringing up the
+  *Warnings* window. The default, t, leaves it to llm; llm's own
+  `llm-warn-on-nonfree` and other packages' use of llm are unchanged.
+
 ## Unreleased — in-place commands join the chat's conversation
 
 - `superchat-inline-ask`, `superchat-inline-act` and

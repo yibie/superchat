@@ -385,6 +385,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
 - `superchat-display-style` — 一次 Emacs 里聊天第一次在哪里打开：`editor`（默认）在代码旁的侧窗口，`agent` 在这段对话自己的 tab；聊天里按 `C-c C-w` 切换。
+- `superchat-llm-warning-message` — 设为 nil，superchat 发出的请求就不再触发 llm 的"… API is not free software"提醒（以及弹出的 *Warnings* 窗口）；默认 t，交给 llm 自己决定（`llm-warn-on-nonfree`）。
 - `superchat-display-single-window` — agent 模式下，聊天是它那个 tab 里唯一的窗口（默认 `t`）；编辑模式从不关窗口。
 - `superchat-side-window-width` — 右侧侧窗口（聊天与计划面板）的宽度（默认占 frame 的 `0.42`）。
 
