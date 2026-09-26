@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for the decision "the next turn learns what the user
-;; saved" (docs/decisions/accepted/2026-09-25-the-next-turn-learns-what-the-user-saved.md;
+;; saved" (docs/decisions/implemented/2026-09-25-the-next-turn-learns-what-the-user-saved.md;
 ;; context contract, amendment 2026-09-25 (b)).  When the user saves, or
 ;; discards, a buffer a Session's tools edited and left unsaved, the next
 ;; turn's request carries one `[Injected material]' user message saying so,

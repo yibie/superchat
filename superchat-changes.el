@@ -62,6 +62,7 @@
 (declare-function superchat-runtime-admit-between-turns "superchat-runtime"
                   (session-id source text))
 (declare-function superchat-plugin-row-active-p "superchat-plugin" (name))
+(declare-function superchat-conversation-session-id "superchat" ())
 (defvar superchat--tool-execution-context)
 (declare-function diffs-minor-mode "diffs" (&optional arg))
 (defvar diffs-minor-mode)
@@ -505,6 +506,18 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
 
 ;;;; The user's operations -----------------------------------------------------
 
+;; A code buffer has no conversation of its own.  See the review screen's
+;; part of docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
+(defun superchat-changes--session ()
+  "Return the Session a review command acts on here.
+The current buffer's own, when it is a chat View; else the conversation the
+chat window shows, as an in-place command from this buffer would join it
+(M10 slice 2): the chat beside this buffer, else the main one."
+  (or (and (local-variable-p 'superchat--session-id) superchat--session-id)
+      (and (fboundp 'superchat-conversation-session-id)
+           (superchat-conversation-session-id))
+      (user-error "No conversation here")))
+
 (defun superchat-changes--read-buffer (session-id)
   (let* ((rows (superchat-changes-candidates session-id))
          (names (mapcar (lambda (row) (plist-get row :name)) rows)))
@@ -514,8 +527,11 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
 (defun superchat-changes-diff (buffer)
   "Open the review screen for BUFFER alone: how it differs from its file.
 `s' there saves it (the user's operation) and `q' leaves it unsaved.  A buffer
-that visits no file has nothing to compare with and is simply displayed."
-  (interactive (list (superchat-changes--read-buffer superchat--session-id)))
+that visits no file has nothing to compare with and is simply displayed.
+Interactively, BUFFER is one the conversation here left unsaved: this chat's,
+or the one shown beside this buffer."
+  (interactive
+   (list (superchat-changes--read-buffer (superchat-changes--session))))
   (if (buffer-file-name buffer)
       (superchat-changes-review
        (list (list :buffer buffer :name (buffer-name buffer)
@@ -526,12 +542,12 @@ that visits no file has nothing to compare with and is simply displayed."
 
 (defun superchat-changes-save (buffer)
   "Save BUFFER.  The user's operation: this is never offered to a model."
-  (interactive (list (superchat-changes--read-buffer superchat--session-id)))
+  (interactive (list (superchat-changes--read-buffer (superchat-changes--session))))
   (with-current-buffer buffer (save-buffer)))
 
 (defun superchat-changes-revert (buffer)
   "Discard BUFFER's unsaved changes.  The user's operation."
-  (interactive (list (superchat-changes--read-buffer superchat--session-id)))
+  (interactive (list (superchat-changes--read-buffer (superchat-changes--session))))
   (with-current-buffer buffer
     (if (and (buffer-file-name) (file-exists-p (buffer-file-name)))
         (revert-buffer t t t)
@@ -546,9 +562,10 @@ that visits no file has nothing to compare with and is simply displayed."
 
 ;;;###autoload
 (defun superchat-changes ()
-  "List the unsaved buffers this Session's tools edited and open the review screen."
+  "List the unsaved buffers this Session's tools edited and open the review screen.
+The Session is this chat's, or that of the chat shown beside this buffer."
   (interactive)
-  (let ((rows (superchat-changes-candidates superchat--session-id)))
+  (let ((rows (superchat-changes-candidates (superchat-changes--session))))
     (message "%s"
              (if rows
                  (format "%s\nReview: s saves, n leaves unsaved, q stops"

@@ -49,6 +49,7 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 - **光标自己过去**（2026-09-25 起；此前是"不抢焦点"）：Run 结束自动出现时，它显示在对话窗口以外的窗口（编辑模式下是代码区；agent 模式下在对话旁分出一块），并被选中，不需要任何键；选中时丢弃此前积压的按键，所以出现之前敲的键不会存盘。这一刻若 minibuffer 正在用（在回答问题或输入命令），先显示、不选中，minibuffer 结束后再选中。审阅结束（最后一个 `s`/`n`，或 `q`）时，光标回到它出现之前所在的窗口。用户用命令主动打开时（`/changes`、`superchat-changes-diff`、就地做的 `d`）同样选中并丢弃积压的按键。这沿用[批准只接受提问之后的输入](../implemented/2026-09-19-an-approval-is-answered-by-input-that-came-after-it.md)的同一个道理。
 - **候选**：Run 结束时是该 Run 与其委派子 Run 的推导（`superchat-changes-candidates`）；`/changes` 是本会话的推导。磁盘上还没有的新文件以"整文件新增"的 diff 显示，`s` 照常保存；不访问文件的 Buffer 没有文件可存，不进审阅屏，仍在 `/changes` 的文字清单里。
 - **Run 结束的 echo 提示与 `/changes` 的文字清单照旧**；自动出现可由选项关掉。
+- **从代码 Buffer 用命令打开**（2026-09-25 补）：`M-x superchat-changes`、`superchat-changes-diff`、`superchat-changes-save` 与 `-revert` 选 Buffer 时，用的是当前 Buffer 自己的对话；当前 Buffer 不是对话窗口时，用这段代码的就地命令会进的那段对话（第 2 片的规则：这个 tab 右侧显示的那段，没有就是主对话），不再报类型错误。问题见 `.scratch/issues/2026-09-25-superchat-changes-outside-a-chat-view.md`。
 
 ## 共用一段对话
 

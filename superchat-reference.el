@@ -37,7 +37,7 @@ This page is advice. The user's instructions and the permission decisions of thi
 1. Look before you change anything.
 - Which map: a major mode's map is usually MODE-map (emacs-lisp-mode-map). Check that it exists with (boundp 'NAME-map) first. fundamental-mode has no map of its own; a key for every buffer belongs in global-map; a minor mode's map wins over the major mode's.
 - What the key does now, in the buffer the user means: (with-current-buffer NAME (key-binding (kbd \"C-c t h\"))). Keep what you observed: you need it to undo.
-- (lookup-key MAP (kbd \"C-c t h\")) reads one map only. nil means unbound in that map. A number N means the first N keys are already bound to a command, so the longer sequence cannot be bound in that map as it stands; it does not mean the key is free. Always write keys with (kbd \"...\"), never as a bare string.
+- (lookup-key MAP (kbd \"C-c t h\")) reads one map only. nil means unbound in that map. A number N also means that map has no binding for it: its first N keys are not a prefix there, either unbound or bound to a command; look them up to tell which. Only a command there makes define-key of the longer sequence fail with \"starts with non-prefix key\". Another map may still bind the key; key-binding in the target buffer is the effective binding. Always write keys with (kbd \"...\"), never as a bare string.
 - Which file: `user-init-file' is the init file this Emacs loaded. The binding may belong in another file it loads; read before deciding.
 
 2. Three states; never assume they agree.

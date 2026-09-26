@@ -20,6 +20,18 @@ All notable changes to superchat.
   chat is working, an in-place request waits its turn. What an in-place act
   edited is listed by `/changes`.
 
+## Unreleased — the review screen from a file; one reading of lookup-key
+
+- `M-x superchat-changes`, `superchat-changes-diff`, `superchat-changes-save`
+  and `superchat-changes-revert` work from a file's window: they use the
+  conversation an in-place command from there would join (the chat beside
+  the file, else the main one), instead of failing with a type error.
+- The `emacs-keybindings` reference page now reads a number from `lookup-key`
+  the way the operating note does: that map has no binding for the key.  It
+  used to say the first keys were bound to a command, which is wrong when
+  they are simply unbound; in an attended run a model that had read the page
+  drew that wrong conclusion.
+
 ## Unreleased — the model learns what you saved
 
 - When you save a buffer the model edited and left unsaved (with `C-x C-s`,

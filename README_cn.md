@@ -256,7 +256,7 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 
 ### 权限档位
 
-Superchat 操作的是 Emacs 的 **buffer**，不是文件。模型可以读文件（`read_file`）、把文件打开成 buffer（`open_file`）、修改 buffer。**它的修改停在 buffer 里：把 buffer 存盘是你的事**，和你平时用 Emacs 一样——mode line 上的 `*` 就是"有待保存的修改"。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息，同时在另一个窗口出现一块**审阅屏**，光标自己进到它上面：一次一个 buffer，显示文件与 buffer 之间的彩色 diff，`s` 保存、`n` 先不存看下一个、`q` 结束，结束后光标回到原来的地方。审阅屏出现之前敲的键不算数；它出现时你若正在 minibuffer 里输入，等你输完光标再过去。你保存了这样的 buffer（任何方式，包括 `C-x C-s`），或者丢弃了它未保存的修改，模型在下一轮开头会被告知一次。装了 [diffs.el](https://github.com/LuciusChen/diffs.el) 时，diff 会有行号和词级高亮。`/changes` 随时列出这些 buffer 并打开同一块审阅屏，`M-x superchat-changes-diff` 也一样；`M-x superchat-changes-save`／`-revert` 针对单个 buffer。不访问文件的 buffer 只列出、不进审阅屏；通过 `eval_elisp` 跑的代码改了什么不被跟踪。不想让审阅屏自己出现，把 `superchat-changes-review-after-run` 设为 nil。
+Superchat 操作的是 Emacs 的 **buffer**，不是文件。模型可以读文件（`read_file`）、把文件打开成 buffer（`open_file`）、修改 buffer。**它的修改停在 buffer 里：把 buffer 存盘是你的事**，和你平时用 Emacs 一样——mode line 上的 `*` 就是"有待保存的修改"。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息，同时在另一个窗口出现一块**审阅屏**，光标自己进到它上面：一次一个 buffer，显示文件与 buffer 之间的彩色 diff，`s` 保存、`n` 先不存看下一个、`q` 结束，结束后光标回到原来的地方。审阅屏出现之前敲的键不算数；它出现时你若正在 minibuffer 里输入，等你输完光标再过去。你保存了这样的 buffer（任何方式，包括 `C-x C-s`），或者丢弃了它未保存的修改，模型在下一轮开头会被告知一次。装了 [diffs.el](https://github.com/LuciusChen/diffs.el) 时，diff 会有行号和词级高亮。`/changes` 随时列出这些 buffer 并打开同一块审阅屏，`M-x superchat-changes-diff` 也一样；`M-x superchat-changes-save`／`-revert` 针对单个 buffer；在文件窗口里用这几个命令时，用的是从那里就地发起时会进的那段对话（文件旁边那段，没有就是主对话）。不访问文件的 buffer 只列出、不进审阅屏；通过 `eval_elisp` 跑的代码改了什么不被跟踪。不想让审阅屏自己出现，把 `superchat-changes-review-after-run` 设为 nil。
 
 Superchat 的默认修改路径不执行持久化，也不对抗你的环境：如果你装了 `super-save`、开了 `auto-save-visited-mode`、配置了保存时格式化之类，改过的 buffer 会落盘，那是因为**你**把 Emacs 配成了这样。所以承诺不是"磁盘一定不变"，而是"Superchat 不去写它"。
 

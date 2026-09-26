@@ -264,3 +264,13 @@ S 的判定（由独立检查器加答复审阅给出，开跑前固定）：正
 - canonical smoke 基线变化，仅两处、各一行：`A.txt` 与 `A.full.txt` 的 `scripted-prompt-text`，在操作说明之后多出目录块。受保护的 `m3/step/full-baseline-rejects-missing-step-facts` 随基线更新前红后绿；`scripts/m3-regression.el` 未改。`m7/write-path/the-default-surface-has-no-persisting-tool` 里钉住的默认名单加上了 `read_reference`。
 - 其余全部套件、Kernel 检查、加载通过；编译警告与基线一致。
 - **未做、未证实**：没有任何真实模型运行。模型会不会在需要时读、读后会不会用对、目标错误会不会减少、会不会引入新的误操作——都不知道。默认请求因此多带一个工具说明和248 字符的目录，这个成本是确定的，收益还不是。效用对照按上文"效用对照的做法"另行安排。
+
+## 之后的修改（2026-09-25）：`lookup-key` 的数字
+
+第一份资料 `emacs-keybindings` 第 1 点里关于 `lookup-key` 返回数字的一句，原来写的是"数字 N 表示前 N 个键已经绑定了命令，所以更长的序列在这张表里按现状绑不上"。这在常见情形下是错的，也和常驻操作说明（2026-09-24 已改，见[操作说明](../implemented/2026-09-20-emacs-operating-note.md)"之后的修改"第 2 条）矛盾：
+
+- Emacs 自己的说明（`lookup-key` 的 docstring 与 Elisp 手册 "Low-Level Key Binding" 一节）：数字表示 KEY "太长"，前面的键在这张表里不构成前缀；数字是走到一个非前缀键所用的键数。那个非前缀键可以绑了命令，也可以根本没绑。
+- 干净的 `emacs -Q`：`C-c t` 空着时 `(lookup-key global-map (kbd "C-c t h"))` 是 `2`；`C-x C-f` 绑着 `find-file` 时 `(lookup-key global-map (kbd "C-x C-f h"))` 也是 `2`。只有后一种情况下 `define-key` 绑更长的序列会报 "starts with non-prefix key"。
+- M10 第 1b、1c 片的有人值守运行里，模型先读了这份资料，然后照它把 `2` 读成"已有前缀绑定"（`.scratch/issues/2026-09-25-reference-page-misstates-lookup-key-number.md`）。
+
+改为与操作说明同一个说法："that map has no binding for it"，再说明前 N 个键可能空着也可能绑了命令、要查那 N 个键才知道哪一种，只有绑了命令时 `define-key` 才会报 "starts with non-prefix key"，有效绑定看目标 Buffer 里的 `key-binding`。资料的内容版本随正文改变。回归：新文件 `scripts/lookup-key-wording-regression.el`，钉住资料与操作说明都用这句话、都不再有旧说法。**未经真实模型验证。**
