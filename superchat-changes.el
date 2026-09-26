@@ -46,7 +46,7 @@
 ;; `superchat-changes-diff' open it selected too.  Keys typed before it is
 ;; selected are dropped, so they never save anything.  Buffers that visit no file have nothing to save
 ;; to and are not on the screen.
-;; See docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
+;; See docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
 
 ;;; Code:
 
@@ -507,7 +507,7 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
 ;;;; The user's operations -----------------------------------------------------
 
 ;; A code buffer has no conversation of its own.  See the review screen's
-;; part of docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
+;; part of docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
 (defun superchat-changes--session ()
   "Return the Session a review command acts on here.
 The current buffer's own, when it is a chat View; else the conversation the

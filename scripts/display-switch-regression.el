@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for M10 slice 1c
-;; (docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
+;; (docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
 ;; "切换键"): in the chat View `C-c C-w' moves a conversation shown beside the
 ;; file into its own tab, filling it, and back into the editing tab's side
 ;; window, with the unsent input kept; within one Emacs session the next

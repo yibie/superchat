@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for slice 1a of the editor-mode/agent-mode decision
-;; (docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md):
+;; (docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md):
 ;; the review screen that shows, one buffer at a time, how an unsaved buffer
 ;; a Run edited differs from its file, with `s' to save, `n' to leave it
 ;; unsaved and see the next, and `q' to stop.  It is the screen the attended

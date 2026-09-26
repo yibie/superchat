@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for M10 slice 2
-;; (docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
+;; (docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
 ;; "共用一段对话", amended 2026-09-25 "1d 2a"): in-place ask, act and rewrite
 ;; go into the conversation the chat window shows; their requests carry no
 ;; earlier turns of it (a follow-up in the same overlay carries that overlay's

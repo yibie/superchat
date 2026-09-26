@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for opening the review screen by command outside a chat
-;; View (docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
+;; View (docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md,
 ;; 审阅屏, "从代码 Buffer 用命令打开"; issue
 ;; .scratch/issues/2026-09-25-superchat-changes-outside-a-chat-view.md).
 ;; `M-x superchat-changes' and `superchat-changes-diff''s buffer prompt use

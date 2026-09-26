@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for slice 1b of the editor-mode/agent-mode decision
-;; (docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md):
+;; (docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md):
 ;; in editor mode, the default, the chat View opens in a side window on the
 ;; right of the tab being edited, beside the code, instead of in the Session's
 ;; own tab over the whole frame; `superchat-display-style' `agent' keeps that

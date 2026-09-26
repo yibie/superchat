@@ -1,6 +1,6 @@
 # Decision: an editor mode and an agent mode for one conversation, with the plain s/n review of unsaved changes in color
 
-Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢侧边栏布局", then "1. 我希望在编辑文件时，可以是侧边栏为主。2. 但如果我希望是直接操作 emacs 的时候，我又希望以 agentic 的界面为主。", "关于 diff 其实我很满意当前这个交互……最好可以美化一下", "4. B 就可以了", and finally "1. A。 2. A"; amended 2026-09-25 when slice 1c was assigned: "审核界面不应该按键跳转，光标应该自动跳转到 diff 界面"; and before slice 2, after comparing with Cursor: "1d 2a"; implementation state per slice is in [the roadmap](../../roadmap.md).
+Status: implemented — all four slices built and accepted by attended runs (1b and 1c 2026-09-25, 2 on 2026-09-26: [1b](../../reports/2026-09-25-m10-1b-editor-and-agent-mode-acceptance.md), [1c](../../reports/2026-09-25-m10-1c-acceptance.md), [2](../../reports/2026-09-26-m10-2-acceptance.md)). Decided — user, 2026-09-24, over one conversation: "我还是喜欢侧边栏布局", then "1. 我希望在编辑文件时，可以是侧边栏为主。2. 但如果我希望是直接操作 emacs 的时候，我又希望以 agentic 的界面为主。", "关于 diff 其实我很满意当前这个交互……最好可以美化一下", "4. B 就可以了", and finally "1. A。 2. A"; amended 2026-09-25 when slice 1c was assigned: "审核界面不应该按键跳转，光标应该自动跳转到 diff 界面"; and before slice 2, after comparing with Cursor: "1d 2a"; implementation state per slice is in [the roadmap](../../roadmap.md).
 
 ## Problem
 
