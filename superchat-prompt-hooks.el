@@ -512,6 +512,34 @@ being silently dropped (N5) before this collector existed."
              :owner 'chat :id "memory" :slot 'memory :text formatted
              :priority 0 :budget-class 'soft)))))
 
+(defun superchat-prompt--outside-thread (events thread)
+  "Return the storage ids among EVENTS an in-place follow-up leaves out.
+THREAD is its overlay's Runs.  It keeps their rows and the notes of what the
+user saved or discarded, after the thread began, of a buffer those Runs
+edited (M10 record: the follow-up carries its own exchange and those notes)."
+  (let* ((first (cl-some (lambda (event)
+                           (and (member (plist-get event :run-id) thread)
+                                (plist-get event :storage-id)))
+                         events))
+         (edited (delq nil
+                       (mapcar (lambda (event)
+                                 (and (member (plist-get event :run-id) thread)
+                                      (equal "tool.completed" (plist-get event :type))
+                                      (plist-get (plist-get event :payload) :buffer)))
+                               events))))
+    (delq nil
+          (mapcar
+           (lambda (event)
+             (let ((source (plist-get (plist-get event :payload) :source)))
+               (unless (or (member (plist-get event :run-id) thread)
+                           (and (equal "attachment.added" (plist-get event :type))
+                                (equal "user-save" (format "%s" (plist-get source :kind)))
+                                (member (plist-get source :buffer) edited)
+                                first (integerp (plist-get event :storage-id))
+                                (> (plist-get event :storage-id) first)))
+                 (plist-get event :storage-id))))
+           events))))
+
 (defun superchat-prompt-collector--history (env _state _tools)
   "Return the bounded Context View fragment, refit at assemble time.
 Stores `:context-envelope'/`:context-max-chars' in Turn state twice: once
@@ -543,11 +571,8 @@ assembled without its exclusions."
                 (append
                  (superchat-view-superseded-storage-ids session-id)
                  (and thread
-                      (delq nil
-                            (mapcar (lambda (event)
-                                      (unless (member (plist-get event :run-id) thread)
-                                        (plist-get event :storage-id)))
-                                    (superchat-tape-replay-events session-id)))))
+                      (superchat-prompt--outside-thread
+                       (superchat-tape-replay-events session-id) thread)))
               (error
                (setq history-usable-p nil)
                (message

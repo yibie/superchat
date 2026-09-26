@@ -27,7 +27,8 @@ All notable changes to superchat.
   obsolete.
 - Their requests carry only what they point at and your words, not the
   conversation's earlier turns, as Cursor's inline edit does; a follow-up in
-  the same overlay carries that overlay's own earlier exchange. (Since
+  the same overlay carries that overlay's own earlier exchange, and the note
+  that you saved or discarded a buffer it edited. (Since
   "earlier turns reach the model as real messages", such a follow-up had
   been sent without its first question; this fixes it.)
 - The chat window shows each in-place turn when it ends, with a button back

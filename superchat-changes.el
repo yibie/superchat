@@ -127,7 +127,7 @@ later save is not reported until their tools edit it again."
   (dolist (session sessions)
     (ignore-errors
       (superchat-runtime-admit-between-turns
-       session (list :kind 'user-save) text)))
+       session (list :kind 'user-save :buffer (buffer-name buffer)) text)))
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (let ((pairs (cl-remove-if (lambda (pair) (member (car pair) sessions))

@@ -204,6 +204,61 @@ only the region and the instruction."
       (should (equal '("user") (hm--roles (car hm--wires))))
       (should-not (string-match-p "SC-CHAT-QUESTION" (car (sc--texts (car hm--wires))))))))
 
+;;;; A follow-up learns what the user saved of its own edits
+
+(defun sc--act-and-save (buffer)
+  "In-place act that edits BUFFER's third line, then the user saves BUFFER.
+Return the overlay."
+  (let ((overlay (with-current-buffer buffer (superchat-inline-act "SC-ACT"))))
+    (should (smoke--wait (lambda () (eq 'ready (plist-get (sc--state overlay) :status))) 20))
+    (should (buffer-modified-p buffer))
+    (with-current-buffer buffer (save-buffer))
+    overlay))
+
+(ert-deftest shared-conversation/a-follow-up-learns-the-user-saved-its-edit ()
+  "After the user saved the buffer an in-place act edited, a follow-up in the
+same overlay carries the save note (the M10 record, 2026-09-26: \"A\")."
+  (sc--fixture (list '(:tool-uses (("edit_buffer" (buffer_name . "note.txt")
+                                    (old_string . "third") (new_string . "THIRD"))))
+                     '(:text "SC-ACT-ANSWER")
+                     '(:text "SC-UNDO-ANSWER"))
+      (view buffer)
+    (let ((overlay (sc--act-and-save buffer)))
+      (with-current-buffer buffer (superchat-inline-act-reply overlay "SC-UNDO"))
+      (should (smoke--wait (lambda () (eq 'ready (plist-get (sc--state overlay) :status))) 20))
+      (let ((texts (sc--texts (car hm--wires))))
+        (should (cl-some (lambda (text) (string-match-p "SC-ACT-ANSWER" text)) texts))
+        (should (cl-some (lambda (text)
+                           (string-match-p "\\`\\[Injected material\\] The user saved note.txt" text))
+                         texts))))))
+
+(ert-deftest shared-conversation/a-follow-up-leaves-out-other-saves ()
+  "A save note about a buffer only the chat's Run edited stays out of an
+in-place follow-up, like the rest of the conversation."
+  (let* ((other-dir (file-name-as-directory (make-temp-file "sc-other-" t)))
+         (other (expand-file-name "other.txt" other-dir)))
+    (with-temp-file other (insert "two\n"))
+    (unwind-protect
+        (sc--fixture (list '(:text "SC-ANSWER-ONE")
+                           `(:tool-uses (("open_file" (path . ,other))))
+                           '(:tool-uses (("edit_buffer" (buffer_name . "other.txt")
+                                          (old_string . "two") (new_string . "TWO"))))
+                           '(:text "SC-CHAT-ANSWER")
+                           '(:text "SC-ANSWER-TWO"))
+            (view buffer)
+          (let ((overlay (sc--ask buffer "SC-QUESTION-ONE")))
+            (hm--turn view "SC-CHAT edit other.txt")
+            (with-current-buffer (get-file-buffer other) (save-buffer))
+            (with-current-buffer buffer (superchat-inline-reply overlay "SC-QUESTION-TWO"))
+            (should (smoke--wait (lambda () (eq 'ready (plist-get (sc--state overlay) :status))) 20))
+            (let ((texts (sc--texts (car hm--wires))))
+              (should (cl-some (lambda (text) (string-match-p "SC-QUESTION-ONE" text)) texts))
+              (should-not (cl-some (lambda (text) (string-match-p "saved other.txt" text)) texts)))))
+      (when-let* ((b (get-file-buffer other)))
+        (with-current-buffer b (set-buffer-modified-p nil))
+        (kill-buffer b))
+      (delete-directory other-dir t))))
+
 (provide 'shared-conversation-regression)
 
 ;;; shared-conversation-regression.el ends here
