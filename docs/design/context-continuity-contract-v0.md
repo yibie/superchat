@@ -769,7 +769,7 @@ Decision: [request evidence includes Step material](../decisions/accepted/2026-0
 
 ## Amendment 2026-09-25: earlier turns as messages
 
-Decision: [earlier turns reach the model as real messages](../decisions/accepted/2026-09-25-earlier-turns-as-real-tool-messages.md). It replaces, for provider requests, section 10's rendering and the tool-observation *Rendering* of the 2026-09-23 amendment; selection, accounting, disclosure and recall are unchanged.
+Decision: [earlier turns reach the model as real messages](../decisions/implemented/2026-09-25-earlier-turns-as-real-tool-messages.md). It replaces, for provider requests, section 10's rendering and the tool-observation *Rendering* of the 2026-09-23 amendment; selection, accounting, disclosure and recall are unchanged.
 
 **What a provider request carries.** The selected items become messages placed before the current user message, in Tape order: a raw user item a user message, a raw assistant item an assistant message, a selected compact Anchor one user message first saying it is a model's summary of the earlier conversation, an admitted Step-material row a user message `[Injected material] TEXT`. The tool-observation items of one Step become one assistant message whose calls are those items in order, followed by one tool message per call. The disclosure header, the body's role labels and the tool-observation note are not sent; `:prompt` keeps the canonical text rendering for accounting and compaction's input.
 

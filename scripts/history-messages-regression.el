@@ -3,7 +3,7 @@
 ;;; Commentary:
 ;;
 ;; Offline coverage for the decision "earlier turns reach the model as real
-;; messages" (docs/decisions/accepted/2026-09-25-earlier-turns-as-real-tool-messages.md;
+;; messages" (docs/decisions/implemented/2026-09-25-earlier-turns-as-real-tool-messages.md;
 ;; context contract, amendment 2026-09-25).  An earlier turn reaches the model
 ;; as its user message, one assistant message per Step with that Step's tool
 ;; calls, one tool message per call, and its final assistant text -- not as a

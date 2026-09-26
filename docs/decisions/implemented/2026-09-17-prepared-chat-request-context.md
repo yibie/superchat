@@ -2,7 +2,7 @@
 
 Status: implemented
 
-Superseded in part (2026-09-25): history is no longer part of the editable body. The earlier turns are their own messages ([earlier turns reach the model as real messages](../accepted/2026-09-25-earlier-turns-as-real-tool-messages.md)), shown read-only in the inspector, so an edited body is sent with the same history selection as an unedited one; attachments and source selections deleted from the body still stay deleted.
+Superseded in part (2026-09-25): history is no longer part of the editable body. The earlier turns are their own messages ([earlier turns reach the model as real messages](2026-09-25-earlier-turns-as-real-tool-messages.md)), shown read-only in the inspector, so an edited body is sent with the same history selection as an unedited one; attachments and source selections deleted from the body still stay deleted.
 
 ## Decision
 

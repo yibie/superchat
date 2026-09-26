@@ -2,7 +2,7 @@
 
 Status: accepted (user, 2026-09-23: "按照你的建议", after the codex review). Built first; the finish check follows. The mechanism below is settled; its exact contract is written into `docs/design/context-continuity-contract-v0.md` and the Tape event specs before code.
 
-Superseded in part (2026-09-25): item 2's rendering — one `Tool:` line per call inside the history text — is replaced by [earlier turns reach the model as real messages](2026-09-25-earlier-turns-as-real-tool-messages.md); what is stored and selected stays as decided here.
+Superseded in part (2026-09-25): item 2's rendering — one `Tool:` line per call inside the history text — is replaced by [earlier turns reach the model as real messages](../implemented/2026-09-25-earlier-turns-as-real-tool-messages.md); what is stored and selected stays as decided here.
 
 ## Problem
 
