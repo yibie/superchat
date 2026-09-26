@@ -41,9 +41,10 @@
 ;; attended acceptance runs used, brought into the product and colored with
 ;; `diff-mode', and with diffs.el's `diffs-minor-mode' when diffs.el is
 ;; installed.  When a Run leaves unsaved buffers it appears by itself in another
-;; window without being selected, so a key typed elsewhere never reaches it;
-;; `/changes' and `superchat-changes-diff' open it selected.  Keys typed before
-;; it is selected are dropped.  Buffers that visit no file have nothing to save
+;; window and the cursor goes to it -- after the minibuffer, when that is in use
+;; -- and comes back to where it was when the review ends; `/changes' and
+;; `superchat-changes-diff' open it selected too.  Keys typed before it is
+;; selected are dropped, so they never save anything.  Buffers that visit no file have nothing to save
 ;; to and are not on the screen.
 ;; See docs/decisions/accepted/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
 
@@ -64,9 +65,10 @@
 
 (defcustom superchat-changes-review-after-run t
   "Whether the review screen appears by itself when a Run leaves unsaved buffers.
-It is shown in a window other than the selected one and is not selected, so
-keys typed elsewhere never reach it.  `/changes' and `superchat-changes-diff'
-open it and select it whatever this says."
+It is shown in a window other than the selected one and the cursor goes to it;
+keys typed before that are dropped.  While the minibuffer is in use it waits
+for the minibuffer to finish.  `/changes' and `superchat-changes-diff' open
+it and select it whatever this says."
   :type 'boolean
   :group 'superchat)
 
@@ -203,6 +205,11 @@ ROWS are candidate plists, as `superchat-changes-candidates' returns them.")
 ;; Every redraw runs `diff-mode', which would otherwise forget where it was.
 (put 'superchat-changes-review--state 'permanent-local t)
 
+(defvar-local superchat-changes-review--return-window nil
+  "The window that was selected when the review screen took the cursor.")
+;; Rendering sets `diff-mode' again for each buffer; keep this across it.
+(put 'superchat-changes-review--return-window 'permanent-local t)
+
 (defvar-local superchat-changes-review--active nil
   "Non-nil in the review buffer; enables its keys in
 `minor-mode-overriding-map-alist'.")
@@ -316,7 +323,9 @@ Rows whose buffer is gone or visits no file are not shown; the check is made
 now, since ROWS may have been computed before a timer ran.  Returns the review
 buffer, or nil when nothing is left to show.  The screen is displayed in a
 window other than the selected one; with SELECT it is also selected and keys
-typed ahead are dropped, otherwise the selected window stays as it was."
+typed ahead are dropped, otherwise the selected window stays as it was.  A
+selected screen gives the cursor back to the window it came from when the
+review ends."
   (let ((rows (cl-remove-if-not
                (lambda (row)
                  (let ((buffer (plist-get row :buffer)))
@@ -334,15 +343,43 @@ typed ahead are dropped, otherwise the selected window stays as it was."
                           display-buffer-pop-up-window
                           display-buffer-below-selected)
                          (inhibit-same-window . t)))))
-          (when (and select (window-live-p window))
-            (select-window window)
-            (discard-input)))
+          (when select
+            (superchat-changes--review-select window)))
         review))))
 
+(defun superchat-changes--review-select (window)
+  "Move the cursor to WINDOW, the review screen, dropping keys typed ahead.
+The window selected before is where the cursor returns when the review ends."
+  (when (window-live-p window)
+    (let ((from (selected-window)))
+      (with-current-buffer (window-buffer window)
+        (unless (eq from window)
+          (setq superchat-changes-review--return-window from))))
+    (select-window window)
+    (discard-input)))
+
+(defun superchat-changes--review-select-after-minibuffer ()
+  "Once the minibuffer in use is done, move the cursor to the review screen."
+  (remove-hook 'minibuffer-exit-hook
+               #'superchat-changes--review-select-after-minibuffer)
+  ;; The exit hook runs while the minibuffer is still up; select just after.
+  (run-at-time 0 nil
+               (lambda ()
+                 (when-let* ((review (get-buffer superchat-changes-review-buffer-name))
+                             (window (get-buffer-window review t)))
+                   (if (active-minibuffer-window)
+                       (add-hook 'minibuffer-exit-hook
+                                 #'superchat-changes--review-select-after-minibuffer)
+                     (superchat-changes--review-select window))))))
+
 (defun superchat-changes--review-after-run (session run)
-  "Show the review screen for what RUN of SESSION left unsaved, unselected."
+  "Show the review screen for what RUN of SESSION left unsaved and select it.
+While the minibuffer is in use it is shown unselected and selected after."
   (when-let* ((rows (ignore-errors (superchat-changes-candidates session run))))
-    (superchat-changes-review rows)))
+    (let ((busy (active-minibuffer-window)))
+      (when (and (superchat-changes-review rows (not busy)) busy)
+        (add-hook 'minibuffer-exit-hook
+                  #'superchat-changes--review-select-after-minibuffer)))))
 
 (defun superchat-changes--review-buffer ()
   (or (and (local-variable-p 'superchat-changes-review--state)
@@ -361,11 +398,16 @@ typed ahead are dropped, otherwise the selected window stays as it was."
         (superchat-changes--review-close review)))))
 
 (defun superchat-changes--review-close (review)
-  "Close the review buffer REVIEW and give its windows back."
-  (dolist (window (get-buffer-window-list review nil t))
-    (quit-restore-window window 'bury))
-  (when (buffer-live-p review)
-    (kill-buffer review)))
+  "Close the review buffer REVIEW, give its windows back and the cursor too."
+  (let ((return (and (buffer-live-p review)
+                     (buffer-local-value 'superchat-changes-review--return-window
+                                         review))))
+    (dolist (window (get-buffer-window-list review nil t))
+      (quit-restore-window window 'bury))
+    (when (buffer-live-p review)
+      (kill-buffer review))
+    (when (window-live-p return)
+      (select-window return))))
 
 (defun superchat-changes-review-save ()
   "Save the buffer on the review screen, then show the next one.

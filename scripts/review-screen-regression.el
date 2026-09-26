@@ -10,7 +10,7 @@
 ;; acceptance runs used (`ca-reviewer-saves-p'), brought into the product and
 ;; colored: `diff-mode' always, `diffs-minor-mode' when diffs.el is present.
 ;; It appears by itself when a Run leaves unsaved buffers, without taking
-;; focus; `/changes' and `superchat-changes-diff' open it selected.
+;; focus (since 2026-09-25 it takes the cursor); `/changes' and\n;; `superchat-changes-diff' open it selected.
 ;;
 ;; This standalone suite reuses canonical smoke helpers as a library.  It
 ;; neither loads nor modifies the leader-owned M3/M5 sets, and needs no scratch
@@ -165,22 +165,55 @@ was selected when the message was sent."
              (review--settle (smoke--send ,view "edit both"))
              ,@body))))))
 
-;;;; The screen appears by itself, without taking focus
+;;;; The screen appears by itself and the cursor goes to it
 
-(ert-deftest review/after-run/appears-without-taking-focus ()
+(defmacro review--typing-ahead (key &rest body)
+  "Run BODY with KEY typed just before the review screen appears after a Run."
+  (declare (indent 1) (debug t))
+  `(let ((type-ahead (lambda (&rest _) (setq unread-command-events (list ,key)))))
+     (advice-add 'superchat-changes--review-after-run :before type-ahead)
+     (unwind-protect (progn ,@body)
+       (advice-remove 'superchat-changes--review-after-run type-ahead))))
+
+(ert-deftest review/after-run/takes-the-cursor-and-drops-typed-ahead-keys ()
   "A Run that leaves unsaved buffers shows the review screen in another
-window; the window the user was in stays selected, and a key typed there does
-not save anything."
+window and moves the cursor into it, with no key needed (M10 record, amended
+2026-09-25); a key typed just before it appeared saves nothing."
+  (review--typing-ahead ?s
+    (review--after-two-file-run (dir a b view)
+      (should (smoke--wait #'review--shown 5))
+      (should (eq (window-buffer (selected-window)) (review--buffer)))
+      (should-not (eq selected (selected-window)))
+      (should-not unread-command-events)
+      (should (string-match-p "1/2" (review--text)))
+      (should (buffer-modified-p (get-file-buffer a)))
+      (should (equal "one\n" (review--disk a))))))
+
+(ert-deftest review/after-run/waits-while-the-minibuffer-is-in-use ()
+  "When the screen appears while the minibuffer is in use, it is shown but
+not selected; the cursor goes to it once the minibuffer is done."
+  (let* ((busy t)
+         (real (symbol-function 'active-minibuffer-window)))
+    (cl-letf (((symbol-function 'active-minibuffer-window)
+               (lambda () (if busy (minibuffer-window) (funcall real)))))
+      (review--after-two-file-run (dir a b view)
+        (should (smoke--wait #'review--shown 5))
+        (should (eq selected (selected-window)))
+        (setq busy nil)
+        (run-hooks 'minibuffer-exit-hook)
+        (should (smoke--wait (lambda () (eq (window-buffer (selected-window))
+                                            (review--buffer)))
+                             5))))))
+
+(ert-deftest review/after-run/q-gives-the-cursor-back ()
+  "When the review ends, the cursor is back in the window it was in before
+the screen appeared."
   (review--after-two-file-run (dir a b view)
     (should (smoke--wait #'review--shown 5))
-    (should (eq selected (selected-window)))
-    (should-not (eq (window-buffer (selected-window)) (review--buffer)))
-    ;; Typing `s' where the user is does not reach the review screen.
-    (with-current-buffer (window-buffer (selected-window))
-      (should-not (eq (key-binding (kbd "s"))
-                      (with-current-buffer (review--buffer) (key-binding (kbd "s"))))))
-    (should (buffer-modified-p (get-file-buffer a)))
-    (should (equal "one\n" (review--disk a)))))
+    (should (eq (window-buffer (selected-window)) (review--buffer)))
+    (review--press "q")
+    (should-not (review--shown))
+    (should (eq selected (selected-window)))))
 
 (ert-deftest review/option/off-means-no-screen-but-the-notice-stays ()
   "Guard (green before and after): with the option off, no review screen

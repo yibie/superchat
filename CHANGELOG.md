@@ -2,6 +2,21 @@
 
 All notable changes to superchat.
 
+## Unreleased — one key between the two layouts; the review screen takes the cursor
+
+- `C-c C-w` in the chat moves the conversation into its own tab, filling it,
+  and back beside the file you came from; the text you had not sent stays.
+  For the rest of the Emacs session the chat opens in the layout you last
+  switched to; `superchat-display-style` now only sets the first one. Also
+  `M-x superchat-toggle-display-style`, which from a file's window acts on
+  the chat beside it.
+- The review screen for unsaved changes now takes the cursor when it
+  appears after a Run, so `s`/`n`/`q` work without switching to it first;
+  when the review ends the cursor is back where it was. Keys typed before it
+  appeared are still dropped, so they cannot save anything; if you are typing
+  in the minibuffer at that moment, it waits until you are done. A key typed
+  after it appears acts on it.
+
 ## Unreleased — earlier turns reach the model as real messages
 
 - A later turn now sends the earlier ones to the model as real messages:

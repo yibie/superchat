@@ -95,7 +95,7 @@ buffer，但发送第一条消息时请求会被拒绝，并在发送时报告�
 
 ## 5 分钟上手
 
-使用 `M-x superchat` 打开聊天界面。它出现在当前 tab 右侧的侧窗口里，挨着你正在编辑的文件（编辑模式），原有的窗口都还在，只是变窄一些。把 `superchat-display-style` 设为 `agent`，每段对话就改为占满它自己的 tab（agent 模式）。关闭一段对话：在它的聊天窗口里 `M-x superchat-close-session-workspace`，agent 模式下关掉它的 tab 也行；还有 Run 在跑时会先问你。
+使用 `M-x superchat` 打开聊天界面。它出现在当前 tab 右侧的侧窗口里，挨着你正在编辑的文件（编辑模式），原有的窗口都还在，只是变窄一些。在聊天里按 `C-c C-w`，这段对话就移进它自己的 tab 并占满（agent 模式）；再按一次回到你刚才那个文件旁边，没发出去的字还在。同一次 Emacs 里，之后打开聊天用你最后切换到的模式；`superchat-display-style`（`editor` 或 `agent`）决定一开始用哪种。关闭一段对话：在它的聊天窗口里 `M-x superchat-close-session-workspace`，agent 模式下关掉它的 tab 也行；还有 Run 在跑时会先问你。
 
 以下是你能在首次会话中做的五件事：
 
@@ -256,7 +256,7 @@ Artifact 的正文仍留在原 buffer，发布的生成 Artifact 则持久保存
 
 ### 权限档位
 
-Superchat 操作的是 Emacs 的 **buffer**，不是文件。模型可以读文件（`read_file`）、把文件打开成 buffer（`open_file`）、修改 buffer。**它的修改停在 buffer 里：把 buffer 存盘是你的事**，和你平时用 Emacs 一样——mode line 上的 `*` 就是"有待保存的修改"。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息，同时在另一个窗口出现一块**审阅屏**（不抢焦点）：一次一个 buffer，显示文件与 buffer 之间的彩色 diff，`s` 保存、`n` 先不存看下一个、`q` 结束（切到那个窗口后按键才生效，之前敲的键不算数）。装了 [diffs.el](https://github.com/LuciusChen/diffs.el) 时，diff 会有行号和词级高亮。`/changes` 随时列出这些 buffer 并打开同一块审阅屏，`M-x superchat-changes-diff` 也一样；`M-x superchat-changes-save`／`-revert` 针对单个 buffer。不访问文件的 buffer 只列出、不进审阅屏；通过 `eval_elisp` 跑的代码改了什么不被跟踪。不想让审阅屏自己出现，把 `superchat-changes-review-after-run` 设为 nil。
+Superchat 操作的是 Emacs 的 **buffer**，不是文件。模型可以读文件（`read_file`）、把文件打开成 buffer（`open_file`）、修改 buffer。**它的修改停在 buffer 里：把 buffer 存盘是你的事**，和你平时用 Emacs 一样——mode line 上的 `*` 就是"有待保存的修改"。一个 Run 结束时如果留下了它改过、还没保存的 buffer，你会收到一条列出它们的消息，同时在另一个窗口出现一块**审阅屏**，光标自己进到它上面：一次一个 buffer，显示文件与 buffer 之间的彩色 diff，`s` 保存、`n` 先不存看下一个、`q` 结束，结束后光标回到原来的地方。审阅屏出现之前敲的键不算数；它出现时你若正在 minibuffer 里输入，等你输完光标再过去。装了 [diffs.el](https://github.com/LuciusChen/diffs.el) 时，diff 会有行号和词级高亮。`/changes` 随时列出这些 buffer 并打开同一块审阅屏，`M-x superchat-changes-diff` 也一样；`M-x superchat-changes-save`／`-revert` 针对单个 buffer。不访问文件的 buffer 只列出、不进审阅屏；通过 `eval_elisp` 跑的代码改了什么不被跟踪。不想让审阅屏自己出现，把 `superchat-changes-review-after-run` 设为 nil。
 
 Superchat 的默认修改路径不执行持久化，也不对抗你的环境：如果你装了 `super-save`、开了 `auto-save-visited-mode`、配置了保存时格式化之类，改过的 buffer 会落盘，那是因为**你**把 Emacs 配成了这样。所以承诺不是"磁盘一定不变"，而是"Superchat 不去写它"。
 
@@ -382,7 +382,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
-- `superchat-display-style` — 聊天在哪里打开：`editor`（默认）在代码旁的侧窗口，`agent` 在这段对话自己的 tab。
+- `superchat-display-style` — 一次 Emacs 里聊天第一次在哪里打开：`editor`（默认）在代码旁的侧窗口，`agent` 在这段对话自己的 tab；聊天里按 `C-c C-w` 切换。
 - `superchat-display-single-window` — agent 模式下，聊天是它那个 tab 里唯一的窗口（默认 `t`）；编辑模式从不关窗口。
 - `superchat-side-window-width` — 右侧侧窗口（聊天与计划面板）的宽度（默认占 frame 的 `0.42`）。
 

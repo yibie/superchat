@@ -97,7 +97,7 @@ Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for MCP server tool i
 
 ## 5-minute tour
 
-Open the chat with `M-x superchat`. It opens in a side window on the right of the tab you are in, beside the file you are editing (editor mode); your windows stay open, only narrower. Set `superchat-display-style` to `agent` to give each conversation its own tab that it fills instead (agent mode). To close a conversation, run `M-x superchat-close-session-workspace` in its chat window, or close its tab in agent mode; if a Run is still working you are asked first.
+Open the chat with `M-x superchat`. It opens in a side window on the right of the tab you are in, beside the file you are editing (editor mode); your windows stay open, only narrower. Press `C-c C-w` in the chat to move the conversation into its own tab, which it fills (agent mode), and again to bring it back beside the file you came from; the text you had not sent stays. Within an Emacs session the chat then opens in the mode you last switched to; `superchat-display-style` (`editor` or `agent`) sets the mode it starts in. To close a conversation, run `M-x superchat-close-session-workspace` in its chat window, or close its tab in agent mode; if a Run is still working you are asked first.
 
 Here are five things you can do in your first session:
 
@@ -258,7 +258,7 @@ original buffer, while published generated content is durable.
 
 ### Permissions
 
-Superchat works on Emacs **buffers**, not on files. The model can read a file (`read_file`), open a file as a buffer (`open_file`) and edit buffers. **Its edits stay in the buffer: saving a buffer to disk is yours**, the way it always is in Emacs — the `*` in the mode line is the pending change. When a Run ends having left edited buffers unsaved you get a message naming them, and a **review screen** appears in another window without taking focus: one buffer at a time, the colored diff of its file against the buffer, `s` to save it, `n` to leave it unsaved and see the next, `q` to stop (switch to that window to use the keys; keys typed before do nothing). With [diffs.el](https://github.com/LuciusChen/diffs.el) installed the diff gets its line numbers and word-level highlighting. `/changes` lists the buffers and opens the same screen at any time, as does `M-x superchat-changes-diff`; `M-x superchat-changes-save` / `-revert` act on one buffer. Buffers that visit no file are listed but not on the screen, and edits made by code run through `eval_elisp` are not tracked. Set `superchat-changes-review-after-run` to nil to stop the screen from appearing by itself.
+Superchat works on Emacs **buffers**, not on files. The model can read a file (`read_file`), open a file as a buffer (`open_file`) and edit buffers. **Its edits stay in the buffer: saving a buffer to disk is yours**, the way it always is in Emacs — the `*` in the mode line is the pending change. When a Run ends having left edited buffers unsaved you get a message naming them, and a **review screen** appears in another window and the cursor goes to it: one buffer at a time, the colored diff of its file against the buffer, `s` to save it, `n` to leave it unsaved and see the next, `q` to stop, after which the cursor is back where it was. Keys typed before the screen appeared do nothing; if you are typing in the minibuffer at that moment, the cursor goes to it once you are done. With [diffs.el](https://github.com/LuciusChen/diffs.el) installed the diff gets its line numbers and word-level highlighting. `/changes` lists the buffers and opens the same screen at any time, as does `M-x superchat-changes-diff`; `M-x superchat-changes-save` / `-revert` act on one buffer. Buffers that visit no file are listed but not on the screen, and edits made by code run through `eval_elisp` are not tracked. Set `superchat-changes-review-after-run` to nil to stop the screen from appearing by itself.
 
 Superchat's default modification path performs no persistence, and it does not fight your environment: if you run `super-save`, `auto-save-visited-mode`, format-on-save or similar, an edited buffer reaches the disk because *you* set Emacs up that way. So the promise is not "the disk never changes" — it is "Superchat does not write it".
 
@@ -388,7 +388,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
-- `superchat-display-style` — where the chat opens: `editor` (default) in a side window beside the code, `agent` in the conversation's own tab.
+- `superchat-display-style` — where the chat opens first in an Emacs session: `editor` (default) in a side window beside the code, `agent` in the conversation's own tab; `C-c C-w` in the chat switches.
 - `superchat-display-single-window` — in agent mode, the chat is the only window of its tab (default `t`); editor mode never closes a window.
 - `superchat-side-window-width` — width of the right side windows, the chat's and the plan panel's (default `0.42` of the frame).
 

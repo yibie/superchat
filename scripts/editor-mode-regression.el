@@ -328,9 +328,10 @@ file's window still shows the file and the chat is still beside it."
         (should (= 2 (length (editor-mode--windows))))))))
 
 (ert-deftest editor-mode/run/the-review-screen-takes-the-file-window-and-q-gives-it-back ()
-  "Guard (green before and after): when a Run sent from the chat View in the
-side window leaves a buffer unsaved, the review screen appears in the file's
-window, not beside it, and the chat keeps focus; `q' puts the file back."
+  "When a Run sent from the chat View in the side window leaves a buffer
+unsaved, the review screen appears in the file's window, not beside it, and
+the cursor goes to it (M10 record, amended 2026-09-25); `q' puts the file back
+and the cursor back in the chat."
   (let ((superchat-changes-review-after-run t))
     (editor-mode--fixture (editor-mode--edit-other-script dir) (dir code code-window)
       (let* ((view (superchat--ensure-chat-view superchat-buffer-name))
@@ -343,11 +344,12 @@ window, not beside it, and the chat keeps focus; `q' puts the file back."
           (should (eq code-window review))
           (should-not (window-parameter review 'window-side))
           (should (eq view (window-buffer chat)))
-          (should (eq chat (selected-window)))
+          (should (eq review (selected-window)))
           (with-current-buffer "*superchat review*"
             (call-interactively (key-binding (kbd "q"))))
           (should (eq code (window-buffer code-window)))
-          (should (eq view (window-buffer chat))))))))
+          (should (eq view (window-buffer chat)))
+          (should (eq chat (selected-window))))))))
 
 ;;;; Closing a conversation shown only beside the file
 

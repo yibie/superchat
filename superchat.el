@@ -237,11 +237,13 @@ wraps it."
   :group 'superchat)
 
 (defcustom superchat-display-style 'editor
-  "Where the chat View opens.
+  "Where the chat View opens first in an Emacs session.
 `editor' (editor mode): in a side window on the right of the current tab,
 beside the buffer being edited; no tab is added and no window is closed.
 `agent' (agent mode): in the Session's own tab, which
-`superchat-display-single-window' gives to the chat View alone."
+`superchat-display-single-window' gives to the chat View alone.
+`superchat-toggle-display-style' (\\`C-c C-w' in the chat) switches between
+them, and from then on in this Emacs session the last mode is used."
   :type '(choice (const :tag "Beside the code (editor mode)" editor)
                  (const :tag "In the Session's own tab (agent mode)" agent))
   :group 'superchat)
@@ -3403,11 +3405,22 @@ rematerializes the same View itself, exactly once."
         (delete-other-windows))))
   buffer)
 
+(defvar superchat--display-style-current nil
+  "The mode last switched to in this Emacs session, or nil for none yet.
+Once set it wins over `superchat-display-style', which gives the first.")
+
+(defvar superchat--editing-tab-mark nil
+  "The mark on the tab `superchat-toggle-display-style' last left for agent mode.")
+
+(defun superchat--display-style ()
+  "Return the mode the chat View opens in now: `editor' or `agent'."
+  (or superchat--display-style-current superchat-display-style))
+
 (defun superchat--chat-view-beside-code-p (session-id)
   "Non-nil when SESSION-ID's chat View is to open beside the code now.
-That is editor mode (`superchat-display-style'), except in SESSION-ID's own
+That is editor mode (`superchat--display-style'), except in SESSION-ID's own
 tab: that tab is where agent mode shows it, and it is not shown beside itself."
-  (and (eq superchat-display-style 'editor)
+  (and (eq (superchat--display-style) 'editor)
        (not (and session-id
                  (equal session-id
                         (superchat-editor-workspace--tab-session-id
@@ -3436,6 +3449,79 @@ SESSION-ID's own tab is selected, or made, and BUFFER displayed there."
     (superchat-editor-workspace--select-session-tab session-id)
     (superchat--display-chat-view buffer))
   buffer)
+
+(defun superchat--toggle-view-buffer ()
+  "The chat View the switch acts on: this buffer's, or the one beside it."
+  (cond
+   ((and (local-variable-p 'superchat--session-id) superchat--session-id)
+    (current-buffer))
+   ((cl-some (lambda (window)
+               (let ((buffer (window-buffer window)))
+                 (and (eq 'right (window-parameter window 'window-side))
+                      (buffer-local-value 'superchat--session-id buffer)
+                      buffer)))
+             (window-list nil 'no-minibuf)))
+   (t (user-error "No conversation here to switch"))))
+
+(defun superchat--editing-tab-index (mark)
+  "Return the 1-based index of the tab carrying MARK in this frame, or nil."
+  (let ((position (cl-position-if
+                   (lambda (tab) (and mark (eq mark (alist-get 'superchat-editing-tab
+                                                              (cdr tab)))))
+                   (tab-bar-tabs))))
+    (and position (1+ position))))
+
+(defun superchat--select-editing-tab (session-id)
+  "Select the tab to show SESSION-ID's chat beside code in, making one if needed.
+That is the tab the switch last left, else the most recently used tab that is
+not SESSION-ID's own, else a new tab on the most recent buffer that is no chat."
+  (let ((marked (superchat--editing-tab-index superchat--editing-tab-mark))
+        (recent (car (car (sort (cl-loop
+                                 for tab in (tab-bar-tabs) for index from 1
+                                 unless (equal session-id
+                                               (superchat-editor-workspace--tab-session-id tab))
+                                 collect (cons index (or (alist-get 'time (cdr tab)) 0)))
+                                (lambda (a b) (> (cdr a) (cdr b))))))))
+    (cond
+     (marked (tab-bar-select-tab marked))
+     (recent (tab-bar-select-tab recent))
+     (t
+      (let ((code (cl-find-if-not
+                   (lambda (buffer)
+                     (or (buffer-local-value 'superchat--session-id buffer)
+                         (string-prefix-p " " (buffer-name buffer))
+                         (minibufferp buffer)))
+                   (buffer-list))))
+        (tab-bar-new-tab)
+        (superchat-editor-workspace--clear-tab-session-id
+         (superchat-editor-workspace--current-tab))
+        (delete-other-windows)
+        (switch-to-buffer (or code (get-scratch-buffer-create))))))))
+
+;;;###autoload
+(defun superchat-toggle-display-style ()
+  "Switch this conversation between editor mode and agent mode.
+Beside the code (editor mode) it moves the chat into its Session's own tab,
+filling it; in that tab (agent mode) it goes back to the tab it came from,
+the chat beside the code there.  The chat keeps its unsent input, and later
+openings in this Emacs session use the mode switched to."
+  (interactive)
+  (let* ((buffer (superchat--toggle-view-buffer))
+         (session-id (buffer-local-value 'superchat--session-id buffer)))
+    (if (superchat--chat-view-beside-code-p session-id)
+        (let ((mark (list 'editing-tab))
+              (tabs (tab-bar-tabs)))
+          (setf (alist-get 'superchat-editing-tab
+                           (cdr (superchat-editor-workspace--current-tab)))
+                mark)
+          (tab-bar-tabs-set tabs)
+          (setq superchat--editing-tab-mark mark
+                superchat--display-style-current 'agent)
+          (superchat--display-session-view buffer session-id))
+      (setq superchat--display-style-current 'editor)
+      (superchat--select-editing-tab session-id)
+      (superchat--show-chat-view buffer t))
+    buffer))
 
 (defun superchat--render-session-rows (buffer rows)
   "Render Tape ROWS into BUFFER as a rebuilt Session View.
@@ -4604,6 +4690,8 @@ View is already open and has its own buffer-local value."
     (define-key map (kbd "C-c C-r") #'superchat-resume)
     (define-key map (kbd "C-c C-g") #'superchat-agents-panel-show)
     (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
+    ;; Over org's refile, which a chat has no use for.
+    (define-key map (kbd "C-c C-w") #'superchat-toggle-display-style)
     map)
   "Keymap for superchat-mode.")
 
