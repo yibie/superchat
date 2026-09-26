@@ -2,6 +2,24 @@
 
 All notable changes to superchat.
 
+## Unreleased — in-place commands join the chat's conversation
+
+- `superchat-inline-ask`, `superchat-inline-act` and
+  `superchat-rewrite-region` now go into the conversation the chat window
+  shows (the one beside your file, else the main one), wherever the file is.
+  The separate `inline:<project>` and `inline:global` conversations are no
+  longer used (old ones still open); `superchat-inline-session-scope` is
+  obsolete.
+- Their requests carry only what they point at and your words, not the
+  conversation's earlier turns, as Cursor's inline edit does; a follow-up in
+  the same overlay carries that overlay's own earlier exchange. (Since
+  "earlier turns reach the model as real messages", such a follow-up had
+  been sent without its first question; this fixes it.)
+- The chat window shows each in-place turn when it ends, with a button back
+  to the file and line, and later messages in the chat carry it. While the
+  chat is working, an in-place request waits its turn. What an in-place act
+  edited is listed by `/changes`.
+
 ## Unreleased — the model learns what you saved
 
 - When you save a buffer the model edited and left unsaved (with `C-x C-s`,

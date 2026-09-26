@@ -331,7 +331,9 @@ surfaces have none.  Reading the stored envelope keeps the request evidence
 pointing at the selection that actually happened."
   (let* ((context (plist-get envelope :context))
          (prepared (plist-get context :chat-prepared-context))
-         (turn (and (listp context) (plist-get context :chat-turn)))
+         (turn (and (listp context)
+                    (or (plist-get context :chat-turn)
+                        (plist-get context :inline-turn))))
          (state (and turn (superchat-turn-state turn))))
     (if prepared
         ;; The selection is sent as its own messages, never inside the

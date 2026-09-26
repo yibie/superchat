@@ -122,12 +122,13 @@ Like `superchat-inline--sink', except a `calling-tool' status is stored as
                              (plist-get (overlay-get overlay 'superchat-inline)
                                         :status))
                    (superchat-inline--set-state overlay :status 'typing)))))
-   :final (lambda (_run result)
+   :final (lambda (run result)
             (superchat-inline--set-state overlay :fresh-reply nil)
             (superchat-inline--set-state
              overlay :text
              (superchat-inline-act--finish-text overlay (plist-get result :text)))
-            (superchat-inline--set-state overlay :status 'ready))
+            (superchat-inline--set-state overlay :status 'ready)
+            (superchat-inline--settled overlay run "in-place act"))
    :error (lambda (_run failure)
             (superchat-inline--set-state
              overlay :text
@@ -278,6 +279,7 @@ by `superchat-inline-act--sink'.  Returns OVERLAY."
                                          :inline-range (cons (overlay-start overlay)
                                                              (overlay-end overlay))
                                          :inline-act t)
+                                   (superchat-inline--thread-context state instruction)
                                    (when reference
                                      (list :inline-reference-text
                                            (plist-get reference :block)

@@ -35,6 +35,10 @@
 (require 'superchat-sink)
 (require 'superchat-event)
 
+(declare-function superchat-conversation-session-id "superchat" ())
+(declare-function superchat-conversation-show-turn "superchat" (session-id run-id source))
+(declare-function superchat-turn-new "superchat-core" (inbound &optional session-id))
+
 (defgroup superchat-inline nil
   "Inline ask: question at point, answer in an overlay."
   :group 'superchat)
@@ -44,6 +48,9 @@
   :type '(integer :tag "Lines")
   :group 'superchat-inline)
 
+(make-obsolete-variable 'superchat-inline-session-scope
+                        "in-place commands join the conversation the chat window shows."
+                        "M10 slice 2")
 (defcustom superchat-inline-session-scope 'project
   "Session scope for inline ask.
 `project' keeps one Session per project, named
@@ -87,21 +94,44 @@ active; `none' sends no reference at all."
 ;;; Session
 
 (defun superchat-inline-session-id (&optional buffer)
-  "Return the inline ask Session id for BUFFER (default current buffer).
-`superchat-inline-session-scope' `project' gives one Session per project,
-named \"inline:<project-root>\"; outside a project, and for the `global'
-scope, the id is \"inline:global\".  Never prompts."
-  (let* ((buffer (if (and (bufferp buffer) (buffer-live-p buffer))
-                     buffer
-                   (current-buffer)))
-         (root (and (eq superchat-inline-session-scope 'project)
-                    (with-current-buffer buffer
-                      (when-let* ((project (ignore-errors
-                                             (project-current nil))))
-                        (ignore-errors (project-root project)))))))
-    (if (and (stringp root) (not (string-empty-p root)))
-        (format "inline:%s" (file-name-as-directory (file-truename root)))
-      "inline:global")))
+  "Return the Session an in-place command from BUFFER joins.
+That is the conversation the chat window shows (M10 slice 2): the chat beside
+the code in this tab, else the main chat View's.  The option
+`superchat-inline-session-scope' no longer has an effect.  Never prompts."
+  (with-current-buffer (if (and (bufferp buffer) (buffer-live-p buffer))
+                           buffer
+                         (current-buffer))
+    (superchat-conversation-session-id)))
+
+(defun superchat-inline--thread-context (state question)
+  "Return the envelope context that gives a follow-up its own exchange.
+STATE is the overlay's; a first request has no earlier Run in its thread and
+carries no earlier turn.  QUESTION and the Session make the Turn the history
+is assembled for (M10 record, amended 2026-09-25: \"1d\")."
+  (let ((runs (plist-get state :thread-runs)))
+    (when runs
+      (list :inline-thread-runs runs
+            :inline-turn (superchat-turn-new question (plist-get state :session-id))))))
+
+(defun superchat-inline--settled (overlay run kind)
+  "Note RUN, OVERLAY's finished Run, in its thread and in the chat window.
+KIND names the in-place command for the chat window's way back."
+  (let* ((run-id (if (stringp run) run (plist-get run :run-id)))
+         (state (overlay-get overlay 'superchat-inline))
+         (buffer (overlay-buffer overlay)))
+    (when (stringp run-id)
+      ;; A queued request learns its Run only when it runs.
+      (superchat-inline--set-state overlay :run-id run-id)
+      (superchat-inline--set-state
+       overlay :thread-runs (append (plist-get state :thread-runs) (list run-id)))
+      (when (and (buffer-live-p buffer) (fboundp 'superchat-conversation-show-turn))
+        (superchat-conversation-show-turn
+         (plist-get state :session-id) run-id
+         (list :kind kind :buffer buffer :file (buffer-file-name buffer)
+               :line (with-current-buffer buffer
+                       (line-number-at-pos
+                        (or (car-safe (plist-get state :reference))
+                            (overlay-start overlay))))))))))
 
 ;;; Reference
 
@@ -388,11 +418,12 @@ becomes the Ready answer, and an error is shown for
                              (plist-get (overlay-get overlay 'superchat-inline)
                                         :status))
                    (superchat-inline--set-state overlay :status 'typing)))))
-   :final (lambda (_run result)
+   :final (lambda (run result)
             (superchat-inline--set-state overlay :fresh-reply nil)
             (superchat-inline--set-state overlay :text
                                          (or (plist-get result :text) ""))
-            (superchat-inline--set-state overlay :status 'ready))
+            (superchat-inline--set-state overlay :status 'ready)
+            (superchat-inline--settled overlay run "in-place ask"))
    :error (lambda (_run failure)
             (superchat-inline--set-state
              overlay :error-message (or (plist-get failure :text) "failed"))
@@ -458,6 +489,7 @@ Used by `superchat-inline-ask' and `superchat-inline-reply'; returns OVERLAY."
                                    (list :inline-buffer buffer
                                          :inline-range (cons (overlay-start overlay)
                                                              (overlay-end overlay)))
+                                   (superchat-inline--thread-context state question)
                                    (when reference
                                      (list :inline-reference-text
                                            (plist-get reference :block)

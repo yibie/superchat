@@ -3523,6 +3523,82 @@ openings in this Emacs session use the mode switched to."
       (superchat--show-chat-view buffer t))
     buffer))
 
+;; ── Turns started elsewhere (M10 slice 2) ──
+;;
+;; In-place ask, act and rewrite go into the conversation the chat window
+;; shows and are recorded there; the chat window shows each such Turn when it
+;; ends, with a button back to where it was asked (M10 record, "共用一段对话").
+
+(defun superchat-conversation-session-id ()
+  "Return the Session the chat window shows now, making the main one if needed.
+That is the chat beside the code in this tab when there is one, else the main
+chat View's Session, as `superchat-act' uses."
+  (or (cl-some (lambda (window)
+                 (and (eq 'right (window-parameter window 'window-side))
+                      (buffer-local-value 'superchat--session-id (window-buffer window))))
+               (window-list nil 'no-minibuf))
+      (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer))))
+
+(defun superchat--session-views (session-id)
+  "Return the live chat Views showing SESSION-ID."
+  (cl-remove-if-not
+   (lambda (buffer)
+     (and (buffer-local-value 'superchat-mode buffer)
+          (equal session-id (buffer-local-value 'superchat--session-id buffer))))
+   (buffer-list)))
+
+(defun superchat-conversation-show-turn (session-id run-id source)
+  "Show RUN-ID, a Turn of SESSION-ID started outside the chat window, there.
+SOURCE is (:kind KIND :buffer BUFFER :file FILE :line LINE): the in-place
+command and where it was used; the Turn is shown with a button going back.
+Shown once the Run's rows are on the Tape, from a timer."
+  (when (and (stringp session-id) (stringp run-id))
+    (run-at-time 0 nil #'superchat--show-turn-now session-id run-id source)))
+
+(defun superchat--go-to-source (source)
+  "Go back to SOURCE, the buffer and line an in-place command was used at."
+  (let ((buffer (plist-get source :buffer)))
+    (unless (buffer-live-p buffer)
+      (setq buffer (and (plist-get source :file)
+                        (find-file-noselect (plist-get source :file)))))
+    (unless buffer (user-error "That buffer is gone"))
+    (pop-to-buffer buffer)
+    (goto-char (point-min))
+    (forward-line (1- (or (plist-get source :line) 1)))))
+
+(defun superchat--show-turn-now (session-id run-id source)
+  "Render RUN-ID's rows of SESSION-ID into every chat View showing it."
+  (let ((rows (cl-remove-if-not
+               (lambda (row)
+                 (equal run-id (plist-get (ignore-errors (superchat-tape--row-event row))
+                                          :run-id)))
+               (superchat-view-entries session-id))))
+    (when rows
+      (dolist (view (superchat--session-views session-id))
+        (let ((text
+               (with-temp-buffer
+                 ;; The renderer folds audit rows the org way, as in a View.
+                 (org-mode)
+                 (superchat--render-session-rows (current-buffer) rows)
+                 (goto-char (point-min))
+                 ;; The way back goes right under the question's heading.
+                 (when (re-search-forward "^\\* User: .*$" nil t)
+                   (insert "\n")
+                   (insert-text-button
+                    (format "↩ %s, line %d (%s)"
+                            (if (buffer-live-p (plist-get source :buffer))
+                                (buffer-name (plist-get source :buffer))
+                              (file-name-nondirectory (or (plist-get source :file) "")))
+                            (or (plist-get source :line) 1)
+                            (plist-get source :kind))
+                    'follow-link t
+                    'help-echo "Go back to where this was asked"
+                    'action (lambda (_button) (superchat--go-to-source source))))
+                 (buffer-string))))
+          (with-current-buffer view
+            (let ((superchat-buffer-name (buffer-name view)))
+              (superchat--response-region-insert-transcript text :independent-turn))))))))
+
 (defun superchat--render-session-rows (buffer rows)
   "Render Tape ROWS into BUFFER as a rebuilt Session View.
 The one row renderer shared by `superchat--render-session-view' and a

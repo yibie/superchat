@@ -1,6 +1,6 @@
 # Decision: an editor mode and an agent mode for one conversation, with the plain s/n review of unsaved changes in color
 
-Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢侧边栏布局", then "1. 我希望在编辑文件时，可以是侧边栏为主。2. 但如果我希望是直接操作 emacs 的时候，我又希望以 agentic 的界面为主。", "关于 diff 其实我很满意当前这个交互……最好可以美化一下", "4. B 就可以了", and finally "1. A。 2. A"; amended 2026-09-25 when slice 1c was assigned: "审核界面不应该按键跳转，光标应该自动跳转到 diff 界面"; implementation state per slice is in [the roadmap](../../roadmap.md).
+Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢侧边栏布局", then "1. 我希望在编辑文件时，可以是侧边栏为主。2. 但如果我希望是直接操作 emacs 的时候，我又希望以 agentic 的界面为主。", "关于 diff 其实我很满意当前这个交互……最好可以美化一下", "4. B 就可以了", and finally "1. A。 2. A"; amended 2026-09-25 when slice 1c was assigned: "审核界面不应该按键跳转，光标应该自动跳转到 diff 界面"; and before slice 2, after comparing with Cursor: "1d 2a"; implementation state per slice is in [the roadmap](../../roadmap.md).
 
 ## Problem
 
@@ -55,7 +55,10 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 - 规则：就地问、就地做、改写选区都进对话窗口当前显示的那段对话；两种模式显示的是同一段；还没打开过对话时用上一次那段，没有就新建；换对话在对话窗口里换。与 project 无关（Emacs 只把 git 目录自动当作 project；用户不设置 project）。
 - `superchat-act` 已经这样路由（`superchat-submit` → `superchat--ensure-request-chat-buffer`）；就地命令的会话编号来自 `superchat-inline-session-id`，改为同样的来源。
 - 对话窗口实时显示别处发起的一轮，并标明来自哪个 Buffer 哪一行、可以跳回去。
-- 对话在跑任务时，代码里的新问题按 Runtime 的会话队列排队；可对某一句选择不带历史。对话与来源 Buffer 的关联（`[Emacs origin]`）如何同时出现在一段对话里，在这一片开始前定规则。
+- 对话在跑任务时，代码里的新问题按 Runtime 的会话队列排队。
+- **就地请求不带这段对话的历史**（2026-09-25，用户："1d"）：就地问、就地做、改写选区发给模型的只有它自己的引用（哪个 Buffer 哪几行、选区）和用户的话，没有这段对话之前的轮次；没有按次开关。这一轮照样记进对话、在对话窗口里显示，之后在对话窗口里发的请求把它当作历史带上——对话窗口是总控，看得见代码里发生的事。要让就地的事带上对话的历史，就把代码送进对话（`superchat-send-region`）在那里问。参照：Cursor 的就地编辑（`Cmd+K`）默认看不到侧栏对话，靠显式的 `@Chat` 或 `Cmd+L` 把两边连起来；gptel 的改写只发选区和要求。与 Cursor 不同的是，Cursor 不把就地编辑记进侧栏对话，这里按本决定的第 5 条记进去。
+- **在同一个小框里追问带这个小框自己的轮次**：就地问、就地做的追问（`r`）带上这个小框之前的问答，仍不带对话里别的轮次——Cursor 的就地编辑也是在自己的输入框里接着改。改写选区的"再改一次"本来就把上一次的结果作为底稿发出，不需要历史。（建这一片时发现：自"之前几轮按真正的消息发送"那项改动起，就地追问的第一问一答没有再发给模型，这里一并修好。）
+- **就地的一轮不改对话窗口关联的来源 Buffer**（用户："2a"）：它带自己的引用；对话窗口原先关联的来源（`[Emacs origin]`）不变，关联只由明确的入口设定。
 
 ## Token 约束
 
@@ -74,7 +77,7 @@ Status: accepted — user, 2026-09-24, over one conversation: "我还是喜欢�
 1. **1a 审阅屏**：一次 Run 留下两个未存 Buffer 时，审阅屏自动出现在另一个窗口、焦点不动（1c 起改为光标自己进去），显示"1/2"与第一个的彩色 diff；`s` 之后磁盘文件等于 Buffer 并显示"2/2"；`n` 之后第二个仍未存；`q` 结束且不存任何东西；停用的键不改动源 Buffer；装了 diffs.el 时开着 `diffs-minor-mode`；新文件显示为整文件新增并可保存；不访问文件的 Buffer 不进审阅屏而仍在 `/changes` 清单里；`/changes` 与 `superchat-changes-diff` 打开同一块屏并选中它，打开前积压的按键不会存盘；关掉选项后不自动出现，echo 提示照旧。
 2. **1b 编辑模式**：在一个文件里打开对话，对话在右侧侧窗口、代码仍可见、没有新 tab；从对话发起的操作不挪动代码窗口；在对话窗口里关闭会话按关闭协议进行；`superchat-display-style` 为 `agent` 时行为与今天一致；canonical smoke 不变（它逐字比较发给模型的请求）。（这一条原先写作"`frame` 设置下"，`frame` 是提案早先一稿里这个选项的值名。）
 3. **1c 切换键与审阅屏的光标**：编辑模式按键进入对话自己的 tab 并占满，再按回到刚才的编辑 tab、对话在侧栏，输入框里没打完的字还在；同一次 Emacs 里再打开用上次的模式。Run 结束审阅屏自己出现时光标已在它上面，出现前敲的键不存盘；minibuffer 在用时等它结束再过去；审阅结束光标回到原来的窗口。
-4. **2 共用一段对话**：在 `~/Documents` 下一个不在 git 里的文件里就地做一件事，对话窗口（无论哪种模式）里出现这一轮并能跳回那一行；对话在跑任务时就地问，问题排队并在前一个 Run 结束后执行；选"不带历史"时请求里没有这段对话的历史；审阅屏与 `/changes` 列出就地做改过的 Buffer。
+4. **2 共用一段对话**：在 `~/Documents` 下一个不在 git 里的文件里就地做一件事，对话窗口（无论哪种模式）里出现这一轮并能跳回那一行；就地请求里没有这段对话之前的轮次，之后在对话窗口里发的请求带上这一轮；对话在跑任务时就地问，问题排队并在前一个 Run 结束后执行；对话窗口关联的来源不因就地的一轮而变；审阅屏与 `/changes` 列出就地做改过的 Buffer。
 
 第 1b、1c、2 片完成后各用 DeepSeek 做一次有人值守的真实模型验收，编辑模式与 agent 模式各跑一次；已接受的两入口验收是在整窗布局与脚本审阅屏下做的，在新条件下重跑。
 

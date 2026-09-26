@@ -269,7 +269,7 @@ and then removes the overlay; a cancellation removes it at once."
                                            (concat (or (plist-get state :text) "")
                                                    text))))
                  (superchat-rewrite--set-state overlay :status 'typing))))
-   :final (lambda (_run result)
+   :final (lambda (run result)
             (let ((code (superchat-rewrite--extract-code-block
                          (or (plist-get result :text) "") lang-tag)))
               (if (null code)
@@ -277,6 +277,7 @@ and then removes the overlay; a cancellation removes it at once."
                 (overlay-put overlay 'superchat-rewrite
                              (plist-put (superchat-rewrite--state overlay) :text code))
                 (superchat-rewrite--set-state overlay :status 'ready)
+                (superchat-rewrite--tell-conversation overlay run)
                 (when (eq superchat-rewrite-confirmation 'auto)
                   (superchat-rewrite-accept overlay)))))
    :error (lambda (_run failure)
@@ -287,6 +288,18 @@ and then removes the overlay; a cancellation removes it at once."
               (superchat-rewrite--fail overlay (or (plist-get failure :text) "failed"))))
    :orphaned (lambda (_run _reason)
                (superchat-rewrite--delete-overlay overlay))))
+
+(defun superchat-rewrite--tell-conversation (overlay run)
+  "Show OVERLAY's finished rewrite RUN in the conversation's chat window."
+  (let* ((run-id (if (stringp run) run (plist-get run :run-id)))
+         (buffer (overlay-buffer overlay)))
+    (when (and (stringp run-id) (buffer-live-p buffer)
+               (fboundp 'superchat-conversation-show-turn))
+      (superchat-conversation-show-turn
+       (plist-get (superchat-rewrite--state overlay) :session-id) run-id
+       (list :kind "region rewrite" :buffer buffer :file (buffer-file-name buffer)
+             :line (with-current-buffer buffer
+                     (line-number-at-pos (overlay-start overlay))))))))
 
 (defun superchat-rewrite--fail (overlay message)
   "Show MESSAGE in OVERLAY's status bar, then remove the overlay later."

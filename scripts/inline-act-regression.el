@@ -108,7 +108,9 @@
 
 (ert-deftest inline-act/run/edit-lands-in-the-buffer-and-overlay-is-ready ()
   "A scripted tool Turn edits the source buffer and reports in the overlay.
-No chat buffer is created: the whole Run stays in the source buffer."
+No chat window opens: the whole Run is seen in the source buffer.  (Since
+M10 slice 2 the Run joins the conversation the chat window would show, so
+that conversation's buffer may exist, but it is not displayed.)"
   (with-temp-buffer
     (insert "alpha\n")
     (goto-char (point-min))
@@ -124,7 +126,8 @@ No chat buffer is created: the whole Run stays in the source buffer."
           ;; Slice 2 appends the Run footer after the answer; the exact footer
           ;; is asserted by `inline-act/footer/...' below.
           (should (string-prefix-p "Done." (plist-get (inline-act--state overlay) :text)))
-          (should-not (get-buffer superchat-buffer-name)))))))
+          (should-not (and (get-buffer superchat-buffer-name)
+                           (get-buffer-window superchat-buffer-name t))))))))
 
 (ert-deftest inline-act/run/request-carries-the-default-tool-baseline ()
   "The Run's provider request offers the default baseline, not inline-ask's four."

@@ -523,23 +523,29 @@ and are computed once here for both assemblies.  When that projection
 signals, this Turn gets no history fragment at all -- the current input
 still goes out -- and a visible notice is recorded: history is never
 assembled without its exclusions."
-  (let* ((turn (or (plist-get (plist-get env :context) :chat-turn)
-                   ;; S18b: an inline ask has no chat Turn; its history is
-                   ;; the inline project Session's own rows, so a scratch
-                   ;; Turn keyed by the envelope's `:session-id' carries the
-                   ;; bookkeeping instead.  Other surfaces without a Turn
-                   ;; (rewrite, skills, compaction) get no history.
-                   (and (eq (plist-get env :surface) 'inline-ask)
-                        (stringp (plist-get env :session-id))
-                        (superchat-turn-new (or (plist-get env :content) "")
-                                            (plist-get env :session-id)))))
+  (let* ((context (plist-get env :context))
+         ;; An in-place request (M10 record, amended 2026-09-25: "1d") carries
+         ;; no earlier turn of the conversation it joins; a follow-up in the
+         ;; same overlay carries that overlay's own earlier Runs, and the
+         ;; in-place code passes the Turn and those Runs only then.  Other
+         ;; surfaces without a Turn (rewrite, skills, compaction) get none.
+         (thread (plist-get context :inline-thread-runs))
+         (turn (or (plist-get context :chat-turn)
+                   (and thread (plist-get context :inline-turn))))
          (session-id (and turn (superchat-turn-session-id turn)))
          (history-usable-p t)
          (excluded-storage-ids
           (when (and (stringp session-id)
                      (not (string-empty-p session-id)))
             (condition-case err
-                (superchat-view-superseded-storage-ids session-id)
+                (append
+                 (superchat-view-superseded-storage-ids session-id)
+                 (and thread
+                      (delq nil
+                            (mapcar (lambda (event)
+                                      (unless (member (plist-get event :run-id) thread)
+                                        (plist-get event :storage-id)))
+                                    (superchat-tape-replay-events session-id)))))
               (error
                (setq history-usable-p nil)
                (message
