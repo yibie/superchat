@@ -335,6 +335,53 @@ The binding spans llm.el's synchronous chat error callback and then ends."
     (advice-add 'llm-request-plz--handle-error :around
                 #'superchat--llm-capture-http-status)))
 
+;; plz-event-source 0.1.3 hands each server-sent event to its listeners on a
+;; timer set to `current-time'.  Emacs runs timers of equal time newest
+;; first, so two events parsed within one clock reading reached llm.el
+;; swapped, and a streamed answer showed two neighbouring pieces in the
+;; wrong order.  Until plz-event-source keeps the order itself, each such
+;; timer is set strictly after the previous one.
+
+(declare-function slot-value "eieio" (obj slot))
+
+(defvar superchat--llm-last-event-time nil
+  "Time of the last server-sent event timer, or nil.")
+
+(defun superchat--llm-event-timer-time ()
+  "Return a time for the next event timer, after the previous one.
+A clock set back by a second or more is taken as it is, so events are not
+held back until the old reading comes round again."
+  (let* ((now (current-time))
+         (last superchat--llm-last-event-time)
+         (time (if (and last
+                        (not (time-less-p last now))
+                        (time-less-p (time-subtract last now) 1))
+                   (time-add last '(0 0 0 1))
+                 now)))
+    (setq superchat--llm-last-event-time time)))
+
+(defun superchat--llm-dispatch-event-in-order (source event)
+  "Hand EVENT to SOURCE's listeners in the order the events arrived.
+Replaces `plz-event-source--dispatch-event', which it follows except for
+the time each listener's timer is set to."
+  (dolist (pair (slot-value source 'handlers))
+    (when (equal (car pair) (slot-value event 'type))
+      (let ((timer (timer-create)))
+        (timer-set-time timer (superchat--llm-event-timer-time))
+        (timer-set-function timer
+                            (lambda (handler event)
+                              (with-temp-buffer (funcall handler event)))
+                            (list (cdr pair) event))
+        (timer-activate timer)))))
+
+(with-eval-after-load 'plz-event-source
+  (when (and (fboundp 'plz-event-source--dispatch-event)
+             (equal (func-arity 'plz-event-source--dispatch-event) '(2 . 2))
+             (not (advice-member-p #'superchat--llm-dispatch-event-in-order
+                                   'plz-event-source--dispatch-event)))
+    (advice-add 'plz-event-source--dispatch-event :override
+                #'superchat--llm-dispatch-event-in-order)))
+
 (defun superchat--llm-transient-error-p (type err &optional http-status)
   "Return non-nil when TYPE, ERR and HTTP-STATUS identify a retryable error.
 Only HTTP 429 and 5xx retry.  Without an HTTP status, recognize the pinned
@@ -2127,6 +2174,21 @@ and no tool calls."
     (setq cleaned (replace-regexp-in-string "^[ \t]*>.*$" "" cleaned))
     cleaned))
 
+(defun superchat-llm--finish-check-sentence-end-p (text index)
+  "Return non-nil when the character at INDEX of TEXT ends a sentence.
+`。！？' always do.  `.' `!' `?' do only before whitespace, and a dot that
+closes an abbreviation such as \"e.g.\" does not: so a file name, \"e.g.\"
+or \"2.0\" does not cut the sentence it is in."
+  (let ((char (aref text index)))
+    (or (memq char '(?？ ?！ ?。))
+        (and (memq char '(?. ?! ??))
+             (< (1+ index) (length text))
+             (memq (aref text (1+ index)) '(?\s ?\t ?\n))
+             (not (and (eq char ?.)
+                       (string-match-p
+                        "\\(?:\\`\\|[^[:alnum:]]\\)\\(?:[[:alpha:]]\\.\\)\\{2,\\}\\'"
+                        (substring text 0 (1+ index)))))))))
+
 (defun superchat-llm--finish-check-last-sentence (text)
   "Return TEXT's last sentence, trimmed."
   (let* ((trimmed (string-trim (or text "")))
@@ -2140,10 +2202,9 @@ and no tool calls."
                       '(?. ?! ?? ?？ ?！ ?。 ?\s ?\t ?\n)))
       (setq index (1- index)))
     (setq end (1+ index))
-    ;; Walk back to the previous terminator; the sentence starts after it.
+    ;; Walk back to the previous sentence end; the sentence starts after it.
     (while (and (>= index 0)
-                (not (memq (aref trimmed index)
-                           '(?. ?! ?? ?？ ?！ ?。))))
+                (not (superchat-llm--finish-check-sentence-end-p trimmed index)))
       (setq index (1- index)))
     (string-trim (substring trimmed (1+ index) end))))
 
