@@ -847,6 +847,31 @@ only after the tool pipeline has allowed the call."
 The fixed tool-error prefix is additional.  This bounds returned diagnostic
 text, not execution, reader effects or successful evaluation values.")
 
+(defconst superchat-tool-eval-result-max-chars 20000
+  "Most characters of a successful `eval_elisp' value returned to the model.
+A longer printed value keeps its first and last characters (all but
+`superchat-tool-eval-result-tail-chars' of the limit, and that many) around
+a line saying what was cut.  Decision of 2026-09-27, fixes from the first
+task simulation: one keymap dump of 108,699 bytes ended a Run.")
+
+(defconst superchat-tool-eval-result-tail-chars 4000
+  "Characters kept from the end of a cut `eval_elisp' value.")
+
+(defun superchat-tools--eval-value-result (value)
+  "Render VALUE as an `eval_elisp' result, bounded by
+`superchat-tool-eval-result-max-chars'."
+  (let* ((text (format "%S" value))
+         (size (length text))
+         (limit superchat-tool-eval-result-max-chars))
+    (if (<= size limit)
+        (concat "Result: " text)
+      (let ((tail superchat-tool-eval-result-tail-chars))
+        (concat "Result: "
+                (substring text 0 (- limit tail))
+                (format "\n[… %d characters were cut from the middle; the printed value is %d characters.  Return something smaller -- a count, a filtered list, one lookup -- to see it whole.]\n"
+                        (- size limit) size)
+                (substring text (- size tail)))))))
+
 (defun superchat-tools--eval-error-result (err)
   "Render ERR as a bounded, recognizable native eval tool error."
   (let* ((print-length 12)
@@ -904,7 +929,7 @@ the call is asked before this function runs and is not affected."
           (let ((result (let ((inhibit-interaction t)
                               (signal-hook-function leave-on-prompt))
                           (eval (superchat-tools--read-one-expression expression) t))))
-            (format "Result: %S" result))
+            (superchat-tools--eval-value-result result))
         (inhibited-interaction superchat-tools--eval-asked-the-user)
         (error (superchat-tools--eval-error-result err))))))
 

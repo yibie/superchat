@@ -1276,6 +1276,17 @@ stop without dispatch; a condition propagates after registration rollback."
               (puthash prompt previous superchat--llm-input-batches)
             (remhash prompt superchat--llm-input-batches)))))))
 
+(defvar superchat--llm-input-corrections (make-hash-table :test #'eq :weakness 'key)
+  "Prompt -> the model-correctable reason its response was refused.
+A condition signalled while llm.el processes a response reaches the
+request's error callback only as `error' and a message (seen through the
+real transport, 2026-09-27), so the reason is kept here, by prompt, for the
+callback to find.")
+
+(defconst superchat--llm-input-not-alone
+  "Required input must be the only tool in its batch"
+  "Why a response that pairs the input tool with other calls is refused.")
+
 (defun superchat--llm-capture-provider-tool-uses
     (original provider prompt tool-uses)
   "Call ORIGINAL after preserving PROMPT's raw provider TOOL-USES."
@@ -1293,9 +1304,12 @@ stop without dispatch; a condition propagates after registration rollback."
   (when-let* ((input-tool (gethash prompt superchat--llm-input-batches)))
     (let ((names (mapcar #'llm-provider-utils-tool-use-name tool-uses)))
       (when (and (member input-tool names) (not (equal names (list input-tool))))
-        ;; The native scheduler has not entered any Authority wrapper yet.
-        ;; llm-error follows the existing fatal path, not tool-protocol retry.
-        (signal 'llm-error '("Required input must be the only tool in its batch")))))
+        ;; The native scheduler has not entered any Authority wrapper yet, so
+        ;; no call of this response runs.  The reason is left for the error
+        ;; callback, which treats it as a model-correctable call mistake
+        ;; (decision of 2026-09-27); the signal only stops llm.el here.
+        (puthash prompt superchat--llm-input-not-alone superchat--llm-input-corrections)
+        (signal 'llm-error (list superchat--llm-input-not-alone)))))
   (funcall original provider prompt tool-uses))
 
 (with-eval-after-load 'llm-provider-utils
@@ -2160,7 +2174,8 @@ as a normal `:tool-results' response.  They are still model-correctable:
 the preceding assistant tool-use must be removed before the prompt can be
 sent again."
   (and (symbolp type)
-       (string-prefix-p "llm-tool-" (symbol-name type))))
+       (or (string-prefix-p "llm-tool-" (symbol-name type))
+           (eq type 'superchat-llm-input-not-alone))))
 
 (defun superchat--llm-tool-protocol-error-feedback (type message)
   "Build corrective user feedback for an llm.el tool error TYPE/MESSAGE."
@@ -2180,6 +2195,8 @@ sent again."
         "The tool call contains an unsupported argument. Remove it, use the declared argument names, and retry the tool.")
        ('llm-tool-call-error
         "The tool arguments were not complete valid JSON. Retry with shorter arguments that fit in one response.")
+       ('superchat-llm-input-not-alone
+        "ask_user must be the only tool call in its response, and none of the calls in that response ran. Call ask_user by itself -- no other tool in the same response -- and continue with the rest after the answer.")
        (_
         "The tool call was rejected by llm.el. Correct its name or arguments and retry the tool."))
      type
@@ -3153,6 +3170,13 @@ requests until it receives text, bounded by
               (let ((err (if more (car more) type)))
                 (when (eq type 'superchat-llm-evidence-recording-error)
                   (signal type (if more more (list err))))
+                ;; A response refused as a correctable call mistake arrives
+                ;; here as a plain error; its reason was left by prompt.
+                (when-let* ((reason (and (hash-table-p superchat--llm-input-corrections)
+                                         (gethash real-prompt superchat--llm-input-corrections))))
+                  (remhash real-prompt superchat--llm-input-corrections)
+                  (setq type 'superchat-llm-input-not-alone
+                        err reason))
                 (when (superchat--llm-tool-protocol-error-p type)
                   (funcall record-first-output
                            (list :kind "tool-protocol-error"
@@ -3750,7 +3774,7 @@ requests until it receives text, bounded by
                              'context-budget-exceeded details))
                   (let ((message
                          (format
-                          "[文件过大：估算输入 %s tokens + 输出预留 %s > 模型上下文为 %s tokens；请求未发送，建议缩小或换模型。]"
+                          "[请求过长：估算输入 %s tokens + 输出预留 %s > 模型上下文 %s tokens；请求未发送。可以压缩对话、让工具返回更少内容，或换上下文更大的模型。]"
                           context-used output-reserve context-limit)))
                     (unless (and (functionp recover-context)
                                  (funcall recover-context
