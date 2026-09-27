@@ -381,6 +381,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` — the level new Sessions start at (default `edit-buffers` and `ask`). `superchat-mcp-trusted-servers` — MCP servers whose tools run without asking.
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
+- `superchat-report-review` — `nil` (default) or `t`: before a tool-using chat task's answer is final, one extra request checks it against the task's tool record and sends what the record does not support back to the model once. Whatever this says, a tool-using answer ends with a one-line record of what the task's tools changed.
 - `superchat-memory-auto-recall-cross-session` — what other sessions' memories the model may see automatically: `remembered` (only `/remember` anchors, default), `all`, or `none`; your own `/recall` always searches everything.
 - `superchat-handoff-auto-enabled` — automatic compaction on context overflow (default `t`).
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).

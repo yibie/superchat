@@ -128,6 +128,161 @@ most once per Run and can cost one extra request."
           "and where, what is unsaved, and what you did not verify.")
   "The one note the finish check queues for the Run's next Step.")
 
+(defcustom superchat-report-review nil
+  "Whether a tool-using chat Run's final report is checked by a reviewer.
+When non-nil, a chat Run that made tool calls and ends on a reply without a
+tool call gets one extra request before the reply is final: a fresh context
+with no tools, holding the person's request, the Run's tool lines and the
+reply, asked to list what the record does not support.  Findings go back to
+the model once; its next reply is final.  Off by default: it costs one
+request per such Run, and the task simulation measures it before any default
+changes.  Decision: docs/decisions/accepted/
+2026-09-27-claims-checked-against-the-record.md."
+  :type 'boolean
+  :group 'superchat)
+
+(defconst superchat-llm--report-review-system
+  (concat "You check an assistant's report against the record of what it actually "
+          "did in this task. You have no tools and see nothing but what follows. "
+          "Judge only from the record; do not guess and do not add advice.")
+  "System text of the reviewer request.")
+
+(defconst superchat-llm--report-review-question
+  (concat "List every statement in the report that the record does not support "
+          "(an action that is not in the record, a result the record contradicts, "
+          "a value that is in no tool result) and every part of the request the "
+          "record shows was not done. If there is none, answer exactly OK. "
+          "Otherwise answer one line per problem, each starting with \"- \".")
+  "What the reviewer is asked.")
+
+(defun superchat-llm--report-review-note (findings)
+  "The correction queued for the model when the reviewer found FINDINGS."
+  (concat "A check of your report against this task's tool record found:\n"
+          findings
+          "\nCorrect the report: do what is missing with tools, or say plainly "
+          "what was not done. Claim nothing the record does not show."))
+
+(defun superchat-llm--report-review-applies-p
+    (request-context run-active tool-rounds final-answer-requested reviewed
+                     finish-check-fired reply)
+  "Return non-nil when this reply of a chat Run is to be reviewed.
+All of the conditions are stated here so a caller cannot half-apply them."
+  (let ((run-id (plist-get request-context :run-id)))
+    (and superchat-report-review
+         (not reviewed)
+         (not finish-check-fired)
+         (not final-answer-requested)
+         (> tool-rounds 0)
+         (stringp reply) (not (string-empty-p (string-trim reply)))
+         (stringp run-id)
+         (funcall run-active)
+         (eq 'chat (plist-get (superchat-runtime-status run-id) :surface)))))
+
+(defun superchat-llm--report-review-record (session-id run-id)
+  "Return (REQUEST . TOOL-LINES) of RUN-ID in SESSION-ID from the Tape.
+REQUEST is the person's text for the Run; TOOL-LINES the one-line tool
+observations later turns see, in order."
+  (let* ((events (superchat-tape-replay-events session-id))
+         (rows (ignore-errors (superchat-db-tape-replay session-id)))
+         (requested (make-hash-table :test #'equal))
+         request lines)
+    (dolist (event events)
+      (when (equal (plist-get event :run-id) run-id)
+        (let ((payload (plist-get event :payload)))
+          (pcase (plist-get event :type)
+            ("intent.received"
+             (let ((row (cl-find (plist-get event :storage-id) rows :key #'car)))
+               (setq request (and row (nth 3 row)))))
+            ("tool.requested"
+             (puthash (plist-get payload :execution-id) payload requested))
+            ((or "tool.completed" "tool.failed")
+             (let ((asked (gethash (plist-get payload :execution-id) requested)))
+               (push (superchat-tape-tool-observation-line
+                      (or (plist-get payload :tool-name) (plist-get asked :tool-name))
+                      (if (equal "tool.completed" (plist-get event :type))
+                          "ok"
+                        (plist-get payload :status))
+                      (plist-get asked :arguments-text)
+                      (plist-get asked :arguments-truncated)
+                      (plist-get asked :arguments-chars)
+                      (plist-get payload :result-text)
+                      (plist-get payload :result-truncated)
+                      (plist-get payload :result-chars))
+                     lines)))))))
+    (cons (or request "") (nreverse lines))))
+
+(defun superchat-llm--report-review (request-context reply callback)
+  "Ask a reviewer about REPLY; call CALLBACK with the findings, or nil.
+The reviewer is one Run in an operation-scoped child Session (as compaction
+does), with no tools and a prepared prompt, so its request is on the Tape
+like any other.  Its verdict is recorded on the reviewed Run as
+`run.report-reviewed'.  A failed review calls CALLBACK with nil."
+  (let* ((session-id (plist-get request-context :session-id))
+         (run-id (plist-get request-context :run-id))
+         (record (superchat-llm--report-review-record session-id run-id))
+         (prompt (concat "The person's request:\n<<<REQUEST\n" (car record) "\nREQUEST>>>\n\n"
+                         "The record of the tool calls this task made, in order "
+                         "(one line each; long results are cut):\n"
+                         (if (cdr record) (string-join (cdr record) "\n") "(no tool call)")
+                         "\n\nThe assistant's report to the person:\n<<<REPORT\n"
+                         reply "\nREPORT>>>\n\n" superchat-llm--report-review-question))
+         (child (format "%s/report-review-%s" session-id
+                        (substring (md5 (format "%s:%s:%s" run-id (float-time) (random))) 0 12)))
+         (delivered nil)
+         (deliver
+          (lambda (text status)
+            (unless delivered
+              (setq delivered t)
+              (let* ((answer (string-trim (or text "")))
+                     (verdict (cond ((not (eq status 'completed)) "failed")
+                                    ((string-empty-p answer) "failed")
+                                    ((string-match-p "\\`OK\\b" answer) "ok")
+                                    (t "findings")))
+                     (findings (and (equal verdict "findings")
+                                    (substring answer 0 (min 2000 (length answer))))))
+                (unwind-protect
+                    (progn
+                      (ignore-errors
+                        (superchat-runtime--append-event
+                         (superchat-runtime--entry run-id) "run.report-reviewed"
+                         (append (list :verdict verdict :review-session child)
+                                 (when findings (list :findings findings)))
+                         (format "run.report-reviewed: %s %s" run-id verdict)
+                         nil t))
+                      (funcall callback findings))
+                  (ignore-errors
+                    (superchat-service-call nil 'editor-workspace 'close child))))))))
+    (condition-case nil
+        (let* ((buffer (superchat-service-call nil 'editor-workspace 'buffer
+                                               child 'report-review-protocol t))
+               (buffer (superchat-service-call nil 'editor-workspace 'validate-buffer
+                                               buffer child)))
+          (superchat-service-call
+           nil 'driver 'submit
+           (list :surface 'report-review
+                 :content "Review the report"
+                 :session-id child
+                 :capability "report-review"
+                 :topology 'single
+                 :tools 'none
+                 :origin `(:surface report-review :kind report-review
+                           :source-session-id ,session-id :source-run-id ,run-id)
+                 :sink (superchat-sink-callback
+                        :id (format "report-review-%08x" (random #x100000000))
+                        :stream #'ignore
+                        :final (lambda (_run result)
+                                 (funcall deliver (plist-get result :text) 'completed))
+                        :error (lambda (_run failure)
+                                 (funcall deliver (plist-get failure :text)
+                                          (plist-get failure :status))))
+                 :context (list :host-buffer buffer
+                                :prepared-prompt prompt
+                                :prepared-system superchat-llm--report-review-system)
+                 :runtime-extras (list :clean-input "Review the report"
+                                       :actor-id "reviewer"
+                                       :record-conversation nil))))
+      ((error quit) (funcall deliver nil 'failed)))))
+
 (defcustom superchat-llm-unknown-tool-retries 2
   "How many invalid tool calls the main loop recovers from.
 
@@ -2818,6 +2973,8 @@ requests until it receives text, bounded by
            (final-answer-requested nil)
            ;; The finish check fires at most once per Run.
            (finish-check-fired nil)
+           ;; The report review runs at most once per Run.
+           (report-reviewed nil)
            ;; Reference pages this loop has already pointed the model at.
            (reference-pointed nil)
            (completed nil)
@@ -3506,19 +3663,59 @@ requests until it receives text, bounded by
                                                (format "[llm-chat-streaming error: %s]"
                                                        (error-message-string err))
                                                'failed))))
-                               (funcall finalize
-                                        (cond
-                                         ((and (consp response)
-                                               (stringp (plist-get response :text))
-                                               (not (string-empty-p
-                                                     (plist-get response :text))))
-                                          (plist-get response :text))
-                                         ((and (stringp response)
-                                               (not (string-empty-p response)))
-                                          response)
-                                         (response-parts
-                                          (string-join (nreverse response-parts) ""))
-                                         (t "[Empty response from llm]")))))
+                               (let ((final-text
+                                      (cond
+                                       ((and (consp response)
+                                             (stringp (plist-get response :text))
+                                             (not (string-empty-p
+                                                   (plist-get response :text))))
+                                        (plist-get response :text))
+                                       ((and (stringp response)
+                                             (not (string-empty-p response)))
+                                        response)
+                                       (response-parts
+                                        (string-join (nreverse response-parts) ""))
+                                       (t "[Empty response from llm]"))))
+                                 ;; The report review (a switch, off by
+                                 ;; default): before the reply is final, one
+                                 ;; reviewer request compares it with the
+                                 ;; Run's record; findings go back once.
+                                 (if (superchat-llm--report-review-applies-p
+                                      request-context run-active-p tool-rounds
+                                      final-answer-requested report-reviewed
+                                      finish-check-fired final-text)
+                                     (progn
+                                       (setq report-reviewed t)
+                                       (superchat-llm--report-review
+                                        request-context final-text
+                                        (lambda (findings)
+                                          (cond
+                                           ((not (funcall run-active-p)) nil)
+                                           ((and findings
+                                                 (superchat-runtime-steer
+                                                  (plist-get request-context :run-id)
+                                                  (superchat-llm--report-review-note findings)
+                                                  'report-review))
+                                            (cl-incf tool-rounds)
+                                            (when (and (buffer-live-p request-buffer)
+                                                       (fboundp 'superchat--response-region-close))
+                                              (with-current-buffer request-buffer
+                                                (superchat--response-region-close
+                                                 nil nil transcript-owner)))
+                                            (setq response-parts '())
+                                            (setq cumulative ""
+                                                  reasoning-cumulative "")
+                                            (condition-case err
+                                                (funcall send-request 'tool-followup)
+                                              (superchat-llm-evidence-recording-error
+                                               (signal (car err) (cdr err)))
+                                              (error
+                                               (funcall finalize
+                                                        (format "[llm-chat-streaming error: %s]"
+                                                                (error-message-string err))
+                                                        'failed))))
+                                           (t (funcall finalize final-text))))))
+                                   (funcall finalize final-text)))))
                          (funcall finalize
                                   "[Missing final response from llm]" 'failed)))))))))
 

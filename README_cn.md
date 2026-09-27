@@ -397,6 +397,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `edit-buffers` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
+- `superchat-report-review` —— `nil`（默认）或 `t`：用了工具的聊天任务，在回答定稿之前多发一次请求，拿回答去对照这次的工具记录，把记录里没有依据的说法退回给模型改一次。不论这项怎么设，用了工具的回答下面都会附一行“这次工具实际改了什么”的记录。
 - `superchat-memory-auto-recall-cross-session` —— 模型可自动看到其他对话的哪些记忆：`remembered`（只看 `/remember` 记下的，默认）、`all`、`none`；你自己的 `/recall` 始终搜全部。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 

@@ -39,14 +39,16 @@
 ;;; Surfaces (contract §2.1)
 
 (defvar superchat-pipeline--surfaces
-  '(workflow subagent compaction skills external)
+  '(workflow subagent compaction skills external report-review)
   "Registered Producer surface symbols.
 
 The built-in surface rows `chat', `inline-ask', `inline-rewrite', `org-babel'
 and `magit' register themselves through `superchat-register-surface', so they
 are absent from this core seed and are withdrawn by the row's Scope.  The
 remaining names are core-held for surfaces without a row in this slice; a
-plugin (Telega, for example) adds its own with `superchat-register-surface'.")
+plugin (Telega, for example) adds its own with `superchat-register-surface'.
+`report-review' is the reviewer request of `superchat-report-review'
+\(docs/decisions/accepted/2026-09-27-claims-checked-against-the-record.md).")
 
 (defun superchat-register-surface (symbol)
   "Register SYMBOL as a Producer surface.  Signal an error on a duplicate
