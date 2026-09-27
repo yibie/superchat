@@ -1573,6 +1573,47 @@ This text belongs to the View, never to the model's response body."
            "Execution stopped without requesting a final answer."
          "A final answer was requested; unfinished or unverified work may remain.")))))
 
+(declare-function superchat-tape-replay-events "superchat-tape" (session-id &optional since-id limit))
+
+(defun superchat-render-run-record-line (session-id run-id)
+  "The product's record line for RUN-ID's tool calls, or nil when it made none.
+It says what the Run's tools changed, read from the Tape: every buffer a
+structured tool changed (the `:buffer' of its `tool.completed' facts) with its
+state now -- unsaved, saved, or closed -- or that none was changed, and how
+many times `eval_elisp' ran, whose effects are not tracked.  It is shown to
+the person under the answer and never sent to the model
+\(docs/decisions/accepted/2026-09-27-claims-checked-against-the-record.md)."
+  (let (called buffers (evals 0))
+    (dolist (event (and (stringp session-id) (stringp run-id)
+                        (ignore-errors (superchat-tape-replay-events session-id))))
+      (when (equal (plist-get event :run-id) run-id)
+        (let ((payload (plist-get event :payload)))
+          (pcase (plist-get event :type)
+            ("tool.requested" (setq called t))
+            ("tool.completed"
+             (when-let* ((name (plist-get payload :buffer)))
+               (unless (member name buffers) (push name buffers)))
+             (when (equal (plist-get payload :tool-name) "eval_elisp")
+               (cl-incf evals)))))))
+    (when called
+      (concat
+       "Record of this task: "
+       (if buffers
+           (concat "changed "
+                   (mapconcat
+                    (lambda (name)
+                      (let ((buffer (get-buffer name)))
+                        (format "%s (%s)" name
+                                (cond ((null buffer) "closed")
+                                      ((buffer-modified-p buffer) "unsaved")
+                                      (t "saved")))))
+                    (reverse buffers) ", "))
+         "no buffer or file was changed by a tool")
+       (when (> evals 0)
+         (format "; ran Emacs Lisp %d time%s (what it changed is not tracked)"
+                 evals (if (= evals 1) "" "s")))
+       "."))))
+
 (defun superchat-render-view-sink (buffer session-id transcript-owner)
   "Return the chat View's Sink for BUFFER/SESSION-ID/TRANSCRIPT-OWNER.
 
@@ -1595,7 +1636,15 @@ or replaced still completes durably without ever declaring the Sink dead."
                       (superchat--tool-budget-notice
                        (plist-get payload :tool-budget))))
            (superchat--response-region-insert-persistent
-            notice nil transcript-owner))))
+            notice nil transcript-owner)))
+       (record-line (run)
+         ;; What the Run's tools changed, under the answer (Part A of the
+         ;; 2026-09-27 decision); product text, not the model's.
+         (when-let* ((line (superchat-render-run-record-line
+                            session-id
+                            (if (stringp run) run (plist-get run :run-id)))))
+           (superchat--response-region-insert-persistent
+            (propertize line 'face 'shadow) nil transcript-owner))))
     (superchat-sink-create
      :id (format "view-%s" (buffer-name buffer))
      :status
@@ -1667,7 +1716,8 @@ or replaced still completes durably without ever declaring the Sink dead."
              (superchat--process-llm-result
               (plist-get payload :text) (plist-get payload :tape-id)
               transcript-owner)
-             (budget-notice payload)))))
+             (budget-notice payload)
+             (record-line run)))))
      :error
      (lambda (run failure)
        (when (current-p)
@@ -1699,7 +1749,8 @@ or replaced still completes durably without ever declaring the Sink dead."
                 (unless (superchat-runtime--sink-stop-requested-p run)
                   (superchat--process-llm-result
                    (plist-get failure :text) (plist-get failure :tape-id)
-                   transcript-owner))))
+                   transcript-owner)
+                  (record-line run))))
              (budget-notice failure)))))
      :orphaned (lambda (_run _reason) nil))))
 
