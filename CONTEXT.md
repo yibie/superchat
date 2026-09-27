@@ -79,6 +79,18 @@ delegated execution, explicitly reference their direct parent Run, and do not
 create a separate Runtime.
 _Avoid_: Agent, Session
 
+**Skill**:
+A named piece of task-specific instructions in a file (a folder with
+`SKILL.md`, or a single file with a description) that the model finds in the
+skill catalog and reads when a task needs it, or that the person invokes with
+`>name`.
+_Avoid_: preset (a Skill of type agent or plan is also a Preset), plugin
+
+**Skill catalog**:
+The list of Skills — name, one-line description, file location — carried in
+the system text so the model knows what it can read.
+_Avoid_: skill index, registry
+
 **Region rewrite**:
 One instruction applied to exactly the Rewrite target; its answer is the
 replacement text alone, and it changes the buffer only when the user accepts it.
