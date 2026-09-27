@@ -1,6 +1,6 @@
 # Decision: a model's report is checked against what the Run actually did
 
-Status: proposed — the user chose, 2026-09-27 ("按照建议"), to have this researched before deciding; the options below await the user.
+Status: accepted — user, 2026-09-27: "follow advice" to the recommendation: option 1 now, option 3 as a switch, off by default, measured in the task simulation before any default changes.
 
 ## 一句话
 
@@ -32,7 +32,21 @@ Sources: `.scratch/task-sim/FIRST-BATCH-REPORT.md`, `SECOND-BATCH-REPORT.md`.
 3. **A reviewer call (OpenHands's shape, with the same model).** After a tool-using Run's final answer, one extra request with a fresh context: the person's request, the Run's tool lines (the same one-line observations later turns already see), and the answer; it lists claims the record does not support and parts of the request not met. If it lists any, they go back to the model once as a correction. Catches all four observed cases in principle; costs one request and several seconds per tool-using Run; a model reviewing its own kind of output may miss what it would itself invent.
 4. **An instruction only (DeepSeek Harness's goal-round wording).** Add to the operating note: report only what a tool result in this Run shows. Cheapest; the note already says "Report what you checked", and the runs above happened with it.
 
-## Recommendation
+## Decision
+
+The user took the recommendation ("follow advice").
+
+**Part A — the record line (built now, always on).** When a Run that made at least one tool call ends — completed or failed, not cancelled — the chat View shows, after the answer, one product-written line in a quiet face, never sent to the model and never on the Tape as model text:
+
+- `Record of this task: changed BUFFER (unsaved|saved|closed), …` for every buffer a structured tool changed in this Run (the `:buffer` on its `tool.completed` facts), with the buffer's state now;
+- `no buffer or file was changed by a tool` when none was;
+- `; ran Emacs Lisp N times (what it changed is not tracked)` when `eval_elisp` succeeded N > 0 times.
+
+It follows the existing tool-budget notice's placement. Only the chat View shows it; in-place surfaces keep their own reports.
+
+**Part B — the reviewer (a switch, `superchat-report-review`, default nil).** When on, a chat Run that made tool calls and ends on a reply without a tool call gets, before that reply is final, one extra request to the same backend with a fresh context and no tools: the person's request, the Run's tool lines (the one-line observations later turns see), and the reply; it answers `OK` or lists the claims the record does not support and the parts of the request not met. A list goes back to the model once as a user-role correction ("A check of your report against this task's tool record found: … Correct the report: do what is missing with tools, or say plainly what was not done; claim nothing the record does not show."); the model's next reply is final. At most once per Run; not when the finish check fired; recorded on the Tape (`run.report-reviewed`, with the verdict and the findings). The task simulation compares the same tasks with it on and off (catches, false alarms, added time) before any default changes.
+
+## Recommendation (as proposed)
 
 1 now (it costs nothing per request and removes the silent case), and 3 as an option measured in the task simulation before it becomes a default (same tasks with and without the reviewer: how many false claims it catches, how many false alarms, the added time). 2 and 4 are not recommended: 2 is brittle wording rules; 4 did not prevent the observed cases.
 
