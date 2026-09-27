@@ -111,6 +111,11 @@ SPEC is (SKILLS EXTRA)."
       (should (string-match-p "read_file" text))
       (should (string-match-p "names the skill" text))
       (should (string-match-p "relative path" text))
+      ;; Scripts (amendment 2026-09-27): how to run one, and that the
+      ;; permission level decides.
+      (should (string-match-p "(load \\\"ABSOLUTE-PATH\\\")" text))
+      (should (string-match-p "call-process" text))
+      (should (string-match-p "permission level" text))
       (should (string-match-p "<available_skills>" text))
       (should (string-match-p "<name>denote-journal</name>" text))
       (should (string-match-p (regexp-quote (format "<location>%s</location>"

@@ -28,6 +28,13 @@ Status: accepted — user, 2026-09-26: "superchat 的 skill 只能靠 >名字 �
 5. **Bundled reference pages are unchanged** (question 4, A): `read_reference` and its index stay as they are; merging them into the catalog is a later, separate decision.
 6. The `denote-journal` skill used by the task simulation is written by the leader from the package's source and reviewed by the user before any run uses it (question 5, A). It is test data, not bundled.
 
+## Amendment 2026-09-27: scripts in a skill
+
+Asked whether a skill can bring its whole folder and scripts, the user answered: scripts come in every language ("Emacs 里的 Skill 脚本，语言是各色各样的，没有同意。尽管我们推荐用 elisp"); running one follows the permission level (Q2 A); no directory-listing tool — a skill names the files it uses, as in Pi and DeepSeek Harness, which give the skill's base directory and never list it (Q3 C).
+
+- The catalog text tells the model how to run a script a skill names: an Emacs Lisp file with `eval_elisp` `(load "ABSOLUTE-PATH")`, any other script by starting its program from `eval_elisp` (for example `call-process`); either is full Emacs control and follows the session's permission level — asked about per call under the default `edit-buffers` level. It recommends nothing about the script's language to the model; the recommendation of Emacs Lisp is for skill authors.
+- Reading a skill's other files needs no change: `read_file` with the path resolved against the skill's folder. Reading a folder is an error, and stays so.
+
 ## Alternatives considered
 
 **A dedicated loader tool (DeepSeek Harness's `skill`).** Records "skill loaded" as its own event and can refuse unlisted names; lost to Pi's way, which the user named, needs no new tool, and reaches a skill's relative files with the same `read_file`.

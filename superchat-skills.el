@@ -284,7 +284,10 @@ the first skill of a name wins.  Reading the folders has no side effect."
      "Use read_file to load a skill's file when the task matches its description, "
      "or when the user names the skill. When a skill file refers to a relative path, "
      "resolve it against the skill's directory (the directory of its file) and read "
-     "it with read_file when you need it.\n\n<available_skills>\n"
+     "it with read_file when you need it. To run a script a skill names, load an "
+     "Emacs Lisp file with eval_elisp (load \"ABSOLUTE-PATH\"), and start any other "
+     "script's program from eval_elisp (for example call-process); running a script "
+     "is full Emacs control and follows the session's permission level.\n\n<available_skills>\n"
      (mapconcat (lambda (skill)
                   (format "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n    <location>%s</location>\n  </skill>\n"
                           (superchat-skills--xml (plist-get skill :name))
