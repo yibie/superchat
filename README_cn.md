@@ -156,6 +156,8 @@ User: >code-review #src/utils.el
 
 技能是可复用的系统提示词，以带 YAML frontmatter 的 Markdown 文件存储。放在 `skills/*.md` 中，通过 `>skill-name` 调用。
 
+**模型会自己发现 skill。** 只要请求里有 `read_file` 工具，就会带上一份 skill 目录：每个 skill 的名字、一句 `description` 和文件位置，格式与 Pi 相同。任务和某条描述对得上，或者你在话里点名某个 skill（比如“用 denote-journal 的 skill”），模型就会用 `read_file` 读这份 skill；skill 里用相对路径提到的文件，用到时再读。目录收录 skills 文件夹里任意深度的 `SKILL.md` 文件夹（Pi、Claude Code、Codex 共用的标准格式），以及带 `description` 的单个 `.md`/`.org` skill；`superchat-skills-extra-directories` 可以再加别的文件夹（比如 `~/.agents/skills`）。模式类 skill（`type: agent` 或 `plan`）和标了 `disable-model-invocation: true` 的，仍只能用 `>名字` 调用。`>名字` 也能找到 `名字/SKILL.md` 这样的文件夹。
+
 `type: prompt`（默认类型）会将 body 作为当轮的系统提示词注入：
 
 ```markdown

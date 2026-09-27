@@ -315,6 +315,21 @@ It never advertises an entry the request does not have.")
                   (superchat-reference-index-text))))
   turn)
 
+;; docs/decisions/accepted/2026-09-27-skills-the-model-finds-itself.md
+(defconst superchat-prompt--skill-catalog-tools '("read_file")
+  "The skill catalog is rendered only when the model can read a skill.")
+
+(declare-function superchat-skills-catalog-text "superchat-skills")
+
+(defun superchat-prompt-hook--skill-catalog (turn)
+  "Add the skill catalog: the skills the model may read with read_file."
+  (when-let* ((text (and (require 'superchat-skills nil t)
+                         (fboundp 'superchat-skills-catalog-text)
+                         (ignore-errors (superchat-skills-catalog-text)))))
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n" text)))
+  turn)
+
 (defun superchat-prompt--block-tools (fn)
   "Return the tool names block function FN is about, or nil.
 A block with tool names is rendered only when one of them is on the final tool
@@ -324,7 +339,9 @@ surface; nil is an unconditional block."
         ((eq fn #'superchat-prompt-hook--emacs-operating-note)
          superchat-prompt--operating-note-tools)
         ((eq fn #'superchat-prompt-hook--reference-index)
-         superchat-prompt--reference-index-tools)))
+         superchat-prompt--reference-index-tools)
+        ((eq fn #'superchat-prompt-hook--skill-catalog)
+         superchat-prompt--skill-catalog-tools)))
 
 (defconst superchat-prompt--system-instruction-specs
   (list (list "language-instruction"
@@ -338,7 +355,9 @@ surface; nil is an unconditional block."
         (list "emacs-operating-note"
               #'superchat-prompt-hook--emacs-operating-note 5)
         (list "reference-index"
-              #'superchat-prompt-hook--reference-index 4))
+              #'superchat-prompt-hook--reference-index 4)
+        (list "skill-catalog"
+              #'superchat-prompt-hook--skill-catalog 3))
   "System-prompt sub-blocks folded into the `system-instructions' collector.
 Each entry is (ID HOOK-FUNCTION PRIORITY); PRIORITY orders the resulting
 `:slot system' fragments so their joined text matches the order the
@@ -378,7 +397,8 @@ compaction) never received these blocks."
                       (let ((decided (or tools
                                          (bound-and-true-p superchat-llm-tool-names))))
                         (and (memq fn (list #'superchat-prompt-hook--emacs-operating-note
-                                            #'superchat-prompt-hook--reference-index))
+                                            #'superchat-prompt-hook--reference-index
+                                            #'superchat-prompt-hook--skill-catalog))
                              decided
                              (not (and (listp decided)
                                        (cl-intersection

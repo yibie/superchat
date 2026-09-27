@@ -171,6 +171,8 @@ Typing `/` in the prompt opens live command completion from the same built-in an
 
 Skills are reusable system prompts packaged as markdown with YAML frontmatter. They live in `skills/*.md` and are invoked with `>skill-name`.
 
+**The model finds skills itself.** Every request that offers `read_file` carries a skill catalog: the name, the one-line `description` and the file location of each skill, in the shape Pi uses. When a task matches a description, or when you name a skill in your message ("use the denote-journal skill"), the model reads that skill with `read_file`, and reads any file the skill points to by a relative path when it needs it. The catalog lists folders holding a `SKILL.md` (the Agent Skills layout of Pi, Claude Code and Codex) at any depth in the skills directory, and single `.md`/`.org` skills there that have a `description`; `superchat-skills-extra-directories` adds other folders (for example `~/.agents/skills`). Mode skills (`type: agent` or `plan`) and skills marked `disable-model-invocation: true` stay `>name` only. `>name` also finds a folder `name/SKILL.md`.
+
 A `type: prompt` skill (the default) injects the body as the system prompt for that turn:
 
 ```markdown

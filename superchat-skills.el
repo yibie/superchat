@@ -61,6 +61,18 @@ If nil, falls back to the GITHUB_TOKEN environment variable."
   :type 'directory
   :group 'superchat-skills)
 
+(defcustom superchat-skills-extra-directories nil
+  "Other folders whose skills join the skill catalog.
+Each folder is searched, at any depth, for folders holding a `SKILL.md'
+(the Agent Skills layout that Pi, Claude Code and Codex use), for example
+\"~/.agents/skills\".  `superchat-skills-directory' comes first: when two
+skills share a name, the first one found wins."
+  :type '(repeat directory)
+  :group 'superchat-skills)
+
+(defconst superchat-skills-description-max-chars 1024
+  "Longest description a skill shows in the catalog (the Agent Skills limit).")
+
 (defcustom superchat-skills-agents-md-file
   (expand-file-name "AGENTS.md"
                     (if (boundp 'superchat-data-directory)
@@ -128,15 +140,21 @@ into the user's skills directory."
                       (mapcar #'file-name-base
                               (directory-files superchat-skills-directory nil
                                                (concat "^.*\\." (regexp-quote ext) "$"))))))
+      ;; Folders holding a SKILL.md, by their own name.
+      (dolist (dir (directory-files superchat-skills-directory t "\\`[^.]"))
+        (when (file-exists-p (expand-file-name "SKILL.md" dir))
+          (setq skills (append skills (list (file-name-nondirectory dir))))))
       (delete-dups skills))))
 
 (defun superchat-skills-exists-p (skill-name)
   "Check if SKILL-NAME exists as a skill."
-  (not (null (member skill-name (superchat-skills-get-available)))))
+  (and (superchat-skills--find-file skill-name) t))
 
 (defun superchat-skills--find-file (skill-name)
   "Find the skill file path for SKILL-NAME.
-Returns the first matching file with supported extension."
+A single file NAME.EXT in `superchat-skills-directory' comes first, then a
+folder NAME holding `SKILL.md', then any `SKILL.md' there whose frontmatter
+name is SKILL-NAME."
   (superchat-skills-initialize)
   (catch 'found
     (dolist (ext superchat-skills-file-extensions)
@@ -144,7 +162,136 @@ Returns the first matching file with supported extension."
                                     superchat-skills-directory)))
         (when (file-exists-p file)
           (throw 'found file))))
+    (let ((folder (expand-file-name (concat skill-name "/SKILL.md")
+                                    superchat-skills-directory)))
+      (when (file-exists-p folder)
+        (throw 'found folder)))
+    (dolist (file (superchat-skills--skill-files superchat-skills-directory nil))
+      (when (equal skill-name
+                   (cdr (assoc "name" (ignore-errors (superchat-skills--frontmatter file)))))
+        (throw 'found file)))
     nil))
+
+;;;; The skill catalog: skills the model finds itself
+;; docs/decisions/accepted/2026-09-27-skills-the-model-finds-itself.md
+
+(defun superchat-skills--unquote (value)
+  "VALUE without one pair of surrounding quotes."
+  (if (and (>= (length value) 2)
+           (memq (aref value 0) '(?\" ?'))
+           (eq (aref value 0) (aref value (1- (length value)))))
+      (substring value 1 -1)
+    value))
+
+(defun superchat-skills--frontmatter (file)
+  "FILE's frontmatter as an alist of lower-case keys to strings, or nil.
+Only `key: value' lines are read; a YAML block scalar (`|' or `>' followed
+by indented lines) is read whole, `|' keeping line breaks and `>' folding
+them into spaces."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 65536)
+    (goto-char (point-min))
+    (when (looking-at "---[ \t]*$")
+      (forward-line 1)
+      (let ((start (point)))
+        (when (re-search-forward "^---[ \t]*$" nil t)
+          (let ((end (copy-marker (match-beginning 0))) alist)
+            (goto-char start)
+            (while (< (point) end)
+              (if (looking-at "\\([A-Za-z_][A-Za-z0-9_-]*\\):[ \t]*\\(.*\\)$")
+                  (let ((key (downcase (match-string 1)))
+                        (value (string-trim (match-string 2))))
+                    (forward-line 1)
+                    (if (string-match-p "\\`[|>][-+]?\\'" value)
+                        (let ((fold (string-prefix-p ">" value)) lines)
+                          (while (and (< (point) end)
+                                      (looking-at "\\(?:[ \t]+\\(.*\\)\\|[ \t]*\\)$"))
+                            (push (string-trim (or (match-string 1) "")) lines)
+                            (forward-line 1))
+                          (setq lines (nreverse lines))
+                          (while (and lines (string-empty-p (car (last lines))))
+                            (setq lines (butlast lines)))
+                          (setq value (mapconcat #'identity lines (if fold " " "\n"))))
+                      (setq value (superchat-skills--unquote value)))
+                    (push (cons key value) alist))
+                (forward-line 1)))
+            (nreverse alist)))))))
+
+(defun superchat-skills--skill-files (directory root-files)
+  "Skill files in DIRECTORY: every `SKILL.md' at any depth, then, when
+ROOT-FILES, DIRECTORY's own .md and .org files.  Hidden folders are skipped."
+  (when (and (stringp directory) (file-directory-p directory))
+    (let ((directory (expand-file-name directory)))
+      (append
+       (sort (directory-files-recursively
+              directory "\\`SKILL\\.md\\'" nil
+              (lambda (dir) (not (string-prefix-p "." (file-name-nondirectory dir))))
+              t)
+             #'string<)
+       (when root-files
+         (cl-remove-if (lambda (file) (equal (file-name-nondirectory file) "SKILL.md"))
+                       (directory-files directory t "\\`[^.].*\\.\\(?:md\\|org\\)\\'")))))))
+
+(defun superchat-skills--catalog-entry (file)
+  "FILE's catalog entry (:name :description :location), or nil when it is
+not listed: no description, a mode skill (type agent or plan), or marked
+`disable-model-invocation: true'."
+  (let* ((front (superchat-skills--frontmatter file))
+         (description (cdr (assoc "description" front)))
+         (type (cdr (assoc "type" front))))
+    (when (and (stringp description)
+               (not (string-empty-p (string-trim description)))
+               (not (member type '("agent" "plan")))
+               (not (member (cdr (assoc "disable-model-invocation" front)) '("true" "yes"))))
+      (list :name (or (cdr (assoc "name" front))
+                      (if (equal (file-name-nondirectory file) "SKILL.md")
+                          (file-name-nondirectory
+                           (directory-file-name (file-name-directory file)))
+                        (file-name-base file)))
+            :description (if (> (length description) superchat-skills-description-max-chars)
+                             (substring description 0 superchat-skills-description-max-chars)
+                           description)
+            :location (expand-file-name file)))))
+
+(defun superchat-skills-catalog ()
+  "The skills the model may read: a list of (:name :description :location).
+`superchat-skills-directory' (its SKILL.md folders and described files)
+comes first, then `superchat-skills-extra-directories' (SKILL.md folders);
+the first skill of a name wins.  Reading the folders has no side effect."
+  (let (seen catalog)
+    (dolist (source (cons (cons superchat-skills-directory t)
+                          (mapcar (lambda (dir) (cons dir nil))
+                                  superchat-skills-extra-directories)))
+      (dolist (file (superchat-skills--skill-files (car source) (cdr source)))
+        (when-let* ((entry (ignore-errors (superchat-skills--catalog-entry file))))
+          (unless (member (plist-get entry :name) seen)
+            (push (plist-get entry :name) seen)
+            (push entry catalog)))))
+    (nreverse catalog)))
+
+(defun superchat-skills--xml (text)
+  "TEXT with the XML special characters escaped."
+  (replace-regexp-in-string
+   "[&<>\"]"
+   (lambda (c) (pcase c ("&" "&amp;") ("<" "&lt;") (">" "&gt;") (_ "&quot;")))
+   text t t))
+
+(defun superchat-skills-catalog-text ()
+  "The skill catalog as system text, in Pi's shape, or nil with no skills."
+  (when-let* ((skills (superchat-skills-catalog)))
+    (concat
+     "The following skills provide specialized instructions for specific tasks. "
+     "Use read_file to load a skill's file when the task matches its description, "
+     "or when the user names the skill. When a skill file refers to a relative path, "
+     "resolve it against the skill's directory (the directory of its file) and read "
+     "it with read_file when you need it.\n\n<available_skills>\n"
+     (mapconcat (lambda (skill)
+                  (format "  <skill>\n    <name>%s</name>\n    <description>%s</description>\n    <location>%s</location>\n  </skill>\n"
+                          (superchat-skills--xml (plist-get skill :name))
+                          (superchat-skills--xml (plist-get skill :description))
+                          (superchat-skills--xml (plist-get skill :location))))
+                skills "")
+     "</available_skills>")))
 
 (defun superchat-skills-load (skill-name)
   "Load SKILL-NAME and return a `superchat-preset'.
