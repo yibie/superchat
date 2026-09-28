@@ -60,8 +60,8 @@ reviewer told that saving is the person's, that negatives need no proof,
 that only unsupported lines are listed); it costs another 18 real runs and
 does not by itself fix the answer opening on a note the person cannot see.
 
-**Only report the ordering defect upstream.**  Lost: until a release, about
-one streamed answer in ten shows a swap in every Superchat.
+**Only report the ordering defect upstream.**  Lost: until a release, nearly
+every long streamed answer shows a swap in every Superchat.
 
 ## Acceptance
 
@@ -71,3 +71,10 @@ one streamed answer in ten shows a swap in every Superchat.
   each caught.  `report-review-regression.el` is removed with Part B.
 - The full sweep passes.
 - A later real batch shows no swapped answer (`harness/stream-order-check.py`).
+
+## Verification (2026-09-29)
+
+Real batches with the fix: no answer differs from what the model sent (36 of
+36 compared).  Streamed answers only, same day and model: 6 of 6 scrambled with
+the old code, 0 of 5 with the fix.  The earlier "4 of 36 runs" counted runs,
+most of which never stream; a long streamed answer was almost always hit.

@@ -246,7 +246,7 @@ The task simulation saw four answers the Run's own record contradicts. By the us
 
 ### Fixes from the third task simulation (`implemented` 2026-09-28)
 
-Streamed answers had two neighbouring pieces swapped in 4 of 36 runs: plz-event-source 0.1.3 gives each server-sent event a timer at `current-time`, and Emacs runs equal-time timers newest first; Superchat now replaces that dispatch with one whose timers are strictly ordered. The finish check cut the last sentence at any dot (`init.el`, "e.g.", "2.0"); an ASCII terminator now ends a sentence only before whitespace and not after an "e.g."-style abbreviation. `scripts/task-sim-third-fixes-regression.el`, 5 tests (3 red at the gap, 2 guards), 5 mutants caught. Record: [fixes from the third task simulation](decisions/accepted/2026-09-27-fixes-from-the-third-task-simulation.md).
+A long streamed answer almost always had two neighbouring pieces swapped (6 of 6 streamed answers with the old code, 0 of 5 with the fix, same day): plz-event-source 0.1.3 gives each server-sent event a timer at `current-time`, and Emacs runs equal-time timers newest first; Superchat now replaces that dispatch with one whose timers are strictly ordered. The finish check cut the last sentence at any dot (`init.el`, "e.g.", "2.0"); an ASCII terminator now ends a sentence only before whitespace and not after an "e.g."-style abbreviation. `scripts/task-sim-third-fixes-regression.el`, 5 tests (3 red at the gap, 2 guards), 5 mutants caught. Record: [fixes from the third task simulation](decisions/accepted/2026-09-27-fixes-from-the-third-task-simulation.md).
 
 ### Guidance from the task simulation (`implemented` 2026-09-27)
 
