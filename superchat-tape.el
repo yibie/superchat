@@ -99,10 +99,7 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "tool.requested" "approval.requested" "approval.decided"
              "tool.execution.started" "tool.completed" "tool.failed"
              "decision.snapshot.recorded" "output.first.recorded"
-             "run.steered" "run.steer-undelivered" "delivery.failed"
-             ;; A chat Run's report checked by a reviewer request
-             ;; (docs/decisions/accepted/2026-09-27-claims-checked-against-the-record.md).
-             "run.report-reviewed"))
+             "run.steered" "run.steer-undelivered" "delivery.failed"))
    (mapcar (lambda (type) (list :type type :relevance 'configuration))
            '("capability.activated" "topology.changed"
              "workspace.bound"

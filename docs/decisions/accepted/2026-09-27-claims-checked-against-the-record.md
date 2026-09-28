@@ -62,3 +62,7 @@ For 1: a tool-using Run that changed nothing shows the "changed nothing" line; o
 
 - 1 adds a line to every tool-using answer; if it is noisy the person learns to skip it. Keep it one line.
 - 3 doubles the model's work at the end of a task and can itself be wrong; it must never change the buffer, only send a correction the model acts on.
+
+## Amendment 2026-09-28: Part B removed
+
+Measured in the third task-simulation batch, the reviewer caught no material false claim and cost about 19 s and 3.4 requests per reviewed Run; by the user's choice it was removed. Part A stays. See [fixes from the third task simulation](2026-09-27-fixes-from-the-third-task-simulation.md).
