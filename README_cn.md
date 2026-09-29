@@ -382,7 +382,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-response-timeout` — 每次 provider 请求的静默窗口（默认 120 秒，工具模式有调整）。
 - `superchat-emacs-operating-note` — 一小段关于在 Emacs 里干活的说明（键位怎么写、buffer 与文件的区别、该如实报告什么），随带有 `eval_elisp` 或 `edit_buffer` 的请求放进系统提示。默认 `t`；`nil` 关闭；设成字符串则发送你自己的文字。每次这样的请求约多 250 个 token。它对真实模型的效果尚未验证。
 - `superchat-response-timeout-hard-limit` — 可选的跨请求累计传输上限（秒）。默认 nil，即没有这道上限（2026-09-19 之前是 600）。
-- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — 工具轮数预算与触顶行为（默认 12 / `ask`）。
+- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — 工具轮数预算与触顶行为（默认 nil，不限轮数 / `ask`，仅在设了上限时起作用）。
 - `superchat-llm-reasoning` — 请求的思考档位，或沿用 provider 默认值（`nil`）；见 [Reasoning 设置](#reasoning-设置)。
 - `superchat-context-message-count` — 注入 prompt 的近期消息数量。
 - `superchat-conversation-history-limit` — 缓冲区中保留的最大消息数。
@@ -468,7 +468,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 **达到工具轮数上限**
 
-一轮指一次调用了一个或多个工具的模型响应。默认达到 12 轮时，交互式 Emacs 询问是否再给 12 轮；拒绝或使用 batch 模式时，会撤掉工具并请求最终答复，`stop` 则立即结束。聊天中保留独立的预算提示，重新打开 Session 后也可见。将配置任务视为完成前，应核对答复中的已完成、未完成和未验证部分。可通过 `superchat-llm-max-tool-rounds` 和 `superchat-llm-round-limit-action` 调整行为，累计 hard 上限仍然有效。
+一轮指一次调用了一个或多个工具的模型响应。默认不限轮数：任务一直调用工具，直到模型给出答复、你用 `C-c C-k` 停下，或到了 Run 总期限（[决定](docs/decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md)）。设了上限时，达到该轮数，交互式 Emacs 询问是否再给同样多轮；拒绝或使用 batch 模式时，会撤掉工具并请求最终答复，`stop` 则立即结束。聊天中保留独立的预算提示，重新打开 Session 后也可见。将配置任务视为完成前，应核对答复中的已完成、未完成和未验证部分。可通过 `superchat-llm-max-tool-rounds` 和 `superchat-llm-round-limit-action` 调整行为，累计 hard 上限仍然有效。
 
 **记忆不能持久化**
 

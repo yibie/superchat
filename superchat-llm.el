@@ -100,13 +100,16 @@ Tool calling (especially with cloud models or Ollama) may need more time."
   :type 'number
   :group 'superchat)
 
-(defcustom superchat-llm-max-tool-rounds 12
-  "Maximum consecutive tool rounds before Superchat stops the loop.
+(defcustom superchat-llm-max-tool-rounds nil
+  "Maximum consecutive tool rounds before Superchat stops the loop, or nil.
 
-One round is a model response that invokes one or more tools.  The
-limit bounds the depth of a tool conversation; agent tool wrappers
-separately bound the total number of tool calls.  Set this to nil to
-disable the round limit."
+One round is a model response that invokes one or more tools.  nil (the
+default) sets no limit: a Run calls tools until the model answers or the
+person stops it (\\[superchat-cancel] in the chat).  A number bounds the
+depth of a tool conversation, and `superchat-llm-round-limit-action' says
+what happens there.  Agent tool wrappers separately bound the total number
+of tool calls.  Decision: docs/decisions/accepted/
+2026-09-29-no-tool-round-limit-by-default.md."
   :type '(choice (const :tag "Unlimited" nil)
                  (integer :tag "Rounds"))
   :group 'superchat)

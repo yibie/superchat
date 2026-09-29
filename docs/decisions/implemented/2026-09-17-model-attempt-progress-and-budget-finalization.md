@@ -35,3 +35,7 @@ Tool budget finalization states the actual boundary and asks for completed, inco
 The [configuration guide](../../../README.md#reasoning-settings) explains provider defaults, explicit Preset inheritance and compatible endpoint mappings. Existing users who explicitly set an unmapped effort need to declare its protocol or choose provider defaults. An explicit raw parameter overrides automatic effort selection, so it is unsuitable for users who expect Presets to vary that setting. Successful request serialization is evidence of the requested value, not proof that an arbitrary server honors it.
 
 The focused [execution regression](../../../scripts/m5-execution-regression.el) covers real request construction, scripted tool execution through Authority and Runtime, fake-clock counterexamples and actual Emacs timer scheduling. The existing leader-owned M3 and M5 sets remain unchanged. Scripted correctness and a particular model's success on an Emacs task remain separate evidence; the reference reader and operating guide remain proposals in the roadmap.
+
+## Amendment 2026-09-29: no round limit by default
+
+The default `superchat-llm-max-tool-rounds` is now nil ([no tool round limit by default](../accepted/2026-09-29-no-tool-round-limit-by-default.md)); this decision's refusal to change the default is superseded. Its budget finalization, notice and record stand for anyone who sets a limit.

@@ -388,7 +388,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-response-timeout` — silence window for each provider attempt (default 120 seconds, adjusted in tool mode).
 - `superchat-emacs-operating-note` — a short note about working in Emacs (keys, buffers versus files, what to report) sent in the system text of requests that offer `eval_elisp` or `edit_buffer`. Default `t`; `nil` turns it off; a string sends your own text. About 250 tokens per such request. Its effect on real models has not been verified.
 - `superchat-response-timeout-hard-limit` — optional aggregate transport limit across attempts, in seconds. Default nil: no such limit (it was 600 until 2026-09-19).
-- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — tool round budget and its boundary action (default 12 / `ask`).
+- `superchat-llm-max-tool-rounds` / `superchat-llm-round-limit-action` — tool round budget and its boundary action (default nil, no limit / `ask`, used only when a limit is set).
 - `superchat-llm-reasoning` — requested effort, or provider defaults (`nil`); see [reasoning settings](#reasoning-settings).
 - `superchat-context-message-count` — how many recent messages to include in the prompt.
 - `superchat-conversation-history-limit` — how many messages to keep in the buffer.
@@ -465,7 +465,7 @@ Each provider attempt gets its own silence window: 120 seconds by default, multi
 
 **Tool round limit reached**
 
-A round is one model response invoking one or more tools. At the default 12 rounds, interactive Emacs asks whether to grant another 12. Declining, or using batch mode, requests a final answer without tools; `stop` ends immediately. The chat keeps a separate budget notice, including after reopening the Session. Read the answer's completed, incomplete and unverified work before treating a configuration task as done. Adjust `superchat-llm-max-tool-rounds` and `superchat-llm-round-limit-action` for your workflow; the aggregate hard limit still applies.
+A round is one model response invoking one or more tools. By default there is no round limit: a task calls tools until the model answers, you stop it with `C-c C-k`, or the Run deadline passes ([decision](docs/decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md)). With a limit set, at that many rounds interactive Emacs asks whether to grant as many again. Declining, or using batch mode, requests a final answer without tools; `stop` ends immediately. The chat keeps a separate budget notice, including after reopening the Session. Read the answer's completed, incomplete and unverified work before treating a configuration task as done. Adjust `superchat-llm-max-tool-rounds` and `superchat-llm-round-limit-action` for your workflow; the aggregate hard limit still applies.
 
 **Memory not persisting**
 
