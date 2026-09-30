@@ -927,6 +927,11 @@ the call is asked before this function runs and is not affected."
     (catch asked
       (condition-case err
           (let ((result (let ((inhibit-interaction t)
+                              ;; Tools run from llm.el's callbacks, which
+                              ;; Emacs calls with quitting inhibited; a
+                              ;; person's C-g must still stop the model's
+                              ;; code (decision of 2026-09-30).
+                              (inhibit-quit nil)
                               (signal-hook-function leave-on-prompt))
                           (eval (superchat-tools--read-one-expression expression) t))))
             (superchat-tools--eval-value-result result))

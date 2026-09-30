@@ -248,6 +248,10 @@ The task simulation saw four answers the Run's own record contradicts. By the us
 
 By the user's choice ("A"): `superchat-llm-max-tool-rounds` defaults to nil, as DeepSeek Harness and Pi set no per-task round cap; a number still works as before. `scripts/no-round-limit-regression.el`, 2 tests, red first. Record: [no tool round limit by default](decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md).
 
+### C-g stops a model's Emacs Lisp that runs away (`implemented` 2026-09-30)
+
+A task-simulation run froze on an `eval_elisp` loop that never ended. Tools run from llm.el's callbacks, which Emacs calls with quitting inhibited, so a person's C-g could not stop it; the existing quit handling (call recorded as interrupted, Run cancelled) was never reached. By the user's choice ("A"): the model's expression is evaluated with `inhibit-quit` nil. `scripts/tool-quit-regression.el`, 2 tests (the new one red at the gap); end to end in a terminal Emacs the stand-in's one C-g ended the Run cancelled in 13 s, where three C-g had left it frozen. The task simulation's stand-in now presses C-g when Emacs's heartbeat is 30 s stale. Record: [C-g stops a runaway eval](decisions/accepted/2026-09-30-c-g-stops-a-runaway-eval.md).
+
 ### An ERT reference page (`implemented` 2026-09-29)
 
 By the user's choice ("可以提供一个 ert 参考资料"; "基准可以改" to smoke baseline A's new index line): a reference page `emacs-ert-tests` (load a test file, run only its tests with `ert-run-tests-batch`, read the result as plain data, what not to call); measured on T5 side by side, six runs each: 6/6 with a median of 4 tool calls and no tool error, against 5/6, 18.5 calls and 5 to 15 errors a run without it. `scripts/ert-reference-regression.el` runs the page's own forms against a fixture. Record: [an ERT reference page](decisions/accepted/2026-09-29-ert-reference-page.md).
