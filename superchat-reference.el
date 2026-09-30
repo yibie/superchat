@@ -61,7 +61,49 @@ Check each one you talk about: (buffer-modified-p) for the buffer, read_file for
 Saving is the user's decision. Tell the user which buffer holds the change and whether it is modified. Do not look for another way to get the text onto the disk.
 
 6. Report what you observed.
-Say what you checked and what it answered. You did not restart Emacs, so claim nothing about a restart beyond what the text of the file says. If a check failed or was not made, say so."))
+Say what you checked and what it answered. You did not restart Emacs, so claim nothing about a restart beyond what the text of the file says. If a check failed or was not made, say so.")
+   (list
+    :id "emacs-ert-tests"
+    :summary "running a file's ERT tests in the user's Emacs and reporting which passed, failed or were skipped"
+    :pointers '(("eval_elisp" . "only for use in batch mode")
+                ("eval_elisp" . "definition is void: ert-"))
+    :body "Running a file's ERT tests in the user's Emacs and reporting the result.
+
+This page is advice. The user's instructions and the permission decisions of this session come first; where they differ from this page, follow them. Nothing here is run for you, and nothing here allows a call that would otherwise be asked about or denied.
+
+1. Look first.
+- Read the test file (read_file) before loading it: loading evaluates every top-level form of it in the user's running Emacs. Note which library it requires and the prefix its test names share.
+- Loading defines or redefines its tests and whatever else it defines; it changes no file.
+
+2. Load it with its directory on load-path.
+(let ((load-path (cons (expand-file-name \"~/proj\") load-path)))
+  (load (expand-file-name \"~/proj/foo-test.el\") nil t))
+If the library under test was already loaded and its file has changed since, load that file too, or the tests run against the old definitions.
+
+3. Run only this file's tests and return plain data.
+ert-run-tests-batch runs the tests whose names match a regexp and returns a stats object. Do not return that object itself: it prints as a huge circular structure. Read it into a list, one expression:
+(let ((stats (ert-run-tests-batch \"^foo-test-\")))
+  (list :total (ert-stats-total stats)
+        :unexpected (ert-stats-completed-unexpected stats)
+        :skipped (ert-stats-skipped stats)
+        :tests (cl-loop for test across (ert--stats-tests stats)
+                        for result across (ert--stats-test-results stats)
+                        collect (list (ert-test-name test) (type-of result)
+                                      (and (ert-test-result-with-condition-p result)
+                                           (let ((print-length 8) (print-level 4))
+                                             (format \"%S\" (ert-test-result-with-condition-condition result))))))))
+The type is ert-test-passed, ert-test-failed or ert-test-skipped; the condition of a failure shows the should form, its :form and its :value. :unexpected counts the failures. (mapcar #'ert-test-name (ert-select-tests \"^foo-test-\" t)) lists the tests a regexp picks without running them.
+
+4. Do not.
+- ert-run-tests-batch-and-exit: it ends Emacs when it finishes; in the user's Emacs it signals \"only for use in batch mode\".
+- The selector t: it runs every test loaded in this Emacs, other packages' too.
+- M-x ert or ert-run-tests-interactively: they open an *ert* window in the user's frame. If you used one, say which buffer and window it opened.
+- Guessing ERT functions: the ones on this page exist; check any other name with fboundp before calling it.
+
+5. A clean run in a separate Emacs, when the user asks for one or the tests need a fresh Emacs: run emacs -Q --batch -L DIR -l FILE -f ert-run-tests-batch-and-exit through call-process with the output in a buffer; it follows this session's permission level. Its exit status is 0 when no test failed (skipped tests do not count as failures), 1 when one did.
+
+6. Report.
+Name the tests that passed, failed and were skipped, with each failure's :form and :value as the result showed them. Say what you loaded into the user's Emacs (it stays defined) and that no file was changed, unless you changed one."))
   "The reference pages: plists of :id, :summary, :pointers and :body.")
 
 (defun superchat-reference--page (id)

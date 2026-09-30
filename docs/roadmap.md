@@ -248,6 +248,10 @@ The task simulation saw four answers the Run's own record contradicts. By the us
 
 By the user's choice ("A"): `superchat-llm-max-tool-rounds` defaults to nil, as DeepSeek Harness and Pi set no per-task round cap; a number still works as before. `scripts/no-round-limit-regression.el`, 2 tests, red first. Record: [no tool round limit by default](decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md).
 
+### An ERT reference page (`implemented` 2026-09-29)
+
+By the user's choice ("可以提供一个 ert 参考资料"; "基准可以改" to smoke baseline A's new index line): a reference page `emacs-ert-tests` (load a test file, run only its tests with `ert-run-tests-batch`, read the result as plain data, what not to call); measured on T5 side by side, six runs each: 6/6 with a median of 4 tool calls and no tool error, against 5/6, 18.5 calls and 5 to 15 errors a run without it. `scripts/ert-reference-regression.el` runs the page's own forms against a fixture. Record: [an ERT reference page](decisions/accepted/2026-09-29-ert-reference-page.md).
+
 ### Fixes from the third task simulation (`implemented` 2026-09-28)
 
 A long streamed answer almost always had two neighbouring pieces swapped (6 of 6 streamed answers with the old code, 0 of 5 with the fix, same day): plz-event-source 0.1.3 gives each server-sent event a timer at `current-time`, and Emacs runs equal-time timers newest first; Superchat now replaces that dispatch with one whose timers are strictly ordered. The finish check cut the last sentence at any dot (`init.el`, "e.g.", "2.0"); an ASCII terminator now ends a sentence only before whitespace and not after an "e.g."-style abbreviation. `scripts/task-sim-third-fixes-regression.el`, 5 tests (3 red at the gap, 2 guards), 5 mutants caught. Record: [fixes from the third task simulation](decisions/accepted/2026-09-27-fixes-from-the-third-task-simulation.md).
