@@ -268,7 +268,7 @@ the prompt is collected again."
 t sends the built-in `superchat-emacs-operating-note-text'; a string sends
 that string instead; nil sends nothing.  The note is part of the system text
 and appears only when `eval_elisp' or `edit_buffer' is on the request's final
-tool surface.  It costs about 250 tokens on each such request."
+tool surface.  It costs about 310 tokens on each such request."
   :type '(choice (const :tag "Built-in note" t)
                  (const :tag "No note" nil)
                  (string :tag "My own note"))
@@ -281,9 +281,10 @@ tool surface.  It costs about 250 tokens on each such request."
 - Change a file with open_file, then edit_buffer; until the user saves, (load FILE) reads the old disk text. To make it live, evaluate only the forms you changed, not the whole buffer (no eval-buffer).
 - eval_elisp takes one expression; wrap several in progn.
 - To undo, restore what you observed (not \"unbound\"), only what this task changed.
+- The origin buffer is where the user is, not the task's limit. Their agenda, feeds, notes, files and repositories live in this Emacs: ask it with eval_elisp (the packages and variables they configured) before saying you cannot reach something.
 - Never change global settings, other buffers or Superchat's windows to get past an obstacle; say what blocks you.
 - Report what you checked: the buffer you edited and whether it is unsaved (buffer-modified-p); saving is the user's. You did not restart Emacs; claim no restart."
-  "The built-in Emacs operating note: at most 1024 characters.
+  "The built-in Emacs operating note: at most 1280 characters.
 It must never tell the model to save or persist anything.")
 
 (defconst superchat-prompt--operating-note-tools '("eval_elisp" "edit_buffer")

@@ -27,7 +27,8 @@
 
 (ert-deftest task-sim-guidance/the-note-says-stay-inside-the-task ()
   (let ((text superchat-emacs-operating-note-text))
-    (should (<= (length text) 1024))
+    ;; The cap was 1024 until 2026-10-01 (guidance from the goals batch).
+    (should (<= (length text) 1280))
     (should (string-match-p "global settings" text))
     (should (string-match-p "other buffers" text))
     (should (string-match-p "Superchat's windows" text))

@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — the model is told the whole Emacs is in reach
+
+- The Emacs operating note gains one line: the buffer a request comes from
+  is where you are, not the limit of the task; your agenda, feeds, notes,
+  files and repositories are in the same Emacs and are asked for before the
+  model says it cannot reach them. In task runs on DeepSeek the model had
+  answered "I cannot reach your agenda" without looking in 4 of 8 runs; with
+  the line, in none of 11. The note is now at most 1280 characters (about
+  310 tokens on each request that carries it).
+
 ## Unreleased — in-place act gets the chat window's system text
 
 - `superchat-inline-act` requests now carry the same system instructions as

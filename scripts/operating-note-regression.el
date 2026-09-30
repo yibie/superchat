@@ -168,7 +168,8 @@ no Emacs-changing tool gets no note.  Found while building the reference index
   (let ((text superchat-emacs-operating-note-text)
         (case-fold-search t))
     (should (string-prefix-p on--marker text))
-    (should (<= (length text) 1024))
+    ;; The cap was 1024 until 2026-10-01 (guidance from the goals batch).
+    (should (<= (length text) 1280))
     (dolist (needle '("(kbd " "eval-buffer" "user-init-file" "lookup-key" "progn"
                       "fundamental-mode" "unsaved" "saving is the user's"))
       (should (string-match-p (regexp-quote needle) text)))
