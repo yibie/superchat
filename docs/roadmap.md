@@ -354,6 +354,8 @@ Emacs capability seams (buffer, command, eval, process, file, org, magit, lsp), 
 
 Independent and unscheduled (`proposed`): a standing Preset mount that several Views join by re-parenting. It does not depend on the tool surface. It must keep the delivered per-View isolation: two Views choosing the same Preset name are not, by that fact, joined to one mount.
 
+Noted, not scheduled (the user's choice "A", 2026-09-30): work items after [Holon's "why work items"](https://holon.run/zh-CN/blog/why-work-items) — a durable record per piece of work, separate from the chat, answering what is to be delivered, how far it got, what it is waiting for and where to resume, with waits resumed by signals. Two halves. DeepSeek Harness has the first as its same-session Goal (one current goal per session; active, paused, blocked with a reason, complete; replayed from the session log; never starts work by itself after a restore); Superchat has no counterpart yet. The second — several items per session, each waiting on its own signal and resumed by the runtime (in Emacs the signals would be hooks: a save, a finished compile, an incoming message, an Org deadline) — DeepSeek Harness defers, and it would let the model act while nobody watches. Neither is measured: the task simulation has only single-sitting tasks, so a two-phase task with a wait comes first. Revisit after single-task reliability.
+
 ## What this roadmap does not do
 
 No line-count targets. No documentation gates or verification scripts. No replacement package-wide test suite; canonical smoke, focused regression scripts and real-model runs provide distinct evidence. No milestone deletes a feature from the default set without a recorded user decision.
