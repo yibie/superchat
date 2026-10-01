@@ -109,15 +109,34 @@ Status: proposed — 契约草稿。方向来自用户 2026-10-01 的四条裁�
 2. **workspace 之内，记忆怎么带**：规矩和偏好每次都带（有总量上限），其它事实靠搜索。
 3. **一件事被唤醒后在哪段对话里继续**：新开一段只带这件事记录的对话，做完后在该 workspace 的主对话里留一条简短结果。
 
+## 用户已定（2026-10-01 第二轮）
+
+4. **临时 workspace 没有"结束"**（"1A"）：它只是"没有目录、没有记忆区、只有一段对话"的 workspace；里面的提醒和别处的一样，到完成为止都在。这个问题原是本草稿自己造出来的：Codex 里不属于 project 的对话就是一段普通对话，定时任务统一列在 Scheduled 里，创建时说明回到当前对话还是每次新开（其文档 *Scheduled tasks*、*Projects and chats*，2026-10-01 逐字读过）。
+5. **现有带 workspace 的两个名字要换掉**：workspace 是一级概念，"Artifact Workspace" 和 "Session EditorWorkspace" 不能再含这个词。新名字待定。
+6. **就地命令进文件所在 workspace 的主对话**（"3A"），改掉 2026-09-24 记录第 5 条。
+7. **规矩和偏好对 workspace 里所有对话都带上，子代理也带**；靠搜索的事实只有主 agent 能查（"4A"）。
+8. **模型只在用户明确说"记住"或"以后都这样"时才写记忆**，写完说明记了什么；自己推断的偏好不写（"5A"）。
+9. **workspace 与 git 解耦**：不要求是版本库；推荐用 git，尤其是 jj 来初始化，但不是前提。
+10. **workspace 要与 Emacs 自身的机制结合**：superchat 是 Emacs 的原生物（用户原话）。
+
+## Emacs 自己已有的机制（2026-10-01 读 Emacs 32 的 `project.el`、`project-tab-groups` 和用户配置核实）
+
+| 机制 | 事实 |
+|---|---|
+| `project.el` 认定 project | 由 `project-find-functions` 这个钩子决定，可以加自己的认定函数；默认只有按版本库认定的那一个。`project-vc-extra-root-markers` 让"含有某个标记文件的目录"成为 project，文档写明可用于版本库之外的 project |
+| 临时 project | `project-current` 在需要时会给任意目录返回一个 "transient" project |
+| 已知 project 列表 | `project-list-file` 持久保存；`project-switch-project` 切换；`project-buffers`、`project-name`、`project-kill-buffers` |
+| tab-bar | 每个 tab 保存自己的窗口布局；tab 可以归入 tab 组 |
+| 用户的配置 | `tab-bar-mode`、`global-tab-line-mode` 都开着，这一段在 `init.el` 里的标题就是 "Workspace：tab-bar + tab-line"；`project-tab-groups-mode` 让"切换 project"变成"选中或新建这个 project 的 tab 组"，`project-kill-buffers` 关掉该组；配置注释写明目标是"项目 ↔ tab 组 ↔ ibuffer 组三者一致" |
+| superchat 今天 | 只用 tab-bar：给一个 tab 记上会话 id（agent 模式下对话自己的 tab）；不看 tab 组，不看 project，不用 tab-line |
+
 ## 仍待用户决定
 
-**临时 workspace 里设的提醒。** 用户问"为什么会有这个问题，可以看看 codex 是怎么处理的吗"。这个问题是本草稿自己造出来的：草稿给临时 workspace 规定了"结束"的时刻，又规定 work item 只属于一个 workspace，于是才有"它结束了，里面的提醒怎么办"。Codex 没有这个问题（据其文档 *Scheduled tasks* 与 *Projects and chats*，2026-10-01 逐字读过）：
+见 2026-10-01 第三轮提问：workspace 由谁认定、非版本库目录怎么成为 workspace、屏幕上用什么表示、是否允许多目录、两个旧名字改成什么。
 
-- 不属于任何 project 的对话就是一段普通对话，留在最近对话列表里，不会被回收；"事情变大了就把它移进一个 project"。
-- 定时任务是独立的东西，统一列在 Scheduled 里（它同时是收件箱）。创建时说明每次运行是回到当前这段对话，还是每次新开一段。
-- 所以在没有 project 的对话里设定时任务没有任何特别之处。
+## 搁置（用户："这个问题可以先留置"）
 
-据此的提议：去掉"临时 workspace 何时结束"这个概念。临时 workspace 只是"没有目录、没有记忆区、只有一段对话"的 workspace；里面的提醒和别处的一样，到完成为止都在。另加一个给人看的总表，列出所有 workspace 里未完成的 work item（给人看的列表不算"模型可见的内容跨 workspace"）。
+**谁可以创建 work item，以及 work item 的 id 与 jj 的 change id。** 用户的想法：work item 的 id 和 jj 的 change id 很像，也许可以靠 jj 来承担协作。jj 的事实（`jj help -k glossary`，jj 0.45.1）：change 是"一个随时间演变的提交"，change id 在改写（描述、变基、合并）后不变；一个仓库可以有多个 workspace，即多份工作副本，"就是 Git 所说的 worktree"，各有自己的工作副本提交；操作日志记录每次操作，并发操作在日志里分叉再合并。Antigravity 的 "New Worktree Mode" 用的是同一种隔离，理由是"防止并行的子代理互相冲突"。与本草稿相接和不相接的地方，留到这一支重新打开时再定。
 
 ## Alternatives considered
 
