@@ -664,7 +664,11 @@ become a third recurrence."
                  'face (if active
                            'superchat-status-active-face
                          'superchat-status-muted-face))
-     " Superchat · " model " · " phase
+     " Superchat · "
+     (if-let* ((name (plist-get superchat--workspace-binding :name)))
+         (concat name " · ")
+       "")
+     model " · " phase
      (if (numberp attempt) (format " · attempt %d" attempt) "")
      (if elapsed (concat " · " elapsed) "")
      (if context (concat " │ " context) "")
@@ -2089,9 +2093,20 @@ creates files."
                       (superchat-workspace-id-from-root root))
               :root root)))))
 
+(defun superchat--workspace-name-for-root (root)
+  "Return the display name of the Workspace rooted at ROOT.
+That is the project's name, else ROOT's directory name."
+  (or (plist-get (superchat-workspace-of-directory root) :name)
+      (file-name-nondirectory (directory-file-name root))))
+
 (defun superchat--apply-workspace-binding (binding)
   "Record BINDING (:id ID :root ROOT) as the current Session's Workspace.
-A nil BINDING clears it.  Return BINDING."
+A nil BINDING clears it.  The View keeps the binding with a `:name' added
+(the Tape fact carries only id and root).  Return that binding."
+  (when (and binding (not (plist-get binding :name)))
+    (setq binding (append binding
+                          (list :name (superchat--workspace-name-for-root
+                                       (plist-get binding :root))))))
   (if binding
       (superchat--configuration-event
        "workspace.bound"
@@ -2210,11 +2225,14 @@ project.  Otherwise bind VIEW and return the binding.  Never creates files."
     (superchat--activate-capability preset capability t)
     (setq-local superchat--active-topology
                 (if (memq topology '(single team)) topology 'single))
-    (setq-local superchat--workspace-binding
-                (and workspace-live-p
-                     (list :id workspace-id :root workspace-root)))
+    ;; The board's bind also sets the binding, without a name; set ours after.
     (when workspace-live-p
       (superchat-artifact-board-bind workspace-id workspace-root session-id))
+    (setq-local superchat--workspace-binding
+                (and workspace-live-p
+                     (list :id workspace-id :root workspace-root
+                           :name (superchat--workspace-name-for-root
+                                  workspace-root))))
     (setq-local superchat-tools-default-directory
                 (and workspace-live-p workspace-root))
     (setq-local superchat--last-surface
@@ -3478,10 +3496,17 @@ another one showing BUFFER; otherwise it is plain `display-buffer'."
 (defun superchat--display-session-view (buffer session-id)
   "Display BUFFER, SESSION-ID's chat View, select it, and return BUFFER.
 In editor mode it is shown beside the code in the current tab; in agent mode
-SESSION-ID's own tab is selected, or made, and BUFFER displayed there."
+SESSION-ID's own tab is selected, or made, and BUFFER displayed there; when
+BUFFER is bound to a Workspace, that tab joins the tab group named for it."
   (if (superchat--chat-view-beside-code-p session-id)
       (superchat--show-chat-view buffer t)
     (superchat-editor-workspace--select-session-tab session-id)
+    (when-let* ((name (plist-get (buffer-local-value
+                                  'superchat--workspace-binding buffer)
+                                 :name)))
+      (unless (equal name (alist-get 'group
+                                     (cdr (superchat-editor-workspace--current-tab))))
+        (tab-bar-change-tab-group name)))
     (superchat--display-chat-view buffer))
   buffer)
 
