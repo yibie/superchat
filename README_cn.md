@@ -398,6 +398,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
 - `superchat-memory-auto-recall-cross-session` —— 模型可自动看到同一个 workspace 里其他对话的哪些内容：`all`（默认）、`remembered`（只看 `/remember` 记下的）、`none`。不同 workspace 之间互不可见，临时对话只看得到它自己。你自己的 `/recall` 始终搜全部。
+- `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的是临时对话。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
 内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误。通过 `eval_elisp` 运行的代码不会向你提问：它一旦要弹出提问、输入框或读取按键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。

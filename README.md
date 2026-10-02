@@ -382,6 +382,7 @@ The most-used defcustoms (see `M-x customize-group RET superchat RET` for all):
 - `superchat-llm-set-model-capabilities` — declare a local model's streaming abilities, e.g. for LM Studio: `(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`; unknown models fall back to safe defaults.
 - `superchat-rewrite-confirmation` — `overlay` (preview, accept with `C-c C-a`) or `auto`.
 - `superchat-memory-auto-recall-cross-session` — what the model may see automatically from the other conversations of the same workspace: `all` (default), `remembered` (only `/remember` anchors), or `none`. Nothing crosses from one workspace to another, and a temporary conversation sees only itself. Your own `/recall` always searches everything.
+- `superchat-personal-workspace-directory` — the directory of your Personal Workspace, the home of the agenda, feeds and chats (the modes in `superchat-personal-workspace-modes`); set it with `M-x superchat-set-personal-workspace`. Unset (the default), a conversation called from those buffers is temporary.
 - `superchat-handoff-auto-enabled` — automatic compaction on context overflow (default `t`).
 - `superchat-data-directory` — where memory, config, and commands live (default `~/.emacs.d/superchat/`).
 - `superchat-lang` — language for `$lang` variable in custom commands (default `"English"`).

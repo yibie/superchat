@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — a Personal Workspace for the agenda, feeds and chats
+
+- `M-x superchat-set-personal-workspace` designates a directory as your
+  Personal Workspace (`superchat-personal-workspace-directory`). Superchat
+  called from the agenda, the calendar, elfeed, telega, mail and IRC buffers
+  (`superchat-personal-workspace-modes`) then joins that workspace's
+  conversation and carries its `AGENTS.md`, whatever directory the buffer
+  happens to sit in. Until you designate one, a conversation called from
+  those buffers is a temporary one; it no longer lands in the project you
+  opened the agenda from.
+- It is a workspace like any other: no other workspace sees its rules.
+- To give one interface to a different workspace, set
+  `superchat-buffer-workspace-directory` in its mode hook.
+
 ## Unreleased — a workspace keeps its rules, and recall stays inside it
 
 - A conversation that belongs to a workspace (a project directory) now sends
