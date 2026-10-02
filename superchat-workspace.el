@@ -119,6 +119,21 @@ directory."
 
 ;;;; Rules ------------------------------------------------------------------------
 
+(defconst superchat-workspace-remember-note-with-file
+  "When the user explicitly asks you to remember something, or says \"from now on\" or \"always\", add it to %s: open that file as a buffer, edit the buffer, and tell the user what you wrote.  It takes effect once the user saves the file.  Do not write down preferences you only inferred."
+  "What a request says about remembering when the Workspace has a rules file.
+The one %s is the file's path (contract R4).")
+
+(defconst superchat-workspace-remember-note-without-file
+  "This workspace has no rules file yet.  When the user explicitly asks you to remember something, or says \"from now on\" or \"always\", write it to %s: open that path as a buffer (a new file starts as an empty buffer), edit the buffer, and tell the user what you wrote.  It takes effect once the user saves the file.  Do not write down preferences you only inferred."
+  "What a request says about remembering when the Workspace has no rules file.
+The one %s is the path `AGENTS.md' would have under the root.")
+
+(defconst superchat-workspace-temporary-note
+  "This is a temporary conversation: it belongs to no workspace, and nothing said here is carried into later conversations.  If the user asks you to remember something for later, say that it will not be kept here, and that `/workspace DIRECTORY' in this window makes a directory a workspace whose rules are kept in its AGENTS.md."
+  "What a request says about remembering in a conversation bound to no Workspace
+\(contract W5, W10).")
+
 (defconst superchat-workspace-rules-max-chars 6000
   "Most characters of a rules file that go into one request.")
 
@@ -161,6 +176,21 @@ Never signals."
                                   superchat-workspace-rules-max-chars file)
                         ""))))))
     (error nil)))
+
+(defun superchat-workspace-remember-note (root)
+  "Return what a request says about remembering, for the Workspace at ROOT.
+With a rules file, the model is told to edit that file's buffer; with a
+root but no rules file, to start `AGENTS.md' there; with a nil ROOT (a
+temporary conversation), that nothing is kept.  The model writes only on
+the user's explicit word, and the user's save is what makes it a rule
+\(contract R4)."
+  (if (and (stringp root) (file-directory-p root))
+      (let ((file (superchat-workspace-rules-file root)))
+        (if file
+            (format superchat-workspace-remember-note-with-file file)
+          (format superchat-workspace-remember-note-without-file
+                  (expand-file-name "AGENTS.md" root))))
+    superchat-workspace-temporary-note))
 
 (defun superchat-workspace-project-finder (dir)
   "Return a project for the nearest `.superchat/' directory above DIR, or nil.

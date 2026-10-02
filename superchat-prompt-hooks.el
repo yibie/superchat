@@ -424,21 +424,30 @@ compaction) never received these blocks."
     (nreverse fragments)))
 
 (declare-function superchat-workspace-rules-text "superchat-workspace" (root))
+(declare-function superchat-workspace-remember-note "superchat-workspace" (root))
 
 (defun superchat-prompt-collector--workspace-rules (env _state _tools)
   "Return the rules of the Workspace ENV's Session is bound to, as system text.
 The root comes from the Session's own Tape (`workspace.bound'), so the rules
 follow the conversation, not the buffer that happens to be current.  Chat,
-inline-ask and inline-act only, like the other system blocks.  Nothing for a
-Session with no Workspace root (a temporary conversation) or no rules file."
+inline-ask and inline-act only, like the other system blocks.  After the
+rules comes what to do when the user says to remember something
+\(`superchat-workspace-remember-note'); a Session with no Workspace root (a
+temporary conversation) gets only that note, which says nothing is kept."
   (let* ((session-id (plist-get env :session-id))
-         (root (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
+         (surface-p (memq (plist-get env :surface) '(chat inline-ask inline-act)))
+         (root (and surface-p
                     (stringp session-id)
                     (plist-get (superchat-view-session-configuration session-id)
                                :workspace-root)))
-         (text (and (stringp root)
-                    (fboundp 'superchat-workspace-rules-text)
-                    (superchat-workspace-rules-text root))))
+         (rules (and (stringp root)
+                     (fboundp 'superchat-workspace-rules-text)
+                     (superchat-workspace-rules-text root)))
+         (note (and surface-p
+                    (stringp session-id)
+                    (fboundp 'superchat-workspace-remember-note)
+                    (superchat-workspace-remember-note root)))
+         (text (and note (if rules (concat rules "\n\n" note) note))))
     (when text
       (list (superchat-prompt-fragment
              :owner 'core :id "workspace-rules" :slot 'system :text text
