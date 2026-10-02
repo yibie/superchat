@@ -10,7 +10,8 @@
 ;; `superchat-workspace-declare' writes the file.
 ;;
 ;; The Artifact Board lives in `superchat-artifact-board.el'; this file
-;; only answers "which Workspace".  Loading it has no side effects:
+;; only answers "which Workspace" and "what are its rules" (the
+;; `AGENTS.md' under the root, contract R2).  Loading it has no side effects:
 ;; the project finder is installed by
 ;; `superchat-workspace-install-project-finder', which the default row
 ;; `workspace-resolution' calls when it is mounted and undoes when it is
@@ -115,6 +116,51 @@ directory."
     (when (called-interactively-p 'interactive)
       (message "Declared workspace root: %s" root))
     (superchat-workspace--from-root root name)))
+
+;;;; Rules ------------------------------------------------------------------------
+
+(defconst superchat-workspace-rules-max-chars 6000
+  "Most characters of a rules file that go into one request.")
+
+(defconst superchat-workspace-rules-file-names '("AGENTS.md" "CLAUDE.md")
+  "File names looked for under a Workspace root, first one found wins.")
+
+(defun superchat-workspace-rules-file (root)
+  "Return the rules file of the Workspace rooted at ROOT, or nil.
+That is `AGENTS.md' under ROOT, else `CLAUDE.md', when it is a readable
+regular file.  Nil when ROOT is not an existing directory."
+  (when (and (stringp root) (file-directory-p root))
+    (cl-some (lambda (name)
+               (let ((file (expand-file-name name root)))
+                 (and (file-regular-p file) (file-readable-p file) file)))
+             superchat-workspace-rules-file-names)))
+
+(defun superchat-workspace-rules-text (root)
+  "Return the rules of the Workspace rooted at ROOT as request text, or nil.
+The text is read from the file on disk, never from a buffer, so an unsaved
+edit is not in it (contract R4: saving is the user's consent).  It names the
+file, and is cut at `superchat-workspace-rules-max-chars' characters with a
+closing line that says so.  Nil when there is no rules file or it is blank.
+Never signals."
+  (condition-case nil
+      (let ((file (superchat-workspace-rules-file root)))
+        (when file
+          (let* ((body (string-trim
+                        (with-temp-buffer
+                          (insert-file-contents file)
+                          (buffer-string))))
+                 (cut (> (length body) superchat-workspace-rules-max-chars)))
+            (unless (string-empty-p body)
+              (concat "Workspace rules, from " file
+                      ".  The user keeps these for all work in this workspace; follow them.\n\n"
+                      (if cut
+                          (substring body 0 superchat-workspace-rules-max-chars)
+                        body)
+                      (if cut
+                          (format "\n\n[Cut at %d characters; read %s for the rest.]"
+                                  superchat-workspace-rules-max-chars file)
+                        ""))))))
+    (error nil)))
 
 (defun superchat-workspace-project-finder (dir)
   "Return a project for the nearest `.superchat/' directory above DIR, or nil.

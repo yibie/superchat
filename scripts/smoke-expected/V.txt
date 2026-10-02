@@ -1,4 +1,4 @@
-collectors-mounted: 11
+collectors-mounted: 12
 commands-without-chat-commands: 0
 commands-remounted: 34
 workflow-projection-without: nil
@@ -6,7 +6,7 @@ workflow-projection-remounted: t
 chat-parser-direct: t
 invariants: (plugin-scope-only exact-sink prompt-reconstructable tool-execution-passes-the-pipeline terminal-on-tape host-buffer-unchanged)
 chat-collectors-after-unmount: 0
-collectors-after-remount: 11
+collectors-after-remount: 12
 read_buffer-descriptor-without-tools-builtin: nil
 read_buffer-descriptor-remounted: t
 assembler-works-without-its-plugin: t

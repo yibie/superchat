@@ -423,6 +423,27 @@ compaction) never received these blocks."
                   fragments)))))
     (nreverse fragments)))
 
+(declare-function superchat-workspace-rules-text "superchat-workspace" (root))
+
+(defun superchat-prompt-collector--workspace-rules (env _state _tools)
+  "Return the rules of the Workspace ENV's Session is bound to, as system text.
+The root comes from the Session's own Tape (`workspace.bound'), so the rules
+follow the conversation, not the buffer that happens to be current.  Chat,
+inline-ask and inline-act only, like the other system blocks.  Nothing for a
+Session with no Workspace root (a temporary conversation) or no rules file."
+  (let* ((session-id (plist-get env :session-id))
+         (root (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
+                    (stringp session-id)
+                    (plist-get (superchat-view-session-configuration session-id)
+                               :workspace-root)))
+         (text (and (stringp root)
+                    (fboundp 'superchat-workspace-rules-text)
+                    (superchat-workspace-rules-text root))))
+    (when text
+      (list (superchat-prompt-fragment
+             :owner 'core :id "workspace-rules" :slot 'system :text text
+             :priority 2 :budget-class 'hard)))))
+
 (defun superchat-prompt-collector--file-inline (env _state _tools)
   "Return the `#file' attachment fragment, if ENV's Turn referenced one.
 `superchat-prompt-collect' already stripped the ref from clean-input and
@@ -778,7 +799,7 @@ former prepared-prompt bypass (migration step 3)."
 ;; ── Plugin: the default collectors ──
 ;; Each registration is a `collect-context' Event listener, and the Event's
 ;; listeners run newest-first: history, memory, context-files,
-;; file-inline, system-instructions, chat-input, plan, origin, prepared.
+;; file-inline, workspace-rules, system-instructions, chat-input, plan, origin, prepared.
 ;; Collection order is not the assembly contract -- the fragments carry
 ;; their own `:priority'/`:budget-class'/`:required', which the assembler
 ;; sorts -- but it is preserved so a nearer Scope still shadows an
@@ -807,6 +828,8 @@ selection, memory, history, plan, and a producer's prepared text."
                           #'superchat-prompt-collector--chat-input :owner 'chat)
     (superchat-context-register 'system-instructions
                           #'superchat-prompt-collector--system-instructions :owner 'chat)
+    (superchat-context-register 'workspace-rules
+                          #'superchat-prompt-collector--workspace-rules :owner 'chat)
     (superchat-context-register 'file-inline
                           #'superchat-prompt-collector--file-inline :owner 'chat)
     (superchat-context-register 'context-files
