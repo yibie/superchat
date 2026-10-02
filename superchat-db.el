@@ -427,31 +427,68 @@ starting with SELECT or WITH are allowed."
       (error "Multi-statement queries are not allowed"))
     (sqlite-select db stmt params)))
 
+(defconst superchat-db--tape-search-max-pieces 48
+  "Most pieces one MATCH string may hold; a longer query keeps the first ones.")
+
+(defun superchat-db--tape-search-cjk-p (char)
+  "Return non-nil when CHAR is a Han, Hiragana, Katakana or Hangul character."
+  (or (<= #x3040 char #x30ff)
+      (<= #x3400 char #x4dbf)
+      (<= #x4e00 char #x9fff)
+      (<= #xac00 char #xd7af)
+      (<= #xf900 char #xfaff)))
+
+(defun superchat-db--tape-search-pieces (token)
+  "Return the search pieces of TOKEN, a run of word characters.
+Each run of CJK characters is cut into overlapping three-character pieces,
+because the `trigram' index matches any three characters in a row and CJK
+text has no spaces to cut at; a run of other characters is one piece.  A
+piece shorter than three characters can match nothing and is dropped."
+  (let ((pieces nil) (start 0) (length (length token)))
+    (while (< start length)
+      (let* ((cjk (superchat-db--tape-search-cjk-p (aref token start)))
+             (end start))
+        (while (and (< end length)
+                    (eq cjk (and (superchat-db--tape-search-cjk-p (aref token end)) t)))
+          (setq end (1+ end)))
+        (if cjk
+            (let ((i start))
+              (while (<= (+ i 3) end)
+                (push (substring token i (+ i 3)) pieces)
+                (setq i (1+ i))))
+          (when (>= (- end start) 3)
+            (push (substring token start end) pieces)))
+        (setq start end)))
+    (nreverse pieces)))
+
 (defun superchat-db--tape-search-match-query (query)
-  "Return an FTS5 MATCH string OR-joining QUERY's word tokens, or nil.
-Tokens shorter than 3 characters are dropped: `tape_fts' is indexed with
-the `trigram' tokenizer (chosen so CJK content, which has no spaces,
-still gets substring matches — see the schema comment above), and a
-phrase shorter than 3 characters can never match anything under that
-tokenizer.  Each surviving token is quoted as its own FTS5 phrase and
-doubled-quote-escaped, so reserved FTS5 syntax inside QUERY (`NEAR',
-`AND', `OR', `*', parentheses, quotes) is always treated as literal text,
-never as query syntax.  A QUERY with no surviving tokens (e.g. pure
-punctuation) returns nil, so the caller skips the query entirely instead
-of asking FTS5 to match nothing."
-  (let (tokens)
+  "Return an FTS5 MATCH string OR-joining QUERY's search pieces, or nil.
+`tape_fts' is indexed with the `trigram' tokenizer, so a piece shorter than
+three characters can never match and is dropped.  A run of CJK characters is
+cut into overlapping three-character pieces (see
+`superchat-db--tape-search-pieces'); other words are kept whole.  Pieces are
+not repeated, and only the first `superchat-db--tape-search-max-pieces' are
+used.  Each piece is quoted as its own FTS5 phrase and doubled-quote-escaped,
+so reserved FTS5 syntax inside QUERY (`NEAR', `AND', `OR', `*', parentheses,
+quotes) is always treated as literal text, never as query syntax.  A QUERY
+with no surviving piece (e.g. pure punctuation) returns nil, so the caller
+skips the query entirely instead of asking FTS5 to match nothing."
+  (let (pieces)
     (with-temp-buffer
       (insert query)
       (goto-char (point-min))
       (while (re-search-forward "\\w+" nil t)
-        (let ((token (match-string 0)))
-          (when (>= (length token) 3)
-            (push token tokens)))))
-    (when tokens
+        (dolist (piece (superchat-db--tape-search-pieces (match-string 0)))
+          (unless (member piece pieces)
+            (push piece pieces)))))
+    (setq pieces (nreverse pieces))
+    (when (> (length pieces) superchat-db--tape-search-max-pieces)
+      (setq pieces (cl-subseq pieces 0 superchat-db--tape-search-max-pieces)))
+    (when pieces
       (mapconcat
-       (lambda (token)
-         (concat "\"" (replace-regexp-in-string "\"" "\"\"" token) "\""))
-       (nreverse tokens)
+       (lambda (piece)
+         (concat "\"" (replace-regexp-in-string "\"" "\"\"" piece) "\""))
+       pieces
        " OR "))))
 
 (defun superchat-db-tape-search (query &optional session-id limit)
