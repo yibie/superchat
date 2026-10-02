@@ -119,14 +119,15 @@ _Avoid_: Agent, Agent Profile, profile
 
 ## Workspace
 
-Accepted language (user, 2026-10-01).  The behaviour behind Workspace and
-Temporary Workspace is specified in the
+Accepted language (user, 2026-10-01).  The behaviour behind Workspace,
+Temporary Workspace, Personal Workspace and Work Record is specified in the
 [contract draft](docs/decisions/proposed/2026-10-01-workspace-work-item-session-memory.md)
 and is not built: today a Session is tied to a directory only by `/workspace`.
 
 **Workspace**:
 The place work happens in: one directory that Emacs treats as a project,
-together with what Superchat keeps for it — its rules and its conversations.
+together with what Superchat keeps for it — its rules, its conversations and
+its Work Records.
 A buffer belongs to the Workspace of its file; on screen a Workspace is its tab
 group.
 _Avoid_: project (Emacs's own object, which says where a Workspace is), working
@@ -137,6 +138,18 @@ The Workspace of work done outside any project.  It has no directory and so no
 rules, holds one conversation, and nothing in it is carried into another
 conversation.
 _Avoid_: default workspace, global workspace
+
+**Personal Workspace**:
+The Workspace the user designates as the home of interfaces that belong to no
+directory, such as the agenda, feeds and chats.  Until one is designated, work
+started from them is in a Temporary Workspace.
+_Avoid_: global workspace, default workspace, home
+
+**Work Record**:
+The durable record of one piece of work in a Workspace: what is to be
+delivered, what was done and changed, where it stands, what came out.  Its id
+is what the conversations, Runs and agents working on that piece share.
+_Avoid_: work item, todo, task, reminder, ticket
 
 **Artifact Board**:
 The durable registry of Artifacts — published pieces of work product, each with
