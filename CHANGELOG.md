@@ -2,6 +2,25 @@
 
 All notable changes to superchat.
 
+## Unreleased — a workspace keeps its rules, and recall stays inside it
+
+- A conversation that belongs to a workspace (a project directory) now sends
+  that directory's `AGENTS.md` — `CLAUDE.md` when there is none — with every
+  request, up to 6000 characters, read from the saved file. Sub-agents it
+  delegates to carry the same rules.
+- Say "remember …" or "from now on …" and the model adds the rule to that
+  file's buffer and tells you what it wrote; it becomes a rule when you save.
+  In a temporary conversation (outside any project) the model is told nothing
+  is kept, and says so.
+- Automatic recall and the model's `memory_search` look only in the
+  conversations of the same workspace; a temporary conversation sees only
+  itself. `superchat-memory-auto-recall-cross-session` now defaults to `all`,
+  meaning all of this workspace (it was `remembered`, across everything).
+- A recall query in Chinese, Japanese or Korean now matches: it is cut into
+  overlapping three-character pieces, which is what the index holds. Before,
+  the text between two punctuation marks was searched as one word and found
+  nothing.
+
 ## Unreleased — the Artifact Board gets its own name
 
 - `superchat-workspace.el` is now `superchat-artifact-board.el`, and its

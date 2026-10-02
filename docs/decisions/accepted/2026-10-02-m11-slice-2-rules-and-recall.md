@@ -26,6 +26,20 @@ Status: accepted — 用户，2026-10-02："你可以继续走向下一片"。�
 4. **临时对话里说"记住"**：模型回答这里是临时的、不保存，并告诉用户执行 `/workspace <目录>` 把目录设为 workspace。契约 W5 说的"当场问是否设为 workspace"由用户执行这条命令来完成，superchat 不替用户建目录标记。
 5. **本片之前的、不属于任何 workspace 的旧记录**不再自动带进任何别的对话。
 
+## 实现中定下的几点
+
+- **"本 workspace 内都能找"成了默认。** `superchat-memory-auto-recall-cross-session` 的默认值由 `remembered` 改为 `all`，三个取值的含义都收窄到本 workspace 之内：`all` 是本 workspace 其它对话里任何匹配的记录，`remembered` 只是其中 `/remember` 记下的，`none` 只找本对话。契约写的是"本 workspace 内互通、跨 workspace 不通"。
+- **规矩所在的目录取自对话自己的绑定**（Tape 上的 `workspace.bound`），不取对话窗口当时所在的目录；子代理取的是父对话的绑定。
+- **"记住"的说明跟在规矩后面，三种写法**：有规矩文件时指明那个文件；有 workspace 但没有规矩文件时指明 `AGENTS.md` 该建在哪；临时对话里说明这里不保存。子代理只带规矩，不带这段说明。
+- **查询最多取 48 个片段**，超出的不用。
+
+## 没有覆盖的地方
+
+- 模型的 `sql` 工具能直接查整张记录表，不受 workspace 限制。
+- 用户自己输入的 `/recall` 仍然搜全部对话；它由 `superchat-memory-recall-scope` 管，本片没有改。
+- workflow 里的 agent 没有带规矩，只有 `delegate_to_subagent` 这条路带了。
+- 规矩文件还不存在时，模型第一次用 `edit_buffer` 往空 buffer 里写会失败（没有可匹配的原文），真实运行里它改用 `eval_elisp` 插入写成了。登记在 `.scratch/issues/2026-10-02-edit-buffer-cannot-fill-an-empty-buffer.md`。
+
 ## Alternatives considered
 
 **规矩读 buffer 里未保存的文字。** 输在契约 R4：保存是用户的同意。
