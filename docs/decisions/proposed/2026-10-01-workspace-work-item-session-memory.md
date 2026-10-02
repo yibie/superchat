@@ -185,6 +185,54 @@ id 标的不是一条待办，而是一件工作的记录：要交付什么、�
 
 第 22 条的后果：一段对话与工作记录是多对多——一段对话先后做几件工作，同一时刻只有一条"当前记录"；一条记录可以先后被几段对话接着做。记录分得对不对取决于模型，所以要先定"模型什么都没说时产品怎么办"，见第五轮提问。
 
+## 第五轮：按 Holon 的机制回答（用户："你先总结 holon 的机制，然后就可以回答以上问题了"）
+
+来源：Holon 源码仓库 `github.com/holon-run/holon`，提交 `94df057`，2026-10-01 克隆后直接阅读。概念页 `docs/website/concepts/{runtime-model,context-continuity,memory,multi-agent-collaboration}.md`；规范页 `docs/website/spec/{work-items,wake-and-continuation,scheduler,tasks,tools,workspace-and-execution}.md`；RFC `instruction-loading`（accepted）、`agent-and-workspace-memory`（draft）、`long-lived-context-memory`、`agent-delegation-tool-plane`；给模型看的原文 `src/prompt/mod.rs`（`planning_discipline`、`work_item_first_execution`、`runtime_scheduling_contract`、`agent_home_contract` 各段）、`src/prompt/tool_guidance/*.md`、`src/tool/tool_descriptions/*.md`；上下文拼装 `src/context/mod.rs`；记录结构 `src/domain/work_item.rs`；定时器 `src/runtime/waiting.rs`。其实现对照表（`docs/rfc-implementation-matrix.md`）把 work item 模型标为"部分实现：流程纪律仍有一部分靠指令"。
+
+### Holon 的机制
+
+| 方面 | Holon 怎么做 |
+|---|---|
+| 四个对象 | Agent：长期存在的执行者，有自己的家目录。Workspace：项目根目录；一个 agent 同一时刻只有一个活动 workspace；没有挂项目时，家目录就是 workspace。WorkItem：一个目标的持久记录。Task：一次执行的句柄（一条命令，或一个子 agent） |
+| 三层记录 | 流水账（ledger）：运行时自动写，只追加，全量。当前工作上下文：当前 WorkItem 加运行时从可信证据里提取的引用，模型不能写这些引用。归档片段（episode）：在"换了活干、进入等待、任务回来、结果定格、轮数到顶"这些边界上，运行时把这一段工作的证据定格成不可变的归档 |
+| 什么时候有 WorkItem | 由模型建。系统提示词原文："WorkItem 是一个必须跨多次执行存活的目标的持久记录，不是每一轮或每个操作的日志。"普通问答、闲聊、一次性解释、短调查、一轮能做完的多步工作，都不建。只在这些情况建：用户明确要求记录、跟踪、监控、定时；工作跨轮或必须能恢复；在等外部状态或用户输入；有独立的生命周期和验收标准。拿不准时给轻量回答，或问用户要不要跟踪 |
+| 模型怎么维护 | 目标一句话；计划是 agent 家目录里的一个普通文件（`work-items/<id>/plan.md`）；进度是一张清单。原文要求"只存上下文丢失后恢复所需的最少状态"，在重大变化之后、交接之前、等待之前、结束一次长执行之前更新；恢复时先读记录，再有限度地重查可能已变的外部事实；不把整段聊天或工具日志抄进计划 |
+| 焦点 | 同一时刻至多一个当前 WorkItem。新建的不会自动成为当前。从 A 切到 B 会记下续接关系，B 完成后回到 A |
+| 模型每轮看到什么 | 当前 WorkItem 的全文（目标、计划状态、计划文件预览、清单、等待）；当前工作的引用；其它 WorkItem 的候选清单，按调度状态分组（被触发的、可运行的、让出的、等用户的、被卡住的、最近完成的）；按相关性和预算选出的归档片段；最近几轮；当前输入。没有当前项时写明"无" |
+| 上下文怎么不乱 | 不在 WorkItem 的边界上硬切历史。做的是"投影"：钉住权威的内容（用户意图、当前 WorkItem、等待）；按续接链和预算选最近几轮；折叠重复的唤醒和重试；更早的工作变成归档片段，按相关性取。提示里另写明：最近几轮只是背景证据，除非当前输入或当前 WorkItem 要求，不要去恢复旧任务或旧等待 |
+| 等待与唤醒 | `WaitFor` 把等待（任务结果、定时器、外部事件、用户输入、系统）挂在 WorkItem 上，没有 WorkItem 时挂在 agent 上，然后让出这一轮。条件满足时运行时唤醒 agent 起新的一轮。能不能跑由状态和等待算出，不存储 |
+| 定时器 | 独立的对象，不是 WorkItem：`CreateTimer` 建一次性或重复的定时器，持久保存，过了点的在恢复时补发。到点是往 agent 的队列里放一条消息，起一轮模型。要"等到那时再继续这件事"，另用 `WaitFor(timer)` |
+| 完成 | 模型调用 `CompleteWorkItem`，必须附一段给用户看的完成报告；运行时把报告与这次执行、这条记录的版本绑在一起原子提交，并取消这条记录上的等待。只有"进行中"和"已完成"，没有重新打开 |
+| 存在哪儿 | 运行时状态（账本、索引、缓存）在 agent 家目录的 `.holon/` 下，agent 不得编辑。计划文件是家目录里的普通文件 |
+| 规矩与记忆的归属 | 指令文件三层：用户全局 `~/.agents/AGENTS.md`、agent 级 `agent_home/AGENTS.md`、workspace 级 `<workspace>/AGENTS.md`（没有它时才退而读 `CLAUDE.md`）。agent 家里另有两份精选记忆 `memory/operator.md`（用户偏好）和 `memory/self.md`，每轮各带一小段（默认 1500 字符），其余靠搜索。运行时证据在写入时带上 workspace 的 id，搜索默认限定在当前 workspace。检索对中文做二元切分。原文："一条记忆若成了 workspace 必须遵守的规矩，就应升格写进 workspace 的指令文件或仓库文档。"没有"记住"工具（RFC 列为未决） |
+| 多 agent | 委派出去的是一个 Task，归创建它时的那条 WorkItem 名下；子 agent 的结果作为任务结果回来。子 agent 拿到的上下文以那条 WorkItem 的快照加明确交代为中心，不是父 agent 的整段对话。委派不扩大权限。要隔离改文件就开 git worktree，非 git 目录没有隔离办法 |
+
+### 据此对第五轮七个问题的回答
+
+| 问题 | 回答 | 与本记录作者上一轮建议的差别 |
+|---|---|---|
+| 什么时候算有一条记录 | 由模型按 Holon 那套规则建：只给必须跨轮存活的工作建，普通问答和一轮做完的事不建。"实际做了什么"仍由已有的东西自动留着：Tape，和每个答复下面那行"这次任务的记录" | 上一轮建议"动了手就自动开一条"，不采用 |
+| 换了一件事后，前一件事的对话带不带 | 不在边界上硬切。当前记录每次都钉在请求里；最近几轮照带，并写明它们只是背景；更早的照现有的压缩办法处理，压缩点优先落在"换了活干、进入等待、任务回来"这些边界上 | 上一轮建议"换事即只带摘要"，不采用 |
+| 模型看得到哪些记录 | 当前这条的全文，加本 workspace 其它记录的分组清单；细节用工具读 | 一致 |
+| 怎么算完 | 模型标完成并必须附结论，产品把结论和这次执行绑在一起、旁边附上事实；用户也可以自己标完成。不设"重新打开"，后续的事另起一条并指向旧的 | 去掉了"重新打开" |
+| 存在哪儿 | 记录在 superchat 的数据库里，只追加。需要长计划时，计划是 superchat 数据目录下的一个普通文件，不放进用户的项目目录 | 多了"计划是文件"这一点 |
+| 提醒算不算记录 | 不算。定时器是独立的对象；"到点接着干某件事"是挂在记录上的等待 | 一致。Holon 的定时器到点一律起一轮模型；"纯提醒只提示、不启动模型"是用户此前的决定，保留，这是 superchat 与 Holon 的一处差别 |
+| 规矩文件与 AGENTS.md | workspace 的规矩就是它根目录下的 `AGENTS.md`（没有它时退而读 `CLAUDE.md`），不另设 superchat 自己的规矩文件。用户明确说"记住"时，模型改的是 `AGENTS.md` 的 buffer，用户保存才生效。`.superchat/` 只放 workspace 的身份编号 | 上一轮建议"自己的文件，另外只读 AGENTS.md"，不采用 |
+
+### 上一轮六条推论按 Holon 修正
+
+1. 事实由产品写、叙述由模型写：与 Holon 一致（它的引用、账本、归档都由运行时写）。
+2. "叙述就用每次答复本身"：不符合 Holon，撤回。有记录的工作，模型要自己维护记录里恢复所需的最少状态（目标、计划、进度、下一步），在重大变化后、交接前、等待前、结束长执行前更新。因为只有跨轮的工作才有记录，这笔开销只落在长工作上。
+3. "子代理的活是一条子记录"：不符合 Holon，改为：委派出去的是一个任务，挂在主记录名下；子代理拿到的是这条记录的快照加明确交代；结果作为任务结果回到主记录。
+4. 往 Emacs 的 project 钩子里加认定函数、5. 界面归属表、6. 告诉模型的摆法：与 Holon 无关，不变。
+
+### superchat 有意与 Holon 不同的地方（都来自用户此前的裁定）
+
+- Holon 的记录和记忆属于一个长期存在的 agent，workspace 只是标签；superchat 没有长期存在的 agent，记录和规矩属于 workspace，workspace 的主对话相当于 Holon 里那个长期存在的 agent。
+- Holon 有用户全局的指令文件和 agent 级的用户偏好文件；superchat 不设全局层。
+- Holon 没有项目时退回 agent 的家目录，那里有记忆；superchat 的临时 workspace 没有记忆，个人 workspace 要用户指定。
+- Holon 的定时器到点一律起一轮模型；superchat 的纯提醒不启动模型。
+
 ## jj 的事实（供上一节用；`jj help -k glossary`，jj 0.45.1）
 
 change 是"一个随时间演变的提交"，change id 在改写（描述、变基、合并）后不变；一个仓库可以有多个 workspace，即多份工作副本，"就是 Git 所说的 worktree"，各有自己的工作副本提交；操作日志记录每次操作，并发操作在日志里分叉再合并。Antigravity 的 "New Worktree Mode" 用的是同一种隔离，理由是"防止并行的子代理互相冲突"（其文档 *Projects*，2026-10-01 逐字读过）。
