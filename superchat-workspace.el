@@ -9,6 +9,11 @@
 ;; (W4); without that file the id is a hash of the real path.  Only
 ;; `superchat-workspace-declare' writes the file.
 ;;
+;; Interfaces that belong to no directory -- the agenda, feeds, chats --
+;; belong to the Personal Workspace the user designates (W11);
+;; `superchat-workspace-of-source' is the one place that decides which
+;; Workspace a request made from a buffer belongs to.
+;;
 ;; The Artifact Board lives in `superchat-artifact-board.el'; this file
 ;; only answers "which Workspace" and "what are its rules" (the
 ;; `AGENTS.md' under the root, contract R2).  Loading it has no side effects:
@@ -116,6 +121,109 @@ directory."
     (when (called-interactively-p 'interactive)
       (message "Declared workspace root: %s" root))
     (superchat-workspace--from-root root name)))
+
+;;;; The Personal Workspace and where a source buffer belongs ---------------------
+
+(defgroup superchat-workspace nil
+  "Which Workspace a buffer belongs to."
+  :group 'superchat)
+
+(defcustom superchat-personal-workspace-directory nil
+  "The directory of the Personal Workspace, or nil for none.
+The Personal Workspace is the home of the interfaces that belong to no
+directory -- the agenda, feeds, chats: buffers in one of
+`superchat-personal-workspace-modes'.  It is a Workspace like any other,
+with its own `AGENTS.md' and conversations, and no other Workspace sees
+its rules.  While this is nil, a conversation called from those
+interfaces is a temporary one.  Set it with
+`superchat-set-personal-workspace', which also declares the directory."
+  :type '(choice (const :tag "None" nil) directory)
+  :group 'superchat-workspace)
+
+(defcustom superchat-personal-workspace-modes
+  '(org-agenda-mode calendar-mode diary-mode
+    elfeed-search-mode elfeed-show-mode newsticker-treeview-mode
+    telega-root-mode telega-chat-mode
+    gnus-group-mode gnus-summary-mode gnus-article-mode
+    mu4e-main-mode mu4e-headers-mode mu4e-view-mode
+    notmuch-hello-mode notmuch-search-mode notmuch-show-mode
+    erc-mode rcirc-mode)
+  "Major modes whose buffers belong to the Personal Workspace.
+A buffer in one of these modes, or a mode derived from one, belongs to
+the Personal Workspace whatever its `default-directory' happens to be."
+  :type '(repeat symbol)
+  :group 'superchat-workspace)
+
+(defvar-local superchat-buffer-workspace-directory nil
+  "When non-nil, the directory whose Workspace this buffer belongs to.
+It wins over the buffer's mode and `default-directory'.  Set it in a mode
+hook to give one interface to a Workspace other than the personal one:
+
+  (add-hook \='elfeed-search-mode-hook
+            (lambda ()
+              (setq-local superchat-buffer-workspace-directory \"~/research/\")))")
+
+(defun superchat-workspace-at-directory (dir)
+  "Return the Workspace DIR belongs to, DIR itself being the root if need be.
+Inside a project that is the project's Workspace; elsewhere DIR is the
+root, named after it.  Nil unless DIR is an existing directory.  Never
+creates files."
+  (when (and (stringp dir) (file-directory-p dir))
+    (or (superchat-workspace-of-directory dir)
+        (let ((root (superchat-workspace--canonical-root dir)))
+          (superchat-workspace--from-root
+           root (file-name-nondirectory (directory-file-name root)))))))
+
+(defun superchat-workspace-personal ()
+  "Return the Personal Workspace, or nil when none is designated.
+Nil too when `superchat-personal-workspace-directory' is not an existing
+directory."
+  (superchat-workspace-at-directory superchat-personal-workspace-directory))
+
+(defun superchat-workspace-personal-buffer-p (&optional buffer)
+  "Return non-nil when BUFFER is an interface of the Personal Workspace.
+That is a live buffer whose major mode is, or derives from, one of
+`superchat-personal-workspace-modes'.  BUFFER defaults to the current one."
+  (let ((buffer (or buffer (current-buffer))))
+    (and (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (apply #'derived-mode-p superchat-personal-workspace-modes))
+         t)))
+
+(defun superchat-workspace-of-source (&optional buffer)
+  "Return the Workspace a request made from BUFFER belongs to, or nil.
+In order: the Workspace of `superchat-buffer-workspace-directory' when
+the buffer sets it; for an interface of the Personal Workspace
+\(`superchat-workspace-personal-buffer-p'), the Personal Workspace, or nil
+while none is designated -- never the project its `default-directory'
+happens to lie in; otherwise the project Workspace of the buffer's
+directory.  Nil means a temporary conversation.  BUFFER defaults to the
+current buffer; a dead buffer gives nil."
+  (let ((buffer (or buffer (current-buffer))))
+    (when (buffer-live-p buffer)
+      (let ((own (buffer-local-value 'superchat-buffer-workspace-directory
+                                     buffer)))
+        (cond
+         ((and (stringp own) (file-directory-p own))
+          (superchat-workspace-at-directory own))
+         ((superchat-workspace-personal-buffer-p buffer)
+          (superchat-workspace-personal))
+         (t (superchat-workspace-of-buffer buffer)))))))
+
+;;;###autoload
+(defun superchat-set-personal-workspace (dir)
+  "Make DIR the Personal Workspace, and return that Workspace.
+DIR is declared a Workspace (`superchat-workspace-declare') and saved as
+`superchat-personal-workspace-directory' for future sessions.  Signals a
+`user-error' unless DIR is an existing directory."
+  (interactive (list (read-directory-name "Personal workspace directory: "
+                                          nil nil t)))
+  (let ((workspace (superchat-workspace-declare dir)))
+    (customize-save-variable 'superchat-personal-workspace-directory
+                             (plist-get workspace :root))
+    (when (called-interactively-p 'interactive)
+      (message "Personal workspace: %s" (plist-get workspace :root)))
+    workspace))
 
 ;;;; Rules ------------------------------------------------------------------------
 

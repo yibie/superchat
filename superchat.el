@@ -2140,14 +2140,16 @@ A nil BINDING clears it.  The View keeps the binding with a `:name' added
        t))
 
 (defun superchat--session-bind-workspace-at-creation (view source)
-  "Bind chat VIEW to the project Workspace of SOURCE, once, at creation.
-SOURCE is the buffer the entry command was called from.  Do nothing and
-return nil when either buffer is dead, SOURCE is a Superchat surface,
-VIEW is already bound or has user/assistant rows, or SOURCE is in no
-project.  Otherwise bind VIEW and return the binding.  Never creates files."
+  "Bind chat VIEW to the Workspace of SOURCE, once, at creation.
+SOURCE is the buffer the entry command was called from; its Workspace is
+what `superchat-workspace-of-source' gives (a project, or the Personal
+Workspace for the agenda and its like).  Do nothing and return nil when
+either buffer is dead, SOURCE is a Superchat surface, VIEW is already
+bound or has user/assistant rows, or SOURCE has no Workspace.  Otherwise
+bind VIEW and return the binding.  Never creates files."
   (when (and (buffer-live-p view) (buffer-live-p source)
              (not (superchat--chat-view-p source)))
-    (let ((workspace (superchat-workspace-of-buffer source)))
+    (let ((workspace (superchat-workspace-of-source source)))
       (when workspace
         (with-current-buffer view
           (unless (or superchat--workspace-binding
@@ -3914,13 +3916,15 @@ live-Run-guarded step, exactly once."
     buffer))
 
 (defun superchat--source-workspace (&optional buffer)
-  "Return the project Workspace of BUFFER (default current), or nil.
-A Superchat surface (chat View, request inspector) belongs to no Workspace
+  "Return the Workspace of BUFFER (default current), or nil.
+That is `superchat-workspace-of-source': a project, the Personal
+Workspace for the agenda and its like, or the buffer's own choice.  A
+Superchat surface (chat View, request inspector) belongs to no Workspace
 of its own here, so it gives nil."
   (let ((buffer (or buffer (current-buffer))))
     (and (buffer-live-p buffer)
          (not (superchat--chat-view-p buffer))
-         (superchat-workspace-of-buffer buffer))))
+         (superchat-workspace-of-source buffer))))
 
 (defun superchat--view-temporary-p (view)
   "Return non-nil when VIEW is a live chat View bound to no Workspace.
