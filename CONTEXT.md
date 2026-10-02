@@ -44,27 +44,28 @@ Entry points invoked from an ordinary buffer — inline ask, inline act, region
 rewrite — join the Session the chat View is showing, not one chosen by project.
 _Avoid_: Buffer, Run, project session
 
-**Session EditorWorkspace**:
+**Session Buffer Set**:
 The live set of Emacs buffers one Session owns.  Ownership comes from exact
 markers on the buffer, never from its name, tab, project or directory.  Where a
 buffer is displayed (the Session's tab, or a side window of another tab) is
-not ownership.  It is distinct from the durable Artifact Workspace; Runtime
+not ownership.  It is distinct from the durable Artifact Board; Runtime
 borrows a buffer from it and never closes one.
-_Avoid_: Session buffer, Artifact Workspace, HostLease
+_Avoid_: Session EditorWorkspace and EditorWorkspace (the name code identifiers
+and older documents still carry), Session buffer, HostLease
 
 **Owned Editor Buffer**:
-A buffer created and marked by one Session EditorWorkspace.  Only the owning
-EditorWorkspace may close it.
+A buffer created and marked by one Session Buffer Set.  Only the owning
+Buffer Set may close it.
 _Avoid_: chat buffer, project buffer, borrowed buffer
 
-**EditorWorkspace Acquisition**:
+**Buffer Set Acquisition**:
 Obtaining a Session's buffer for one role, learning in the same step whether
 it was newly created.  The result is not a lease or a token; it only lets a
 producer roll back a fresh buffer before Runtime accepts the Request.
-_Avoid_: HostLease, ownership token, buffer handle
+_Avoid_: EditorWorkspace Acquisition, HostLease, ownership token, buffer handle
 
-**Operation-scoped Child EditorWorkspace**:
-A child Session's EditorWorkspace created by a producer for one bounded
+**Operation-scoped Child Buffer Set**:
+A child Session's Buffer Set created by a producer for one bounded
 operation and closed by that producer afterwards, not by Runtime's terminal
 completion.
 _Avoid_: per-Run cleanup, parent-owned host, direct buffer kill
@@ -115,6 +116,32 @@ state.  A Preset can define scoped Plugin composition; this registration
 context is distinct from Session identity and Run execution.  A Session is
 not a Scope layer.
 _Avoid_: Agent, Agent Profile, profile
+
+## Workspace
+
+Accepted language (user, 2026-10-01).  The behaviour behind Workspace and
+Temporary Workspace is specified in the
+[contract draft](docs/decisions/proposed/2026-10-01-workspace-work-item-session-memory.md)
+and is not built: today a Session is tied to a directory only by `/workspace`.
+
+**Workspace**:
+The place work happens in: one directory that Emacs treats as a project,
+together with what Superchat keeps for it — its rules and its conversations.
+A buffer belongs to the Workspace of its file; on screen a Workspace is its tab
+group.
+_Avoid_: project (Emacs's own object, which says where a Workspace is), working
+copy (what jj calls a workspace), global memory
+
+**Temporary Workspace**:
+The Workspace of work done outside any project.  It has no directory and so no
+rules, holds one conversation, and nothing in it is carried into another
+conversation.
+_Avoid_: default workspace, global workspace
+
+**Artifact Board**:
+The durable registry of Artifacts — published pieces of work product, each with
+a revision — through which a lead agent and its sub-agents pass results.
+_Avoid_: Artifact Workspace, Workspace (for this), shared memory
 
 ## Composition
 

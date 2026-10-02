@@ -146,13 +146,38 @@ Status: proposed — 契约草稿。方向来自用户 2026-10-01 的四条裁�
 
 这样看暴露出一个上文没有回答的问题：**个人助理的"地方"在哪**。日程、RSS、Telegram 这类界面不对应某个目录里的文件，按 `project.el` 的规则，它们"属于哪个 project"取决于打开时碰巧所在的目录。
 
-## 仍待用户决定
+## 用户已定（2026-10-01 第三轮，"1A 2A 3A 4A+B 5A"与四条"按建议"）
 
-见 2026-10-01 第三轮提问（体验倒推之后重排）：AI 跟着什么走；规矩放在文件里还是数据库里；目录改名后是否还认得；不对应文件的界面算哪里；出界的改动要不要标出；以及上一轮未答的四条（`project.el` 说了算、屏幕上用 tab 组表示、是否允许多目录、名字）。
+11. **AI 跟着按键那一刻所在的 buffer**：从哪个文件叫出它（对话窗口或就地命令），就是那个文件所在的 workspace；只移动光标不切换。
+12. **规矩是目录里的一个普通文件**：模型改的是它的 buffer，用户保存才生效。在还不是 workspace 的目录里第一次说"记住"时，当场问是否把这里设为 workspace。
+13. **身份是放在目录里的一个编号**，第一次需要时生成；目录改名、搬家后仍认得。
+14. **不对应文件的界面（日程、RSS、Telegram 等）**：用户答"A+B"。本记录的读法（待用户确认）：用户指定一个"个人"workspace 之后，这些界面默认归它，个别界面可以另指给别的 workspace；没有指定之前算临时。"个人"workspace 是一个真实的目录，不是全局层：代码仓库里看不到它的规矩。
+15. **改了不在当前 workspace 里的文件**：不拦，在保存前的审阅屏上标出。
+16. **一个文件属于哪个 workspace，以 Emacs 的 project 机制为准**，superchat 不另设名单。
+17. **屏幕上，workspace 就是它的 tab 组**；对话独占 tab 时归入这个组；临时的不归组。
+18. **只支持一个根目录。**
+19. **一级概念叫 Workspace；"Artifact Workspace" 改为 Artifact Board，"Session EditorWorkspace" 改为 Session Buffer Set。** 术语表已改；其余文档、代码里的文件名与函数名、给模型看的工具名、Tape 事件名各自排期，旧的 Tape 记录不改写。
 
-## 搁置（用户："这个问题可以先留置"）
+用户在这一轮说的两句话，是后面设计的依据：
 
-**谁可以创建 work item，以及 work item 的 id 与 jj 的 change id。** 用户的想法：work item 的 id 和 jj 的 change id 很像，也许可以靠 jj 来承担协作。jj 的事实（`jj help -k glossary`，jj 0.45.1）：change 是"一个随时间演变的提交"，change id 在改写（描述、变基、合并）后不变；一个仓库可以有多个 workspace，即多份工作副本，"就是 Git 所说的 worktree"，各有自己的工作副本提交；操作日志记录每次操作，并发操作在日志里分叉再合并。Antigravity 的 "New Worktree Mode" 用的是同一种隔离，理由是"防止并行的子代理互相冲突"。与本草稿相接和不相接的地方，留到这一支重新打开时再定。
+- **"这里最重要的是，emacs 独特的 frame buffer windows 的组合。"** buffer 是全局的内容，window 是看 buffer 的视口，frame 和 tab 装着一套窗口的摆法；同一个 buffer 可以同时出现在几个窗口、几个 tab、几个 frame 里。所以"属于哪个 workspace"是 buffer 的事，"我现在看着哪个 workspace"是窗口、tab、frame 的事，两者可以不一致。对话是一个 buffer，摆在哪儿是窗口的决定。今天请求里告诉模型的只有来源 buffer（名字、文件、模式、光标位置），没有窗口的摆法。
+- **"workitem-id 实际上是记录的是工作记录。"** 见下一节。
+
+## Work item 是工作记录（用户，第三轮；本节取代上文"Work item"一节里把它写成待办和提醒的部分）
+
+id 标的不是一条待办，而是一件工作的记录：要交付什么、已经做了什么、改了哪些东西、现在停在哪、结果是什么。对话会被压缩、会结束、会换一个 agent 接手；记录留下来，凡是和这件事有关的对话、执行、子代理的活和改动，都凭这个 id 挂在同一条记录上。提醒和定时只是可以附在记录上的东西，不是它的本质。
+
+与已有东西的关系：
+
+- superchat 已经在每个答复下面附一行"这次任务的记录"（`superchat-render-run-record-line`）：由产品从 Tape 读出这次执行实际改了哪些 buffer、是否已保存，不由模型说了算（[已定的对账记录](../accepted/2026-09-27-claims-checked-against-the-record.md)）。工作记录是同一个想法放大一级：一件工作可能跨多次执行、多段对话、多个 agent。
+- jj 的 change 是"改文件的那部分工作"的现成记录：change id 在改写后不变，描述、差异、演变历史都在，多份工作副本可以让多个 agent 并行。
+- jj 管不到的：不改文件的工作；不是 jj 仓库的 workspace（用户已定 workspace 与 git、jj 解耦）；还没保存的改动。
+
+待定的问题见第四轮提问：一件工作的边界从哪儿到哪儿；记录由 superchat 自己存、还是在 jj 仓库里直接用 change；术语表里的名字。上文"分期"里把 work item 的第一期写成提醒，需要随之重排。
+
+## jj 的事实（供上一节用；`jj help -k glossary`，jj 0.45.1）
+
+change 是"一个随时间演变的提交"，change id 在改写（描述、变基、合并）后不变；一个仓库可以有多个 workspace，即多份工作副本，"就是 Git 所说的 worktree"，各有自己的工作副本提交；操作日志记录每次操作，并发操作在日志里分叉再合并。Antigravity 的 "New Worktree Mode" 用的是同一种隔离，理由是"防止并行的子代理互相冲突"（其文档 *Projects*，2026-10-01 逐字读过）。
 
 ## Alternatives considered
 
