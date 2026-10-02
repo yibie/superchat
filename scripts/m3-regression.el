@@ -2443,17 +2443,17 @@ Turn terminals, and judges nothing else."
 settles.  VAR holds the published Artifact's metadata."
   (declare (indent 1) (debug t))
   `(let ((,var nil))
-     (m3a-load 'superchat-workspace)
-     (superchat-workspace-bind "m3a-ws" nil m3r-session)
+     (m3a-load 'superchat-artifact-board)
+     (superchat-artifact-board-bind "m3a-ws" nil m3r-session)
      (m3a-with-tools (("m3a-publish"
                        :function (lambda ()
-                                   (setq ,var (superchat-workspace-publish
+                                   (setq ,var (superchat-artifact-board-publish
                                                "m3a artifact" 'report "m3a-ws"))
                                    "published")
                        :description "m3a Artifact producer")
                       ("m3a-publish-and-wait" :async t
                        :function (lambda (_callback)
-                                   (setq ,var (superchat-workspace-publish
+                                   (setq ,var (superchat-artifact-board-publish
                                                "m3a artifact" 'report "m3a-ws"))
                                    nil)
                        :description "m3a Artifact producer that never settles"))
@@ -2465,8 +2465,8 @@ settles.  VAR holds the published Artifact's metadata."
 
 (defun m3a-artifact-decision (session run reference)
   "Artifact delivery's (ACTION REASON) for REFERENCE produced by RUN."
-  (m3a-load 'superchat-workspace)
-  (let ((decision (superchat-workspace-artifact-delivery-decision session run reference)))
+  (m3a-load 'superchat-artifact-board)
+  (let ((decision (superchat-artifact-board-artifact-delivery-decision session run reference)))
     (list (plist-get decision :action) (plist-get decision :reason))))
 
 (defun m3a-decisions (session run reference)
@@ -2553,10 +2553,10 @@ the subagent report is rejected, the workflow stops and the Artifact is rejected
   "Artifact delivery keeps its own `manual-review': an Artifact published outside
 any Run names no producing Run, even when the Run asked about completed."
   (m3r-fixture '((:text "done"))
-    (m3a-load 'superchat-workspace)
-    (superchat-workspace-bind "m3a-ws" nil m3r-session)
+    (m3a-load 'superchat-artifact-board)
+    (superchat-artifact-board-bind "m3a-ws" nil m3r-session)
     (let* ((run (m3r-run "go"))
-           (artifact (superchat-workspace-publish "published outside a Run" 'report "m3a-ws")))
+           (artifact (superchat-artifact-board-publish "published outside a Run" 'report "m3a-ws")))
       (should (eq 'completed (m3r-status run)))
       (should-not (plist-get artifact :run-id))
       (should (equal '(manual-review artifact-provenance-unknown)
@@ -2596,7 +2596,7 @@ working."
                    (lambda (&rest _) (error "m3a: the Tape cannot be read"))))
           (let ((subagent (superchat-subagent-handoff-decision m3r-session run))
                 (workflow (superchat-workflow--resume-decision m3r-session run))
-                (delivery (superchat-workspace-artifact-delivery-decision
+                (delivery (superchat-artifact-board-artifact-delivery-decision
                            m3r-session run (m3a-reference artifact))))
             (should (eq 'reject (plist-get subagent :action)))
             (should (plist-get subagent :reason))

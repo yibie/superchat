@@ -248,7 +248,7 @@ emacsclient --eval '(superchat-emacsclient-run-cancel "RUN-ID")'
 
 ### 共享 Workspace
 
-`M-x superchat-workspace-set-region` 会把当前区域注册为当前 Session
+`M-x superchat-artifact-board-set-region` 会把当前区域注册为当前 Session
 Workspace 中的 Artifact。一个 Workspace 可以包含多个区域 Artifact；Coding
 Agent 和委派的 Executor 可先用 `workspace_info` 查看，再按 Artifact ID 调用
 `workspace_read` 或 `workspace_write`。`workspace_publish` 会把新的不可变生成

@@ -79,15 +79,15 @@
 (declare-function superchat-team-tasks "superchat-subagent" (&optional team-id))
 (declare-function superchat-subagent-handoff-decision
                   "superchat-subagent" (session-id run-id &optional trace))
-(declare-function superchat-workspace-bind
-                  "superchat-workspace" (workspace-id &optional root session-id))
-(declare-function superchat-workspace-artifacts
-                  "superchat-workspace" (&optional workspace-id replay))
-(declare-function superchat-workspace-artifact-delivery-decision
-                  "superchat-workspace"
+(declare-function superchat-artifact-board-bind
+                  "superchat-artifact-board" (workspace-id &optional root session-id))
+(declare-function superchat-artifact-board-artifacts
+                  "superchat-artifact-board" (&optional workspace-id replay))
+(declare-function superchat-artifact-board-artifact-delivery-decision
+                  "superchat-artifact-board"
                   (session-id run-id reference &optional trace))
-(declare-function superchat-workspace-read
-                  "superchat-workspace"
+(declare-function superchat-artifact-board-read
+                  "superchat-artifact-board"
                   (&optional artifact-id workspace-id expected-revision))
 
 (defun superchat-workflow--ensure-view-prompt ()
@@ -1084,7 +1084,7 @@ running a recipe is refused by `superchat-workflow-execute-async'."
                 :artifact-id (plist-get artifact :artifact-id)
                 :revision (plist-get artifact :revision)))
          (decision
-          (superchat-workspace-artifact-delivery-decision
+          (superchat-artifact-board-artifact-delivery-decision
            (plist-get artifact :session-id)
            (plist-get artifact :run-id)
            reference))
@@ -1092,7 +1092,7 @@ running a recipe is refused by `superchat-workflow-execute-async'."
           (and (eq 'deliver (plist-get decision :action))
                (condition-case nil
                    (let ((content
-                          (superchat-workspace-read
+                          (superchat-artifact-board-read
                            (plist-get artifact :artifact-id)
                            (plist-get artifact :workspace-id)
                            (plist-get artifact :revision))))
@@ -1108,17 +1108,17 @@ running a recipe is refused by `superchat-workflow-execute-async'."
 (defun superchat-research-workflow-view (instance-id)
   "Rebuild Research INSTANCE-ID and its resume decisions from durable facts."
   (require 'superchat-subagent)
-  (require 'superchat-workspace)
+  (require 'superchat-artifact-board)
   (let* ((manifest (or (superchat-research-workflow--manifest instance-id)
                        (error "Unknown Research Workflow: %s" instance-id)))
          (workspace-id (plist-get manifest :workspace_id))
          (_workspace
-          (superchat-workspace-bind
+          (superchat-artifact-board-bind
            workspace-id (plist-get manifest :workspace_root) instance-id))
          (state (superchat--team-state instance-id))
          (tasks (superchat-team-tasks instance-id))
          (members (plist-get state :members))
-         (artifacts (superchat-workspace-artifacts workspace-id t))
+         (artifacts (superchat-artifact-board-artifacts workspace-id t))
          (previous-ready t)
          steps)
     (dolist (role superchat-research-workflow--roles)
@@ -1241,7 +1241,7 @@ running a recipe is refused by `superchat-workflow-execute-async'."
   (unless (and (stringp query) (not (string-empty-p (string-trim query))))
     (user-error "Research question cannot be empty"))
   (require 'superchat-subagent)
-  (require 'superchat-workspace)
+  (require 'superchat-artifact-board)
   (let* ((instance-id
           (format "research-%s-%04x"
                   (format-time-string "%Y%m%d-%H%M%S-%6N")
@@ -1253,7 +1253,7 @@ running a recipe is refused by `superchat-workflow-execute-async'."
                  :query query
                  :workspace_id instance-id
                  :workspace_root root))))
-    (superchat-workspace-bind instance-id root instance-id)
+    (superchat-artifact-board-bind instance-id root instance-id)
     (let ((superchat--team-id instance-id)
           (superchat--team-actor "lead"))
       (superchat-team-message "publish" nil manifest))

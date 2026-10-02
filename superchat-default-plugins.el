@@ -94,7 +94,7 @@ Call time needs Services `driver' and `session'."
 (declare-function superchat--team-projection-initial "superchat-subagent")
 (declare-function superchat--team-projection-apply "superchat-subagent")
 (declare-function superchat-workflow--instance-projection-apply "superchat-workflow")
-(declare-function superchat-workspace--projection-apply "superchat-workspace")
+(declare-function superchat-artifact-board--projection-apply "superchat-artifact-board")
 (declare-function superchat-experience--projection-apply "superchat-experience")
 (declare-function superchat-tools-install-row-builtins "superchat-tools" (row))
 
@@ -125,10 +125,10 @@ Call time needs Services `driver' and `session'."
   :apply (lambda (_scope _config)
     (superchat-tools-install-row-builtins 'workspace)
     (superchat-projection-register
-     'superchat-workspace-artifacts
+     'superchat-artifact-board-artifacts
      :version 2
      :initial nil
-     :apply #'superchat-workspace--projection-apply)))
+     :apply #'superchat-artifact-board--projection-apply)))
 
 (superchat-define-plugin plan
   :doc "Plan objects: nudges the model toward the approved plan after each Turn."

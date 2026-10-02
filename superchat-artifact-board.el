@@ -1,16 +1,24 @@
-;;; superchat-workspace.el --- Region-based shared workspace for multi-agent state -*- lexical-binding: t; -*-
+;;; superchat-artifact-board.el --- The Artifact Board: shared artifacts for a lead agent and its sub-agents -*- lexical-binding: t; -*-
 
 ;; This file is in the public domain.
 
 ;;; Commentary:
 
-;; A workspace is a logical registry of buffer-region artifacts.  The
-;; main agent and its sub-agents read and write those regions through
+;; The Artifact Board is a logical registry of buffer-region artifacts.  The
+;; main agent and its sub-agents read and write those regions through the
 ;; workspace_read / workspace_write tools (registered in
 ;; `superchat-tools.el').
 ;;
+;; Until M11 this file was `superchat-workspace.el' and its symbols began
+;; with `superchat-workspace-'.  "Workspace" now names the place work happens
+;; in (see CONTEXT.md); the Lisp names here moved to `superchat-artifact-board-'.
+;; Three kinds of name keep the old word because they are data that saved
+;; presets, Tape rows and recovery classes already hold: the model-facing
+;; tool names (workspace_read and the others), the Tape event types, and the
+;; error condition `superchat-workspace-artifact-revision-error'.
+;;
 ;; Markers auto-track buffer edits so live artifacts stay in sync.  If no
-;; region is set, `superchat-workspace-write' auto-creates a fallback buffer.
+;; region is set, `superchat-artifact-board-write' auto-creates a fallback buffer.
 
 ;;; Code:
 
@@ -43,12 +51,17 @@
 ;; Configuration
 ;; ═══════════════════════════════════════════════════════════
 
-(defcustom superchat-workspace-fallback-buffer "*superchat-workspace*"
+(define-obsolete-variable-alias 'superchat-workspace-fallback-buffer
+  'superchat-artifact-board-fallback-buffer "M11")
+(define-obsolete-variable-alias 'superchat-workspace-auto-create
+  'superchat-artifact-board-auto-create "M11")
+
+(defcustom superchat-artifact-board-fallback-buffer "*superchat-artifact-board*"
   "Buffer name used as fallback when no workspace region is set."
   :type 'string
   :group 'superchat)
 
-(defcustom superchat-workspace-auto-create t
+(defcustom superchat-artifact-board-auto-create t
   "When non-nil, create the fallback buffer on first write if no region is set."
   :type 'boolean
   :group 'superchat)
@@ -57,79 +70,79 @@
 ;; State
 ;; ═══════════════════════════════════════════════════════════
 
-(defconst superchat-workspace--legacy-id "legacy"
+(defconst superchat-artifact-board--legacy-id "legacy"
   "Workspace ID used by direct legacy Lisp calls.")
 
-(defvar superchat-workspace--registry (make-hash-table :test 'equal)
+(defvar superchat-artifact-board--registry (make-hash-table :test 'equal)
   "Hash table keyed by Workspace ID.
 Each value is a plist with `:artifacts' and `:active-artifact-id'.")
 
-(defvar superchat-workspace--artifact-counter 0
+(defvar superchat-artifact-board--artifact-counter 0
   "Counter used for process-local artifact IDs.")
 
-(defun superchat-workspace--registry ()
+(defun superchat-artifact-board--registry ()
   "Return the workspace registry, creating it if tests rebound it to nil."
-  (unless (hash-table-p superchat-workspace--registry)
-    (setq superchat-workspace--registry (make-hash-table :test 'equal)))
-  superchat-workspace--registry)
+  (unless (hash-table-p superchat-artifact-board--registry)
+    (setq superchat-artifact-board--registry (make-hash-table :test 'equal)))
+  superchat-artifact-board--registry)
 
-(defun superchat-workspace--tool-context ()
+(defun superchat-artifact-board--tool-context ()
   "Return the current Tool Executor context plist, or nil."
   (when (and (boundp 'superchat--tool-execution-context)
              (listp superchat--tool-execution-context))
     superchat--tool-execution-context))
 
-(defun superchat-workspace--bound-workspace-id ()
+(defun superchat-artifact-board--bound-workspace-id ()
   "Return the current buffer's Session Workspace ID, or nil."
   (when (and (boundp 'superchat--workspace-binding)
              (listp superchat--workspace-binding))
     (plist-get superchat--workspace-binding :id)))
 
-(defun superchat-workspace--session-id (&optional workspace)
+(defun superchat-artifact-board--session-id (&optional workspace)
   "Return the best available Session ID for audit events.
 WORKSPACE is the current workspace plist."
-  (or (plist-get (superchat-workspace--tool-context) :session-id)
+  (or (plist-get (superchat-artifact-board--tool-context) :session-id)
       (and (boundp 'superchat--session-id) superchat--session-id)
       (plist-get workspace :session-id)))
 
 ;;;###autoload
-(defun superchat-workspace-current-id ()
+(defun superchat-artifact-board-current-id ()
   "Return the Workspace ID for the current execution context.
 Resolution order is Tool Executor context, current Session binding, any
 active chat binding, then the legacy direct-call fallback."
-  (or (plist-get (superchat-workspace--tool-context) :workspace-id)
-      (superchat-workspace--bound-workspace-id)
+  (or (plist-get (superchat-artifact-board--tool-context) :workspace-id)
+      (superchat-artifact-board--bound-workspace-id)
       (when-let* ((buffer (and (boundp 'superchat-buffer-name)
                                (get-buffer superchat-buffer-name))))
         (with-current-buffer buffer
-          (superchat-workspace--bound-workspace-id)))
-      superchat-workspace--legacy-id))
+          (superchat-artifact-board--bound-workspace-id)))
+      superchat-artifact-board--legacy-id))
 
-(defun superchat-workspace--workspace (workspace-id &optional create)
+(defun superchat-artifact-board--workspace (workspace-id &optional create)
   "Return workspace WORKSPACE-ID, creating it when CREATE is non-nil."
-  (let* ((id (or workspace-id (superchat-workspace-current-id)))
-         (registry (superchat-workspace--registry))
+  (let* ((id (or workspace-id (superchat-artifact-board-current-id)))
+         (registry (superchat-artifact-board--registry))
          (workspace (gethash id registry)))
     (when (and create (not workspace))
       (setq workspace (list :id id :artifacts nil :active-artifact-id nil))
       (puthash id workspace registry))
     workspace))
 
-(defun superchat-workspace--put-workspace (workspace)
+(defun superchat-artifact-board--put-workspace (workspace)
   "Persist WORKSPACE in the registry and return it."
-  (puthash (plist-get workspace :id) workspace (superchat-workspace--registry))
+  (puthash (plist-get workspace :id) workspace (superchat-artifact-board--registry))
   workspace)
 
 ;;;###autoload
-(defun superchat-workspace-bind (workspace-id &optional root session-id)
+(defun superchat-artifact-board-bind (workspace-id &optional root session-id)
   "Ensure logical WORKSPACE-ID exists and bind it in the current buffer.
 Optional ROOT and SESSION-ID are stored as metadata for later audit events."
   (unless (and (stringp workspace-id) (not (string-empty-p workspace-id)))
     (error "Workspace ID must be a non-empty string"))
-  (let ((workspace (superchat-workspace--workspace workspace-id t)))
-    (unless (superchat-workspace--workspace-artifacts workspace)
+  (let ((workspace (superchat-artifact-board--workspace workspace-id t)))
+    (unless (superchat-artifact-board--workspace-artifacts workspace)
       (when-let* ((projected (ignore-errors
-                               (superchat-workspace--projected-artifacts
+                               (superchat-artifact-board--projected-artifacts
                                 workspace-id))))
         (let ((artifacts
                (mapcar (lambda (artifact)
@@ -140,12 +153,12 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
                                      (caar artifacts))))))
     (setq workspace (plist-put workspace :root root))
     (setq workspace (plist-put workspace :session-id session-id))
-    (superchat-workspace--put-workspace workspace)
+    (superchat-artifact-board--put-workspace workspace)
     (setq-local superchat--workspace-binding
                 (append (list :id workspace-id) (when root (list :root root))))
     workspace))
 
-(defun superchat-workspace--artifact-id (workspace)
+(defun superchat-artifact-board--artifact-id (workspace)
   "Return a new process-local artifact ID unique across workspaces."
   (let (artifact-id)
     (while
@@ -155,18 +168,18 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
                         (substring
                          (secure-hash 'sha256 (plist-get workspace :id))
                          0 8)
-                        (cl-incf superchat-workspace--artifact-counter)))
+                        (cl-incf superchat-artifact-board--artifact-counter)))
           (assoc artifact-id
-                 (superchat-workspace--workspace-artifacts workspace))))
+                 (superchat-artifact-board--workspace-artifacts workspace))))
     artifact-id))
 
-(defun superchat-workspace--file-adapter-p (artifact)
+(defun superchat-artifact-board--file-adapter-p (artifact)
   "Return non-nil when ARTIFACT is backed by a durable file."
   (memq (plist-get artifact :adapter) '(generated-file durable-file)))
 
-(defun superchat-workspace--artifact-live-p (artifact)
+(defun superchat-artifact-board--artifact-live-p (artifact)
   "Return non-nil when ARTIFACT content can be resolved now."
-  (if (superchat-workspace--file-adapter-p artifact)
+  (if (superchat-artifact-board--file-adapter-p artifact)
       (file-readable-p (plist-get artifact :path))
     (let ((start (plist-get artifact :start-marker))
           (end (plist-get artifact :end-marker)))
@@ -177,37 +190,37 @@ Optional ROOT and SESSION-ID are stored as metadata for later audit events."
            (eq (marker-buffer start) (marker-buffer end))
            (<= (marker-position start) (marker-position end))))))
 
-(defun superchat-workspace--artifact-buffer (artifact)
+(defun superchat-artifact-board--artifact-buffer (artifact)
   "Return ARTIFACT's live buffer, or nil."
-  (when (superchat-workspace--artifact-live-p artifact)
+  (when (superchat-artifact-board--artifact-live-p artifact)
     (marker-buffer (plist-get artifact :start-marker))))
 
-(defun superchat-workspace--content-hash (content)
+(defun superchat-artifact-board--content-hash (content)
   "Return SHA-256 hash for CONTENT."
   (secure-hash 'sha256 content))
 
-(defun superchat-workspace--artifact-content (artifact)
+(defun superchat-artifact-board--artifact-content (artifact)
   "Return ARTIFACT content or signal when it is unresolved."
-  (unless (superchat-workspace--artifact-live-p artifact)
+  (unless (superchat-artifact-board--artifact-live-p artifact)
     (error "Workspace artifact is unresolved: %s"
            (plist-get artifact :artifact-id)))
-  (if (superchat-workspace--file-adapter-p artifact)
+  (if (superchat-artifact-board--file-adapter-p artifact)
       (with-temp-buffer
         (insert-file-contents (plist-get artifact :path))
         (buffer-string))
-    (with-current-buffer (superchat-workspace--artifact-buffer artifact)
+    (with-current-buffer (superchat-artifact-board--artifact-buffer artifact)
       (save-restriction
         (widen)
         (buffer-substring-no-properties
          (plist-get artifact :start-marker)
          (plist-get artifact :end-marker))))))
 
-(defun superchat-workspace--artifact-metadata (artifact)
+(defun superchat-artifact-board--artifact-metadata (artifact)
   "Return public metadata for ARTIFACT.
-The return value documents `superchat-workspace-add-region': callers get this
+The return value documents `superchat-artifact-board-add-region': callers get this
   plist, whose `:artifact-id' can be passed back to targeted read/write calls."
-  (let* ((live (superchat-workspace--artifact-live-p artifact))
-         (file-p (superchat-workspace--file-adapter-p artifact))
+  (let* ((live (superchat-artifact-board--artifact-live-p artifact))
+         (file-p (superchat-artifact-board--file-adapter-p artifact))
          (start-marker (plist-get artifact :start-marker))
          (end-marker (plist-get artifact :end-marker))
          (buffer (and live (not file-p) (marker-buffer start-marker)))
@@ -218,8 +231,8 @@ The return value documents `superchat-workspace-add-region': callers get this
          (buffer-name (or (and buffer (buffer-name buffer))
                           (plist-get artifact :buffer-name)))
          (revision (if live
-                       (superchat-workspace--content-hash
-                        (superchat-workspace--artifact-content artifact))
+                       (superchat-artifact-board--content-hash
+                        (superchat-artifact-board--artifact-content artifact))
                      (plist-get artifact :revision))))
     (list :artifact-id (plist-get artifact :artifact-id)
           :uri (plist-get artifact :uri)
@@ -237,70 +250,70 @@ The return value documents `superchat-workspace-add-region': callers get this
           :run-id (plist-get artifact :run-id)
           :actor-id (plist-get artifact :actor-id))))
 
-(defun superchat-workspace--artifact-with-provenance (artifact workspace)
+(defun superchat-artifact-board--artifact-with-provenance (artifact workspace)
   "Return ARTIFACT attributed to the current Runtime context."
-  (let ((context (superchat-workspace--tool-context))
+  (let ((context (superchat-artifact-board--tool-context))
         (artifact (copy-sequence artifact)))
     (setq artifact
           (plist-put artifact :session-id
-                     (superchat-workspace--session-id workspace)))
+                     (superchat-artifact-board--session-id workspace)))
     (dolist (key '(:run-id :actor-id))
       (setq artifact (plist-put artifact key (plist-get context key))))
     artifact))
 
-(defun superchat-workspace--workspace-artifacts (workspace)
+(defun superchat-artifact-board--workspace-artifacts (workspace)
   "Return WORKSPACE artifacts alist."
   (plist-get workspace :artifacts))
 
-(defun superchat-workspace--set-workspace-artifacts (workspace artifacts)
+(defun superchat-artifact-board--set-workspace-artifacts (workspace artifacts)
   "Set WORKSPACE ARTIFACTS and persist the workspace."
   (setq workspace (plist-put workspace :artifacts artifacts))
-  (superchat-workspace--put-workspace workspace))
+  (superchat-artifact-board--put-workspace workspace))
 
-(defun superchat-workspace--find-artifact (workspace artifact-id)
+(defun superchat-artifact-board--find-artifact (workspace artifact-id)
   "Return ARTIFACT-ID in WORKSPACE, or nil."
-  (cdr (assoc artifact-id (superchat-workspace--workspace-artifacts workspace))))
+  (cdr (assoc artifact-id (superchat-artifact-board--workspace-artifacts workspace))))
 
-(defun superchat-workspace--active-artifact (workspace)
+(defun superchat-artifact-board--active-artifact (workspace)
   "Return WORKSPACE's active artifact, or nil."
-  (superchat-workspace--find-artifact
+  (superchat-artifact-board--find-artifact
    workspace (plist-get workspace :active-artifact-id)))
 
-(defun superchat-workspace--target-artifact (workspace artifact-id)
+(defun superchat-artifact-board--target-artifact (workspace artifact-id)
   "Return selected artifact in WORKSPACE.
 When ARTIFACT-ID is nil, return the active artifact."
   (if artifact-id
-      (or (superchat-workspace--find-artifact workspace artifact-id)
+      (or (superchat-artifact-board--find-artifact workspace artifact-id)
           (error "Unknown workspace artifact: %s" artifact-id))
-    (superchat-workspace--active-artifact workspace)))
+    (superchat-artifact-board--active-artifact workspace)))
 
-(defun superchat-workspace--replace-artifact (workspace artifact)
+(defun superchat-artifact-board--replace-artifact (workspace artifact)
   "Replace ARTIFACT in WORKSPACE and return updated workspace."
   (let ((artifact-id (plist-get artifact :artifact-id)))
-    (superchat-workspace--set-workspace-artifacts
+    (superchat-artifact-board--set-workspace-artifacts
      workspace
      (cons (cons artifact-id artifact)
            (assoc-delete-all
             artifact-id (copy-sequence
-                         (superchat-workspace--workspace-artifacts
+                         (superchat-artifact-board--workspace-artifacts
                           workspace)))))))
 
-(defun superchat-workspace--remove-artifact (workspace artifact-id)
+(defun superchat-artifact-board--remove-artifact (workspace artifact-id)
   "Remove ARTIFACT-ID from WORKSPACE and return updated workspace."
   (let* ((artifacts (cl-remove artifact-id
-                               (superchat-workspace--workspace-artifacts workspace)
+                               (superchat-artifact-board--workspace-artifacts workspace)
                                :key #'car :test #'equal))
          (active (plist-get workspace :active-artifact-id)))
     (setq workspace (plist-put workspace :artifacts artifacts))
     (when (equal active artifact-id)
       (setq workspace (plist-put workspace :active-artifact-id
                                  (caar artifacts))))
-    (superchat-workspace--put-workspace workspace)))
+    (superchat-artifact-board--put-workspace workspace)))
 
-(defun superchat-workspace--event-payload (artifact &optional old-revision)
+(defun superchat-artifact-board--event-payload (artifact &optional old-revision)
   "Return bounded event payload for ARTIFACT.
 OLD-REVISION is included for change/remove facts."
-  (let ((metadata (superchat-workspace--artifact-metadata artifact)))
+  (let ((metadata (superchat-artifact-board--artifact-metadata artifact)))
     (append
      (list :artifact-id (plist-get metadata :artifact-id)
            :uri (plist-get metadata :uri)
@@ -317,10 +330,10 @@ OLD-REVISION is included for change/remove facts."
      (when old-revision
        (list :old-revision old-revision)))))
 
-(defun superchat-workspace--emit (workspace type artifact &optional old-revision)
+(defun superchat-artifact-board--emit (workspace type artifact &optional old-revision)
   "Append a bounded workspace lifecycle event for ARTIFACT."
-  (when-let* ((session-id (superchat-workspace--session-id workspace)))
-    (let* ((context (superchat-workspace--tool-context))
+  (when-let* ((session-id (superchat-artifact-board--session-id workspace)))
+    (let* ((context (superchat-artifact-board--tool-context))
            (event
             (list :type type
                   :session-id session-id
@@ -329,7 +342,7 @@ OLD-REVISION is included for change/remove facts."
                   :summary (format "%s: %s"
                                    type (plist-get artifact :uri))
                   :payload
-                  (superchat-workspace--event-payload artifact old-revision))))
+                  (superchat-artifact-board--event-payload artifact old-revision))))
       (dolist (key '(:turn-id :run-id :actor-id :profile-id :parent-run-id
                      :correlation-id :causation-id :team-id))
         (when-let* ((value (plist-get context key)))
@@ -340,43 +353,43 @@ OLD-REVISION is included for change/remove facts."
 ;; Fallback buffer
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-workspace--fallback-buffer-name (workspace-id)
+(defun superchat-artifact-board--fallback-buffer-name (workspace-id)
   "Return fallback buffer name for WORKSPACE-ID."
-  (if (equal workspace-id superchat-workspace--legacy-id)
-      superchat-workspace-fallback-buffer
-    (format "%s<%s>" superchat-workspace-fallback-buffer workspace-id)))
+  (if (equal workspace-id superchat-artifact-board--legacy-id)
+      superchat-artifact-board-fallback-buffer
+    (format "%s<%s>" superchat-artifact-board-fallback-buffer workspace-id)))
 
-(defun superchat-workspace--fallback-buffer (&optional workspace-id)
+(defun superchat-artifact-board--fallback-buffer (&optional workspace-id)
   "Return the fallback workspace buffer for WORKSPACE-ID, creating it if needed."
-  (let ((buf (get-buffer (superchat-workspace--fallback-buffer-name
+  (let ((buf (get-buffer (superchat-artifact-board--fallback-buffer-name
                           (or workspace-id
-                              (superchat-workspace-current-id))))))
+                              (superchat-artifact-board-current-id))))))
     (unless (buffer-live-p buf)
       (setq buf
             (get-buffer-create
-             (superchat-workspace--fallback-buffer-name
-              (or workspace-id (superchat-workspace-current-id))))))
+             (superchat-artifact-board--fallback-buffer-name
+              (or workspace-id (superchat-artifact-board-current-id))))))
     buf))
 
-(defun superchat-workspace--fallback-artifact (workspace)
+(defun superchat-artifact-board--fallback-artifact (workspace)
   "Create or return WORKSPACE's fallback buffer artifact."
   (let* ((workspace-id (plist-get workspace :id))
-         (buf (superchat-workspace--fallback-buffer workspace-id))
-         (artifact (superchat-workspace--active-artifact workspace)))
+         (buf (superchat-artifact-board--fallback-buffer workspace-id))
+         (artifact (superchat-artifact-board--active-artifact workspace)))
     (if (and artifact
              (equal (plist-get artifact :role) 'fallback)
-             (superchat-workspace--artifact-live-p artifact))
+             (superchat-artifact-board--artifact-live-p artifact))
         artifact
       (with-current-buffer buf
         (let ((start (set-marker (make-marker) (point-min) buf))
               (end (set-marker (make-marker) (point-max) buf)))
           (set-marker-insertion-type start nil)
           (set-marker-insertion-type end t)
-          (let* ((artifact-id (superchat-workspace--artifact-id workspace))
+          (let* ((artifact-id (superchat-artifact-board--artifact-id workspace))
                  (content (buffer-substring-no-properties (point-min) (point-max)))
-                 (revision (superchat-workspace--content-hash content))
+                 (revision (superchat-artifact-board--content-hash content))
                  (new-artifact
-                  (superchat-workspace--artifact-with-provenance
+                  (superchat-artifact-board--artifact-with-provenance
                    (list :artifact-id artifact-id
                          :uri (format "buffer://%s" artifact-id)
                          :type 'buffer-region
@@ -392,15 +405,15 @@ OLD-REVISION is included for change/remove facts."
             (let ((old-workspace (copy-tree workspace)))
               (condition-case err
                   (progn
-                    (setq workspace (superchat-workspace--replace-artifact
+                    (setq workspace (superchat-artifact-board--replace-artifact
                                      workspace new-artifact))
                     (setq workspace (plist-put workspace :active-artifact-id
                                                artifact-id))
-                    (superchat-workspace--put-workspace workspace)
-                    (superchat-workspace--emit
+                    (superchat-artifact-board--put-workspace workspace)
+                    (superchat-artifact-board--emit
                      workspace "workspace.artifact.added" new-artifact))
                 (error
-                 (superchat-workspace--put-workspace old-workspace)
+                 (superchat-artifact-board--put-workspace old-workspace)
                  (set-marker start nil)
                  (set-marker end nil)
                  (signal (car err) (cdr err)))))
@@ -411,25 +424,25 @@ OLD-REVISION is included for change/remove facts."
 ;; ═══════════════════════════════════════════════════════════
 
 ;;;###autoload
-(defun superchat-workspace-add-region (beg end &optional role workspace-id)
+(defun superchat-artifact-board-add-region (beg end &optional role workspace-id)
   "Add BEG..END as a buffer-region artifact and return its metadata plist.
 The returned `:artifact-id' is the stable target for
-`superchat-workspace-read' and `superchat-workspace-write'."
+`superchat-artifact-board-read' and `superchat-artifact-board-write'."
   (interactive "r")
   (when (called-interactively-p 'any)
     (unless (use-region-p)
       (user-error "No active region; highlight text first")))
-  (let* ((workspace (superchat-workspace--workspace workspace-id t))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id t))
          (old-workspace (copy-tree workspace))
-         (artifact-id (superchat-workspace--artifact-id workspace))
+         (artifact-id (superchat-artifact-board--artifact-id workspace))
          (start (set-marker (make-marker) beg (current-buffer)))
          (end-marker (set-marker (make-marker) end (current-buffer)))
          (content (save-restriction
                     (widen)
                     (buffer-substring-no-properties start end-marker)))
-         (revision (superchat-workspace--content-hash content))
+         (revision (superchat-artifact-board--content-hash content))
          (artifact
-          (superchat-workspace--artifact-with-provenance
+          (superchat-artifact-board--artifact-with-provenance
            (list :artifact-id artifact-id
                  :uri (format "buffer://%s" artifact-id)
                  :type 'buffer-region
@@ -446,30 +459,30 @@ The returned `:artifact-id' is the stable target for
     (set-marker-insertion-type end-marker t)
     (condition-case err
         (progn
-          (setq workspace (superchat-workspace--replace-artifact workspace artifact))
+          (setq workspace (superchat-artifact-board--replace-artifact workspace artifact))
           (setq workspace (plist-put workspace :active-artifact-id artifact-id))
-          (superchat-workspace--put-workspace workspace)
-          (superchat-workspace--emit workspace "workspace.artifact.added" artifact)
-          (let ((metadata (superchat-workspace--artifact-metadata artifact)))
+          (superchat-artifact-board--put-workspace workspace)
+          (superchat-artifact-board--emit workspace "workspace.artifact.added" artifact)
+          (let ((metadata (superchat-artifact-board--artifact-metadata artifact)))
             (when (called-interactively-p 'any)
               (message "Workspace artifact %s set in %s (%d..%d)"
                        artifact-id (buffer-name) beg end))
             metadata))
       (error
-       (superchat-workspace--put-workspace old-workspace)
+       (superchat-artifact-board--put-workspace old-workspace)
        (set-marker start nil)
        (set-marker end-marker nil)
        (signal (car err) (cdr err))))))
 
 ;;;###autoload
-(defun superchat-workspace-publish (content &optional role workspace-id)
+(defun superchat-artifact-board-publish (content &optional role workspace-id)
   "Publish immutable CONTENT as a durable Artifact and return its metadata."
   (unless (and (stringp content) (not (string-empty-p content)))
     (error "Published Artifact content must be a non-empty string"))
-  (let* ((workspace (superchat-workspace--workspace workspace-id t))
-         (session-id (superchat-workspace--session-id workspace))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id t))
+         (session-id (superchat-artifact-board--session-id workspace))
          (old-workspace (copy-tree workspace))
-         (artifact-id (superchat-workspace--artifact-id workspace))
+         (artifact-id (superchat-artifact-board--artifact-id workspace))
          (directory
           (expand-file-name
            (format "artifacts/%s/"
@@ -478,7 +491,7 @@ The returned `:artifact-id' is the stable target for
            (or superchat-data-directory
                (expand-file-name "superchat/" user-emacs-directory))))
          (path (expand-file-name (concat artifact-id ".txt") directory))
-         (revision (superchat-workspace--content-hash content))
+         (revision (superchat-artifact-board--content-hash content))
          (role (cond ((symbolp role) role)
                      ((and (stringp role)
                            (<= (length role) 64)
@@ -488,7 +501,7 @@ The returned `:artifact-id' is the stable target for
                      ((null role) 'report)
                      (t (error "Invalid Artifact role: %S" role))))
          (artifact
-          (superchat-workspace--artifact-with-provenance
+          (superchat-artifact-board--artifact-with-provenance
            (list :artifact-id artifact-id
                  :uri (concat "file://" path)
                  :path path
@@ -504,72 +517,72 @@ The returned `:artifact-id' is the stable target for
         (progn
           (with-temp-file path (insert content))
           (setq workspace
-                (superchat-workspace--replace-artifact workspace artifact))
+                (superchat-artifact-board--replace-artifact workspace artifact))
           (setq workspace
                 (plist-put workspace :active-artifact-id artifact-id))
-          (superchat-workspace--put-workspace workspace)
-          (superchat-workspace--emit
+          (superchat-artifact-board--put-workspace workspace)
+          (superchat-artifact-board--emit
            workspace "workspace.artifact.added" artifact)
-          (superchat-workspace--artifact-metadata artifact))
+          (superchat-artifact-board--artifact-metadata artifact))
       (error
-       (superchat-workspace--put-workspace old-workspace)
+       (superchat-artifact-board--put-workspace old-workspace)
        (when (file-exists-p path)
          (delete-file path))
        (signal (car err) (cdr err))))))
 
 ;;;###autoload
-(defun superchat-workspace-set-region (beg end &optional role workspace-id)
+(defun superchat-artifact-board-set-region (beg end &optional role workspace-id)
   "Designate BEG..END as the active shared workspace region.
 The region is tracked via markers that adapt to buffer edits."
   (interactive "r")
-  (let* ((workspace (superchat-workspace--workspace workspace-id t))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id t))
          (active-id (plist-get workspace :active-artifact-id))
-         (metadata (superchat-workspace-add-region
+         (metadata (superchat-artifact-board-add-region
                     beg end role (plist-get workspace :id))))
     (when active-id
-      (superchat-workspace-clear active-id (plist-get workspace :id)))
+      (superchat-artifact-board-clear active-id (plist-get workspace :id)))
     (message "Workspace region set in %s (%d..%d)"
              (buffer-name) beg end)
     metadata))
 
 ;;;###autoload
-(defun superchat-workspace-clear (&optional artifact-id workspace-id)
+(defun superchat-artifact-board-clear (&optional artifact-id workspace-id)
   "Clear ARTIFACT-ID from WORKSPACE-ID.
 With no arguments, clear the active artifact in the current workspace."
   (interactive)
-  (let* ((workspace (superchat-workspace--workspace workspace-id))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id))
          (artifact (and workspace
-                        (superchat-workspace--target-artifact
+                        (superchat-artifact-board--target-artifact
                          workspace artifact-id))))
     (when artifact
-      (superchat-workspace--emit
+      (superchat-artifact-board--emit
        workspace "workspace.artifact.removed" artifact
-       (plist-get (superchat-workspace--artifact-metadata artifact)
+       (plist-get (superchat-artifact-board--artifact-metadata artifact)
                   :revision))
       (when (markerp (plist-get artifact :start-marker))
         (set-marker (plist-get artifact :start-marker) nil))
       (when (markerp (plist-get artifact :end-marker))
         (set-marker (plist-get artifact :end-marker) nil))
       (setq workspace
-            (superchat-workspace--remove-artifact
+            (superchat-artifact-board--remove-artifact
              workspace (plist-get artifact :artifact-id))))
     (message "Workspace region cleared")))
 
 ;;;###autoload
-(defun superchat-workspace-show (&optional artifact-id workspace-id)
+(defun superchat-artifact-board-show (&optional artifact-id workspace-id)
   "Display selected workspace artifact or fallback buffer."
   (interactive)
-  (let* ((workspace (superchat-workspace--workspace workspace-id))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id))
          (artifact (and workspace
-                        (superchat-workspace--target-artifact
+                        (superchat-artifact-board--target-artifact
                          workspace artifact-id))))
     (cond
      ((and artifact
-           (superchat-workspace--file-adapter-p artifact)
-           (superchat-workspace--artifact-live-p artifact))
+           (superchat-artifact-board--file-adapter-p artifact)
+           (superchat-artifact-board--artifact-live-p artifact))
       (pop-to-buffer (find-file-noselect (plist-get artifact :path))))
-     ((and artifact (superchat-workspace--artifact-live-p artifact))
-      (let ((buf (superchat-workspace--artifact-buffer artifact)))
+     ((and artifact (superchat-artifact-board--artifact-live-p artifact))
+      (let ((buf (superchat-artifact-board--artifact-buffer artifact)))
         (pop-to-buffer buf)
         (goto-char (plist-get artifact :start-marker))
         (unless (pos-visible-in-window-p (plist-get artifact :end-marker))
@@ -581,26 +594,26 @@ With no arguments, clear the active artifact in the current workspace."
       (user-error "Workspace artifact is unresolved: %s"
                   (plist-get artifact :artifact-id)))
      (t
-      (pop-to-buffer (superchat-workspace--fallback-buffer
+      (pop-to-buffer (superchat-artifact-board--fallback-buffer
                       (or workspace-id
-                          (superchat-workspace-current-id))))))))
+                          (superchat-artifact-board-current-id))))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Reading
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-workspace--active-p (&optional artifact-id workspace-id)
+(defun superchat-artifact-board--active-p (&optional artifact-id workspace-id)
   "Return non-nil when the selected workspace artifact is live."
-  (when-let* ((workspace (superchat-workspace--workspace workspace-id))
-              (artifact (superchat-workspace--target-artifact
+  (when-let* ((workspace (superchat-artifact-board--workspace workspace-id))
+              (artifact (superchat-artifact-board--target-artifact
                          workspace artifact-id)))
-    (superchat-workspace--artifact-live-p artifact)))
+    (superchat-artifact-board--artifact-live-p artifact)))
 
-(defun superchat-workspace--require-artifact-readable
+(defun superchat-artifact-board--require-artifact-readable
     (artifact workspace-id expected-revision)
   "Require readable content and a recorded-terminal-backed handoff for
 cross-Run ARTIFACT."
-  (let* ((context (superchat-workspace--tool-context))
+  (let* ((context (superchat-artifact-board--tool-context))
          (consumer-run-id (plist-get context :run-id))
          (producer-run-id (plist-get artifact :run-id)))
     (when (and (stringp consumer-run-id)
@@ -608,10 +621,10 @@ cross-Run ARTIFACT."
                (not (equal consumer-run-id producer-run-id)))
       ;; ponytail: buffer-region markers are process-local; persist a
       ;; snapshot only if cross-process recovery becomes a product promise.
-      (unless (superchat-workspace--artifact-live-p artifact)
+      (unless (superchat-artifact-board--artifact-live-p artifact)
         (error "Workspace artifact is not live in this Emacs process: %s"
                (plist-get artifact :artifact-id)))
-      (superchat-workspace--check-revision
+      (superchat-artifact-board--check-revision
        artifact expected-revision
        'superchat-workspace-artifact-revision-error)
       (let* ((reference
@@ -619,7 +632,7 @@ cross-Run ARTIFACT."
                     :artifact-id (plist-get artifact :artifact-id)
                     :revision expected-revision))
              (decision
-              (superchat-workspace-artifact-delivery-decision
+              (superchat-artifact-board-artifact-delivery-decision
                (plist-get artifact :session-id)
                producer-run-id reference)))
         (unless (eq 'deliver (plist-get decision :action))
@@ -631,45 +644,45 @@ cross-Run ARTIFACT."
                    (plist-get decision :reason))))
         ;; The live buffer may change while the recorded terminal and Projection
         ;; are read.
-        (superchat-workspace--check-revision
+        (superchat-artifact-board--check-revision
          artifact expected-revision
          'superchat-workspace-artifact-revision-error)))))
 
-(defun superchat-workspace-read
+(defun superchat-artifact-board-read
     (&optional artifact-id workspace-id expected-revision)
   "Return selected workspace content as a string.
 ARTIFACT-ID and WORKSPACE-ID target a specific artifact.  Returns nil when no
 workspace or fallback buffer is active.  Cross-Run tool reads must pass the
 projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
-  (let* ((workspace (superchat-workspace--workspace workspace-id))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id))
          (artifact (and workspace
-                        (superchat-workspace--target-artifact
+                        (superchat-artifact-board--target-artifact
                          workspace artifact-id))))
     (cond
      (artifact
-      (superchat-workspace--require-artifact-readable
+      (superchat-artifact-board--require-artifact-readable
        artifact (plist-get workspace :id) expected-revision)
-      (superchat-workspace--artifact-content artifact))
+      (superchat-artifact-board--artifact-content artifact))
      (artifact-id
       (error "Unknown workspace artifact: %s" artifact-id))
      ((buffer-live-p
-       (get-buffer (superchat-workspace--fallback-buffer-name
-                    (or workspace-id (superchat-workspace-current-id)))))
+       (get-buffer (superchat-artifact-board--fallback-buffer-name
+                    (or workspace-id (superchat-artifact-board-current-id)))))
       (with-current-buffer
-          (get-buffer (superchat-workspace--fallback-buffer-name
-                       (or workspace-id (superchat-workspace-current-id))))
+          (get-buffer (superchat-artifact-board--fallback-buffer-name
+                       (or workspace-id (superchat-artifact-board-current-id))))
         (buffer-substring-no-properties (point-min) (point-max))))
      (t nil))))
 
-(defun superchat-workspace-info (&optional workspace-id)
+(defun superchat-artifact-board-info (&optional workspace-id)
   "Return a human-readable summary of WORKSPACE-ID."
-  (let* ((workspace (superchat-workspace--workspace workspace-id))
-         (artifact (and workspace (superchat-workspace--active-artifact workspace)))
-         (artifacts (and workspace (superchat-workspace-artifacts
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id))
+         (artifact (and workspace (superchat-artifact-board--active-artifact workspace)))
+         (artifacts (and workspace (superchat-artifact-board-artifacts
                                     (plist-get workspace :id)))))
     (cond
      (artifacts
-      (let ((metadata (superchat-workspace--artifact-metadata artifact)))
+      (let ((metadata (superchat-artifact-board--artifact-metadata artifact)))
         (concat
          (cond
           ((and artifact (plist-get metadata :live)
@@ -702,20 +715,20 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
           artifacts
           "\n"))))
      ((buffer-live-p (get-buffer
-                      (superchat-workspace--fallback-buffer-name
-                       (or workspace-id (superchat-workspace-current-id)))))
+                      (superchat-artifact-board--fallback-buffer-name
+                       (or workspace-id (superchat-artifact-board-current-id)))))
       (format "fallback buffer %s"
-              (superchat-workspace--fallback-buffer-name
-               (or workspace-id (superchat-workspace-current-id)))))
+              (superchat-artifact-board--fallback-buffer-name
+               (or workspace-id (superchat-artifact-board-current-id)))))
      (t "no workspace active"))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Writing
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-workspace--write-region (artifact content append)
+(defun superchat-artifact-board--write-region (artifact content append)
   "Write CONTENT to ARTIFACT, appending when APPEND is non-nil."
-  (let ((buf (superchat-workspace--artifact-buffer artifact)))
+  (let ((buf (superchat-artifact-board--artifact-buffer artifact)))
     (unless buf
       (error "Workspace artifact is unresolved: %s"
              (plist-get artifact :artifact-id)))
@@ -736,7 +749,7 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
               (insert (string-trim content))
               (unless (bolp) (insert "\n")))))))))
 
-(defun superchat-workspace--write-file-artifact (artifact content append)
+(defun superchat-artifact-board--write-file-artifact (artifact content append)
   "Write CONTENT to file-backed ARTIFACT, appending when APPEND is non-nil."
   (let ((path (plist-get artifact :path)))
     (unless path
@@ -752,16 +765,16 @@ projected EXPECTED-REVISION and satisfy the Artifact Delivery Contract."
       (with-temp-file path (insert next)))))
 
 ;;;###autoload
-(defun superchat-workspace-publish-mutable (content &optional role workspace-id)
+(defun superchat-artifact-board-publish-mutable (content &optional role workspace-id)
   "Publish mutable durable CONTENT and return its metadata.
-Unlike `superchat-workspace-publish', the returned Artifact can later be
-rewritten through `superchat-workspace-write' with revision tracking."
+Unlike `superchat-artifact-board-publish', the returned Artifact can later be
+rewritten through `superchat-artifact-board-write' with revision tracking."
   (unless (and (stringp content) (not (string-empty-p content)))
     (error "Published Artifact content must be a non-empty string"))
-  (let* ((workspace (superchat-workspace--workspace workspace-id t))
-         (session-id (superchat-workspace--session-id workspace))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id t))
+         (session-id (superchat-artifact-board--session-id workspace))
          (old-workspace (copy-tree workspace))
-         (artifact-id (superchat-workspace--artifact-id workspace))
+         (artifact-id (superchat-artifact-board--artifact-id workspace))
          (directory
           (expand-file-name
            (format "artifacts/%s/"
@@ -770,7 +783,7 @@ rewritten through `superchat-workspace-write' with revision tracking."
            (or superchat-data-directory
                (expand-file-name "superchat/" user-emacs-directory))))
          (path (expand-file-name (concat artifact-id ".txt") directory))
-         (revision (superchat-workspace--content-hash content))
+         (revision (superchat-artifact-board--content-hash content))
          (role (cond ((symbolp role) role)
                      ((and (stringp role)
                            (<= (length role) 64)
@@ -780,7 +793,7 @@ rewritten through `superchat-workspace-write' with revision tracking."
                      ((null role) 'report)
                      (t (error "Invalid Artifact role: %S" role))))
          (artifact
-          (superchat-workspace--artifact-with-provenance
+          (superchat-artifact-board--artifact-with-provenance
            (list :artifact-id artifact-id
                  :uri (concat "file://" path)
                  :path path
@@ -796,28 +809,28 @@ rewritten through `superchat-workspace-write' with revision tracking."
         (progn
           (with-temp-file path (insert content))
           (setq workspace
-                (superchat-workspace--replace-artifact workspace artifact))
+                (superchat-artifact-board--replace-artifact workspace artifact))
           (setq workspace
                 (plist-put workspace :active-artifact-id artifact-id))
-          (superchat-workspace--put-workspace workspace)
-          (superchat-workspace--emit
+          (superchat-artifact-board--put-workspace workspace)
+          (superchat-artifact-board--emit
            workspace "workspace.artifact.added" artifact)
-          (superchat-workspace--artifact-metadata artifact))
+          (superchat-artifact-board--artifact-metadata artifact))
       (error
-       (superchat-workspace--put-workspace old-workspace)
+       (superchat-artifact-board--put-workspace old-workspace)
        (when (file-exists-p path)
          (delete-file path))
        (signal (car err) (cdr err))))))
 
-(defun superchat-workspace--tool-write-p ()
+(defun superchat-artifact-board--tool-write-p ()
   "Return non-nil when a write originates from Tool Executor context."
-  (and (superchat-workspace--tool-context) t))
+  (and (superchat-artifact-board--tool-context) t))
 
-(defun superchat-workspace--check-revision
+(defun superchat-artifact-board--check-revision
     (artifact expected-revision &optional condition)
   "Validate EXPECTED-REVISION against ARTIFACT.
 Signal CONDITION instead of a generic error when it is non-nil."
-  (let ((revision (plist-get (superchat-workspace--artifact-metadata artifact)
+  (let ((revision (plist-get (superchat-artifact-board--artifact-metadata artifact)
                              :revision)))
     (unless (and (stringp expected-revision)
                  (equal expected-revision revision))
@@ -828,35 +841,35 @@ Signal CONDITION instead of a generic error when it is non-nil."
             (signal condition (list message))
           (error "%s" message))))))
 
-(defun superchat-workspace-write
+(defun superchat-artifact-board-write
     (content &optional append artifact-id expected-revision workspace-id)
   "Write CONTENT into a workspace artifact.
 When APPEND is non-nil, content is added at the end.  ARTIFACT-ID targets a
 specific artifact.  Tool-context writes to existing artifacts must pass
 EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
-  (let* ((workspace (superchat-workspace--workspace workspace-id t))
+  (let* ((workspace (superchat-artifact-board--workspace workspace-id t))
          (workspace-id (plist-get workspace :id))
-         (artifact (superchat-workspace--target-artifact workspace artifact-id))
+         (artifact (superchat-artifact-board--target-artifact workspace artifact-id))
          (existing-artifact-p artifact))
     (when (and artifact
                (eq 'generated-file (plist-get artifact :adapter)))
       (error "Published Artifacts are immutable; publish a new Artifact"))
     (unless artifact
-      (unless (or superchat-workspace-auto-create
+      (unless (or superchat-artifact-board-auto-create
                   (buffer-live-p
                    (get-buffer
-                    (superchat-workspace--fallback-buffer-name workspace-id))))
+                    (superchat-artifact-board--fallback-buffer-name workspace-id))))
         (error "Workspace fallback buffer does not exist and auto-create is disabled"))
-      (setq artifact (superchat-workspace--fallback-artifact workspace))
-      (setq workspace (superchat-workspace--workspace workspace-id t)))
-    (when (and existing-artifact-p (superchat-workspace--tool-write-p))
-      (superchat-workspace--check-revision artifact expected-revision))
+      (setq artifact (superchat-artifact-board--fallback-artifact workspace))
+      (setq workspace (superchat-artifact-board--workspace workspace-id t)))
+    (when (and existing-artifact-p (superchat-artifact-board--tool-write-p))
+      (superchat-artifact-board--check-revision artifact expected-revision))
     (let* ((old-artifact (copy-tree artifact))
            (old-revision (plist-get
-                          (superchat-workspace--artifact-metadata artifact)
+                          (superchat-artifact-board--artifact-metadata artifact)
                           :revision))
            (fallback-p (eq (plist-get artifact :role) 'fallback))
-           (file-p (superchat-workspace--file-adapter-p artifact))
+           (file-p (superchat-artifact-board--file-adapter-p artifact))
            result)
       (condition-case err
           (progn
@@ -865,40 +878,40 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
                   ;; Re-check at the commit point; the first check protects
                   ;; the optimistic caller snapshot.
                   (when (and existing-artifact-p
-                             (superchat-workspace--tool-write-p))
-                    (superchat-workspace--check-revision artifact
+                             (superchat-artifact-board--tool-write-p))
+                    (superchat-artifact-board--check-revision artifact
                                                          expected-revision))
-                  (superchat-workspace--write-file-artifact
+                  (superchat-artifact-board--write-file-artifact
                    artifact content append)
                   (let* ((metadata
-                          (superchat-workspace--artifact-metadata artifact))
+                          (superchat-artifact-board--artifact-metadata artifact))
                          (revision (plist-get metadata :revision)))
                     (setq artifact (plist-put artifact :revision revision))
                     (setq artifact (plist-put artifact :content-hash revision))
                     (setq artifact
-                          (superchat-workspace--artifact-with-provenance
+                          (superchat-artifact-board--artifact-with-provenance
                            artifact workspace))
-                    (setq workspace (superchat-workspace--replace-artifact
+                    (setq workspace (superchat-artifact-board--replace-artifact
                                      workspace artifact))
-                    (superchat-workspace--emit
+                    (superchat-artifact-board--emit
                      workspace "workspace.artifact.changed"
                      artifact old-revision))
                   (setq result
                         (format "%s durable Artifact %s"
                                 (if append "Appended to" "Wrote")
                                 (file-name-nondirectory path))))
-              (with-current-buffer (superchat-workspace--artifact-buffer artifact)
+              (with-current-buffer (superchat-artifact-board--artifact-buffer artifact)
                 (atomic-change-group
                   ;; Re-check at the commit point.  The first check protects
                   ;; the optimistic caller snapshot; this one prevents a
                   ;; buffer edit between that check and the actual mutation.
                   (when (and existing-artifact-p
-                             (superchat-workspace--tool-write-p))
-                    (superchat-workspace--check-revision artifact
+                             (superchat-artifact-board--tool-write-p))
+                    (superchat-artifact-board--check-revision artifact
                                                          expected-revision))
-                  (superchat-workspace--write-region artifact content append)
+                  (superchat-artifact-board--write-region artifact content append)
                   (let* ((metadata
-                          (superchat-workspace--artifact-metadata artifact))
+                          (superchat-artifact-board--artifact-metadata artifact))
                          (revision (plist-get metadata :revision)))
                     (setq artifact (plist-put artifact :revision revision))
                     (setq artifact (plist-put artifact :start
@@ -908,26 +921,26 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
                     (setq artifact (plist-put artifact :buffer-name
                                               (plist-get metadata :buffer-name)))
                     (setq artifact
-                          (superchat-workspace--artifact-with-provenance
+                          (superchat-artifact-board--artifact-with-provenance
                            artifact workspace))
-                    (setq workspace (superchat-workspace--replace-artifact
+                    (setq workspace (superchat-artifact-board--replace-artifact
                                      workspace artifact))
-                    (superchat-workspace--emit
+                    (superchat-artifact-board--emit
                      workspace "workspace.artifact.changed"
                      artifact old-revision))))
               (setq result
                     (if fallback-p
                         (format "%s fallback buffer %s"
                                 (if append "Appended to" "Wrote")
-                                (superchat-workspace--fallback-buffer-name
+                                (superchat-artifact-board--fallback-buffer-name
                                  workspace-id))
                       (format "%s workspace region in %s"
                               (if append "Appended to" "Replaced")
                               (buffer-name
-                               (superchat-workspace--artifact-buffer
+                               (superchat-artifact-board--artifact-buffer
                                 artifact)))))))
         (error
-         (setq workspace (superchat-workspace--replace-artifact
+         (setq workspace (superchat-artifact-board--replace-artifact
                           workspace old-artifact))
          (signal (car err) (cdr err))))
       result)))
@@ -936,7 +949,7 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
 ;; Projection
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-workspace--plist-get-any (plist &rest keys)
+(defun superchat-artifact-board--plist-get-any (plist &rest keys)
   "Return the first non-nil value in PLIST for KEYS."
   (catch 'value
     (dolist (key keys)
@@ -944,27 +957,27 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
         (when value
           (throw 'value value))))))
 
-(defun superchat-workspace--projected-artifact (payload event)
+(defun superchat-artifact-board--projected-artifact (payload event)
   "Return unresolved artifact metadata from event PAYLOAD."
-  (let* ((artifact-id (superchat-workspace--plist-get-any
+  (let* ((artifact-id (superchat-artifact-board--plist-get-any
                        payload :artifact-id :artifact_id))
-         (revision (superchat-workspace--plist-get-any
+         (revision (superchat-artifact-board--plist-get-any
                     payload :revision :content-hash :content_hash))
-         (type (superchat-workspace--plist-get-any payload :type))
-         (adapter (superchat-workspace--plist-get-any payload :adapter))
-         (role (superchat-workspace--plist-get-any payload :role)))
+         (type (superchat-artifact-board--plist-get-any payload :type))
+         (adapter (superchat-artifact-board--plist-get-any payload :adapter))
+         (role (superchat-artifact-board--plist-get-any payload :role)))
     (list :artifact-id artifact-id
-          :uri (superchat-workspace--plist-get-any payload :uri)
+          :uri (superchat-artifact-board--plist-get-any payload :uri)
           :type (if (stringp type) (intern type) type)
           :adapter (if (stringp adapter) (intern adapter) adapter)
           :role (if (stringp role) (intern role) role)
           :revision revision
           :content-hash revision
-          :buffer-name (superchat-workspace--plist-get-any
+          :buffer-name (superchat-artifact-board--plist-get-any
                         payload :buffer-name :buffer_name)
-          :path (superchat-workspace--plist-get-any payload :path)
-          :start (superchat-workspace--plist-get-any payload :start)
-          :end (superchat-workspace--plist-get-any payload :end)
+          :path (superchat-artifact-board--plist-get-any payload :path)
+          :start (superchat-artifact-board--plist-get-any payload :start)
+          :end (superchat-artifact-board--plist-get-any payload :end)
           :live nil
           :workspace-id (plist-get event :workspace-id)
           :event-id (plist-get event :event-id)
@@ -972,7 +985,7 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
           :run-id (plist-get event :run-id)
           :actor-id (plist-get event :actor-id))))
 
-(defun superchat-workspace--projection-event (row)
+(defun superchat-artifact-board--projection-event (row)
   "Return normalized workspace event from Tape ROW."
   (let* ((json-object-type 'plist)
          (json-array-type 'list)
@@ -993,13 +1006,13 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
                             (plist-get meta :workspace-id))
           :payload payload)))
 
-(defun superchat-workspace--projection-apply (state row)
+(defun superchat-artifact-board--projection-apply (state row)
   "Apply workspace Tape ROW to pure projection STATE."
-  (let* ((event (superchat-workspace--projection-event row))
+  (let* ((event (superchat-artifact-board--projection-event row))
          (type (plist-get event :type))
          (workspace-id (plist-get event :workspace-id))
          (payload (plist-get event :payload))
-         (artifact-id (superchat-workspace--plist-get-any
+         (artifact-id (superchat-artifact-board--plist-get-any
                        payload :artifact-id :artifact_id))
          (artifacts (cdr (assoc workspace-id state))))
     (pcase type
@@ -1007,13 +1020,13 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
        (when artifact-id
          (setf (alist-get workspace-id state nil nil #'equal)
                (cons (cons artifact-id
-                           (superchat-workspace--projected-artifact
+                           (superchat-artifact-board--projected-artifact
                             payload event))
                      (cl-remove artifact-id artifacts
                                 :key #'car :test #'equal)))))
       ("workspace.artifact.changed"
        (when-let* ((artifact (cdr (assoc artifact-id artifacts))))
-         (let ((changed (superchat-workspace--projected-artifact
+         (let ((changed (superchat-artifact-board--projected-artifact
                          payload event)))
            (dolist (key '(:uri :type :adapter :role :revision :content-hash
                           :buffer-name :path :start :end))
@@ -1029,7 +1042,7 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
     state))
 
 
-(defun superchat-workspace--projected-artifacts (workspace-id)
+(defun superchat-artifact-board--projected-artifacts (workspace-id)
   "Return projected artifacts for WORKSPACE-ID from Tape."
   (when (and (fboundp 'superchat-db-tape-select)
              (fboundp 'superchat-projection-replay))
@@ -1041,22 +1054,22 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
                    WHERE topic = 'workspace'
                    ORDER BY id ASC"))
            (state (superchat-service-call nil 'tape 'replay-projection
-                   'superchat-workspace-artifacts rows)))
+                   'superchat-artifact-board-artifacts rows)))
       (mapcar #'cdr (cdr (assoc workspace-id state))))))
 
 ;;;###autoload
-(defun superchat-workspace-artifacts (&optional workspace-id replay)
+(defun superchat-artifact-board-artifacts (&optional workspace-id replay)
   "Return artifact metadata for WORKSPACE-ID.
 When REPLAY is non-nil, rebuild unresolved metadata from Tape projection."
-  (let ((id (or workspace-id (superchat-workspace-current-id))))
+  (let ((id (or workspace-id (superchat-artifact-board-current-id))))
     (if replay
-        (superchat-workspace--projected-artifacts id)
-      (let ((workspace (superchat-workspace--workspace id)))
+        (superchat-artifact-board--projected-artifacts id)
+      (let ((workspace (superchat-artifact-board--workspace id)))
         (mapcar (lambda (entry)
-                  (superchat-workspace--artifact-metadata (cdr entry)))
-                (superchat-workspace--workspace-artifacts workspace))))))
+                  (superchat-artifact-board--artifact-metadata (cdr entry)))
+                (superchat-artifact-board--workspace-artifacts workspace))))))
 
-(cl-defun superchat-workspace-artifact-delivery-decision
+(cl-defun superchat-artifact-board-artifact-delivery-decision
     (session-id run-id reference &optional (trace nil trace-supplied-p))
   "Return whether REFERENCE from RUN-ID is safe to consume.
 REFERENCE must identify one Workspace Artifact and its expected revision.
@@ -1095,7 +1108,7 @@ snapshot.  The result's `:action' is `deliver', `wait', `manual-review', or
              (t
               (setq artifact
                     (cl-find artifact-id
-                             (superchat-workspace-artifacts workspace-id t)
+                             (superchat-artifact-board-artifacts workspace-id t)
                              :key (lambda (item)
                                     (plist-get item :artifact-id))
                              :test #'equal))
@@ -1144,5 +1157,15 @@ snapshot.  The result's `:action' is `deliver', `wait', `manual-review', or
           :artifact artifact
           :terminal-state terminal-state)))
 
-(provide 'superchat-workspace)
-;;; superchat-workspace.el ends here
+;; The interactive commands under their names before M11.
+(define-obsolete-function-alias 'superchat-workspace-add-region
+  #'superchat-artifact-board-add-region "M11")
+(define-obsolete-function-alias 'superchat-workspace-set-region
+  #'superchat-artifact-board-set-region "M11")
+(define-obsolete-function-alias 'superchat-workspace-clear
+  #'superchat-artifact-board-clear "M11")
+(define-obsolete-function-alias 'superchat-workspace-show
+  #'superchat-artifact-board-show "M11")
+
+(provide 'superchat-artifact-board)
+;;; superchat-artifact-board.el ends here

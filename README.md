@@ -250,7 +250,7 @@ authentication layer, or security boundary.
 
 ### Shared workspace
 
-`M-x superchat-workspace-set-region` makes the active region an Artifact in
+`M-x superchat-artifact-board-set-region` makes the active region an Artifact in
 the current Session Workspace. A Workspace can hold multiple region
 Artifacts; coding agents and delegated executors can inspect them with
 `workspace_info`, then target `workspace_read` or `workspace_write` by

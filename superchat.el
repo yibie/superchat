@@ -47,7 +47,7 @@
 (require 'superchat-llm)
 (require 'superchat-dispatcher)
 (require 'superchat-agent-loop)
-(require 'superchat-workspace)
+(require 'superchat-artifact-board)
 (require 'superchat-editor-workspace)
 (require 'superchat-widgets)
 (require 'superchat-change-set)
@@ -85,7 +85,7 @@
 (autoload 'superchat--team-projection-initial "superchat-subagent")
 (autoload 'superchat--team-projection-apply "superchat-subagent")
 (autoload 'superchat-workflow--instance-projection-apply "superchat-workflow")
-(autoload 'superchat-workspace--projection-apply "superchat-workspace")
+(autoload 'superchat-artifact-board--projection-apply "superchat-artifact-board")
 (autoload 'superchat--cmd-workflow "superchat-workflow")
 (autoload 'superchat-workflow-execute-async "superchat-workflow" nil t)
 (autoload 'superchat-workflow--exists-p "superchat-workflow")
@@ -2095,7 +2095,7 @@ terminal delivery and makes activation failure leave the old Scope usable."
                :workspace-root (plist-get binding :root)))
       (superchat--configuration-event "workspace.unbound" nil))
     (when binding
-      (superchat-workspace-bind
+      (superchat-artifact-board-bind
        (plist-get binding :id)
        (plist-get binding :root)
        superchat--session-id))
@@ -2179,7 +2179,7 @@ terminal delivery and makes activation failure leave the old Scope usable."
                 (and workspace-live-p
                      (list :id workspace-id :root workspace-root)))
     (when workspace-live-p
-      (superchat-workspace-bind workspace-id workspace-root session-id))
+      (superchat-artifact-board-bind workspace-id workspace-root session-id))
     (setq-local superchat-tools-default-directory
                 (and workspace-live-p workspace-root))
     (setq-local superchat--last-surface

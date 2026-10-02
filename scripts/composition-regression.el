@@ -197,21 +197,21 @@ No entry point in `superchat-workflow.el' calls
 ;;;; workspace
 
 (ert-deftest composition/workspace/unmount-withdraws-and-remount-restores ()
-  "Unmounting `workspace' withdraws the `superchat-workspace-artifacts'
+  "Unmounting `workspace' withdraws the `superchat-artifact-board-artifacts'
 projection; a chat Turn still completes and remounting restores it.
-No entry point in `superchat-workspace.el' calls
+No entry point in `superchat-artifact-board.el' calls
 `superchat-plugin-require-active-row' (report finding)."
   (composition--fixture '((:text "ok"))
     (composition--with-restored-composition
       (should (superchat-plugin-row-active-p 'workspace))
-      (should (composition--projection-present-p 'superchat-workspace-artifacts))
+      (should (composition--projection-present-p 'superchat-artifact-board-artifacts))
       (superchat-plugin-unmount 'workspace)
       (should-not (superchat-plugin-row-active-p 'workspace))
-      (should-not (composition--projection-present-p 'superchat-workspace-artifacts))
+      (should-not (composition--projection-present-p 'superchat-artifact-board-artifacts))
       (composition--complete-a-turn)
       (superchat-plugin-mount 'workspace)
       (should (superchat-plugin-row-active-p 'workspace))
-      (should (composition--projection-present-p 'superchat-workspace-artifacts)))))
+      (should (composition--projection-present-p 'superchat-artifact-board-artifacts)))))
 
 ;;;; plan
 
@@ -458,7 +458,7 @@ recipes, which is read-only and stays available; remounted it starts."
       (should (string-match-p "profile" refusal)))
     (superchat-plugin-mount 'workflow)
     (let ((continued nil))
-      (cl-letf (((symbol-function 'superchat-workspace-bind)
+      (cl-letf (((symbol-function 'superchat-artifact-board-bind)
                  (lambda (&rest _) nil))
                 ((symbol-function 'superchat-team-message)
                  (lambda (&rest _) nil))

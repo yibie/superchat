@@ -851,7 +851,7 @@ Workspace's own fallback buffer is scratch space."
                                 (superchat-tool-workspace-write "note")))
         (let ((out (m6p--visit (expand-file-name "out.txt" outside) "region text\n")))
           (with-current-buffer out
-            (superchat-workspace-add-region (point-min) (point-max)))
+            (superchat-artifact-board-add-region (point-min) (point-max)))
           (let ((superchat-sandbox-default-mode 'read-only))
             (should (m6p--denied-p (with-current-buffer out
                                      (superchat-tool-workspace-write "replaced"))))
@@ -875,7 +875,7 @@ when it carries the Workspace fallback's name; a file-less one is scratch."
              (workspace-id (format "m6p-ws-%06x" (random #x1000000)))
              (superchat--tool-execution-context
               (list :workspace-root root :session-id session :workspace-id workspace-id))
-             (fallback (superchat-workspace--fallback-buffer-name workspace-id))
+             (fallback (superchat-artifact-board--fallback-buffer-name workspace-id))
              (imposter (m6p--visit (expand-file-name "outside.txt" outside) "original")))
         (with-current-buffer imposter (rename-buffer fallback))
         (should (m6p--denied-p (superchat-tool-workspace-write "replacement")))
@@ -1311,7 +1311,7 @@ is still Superchat's own state; the real fallback stays writable."
              (workspace-id (format "m6p-ws-%06x" (random #x1000000)))
              (superchat--tool-execution-context
               (list :workspace-root root :session-id session :workspace-id workspace-id))
-             (fallback (superchat-workspace--fallback-buffer-name workspace-id))
+             (fallback (superchat-artifact-board--fallback-buffer-name workspace-id))
              (original-name (buffer-name view))
              (before (with-current-buffer view (buffer-string))))
         (should (eq 'internal

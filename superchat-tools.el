@@ -42,27 +42,27 @@
 (declare-function superchat-team-message "superchat-subagent"
                   (action &optional to content since-id))
 (declare-function superchat-preset-description "superchat-preset" (preset))
-(declare-function superchat-workspace-current-id "superchat-workspace" ())
-(declare-function superchat-workspace--workspace "superchat-workspace"
+(declare-function superchat-artifact-board-current-id "superchat-artifact-board" ())
+(declare-function superchat-artifact-board--workspace "superchat-artifact-board"
                   (workspace-id &optional create))
-(declare-function superchat-workspace--target-artifact "superchat-workspace"
+(declare-function superchat-artifact-board--target-artifact "superchat-artifact-board"
                   (workspace artifact-id))
-(declare-function superchat-workspace--fallback-buffer-name "superchat-workspace"
+(declare-function superchat-artifact-board--fallback-buffer-name "superchat-artifact-board"
                   (workspace-id))
-(declare-function superchat-workspace--file-adapter-p "superchat-workspace" (artifact))
-(declare-function superchat-workspace--artifact-buffer "superchat-workspace" (artifact))
-(declare-function superchat-workspace-write
-                  "superchat-workspace"
+(declare-function superchat-artifact-board--file-adapter-p "superchat-artifact-board" (artifact))
+(declare-function superchat-artifact-board--artifact-buffer "superchat-artifact-board" (artifact))
+(declare-function superchat-artifact-board-write
+                  "superchat-artifact-board"
                   (content &optional append artifact-id expected-revision
                            workspace-id))
-(declare-function superchat-workspace-read
-                  "superchat-workspace"
+(declare-function superchat-artifact-board-read
+                  "superchat-artifact-board"
                   (&optional artifact-id workspace-id expected-revision))
-(declare-function superchat-workspace-publish
-                  "superchat-workspace"
+(declare-function superchat-artifact-board-publish
+                  "superchat-artifact-board"
                   (content &optional role workspace-id))
-(declare-function superchat-workspace-info
-                  "superchat-workspace" (&optional workspace-id))
+(declare-function superchat-artifact-board-info
+                  "superchat-artifact-board" (&optional workspace-id))
 (defvar read-eval)
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
@@ -1161,11 +1161,11 @@ buffer judged is the one that write will reuse: whatever live buffer already
 carries the fallback's name.  That buffer is scratch space only while it
 visits no file; a buffer that visits a file is judged by its file whatever
 it is called."
-  (let* ((workspace-id (superchat-workspace-current-id))
-         (workspace (superchat-workspace--workspace workspace-id))
+  (let* ((workspace-id (superchat-artifact-board-current-id))
+         (workspace (superchat-artifact-board--workspace workspace-id))
          (artifact (and workspace
-                        (superchat-workspace--target-artifact workspace (nth 2 args))))
-         (fallback (superchat-workspace--fallback-buffer-name workspace-id)))
+                        (superchat-artifact-board--target-artifact workspace (nth 2 args))))
+         (fallback (superchat-artifact-board--fallback-buffer-name workspace-id)))
     (cl-flet ((buffer-target (buffer)
                 (let ((target (superchat-sandbox-buffer-target buffer)))
                   ;; The fallback is scratch although its name looks like
@@ -1185,12 +1185,12 @@ it is called."
         (list :target (buffer-target (get-buffer fallback))))
        ((null artifact)
         (list :target (list :buffer nil :name fallback :given fallback :kind 'new)))
-       ((superchat-workspace--file-adapter-p artifact)
+       ((superchat-artifact-board--file-adapter-p artifact)
         (list :path (plist-get artifact :path)))
        (t
         (list :target
               (buffer-target
-               (or (superchat-workspace--artifact-buffer artifact)
+               (or (superchat-artifact-board--artifact-buffer artifact)
                    (error "Workspace artifact is unresolved: %s"
                           (plist-get artifact :artifact-id))))))))))
 
@@ -1202,14 +1202,14 @@ the target; EXPECTED-REVISION prevents stale writes.  A region Artifact is a
 buffer edit and is judged like one; a generated Artifact is a file in
 Superchat's own data directory."
   (cond
-   ((not (fboundp 'superchat-workspace-write))
+   ((not (fboundp 'superchat-artifact-board-write))
     "Error: workspace module is not loaded.")
    (t
     (superchat-sandbox-run-buffer-edit
      :args (list content append artifact-id expected-revision)
      :resolve #'superchat-tools--workspace-write-target
      :perform (lambda (args resolved)
-                (prog1 (apply #'superchat-workspace-write args)
+                (prog1 (apply #'superchat-artifact-board-write args)
                   ;; A region Artifact's buffer is what really changed.
                   (when-let* ((target (plist-get resolved :target))
                               ((plist-get target :buffer)))
@@ -1217,21 +1217,21 @@ Superchat's own data directory."
 
 (defun superchat-tool-workspace-read (&optional artifact-id expected-revision)
   "Return content from ARTIFACT-ID at EXPECTED-REVISION."
-  (if (fboundp 'superchat-workspace-read)
-      (or (superchat-workspace-read artifact-id nil expected-revision)
+  (if (fboundp 'superchat-artifact-board-read)
+      (or (superchat-artifact-board-read artifact-id nil expected-revision)
           "(workspace is empty)")
     "Error: workspace module is not loaded."))
 
 (defun superchat-tool-workspace-publish (content &optional role)
   "Publish immutable CONTENT as a durable Workspace Artifact with ROLE."
-  (if (fboundp 'superchat-workspace-publish)
-      (json-encode (superchat-workspace-publish content role))
+  (if (fboundp 'superchat-artifact-board-publish)
+      (json-encode (superchat-artifact-board-publish content role))
     "Error: workspace module is not loaded."))
 
 (defun superchat-tool-workspace-info ()
   "Return a summary of the current workspace."
-  (if (fboundp 'superchat-workspace-info)
-      (superchat-workspace-info)
+  (if (fboundp 'superchat-artifact-board-info)
+      (superchat-artifact-board-info)
     "Error: workspace module is not loaded."))
 
 ;;;---------------------------------------------

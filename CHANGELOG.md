@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — the Artifact Board gets its own name
+
+- `superchat-workspace.el` is now `superchat-artifact-board.el`, and its
+  functions and options begin with `superchat-artifact-board-`. "Workspace"
+  is being given to the place work happens in (a project with its rules and
+  conversations), so the shared artifact registry a lead agent and its
+  sub-agents use takes the name the glossary gives it. The four commands
+  (`…-add-region`, `…-set-region`, `…-clear`, `…-show`) and the two options
+  (`…-fallback-buffer`, `…-auto-create`) keep their old names as obsolete
+  aliases. The fallback buffer's default name is `*superchat-artifact-board*`.
+  The tool names the model sees (`workspace_read` and the others) and the
+  recorded event names do not change.
+
 ## Unreleased — the model is told the whole Emacs is in reach
 
 - The Emacs operating note gains one line: the buffer a request comes from
