@@ -1048,6 +1048,23 @@ text, or the failure's own status with its text (contract §2.3 bridge)."
             (funcall delivery (or (plist-get failure :text) "")
                      (plist-get failure :status) (plist-get failure :tape-id)))))
 
+(declare-function superchat-workspace-rules-text "superchat-workspace" (root))
+
+(defun superchat--subagent-system-with-rules (system root)
+  "Return SYSTEM followed by the rules of the Workspace rooted at ROOT.
+A sub-agent works in its parent's Workspace and carries the same rules
+\(contract R3).  It gets the rules only, not the note about remembering:
+writing rules is the main agent's.  SYSTEM unchanged when ROOT is nil or
+has no rules file."
+  (let ((rules (and (stringp root)
+                    (fboundp 'superchat-workspace-rules-text)
+                    (superchat-workspace-rules-text root))))
+    (cond
+     ((null rules) system)
+     ((and (stringp system) (not (string-empty-p system)))
+      (concat system "\n\n" rules))
+     (t rules))))
+
 (defun superchat--subagent-runtime-envelope
     (ctx task prompt result prepared-tools buffer delivery)
   "Build the Request envelope for sub-agent CTX (contract §2.2, S13a).
@@ -1066,7 +1083,10 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
          (tool-names (delq nil (mapcar (lambda (tool)
                                          (and (fboundp 'llm-tool-name)
                                               (ignore-errors (llm-tool-name tool))))
-                                       prepared-tools))))
+                                       prepared-tools)))
+         (system (superchat--subagent-system-with-rules
+                  (plist-get result :system-prompt)
+                  (plist-get ctx :workspace-root))))
     (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (append
      (list :surface 'subagent
@@ -1079,12 +1099,12 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
            :topology 'subagent
            :origin '(:surface subagent)
            :target-model (plist-get result :target-model)
-           :system-prompt (plist-get result :system-prompt)
+           :system-prompt system
            :tools (or tool-names 'none)
            :sink (superchat--subagent-delivery-sink delivery)
            :context (list :host-buffer buffer
                           :prepared-prompt prompt
-                          :prepared-system (plist-get result :system-prompt))
+                          :prepared-system system)
            :runtime-extras
            (list :clean-input task
                  :actor-id (plist-get ctx :actor-id)
