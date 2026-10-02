@@ -2075,35 +2075,69 @@ terminal delivery and makes activation failure leave the old Scope usable."
   (setq-local superchat--active-topology topology))
 
 (defun superchat--workspace-binding-for-directory (directory)
-  "Return a stable Workspace binding for DIRECTORY."
-  (let* ((root (file-name-as-directory
-                (file-truename (expand-file-name directory))))
-         (id (concat "workspace-"
-                     (substring (secure-hash 'sha256 root) 0 12))))
-    (list :id id :root root)))
+  "Return the Workspace binding (:id ID :root ROOT) for DIRECTORY.
+Inside a project the binding is that project's Workspace, whose root may
+lie above DIRECTORY; elsewhere DIRECTORY itself is the root.  Never
+creates files."
+  (let ((workspace (superchat-workspace-of-directory directory)))
+    (if workspace
+        (list :id (plist-get workspace :id)
+              :root (plist-get workspace :root))
+      (let ((root (file-name-as-directory
+                   (file-truename (expand-file-name directory)))))
+        (list :id (or (superchat-workspace-read-id root)
+                      (superchat-workspace-id-from-root root))
+              :root root)))))
+
+(defun superchat--apply-workspace-binding (binding)
+  "Record BINDING (:id ID :root ROOT) as the current Session's Workspace.
+A nil BINDING clears it.  Return BINDING."
+  (if binding
+      (superchat--configuration-event
+       "workspace.bound"
+       (list :workspace-id (plist-get binding :id)
+             :workspace-root (plist-get binding :root)))
+    (superchat--configuration-event "workspace.unbound" nil))
+  (when binding
+    (superchat-artifact-board-bind
+     (plist-get binding :id)
+     (plist-get binding :root)
+     superchat--session-id))
+  (setq-local superchat--workspace-binding binding)
+  (setq-local superchat-tools-default-directory
+              (and binding (plist-get binding :root)))
+  binding)
 
 (defun superchat--bind-workspace (directory)
   "Bind the current Session Workspace to DIRECTORY, or clear it when nil."
-  (let ((binding
-         (when directory
-           (unless (file-directory-p directory)
-             (error "Workspace directory does not exist: %s" directory))
-           (superchat--workspace-binding-for-directory directory))))
-    (if binding
-        (superchat--configuration-event
-         "workspace.bound"
-         (list :workspace-id (plist-get binding :id)
-               :workspace-root (plist-get binding :root)))
-      (superchat--configuration-event "workspace.unbound" nil))
-    (when binding
-      (superchat-artifact-board-bind
-       (plist-get binding :id)
-       (plist-get binding :root)
-       superchat--session-id))
-    (setq-local superchat--workspace-binding binding)
-    (setq-local superchat-tools-default-directory
-                (and binding (plist-get binding :root)))
-    binding))
+  (superchat--apply-workspace-binding
+   (when directory
+     (unless (file-directory-p directory)
+       (error "Workspace directory does not exist: %s" directory))
+     (superchat--workspace-binding-for-directory directory))))
+
+(defun superchat--session-has-turns-p (session-id)
+  "Return non-nil when SESSION-ID's Tape has a user or assistant row."
+  (and session-id
+       (superchat-view-entries session-id nil '("user" "assistant") 1)
+       t))
+
+(defun superchat--session-bind-workspace-at-creation (view source)
+  "Bind chat VIEW to the project Workspace of SOURCE, once, at creation.
+SOURCE is the buffer the entry command was called from.  Do nothing and
+return nil when either buffer is dead, SOURCE is a Superchat surface,
+VIEW is already bound or has user/assistant rows, or SOURCE is in no
+project.  Otherwise bind VIEW and return the binding.  Never creates files."
+  (when (and (buffer-live-p view) (buffer-live-p source)
+             (not (superchat--chat-view-p source)))
+    (let ((workspace (superchat-workspace-of-buffer source)))
+      (when workspace
+        (with-current-buffer view
+          (unless (or superchat--workspace-binding
+                      (superchat--session-has-turns-p superchat--session-id))
+            (superchat--apply-workspace-binding
+             (list :id (plist-get workspace :id)
+                   :root (plist-get workspace :root)))))))))
 
 (defun superchat--session-runtime-configuration ()
   "Return the current Session configuration as Runtime Request fields."
@@ -3842,6 +3876,7 @@ inside a chat surface, from Tape, or by branching starts with none."
                   session-id)))
     (with-current-buffer buffer
       (setq-local superchat--current-context-files nil))
+    (superchat--session-bind-workspace-at-creation buffer source)
     (superchat--origin-associate buffer source)
     (superchat--display-session-view buffer session-id)))
 
@@ -3922,6 +3957,16 @@ When called non-interactively with nil, branch after the latest Turn."
              (list :parent_session_id parent-session-id
                    :parent_turn_id parent-turn-id
                    :source_ids source-ids)))
+      ;; S1: a branch is a conversation of its parent's Workspace.
+      (when-let* ((binding superchat--workspace-binding))
+        (superchat-tape-append-event
+         (list :type "workspace.bound"
+               :session-id session-id
+               :actor-id "user"
+               :summary "workspace.bound"
+               :payload
+               (list :workspace-id (plist-get binding :id)
+                     :workspace-root (plist-get binding :root)))))
       (superchat-open-session session-id))))
 
 ;;;###autoload
@@ -3982,6 +4027,7 @@ programmatically to launch with a specific preset."
         ;; inserted by `superchat--ensure-chat-view' above, the shared entry
         ;; point for this command and `superchat-new-session'.
         (superchat--response-region-ensure-view-prompt)))
+    (superchat--session-bind-workspace-at-creation buffer source)
     ;; Called explicitly from a non-chat buffer, this View speaks for that
     ;; exact buffer from now on.  Called from a chat surface it changes
     ;; nothing -- in particular it never rebinds a View to itself.
@@ -4014,10 +4060,13 @@ programmatically to launch with a specific preset."
 
 (defun superchat--ensure-request-chat-buffer ()
   "Return an initialized chat buffer without changing selected windows."
-  (let ((tab (superchat-editor-workspace--current-tab)))
-    (superchat--ensure-chat-view
-     superchat-buffer-name
-     (and tab (superchat-editor-workspace--tab-session-id tab)))))
+  (let* ((source (current-buffer))
+         (tab (superchat-editor-workspace--current-tab))
+         (view (superchat--ensure-chat-view
+                superchat-buffer-name
+                (and tab (superchat-editor-workspace--tab-session-id tab)))))
+    (superchat--session-bind-workspace-at-creation view source)
+    view))
 
 ;; ── The View's associated editing source ──
 ;;
@@ -5478,28 +5527,48 @@ When ARGS names a directory, also bind it as the Session Workspace."
   (superchat--set-topology 'single)
   '(:type :echo :content "Topology: single"))
 
+(defun superchat--workspace-echo (binding)
+  "Return the echo line naming the Workspace BINDING."
+  (format "Workspace: %s (%s)"
+          (file-name-nondirectory (directory-file-name (plist-get binding :root)))
+          (plist-get binding :root)))
+
 (defun superchat--cmd-workspace (_cmd args _input _lang _target-model)
-  "Bind, show, or clear the current Session Workspace."
-  (let ((value (string-trim (or args ""))))
+  "Show, declare, or clear the current Session's Workspace.
+A Session's Workspace is fixed at creation: only a Session with no user
+or assistant rows can still change it."
+  (let ((value (string-trim (or args "")))
+        (fresh (not (superchat--session-has-turns-p superchat--session-id))))
     (cond
      ((string-empty-p value)
       `(:type :echo
-        :content
-        ,(if superchat--workspace-binding
-             (format "Workspace: %s (%s)"
-                     (plist-get superchat--workspace-binding :id)
-                     (plist-get superchat--workspace-binding :root))
-           "Workspace: unbound")))
+        :content ,(if superchat--workspace-binding
+                      (superchat--workspace-echo superchat--workspace-binding)
+                    "Workspace: none")))
      ((string= value "clear")
-      (superchat--bind-workspace nil)
-      '(:type :echo :content "Workspace: unbound"))
+      (if fresh
+          (progn (superchat--bind-workspace nil)
+                 '(:type :echo :content "Workspace: none"))
+        '(:type :echo
+          :content "This conversation stays in its workspace; start a new conversation to change it.")))
      ((file-directory-p (expand-file-name value))
-      (let ((binding
-             (superchat--bind-workspace (expand-file-name value))))
-        `(:type :echo
-          :content ,(format "Workspace: %s (%s)"
-                            (plist-get binding :id)
-                            (plist-get binding :root)))))
+      (let* ((workspace (superchat-workspace-declare (expand-file-name value)))
+             (target (list :id (plist-get workspace :id)
+                           :root (plist-get workspace :root))))
+        (cond
+         ((and (null superchat--workspace-binding) fresh)
+          (superchat--apply-workspace-binding target)
+          `(:type :echo :content ,(superchat--workspace-echo target)))
+         ((equal (plist-get superchat--workspace-binding :id)
+                 (plist-get target :id))
+          `(:type :echo
+            :content ,(superchat--workspace-echo superchat--workspace-binding)))
+         (t
+          `(:type :echo
+            :content ,(format "Declared workspace %s (%s). This conversation stays where it is; call superchat from a buffer in that directory to talk there."
+                              (file-name-nondirectory
+                               (directory-file-name (plist-get target :root)))
+                              (plist-get target :root)))))))
      (t
       '(:type :echo
         :content "Usage: /workspace [existing-directory|clear]")))))
