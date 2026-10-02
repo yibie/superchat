@@ -158,8 +158,8 @@ each holding an `a.txt'; `src-VAR' style sources are made by
     (let ((src (workspace-session--source p)))
       (unwind-protect
           (let* ((run (with-current-buffer src (superchat-act "hello")))
-                 (view (get-buffer superchat-buffer-name))
-                 (session (workspace-session--session view))
+                 (session (car (superchat-view-workspace-session-ids
+                                (plist-get (superchat-workspace-of-directory p) :id))))
                  (types nil))
             (ignore run)
             (should (smoke--wait

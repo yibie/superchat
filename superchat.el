@@ -3567,12 +3567,28 @@ openings in this Emacs session use the mode switched to."
 (defun superchat-conversation-session-id ()
   "Return the Session the chat window shows now, making the main one if needed.
 That is the chat beside the code in this tab when there is one, else the main
-chat View's Session, as `superchat-act' uses."
-  (or (cl-some (lambda (window)
+chat View's Session, as `superchat-act' uses.
+Called from a buffer inside a project it is that Workspace's main
+conversation instead; as a side effect, a chat window already beside the code
+in this tab that shows another conversation is switched to it (not selected),
+and no window is opened when there is none."
+  (if-let* ((workspace (superchat--source-workspace)))
+      (let* ((view (superchat--workspace-main-view workspace))
+             (window
+              (cl-find-if
+               (lambda (window)
                  (and (eq 'right (window-parameter window 'window-side))
-                      (buffer-local-value 'superchat--session-id (window-buffer window))))
-               (window-list nil 'no-minibuf))
-      (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer))))
+                      (buffer-local-value 'superchat--session-id
+                                          (window-buffer window))))
+               (window-list nil 'no-minibuf))))
+        (when (and window (not (eq view (window-buffer window))))
+          (superchat--show-chat-view view))
+        (buffer-local-value 'superchat--session-id view))
+    (or (cl-some (lambda (window)
+                   (and (eq 'right (window-parameter window 'window-side))
+                        (buffer-local-value 'superchat--session-id (window-buffer window))))
+                 (window-list nil 'no-minibuf))
+        (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer)))))
 
 (defun superchat--session-views (session-id)
   "Return the live chat Views showing SESSION-ID."
@@ -3862,6 +3878,42 @@ live-Run-guarded step, exactly once."
     (superchat--reconcile-session-on-reopen session-id)
     buffer))
 
+(defun superchat--source-workspace (&optional buffer)
+  "Return the project Workspace of BUFFER (default current), or nil.
+A Superchat surface (chat View, request inspector) belongs to no Workspace
+of its own here, so it gives nil."
+  (let ((buffer (or buffer (current-buffer))))
+    (and (buffer-live-p buffer)
+         (not (superchat--chat-view-p buffer))
+         (superchat-workspace-of-buffer buffer))))
+
+(defun superchat--workspace-main-view (workspace)
+  "Return the chat View of WORKSPACE's main conversation, making one if needed.
+The main conversation is the Session bound to WORKSPACE with the newest Tape
+activity; with none, a new Session is created and bound.  Shows nothing and
+selects no window."
+  (let ((id (car (superchat-view-workspace-session-ids
+                  (plist-get workspace :id)))))
+    (if id
+        (or (superchat-editor-workspace-buffer id 'session-view)
+            (superchat--render-session-view id))
+      (let* ((session-id (superchat--new-session-id))
+             (view (let ((default-directory (plist-get workspace :root)))
+                     (superchat--ensure-chat-view
+                      (superchat--session-buffer-name session-id)
+                      session-id))))
+        (with-current-buffer view
+          (superchat--apply-workspace-binding
+           (list :id (plist-get workspace :id)
+                 :root (plist-get workspace :root))))
+        view))))
+
+(defun superchat--open-workspace-conversation (workspace)
+  "Display and select the main conversation of WORKSPACE."
+  (let ((view (superchat--workspace-main-view workspace)))
+    (superchat--display-session-view
+     view (buffer-local-value 'superchat--session-id view))))
+
 (defun superchat-new-session ()
   "Create, display, and return a new independent Session View.
 Invoked explicitly from a non-chat buffer, the exact buffer it was called
@@ -4007,8 +4059,17 @@ programmatically to launch with a specific preset."
                               tab-session 'session-view))))
               primary-session
             tab-session))
-         (buffer (superchat--ensure-chat-view
-                  superchat-buffer-name current-session))
+         (source-workspace (superchat--source-workspace source))
+         (buffer (cond
+                  (source-workspace
+                   (superchat--workspace-main-view source-workspace))
+                  ;; Called inside a View bound to a project Workspace, it
+                  ;; stays on that conversation.
+                  ((and (superchat--chat-view-p source)
+                        (plist-get superchat--workspace-binding :root))
+                   source)
+                  (t (superchat--ensure-chat-view
+                      superchat-buffer-name current-session))))
         (preset (when (and preset-name (not (string-empty-p preset-name)))
                   (superchat-skills-load preset-name))))
     (with-current-buffer buffer
@@ -4059,14 +4120,19 @@ programmatically to launch with a specific preset."
               "C-c C-c send; C-c C-w copy; C-c C-t toggle log; C-c C-l open log; C-c C-k cancel"))
 
 (defun superchat--ensure-request-chat-buffer ()
-  "Return an initialized chat buffer without changing selected windows."
-  (let* ((source (current-buffer))
-         (tab (superchat-editor-workspace--current-tab))
-         (view (superchat--ensure-chat-view
-                superchat-buffer-name
-                (and tab (superchat-editor-workspace--tab-session-id tab)))))
-    (superchat--session-bind-workspace-at-creation view source)
-    view))
+  "Return an initialized chat buffer without changing selected windows.
+Called from a buffer inside a project, it is that Workspace's main
+conversation."
+  (let ((workspace (superchat--source-workspace)))
+    (if workspace
+        (superchat--workspace-main-view workspace)
+      (let* ((source (current-buffer))
+             (tab (superchat-editor-workspace--current-tab))
+             (view (superchat--ensure-chat-view
+                    superchat-buffer-name
+                    (and tab (superchat-editor-workspace--tab-session-id tab)))))
+        (superchat--session-bind-workspace-at-creation view source)
+        view))))
 
 ;; ── The View's associated editing source ──
 ;;
@@ -5564,8 +5630,11 @@ or assistant rows can still change it."
           `(:type :echo
             :content ,(superchat--workspace-echo superchat--workspace-binding)))
          (t
+          ;; S1: this conversation stays; the declared Workspace's own
+          ;; conversation opens once the command has answered.
+          (run-at-time 0 nil #'superchat--open-workspace-conversation workspace)
           `(:type :echo
-            :content ,(format "Declared workspace %s (%s). This conversation stays where it is; call superchat from a buffer in that directory to talk there."
+            :content ,(format "Declared workspace %s (%s). This conversation stays where it is; opening that workspace's conversation."
                               (file-name-nondirectory
                                (directory-file-name (plist-get target :root)))
                               (plist-get target :root)))))))
