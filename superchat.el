@@ -665,9 +665,11 @@ become a third recurrence."
                            'superchat-status-active-face
                          'superchat-status-muted-face))
      " Superchat · "
-     (if-let* ((name (plist-get superchat--workspace-binding :name)))
-         (concat name " · ")
-       "")
+     (if superchat--workspace-binding
+         (if-let* ((name (plist-get superchat--workspace-binding :name)))
+             (concat name " · ")
+           "")
+       "temporary · ")
      model " · " phase
      (if (numberp attempt) (format " · attempt %d" attempt) "")
      (if elapsed (concat " · " elapsed) "")
@@ -3497,7 +3499,8 @@ another one showing BUFFER; otherwise it is plain `display-buffer'."
   "Display BUFFER, SESSION-ID's chat View, select it, and return BUFFER.
 In editor mode it is shown beside the code in the current tab; in agent mode
 SESSION-ID's own tab is selected, or made, and BUFFER displayed there; when
-BUFFER is bound to a Workspace, that tab joins the tab group named for it."
+BUFFER is bound to a Workspace, that tab joins the tab group named for it;
+a temporary BUFFER's tab is taken out of any group."
   (if (superchat--chat-view-beside-code-p session-id)
       (superchat--show-chat-view buffer t)
     (superchat-editor-workspace--select-session-tab session-id)
@@ -3507,6 +3510,9 @@ BUFFER is bound to a Workspace, that tab joins the tab group named for it."
       (unless (equal name (alist-get 'group
                                      (cdr (superchat-editor-workspace--current-tab))))
         (tab-bar-change-tab-group name)))
+    (when (and (superchat--view-temporary-p buffer)
+               (alist-get 'group (cdr (superchat-editor-workspace--current-tab))))
+      (tab-bar-change-tab-group ""))
     (superchat--display-chat-view buffer))
   buffer)
 
@@ -3596,7 +3602,9 @@ chat View's Session, as `superchat-act' uses.
 Called from a buffer inside a project it is that Workspace's main
 conversation instead; as a side effect, a chat window already beside the code
 in this tab that shows another conversation is switched to it (not selected),
-and no window is opened when there is none."
+and no window is opened when there is none.
+Called from any other non-chat buffer it is the temporary conversation
+(`superchat--temporary-view'; nothing is displayed)."
   (if-let* ((workspace (superchat--source-workspace)))
       (let* ((view (superchat--workspace-main-view workspace))
              (window
@@ -3609,11 +3617,13 @@ and no window is opened when there is none."
         (when (and window (not (eq view (window-buffer window))))
           (superchat--show-chat-view view))
         (buffer-local-value 'superchat--session-id view))
-    (or (cl-some (lambda (window)
+    (if (not (superchat--chat-view-p))
+        (buffer-local-value 'superchat--session-id (superchat--temporary-view))
+     (or (cl-some (lambda (window)
                    (and (eq 'right (window-parameter window 'window-side))
                         (buffer-local-value 'superchat--session-id (window-buffer window))))
                  (window-list nil 'no-minibuf))
-        (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer)))))
+        (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer))))))
 
 (defun superchat--session-views (session-id)
   "Return the live chat Views showing SESSION-ID."
@@ -3912,6 +3922,34 @@ of its own here, so it gives nil."
          (not (superchat--chat-view-p buffer))
          (superchat-workspace-of-buffer buffer))))
 
+(defun superchat--view-temporary-p (view)
+  "Return non-nil when VIEW is a live chat View bound to no Workspace.
+Such a conversation is the temporary Workspace's one conversation."
+  (and (buffer-live-p view)
+       (buffer-local-value 'superchat-mode view)
+       (buffer-local-value 'superchat--session-id view)
+       (not (buffer-local-value 'superchat--workspace-binding view))))
+
+(defun superchat--visible-temporary-view ()
+  "Return the first buffer in this frame's windows showing a temporary View."
+  (cl-some (lambda (window)
+             (let ((buffer (window-buffer window)))
+               (and (superchat--view-temporary-p buffer) buffer)))
+           (window-list nil 'no-minibuf)))
+
+(defun superchat--temporary-view ()
+  "Return the chat View of the current temporary use, making one if needed.
+One temporary use lasts until its conversation's buffer is killed: the one
+showing in this frame is continued, else the first live temporary View, else
+a new Session starts.  Shows nothing and selects no window."
+  (or (superchat--visible-temporary-view)
+      (cl-find-if #'superchat--view-temporary-p (buffer-list))
+      (let* ((session-id (superchat--new-session-id))
+             (name (if (buffer-live-p (get-buffer superchat-buffer-name))
+                       (superchat--session-buffer-name session-id)
+                     superchat-buffer-name)))
+        (superchat--ensure-chat-view name session-id))))
+
 (defun superchat--workspace-main-view (workspace)
   "Return the chat View of WORKSPACE's main conversation, making one if needed.
 The main conversation is the Session bound to WORKSPACE with the newest Tape
@@ -4093,6 +4131,11 @@ programmatically to launch with a specific preset."
                   ((and (superchat--chat-view-p source)
                         (plist-get superchat--workspace-binding :root))
                    source)
+                  ;; An unbound View is a temporary conversation: stay on it.
+                  ((superchat--view-temporary-p source) source)
+                  ;; Outside any project: the temporary Workspace.
+                  ((not (superchat--chat-view-p source))
+                   (superchat--temporary-view))
                   (t (superchat--ensure-chat-view
                       superchat-buffer-name current-session))))
         (preset (when (and preset-name (not (string-empty-p preset-name)))
@@ -4147,17 +4190,19 @@ programmatically to launch with a specific preset."
 (defun superchat--ensure-request-chat-buffer ()
   "Return an initialized chat buffer without changing selected windows.
 Called from a buffer inside a project, it is that Workspace's main
-conversation."
+conversation; from any other non-chat buffer, the temporary one."
   (let ((workspace (superchat--source-workspace)))
-    (if workspace
-        (superchat--workspace-main-view workspace)
+    (cond
+     (workspace (superchat--workspace-main-view workspace))
+     ((not (superchat--chat-view-p)) (superchat--temporary-view))
+     (t
       (let* ((source (current-buffer))
              (tab (superchat-editor-workspace--current-tab))
              (view (superchat--ensure-chat-view
                     superchat-buffer-name
                     (and tab (superchat-editor-workspace--tab-session-id tab)))))
         (superchat--session-bind-workspace-at-creation view source)
-        view))))
+        view)))))
 
 ;; ── The View's associated editing source ──
 ;;

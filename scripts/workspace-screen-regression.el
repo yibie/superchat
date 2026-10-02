@@ -81,19 +81,14 @@ VARS are fresh project roots."
       (should (string-match-p (concat "Superchat · " (regexp-quote (ws--name p)))
                               (ws--header view))))))
 
-(ert-deftest workspace-screen/the-header-of-an-unbound-view-is-unchanged ()
+(ert-deftest workspace-screen/the-header-of-an-unbound-view-says-temporary ()
   (ws--with nil 'editor (p)
     (let* ((ws--roots nil)
            (view (with-current-buffer (ws--file p) (superchat)))
            (header (ws--header view)))
       (should-not (buffer-local-value 'superchat--workspace-binding view))
       (should-not (string-match-p (regexp-quote (ws--name p)) header))
-      (should (string-match-p "Superchat · smoke-model" header))
-      (should (equal header
-                     (with-current-buffer view
-                       (let ((superchat--workspace-binding nil))
-                         (substring-no-properties
-                          (superchat--header-line-run-state)))))))))
+      (should (string-match-p "Superchat · temporary · " header)))))
 
 (ert-deftest workspace-screen/a-reopened-conversation-still-names-its-workspace ()
   (ws--with '((:text "ok")) 'editor (p)
@@ -122,12 +117,13 @@ VARS are fresh project roots."
     (with-current-buffer (ws--file p) (superchat))
     (should (equal (ws--name p) (ws--group)))))
 
-(ert-deftest workspace-screen/the-tab-of-an-unbound-conversation-keeps-its-group ()
+(ert-deftest workspace-screen/the-tab-of-a-temporary-conversation-has-no-group ()
   (ws--with nil 'agent (p)
-    (let* ((ws--roots nil)
-           (before (ws--group)))
+    (let ((ws--roots nil))
+      (tab-bar-change-tab-group "g1")
+      (should (equal "g1" (ws--group)))
       (with-current-buffer (ws--file p) (superchat))
-      (should (equal before (ws--group))))))
+      (should-not (ws--group)))))
 
 (ert-deftest workspace-screen/beside-the-code-the-tab-group-is-left-alone ()
   (ws--with nil 'editor (p)
