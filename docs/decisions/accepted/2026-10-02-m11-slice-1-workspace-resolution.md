@@ -29,6 +29,11 @@ Status: accepted — 用户，2026-10-02："现在可以规划，然后实现"�
 4. **主对话是这个 workspace 最近活动的那段。** 不另存"主对话"指针：从 Tape 上找绑定了这个 workspace 的对话，取最近活动的一段；新开一段对话后，它就是主对话。子代理的对话不算。
 5. **1.3 只改 project 里的行为，临时的放到 1.5。** 不在任何 project 里的 buffer 在 1.3 之后仍按现在的办法进对话，1.5 再换成临时 workspace。临时使用的界线：从没有 project 的 buffer 叫出时，这个 tab 旁边已经显示着一段临时对话就接着用，否则新开一段；重启 Emacs 后不自动接回，但历史列表里翻得到。
 
+## 实现中定下的两点
+
+- **在已绑定 workspace 的对话 View 里调用 `superchat`，停在这段对话。** 1.3 之后这类 View 不再是名为 `superchat-buffer-name` 的那个 buffer，老路径会另开一段没有绑定的对话；worker 的守卫测试测出后由 leader 定。临时对话的 View 同理（1.5）。
+- **临时使用的界线是"到这段对话的 buffer 被关掉为止"**，取代上文第 5 点里"这个 tab 旁边显示着才接着用"。原界线下，`superchat-submit` 先后两次取对话会取到两段（`superchat--ensure-request-chat-buffer` 在建请求和执行请求时各调用一次），四套已有回归和 canonical smoke 因此变化。
+
 ## Alternatives considered
 
 **新模块另起一个不冲突的名字，改名以后再做。** 输在 `superchat-workspace-` 前缀下会同时有两个模块的函数，读代码的人和 agent 都分不清。
