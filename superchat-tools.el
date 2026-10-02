@@ -68,7 +68,10 @@
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
 (declare-function superchat-db-tape-search-prioritized "superchat-db"
-                  (query current-session-id limit &optional foreign-eligible-only))
+                  (query current-session-id limit &optional foreign-eligible-only
+                         exclude-ids current-session-only session-ids))
+(declare-function superchat-view-recall-session-ids "superchat-tape-view"
+                  (session-id))
 (declare-function superchat-view-tool-history "superchat-tape-view" (tool-name &optional session-id limit))
 (declare-function superchat-view-file-history "superchat-tape-view" (path &optional session-id limit))
 (declare-function superchat-view-recent-errors "superchat-tape-view" (session-id &optional count))
@@ -1257,8 +1260,10 @@ This is a model-initiated lookup, so -- like automatic recall, and unlike
 the user's own `/recall' command -- it follows
 `superchat-memory-auto-recall-cross-session': rows from the active
 session (any kind) are always eligible; rows from another session are
-eligible only when that option allows it (an explicit `/remember' anchor
-under the default `remembered', any row under `all', none under `none').
+eligible only when it belongs to the same Workspace
+\(`superchat-view-recall-session-ids') and that option allows it (any row
+under the default `all', an explicit `/remember' anchor under
+`remembered', none under `none').
 Eligibility and session priority are both enforced by the search itself,
 before any row-count limit, so an eligible row is never crowded out by
 ineligible or merely better-ranked ones."
@@ -1267,14 +1272,16 @@ ineligible or merely better-ranked ones."
              (cross-session
               (if (boundp 'superchat-memory-auto-recall-cross-session)
                   superchat-memory-auto-recall-cross-session
-                'remembered))
+                'all))
              (rows
               (cond
                ((eq cross-session 'none)
                 (superchat-view-search query session-id 20))
                ((fboundp 'superchat-db-tape-search-prioritized)
                 (superchat-db-tape-search-prioritized
-                 query session-id 20 (eq cross-session 'remembered)))
+                 query session-id 20 (eq cross-session 'remembered) nil nil
+                 (and (fboundp 'superchat-view-recall-session-ids)
+                      (superchat-view-recall-session-ids session-id))))
                (t (superchat-view-search query session-id 20)))))
         (superchat-tools--rows-to-json rows))
     "Error: tape view layer is not available."))

@@ -5439,38 +5439,38 @@ privacy-oriented cross-session policy rather than this option."
                  (const :tag "Current session only" session))
   :group 'superchat)
 
-(defcustom superchat-memory-auto-recall-cross-session 'remembered
-  "What automatic indexed recall and `memory_search' may send from OTHER
-sessions.  Rows from the *current* session are always eligible (any
-kind, as before -- automatic recall additionally excludes its own
-recent conversation-history window, which `memory_search' does not,
-since it is an explicit model lookup rather than something silently
-attached to every turn); this option controls only rows that come from
-a session other than the one the user is chatting in right now.
-Eligibility is enforced by the search itself, before any row-count
-limit, so an eligible row is never crowded out by ineligible ones.
+(defcustom superchat-memory-auto-recall-cross-session 'all
+  "What automatic indexed recall and `memory_search' may send from the
+OTHER conversations of the same Workspace.  Rows from the *current*
+session are always eligible (any kind -- automatic recall additionally
+excludes its own recent conversation-history window, which
+`memory_search' does not, since it is an explicit model lookup rather
+than something silently attached to every turn); this option controls
+only rows that come from another session.  Eligibility is enforced by
+the search itself, before any row-count limit, so an eligible row is
+never crowded out by ineligible ones.
 
-`remembered' (the default) admits only rows that are an explicit
-`/remember' anchor -- kind \"anchor\", topic \"remember\" -- so a fact the
-user deliberately asked Superchat to remember still reaches a later
-session or a `memory_search' call, but an ordinary chat turn from an
-unrelated past conversation is never silently sent to the model just
-because it happens to share a word with the current input or query.
+Whatever the value, a row from a conversation of a different Workspace is
+never eligible, and a conversation bound to no Workspace (a temporary
+one) is searched only by itself: recall is shared inside a Workspace and
+does not cross to another (`superchat-view-recall-session-ids').
 
-`all' restores Superchat's original cross-session behaviour: any row
-from any session that matches the search is eligible, ranked by
-relevance with the current session preferred.
+`all' (the default) admits any matching row from the Workspace's other
+conversations, ranked by relevance with the current session preferred.
 
-`none' disables cross-session recall entirely for both automatic recall
-and `memory_search': only the current session's own rows are ever
-attached or returned.
+`remembered' admits, from the Workspace's other conversations, only rows
+that are an explicit `/remember' anchor -- kind \"anchor\", topic
+\"remember\".
+
+`none' keeps to the current session for both automatic recall and
+`memory_search'.
 
 The user's own `/recall' command is unaffected by this option; it keeps
 consulting `superchat-memory-recall-scope' instead, since a human
 explicitly typing `/recall' is not the same privacy question as content
 the model decides on its own to attach or look up."
-  :type '(choice (const :tag "Only explicitly remembered facts" remembered)
-                 (const :tag "Any matching row from any session" all)
+  :type '(choice (const :tag "Only explicitly remembered facts in this workspace" remembered)
+                 (const :tag "Any matching row in this workspace" all)
                  (const :tag "Current session only" none))
   :group 'superchat)
 

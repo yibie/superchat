@@ -111,6 +111,24 @@ Nil when WORKSPACE-ID is not a non-empty string."
                   (mapconcat (lambda (_) "?") sessions ","))
           sessions))))))
 
+;; `superchat-view-session-configuration' is defined further down this file.
+(defun superchat-view-recall-session-ids (session-id)
+  "Return the Sessions a search made from SESSION-ID may look in.
+For a Session bound to a Workspace with a root, those are the Sessions bound
+to that Workspace, SESSION-ID among them: recall is shared inside a Workspace
+and never crosses to another (contract R5).  Any other Session -- a temporary
+conversation, or one from before Workspaces -- gets only itself.  Nil when
+SESSION-ID is not a non-empty string."
+  (when (and (stringp session-id) (not (string-empty-p session-id)))
+    (let* ((config (superchat-view-session-configuration session-id))
+           (workspace-id (plist-get config :workspace-id))
+           (root (plist-get config :workspace-root)))
+      (if (and (stringp workspace-id) (stringp root) (not (string-empty-p root)))
+          (cl-adjoin session-id
+                     (superchat-view-workspace-session-ids workspace-id)
+                     :test #'equal)
+        (list session-id)))))
+
 (defun superchat-view--branch-parent (rows)
   "Return (SESSION-ID . TURN-ID) from the branch anchor in ROWS."
   (when-let* ((anchor (cl-find-if

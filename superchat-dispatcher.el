@@ -102,7 +102,9 @@ dispatcher safe to load and call on its own.")
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
 (declare-function superchat-db-tape-search-prioritized "superchat-db"
                   (query current-session-id limit &optional foreign-eligible-only
-                         exclude-ids current-session-only))
+                         exclude-ids current-session-only session-ids))
+(declare-function superchat-view-recall-session-ids "superchat-tape-view"
+                  (session-id))
 (declare-function superchat-view-row-to-memory-plist "superchat-tape-view" (row))
 (declare-function superchat-tape-append-event-record "superchat-tape" (event))
 
@@ -502,12 +504,13 @@ post-fetch filter would.  This exclusion applies uniformly across every
 `superchat-memory-auto-recall-cross-session' setting, `none' included
 (see CURRENT-SESSION-ONLY below) -- a row already visible as ordinary
 history must never be re-injected as a \"memory\" no matter how
-cross-session eligibility is configured.  Whether a row from a DIFFERENT
-session is eligible is controlled by
-`superchat-memory-auto-recall-cross-session': `remembered' (the default)
-admits only explicit `/remember' anchors (kind \"anchor\", topic
-\"remember\"); `all' admits any matching row from any session
-(Superchat's original behaviour); `none' admits no cross-session rows at
+cross-session eligibility is configured.  A row from a DIFFERENT session
+is eligible only when that session belongs to the same Workspace (see
+`superchat-view-recall-session-ids'; a temporary conversation has only
+itself), and then as `superchat-memory-auto-recall-cross-session' says:
+`all' (the default) admits any matching row; `remembered' admits only
+explicit `/remember' anchors (kind \"anchor\", topic \"remember\");
+`none' admits no cross-session rows at
 all, via `superchat-db-tape-search-prioritized''s CURRENT-SESSION-ONLY
 mode.  Eligibility, session priority, and the own-session recency
 exclusion are all expressed in the search itself (see
@@ -527,7 +530,7 @@ consulting `superchat-memory-recall-scope' instead."
            (cross-session
             (if (boundp 'superchat-memory-auto-recall-cross-session)
                 superchat-memory-auto-recall-cross-session
-              'remembered))
+              'all))
            (none-p (eq cross-session 'none))
            (window-size (and (boundp 'superchat-context-message-count)
                               superchat-context-message-count))
@@ -542,7 +545,9 @@ consulting `superchat-memory-recall-scope' instead."
              ((fboundp 'superchat-db-tape-search-prioritized)
               (superchat-db-tape-search-prioritized
                input session-id limit (eq cross-session 'remembered)
-               recent-ids none-p))
+               recent-ids none-p
+               (and (fboundp 'superchat-view-recall-session-ids)
+                    (superchat-view-recall-session-ids session-id))))
              (none-p
               ;; Defensive fallback only, for when the shared search is
               ;; unavailable; it has no exclude-ids support of its own, so

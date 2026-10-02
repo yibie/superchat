@@ -524,7 +524,7 @@ row that shares at least one word with it, ranked by FTS5 relevance
 
 (defun superchat-db-tape-search-prioritized
     (query current-session-id limit &optional foreign-eligible-only exclude-ids
-           current-session-only)
+           current-session-only session-ids)
   "Full-text search QUERY across every session, CURRENT-SESSION-ID first.
 Unlike `superchat-db-tape-search' with a nil SESSION-ID, session
 priority, (when requested) foreign-row eligibility, and the
@@ -552,6 +552,12 @@ as a single JSON array bound parameter and matched with `t.id NOT IN
 whole long Session, thousands of ids) never hits SQLite's per-statement
 bound-parameter limit the way one placeholder per id would.
 
+SESSION-IDS, when non-nil, is a list of session ids: a row from any
+session outside that list is not considered at all, whatever the other
+arguments say.  It is how a search is kept inside one Workspace (contract
+R5); like EXCLUDE-IDS it travels as one JSON array parameter.  Nil means
+every session, as before.
+
 Rows are ordered by session match first (CURRENT-SESSION-ID's own rows
 before every other session's; moot when CURRENT-SESSION-ONLY is
 non-nil), then by FTS5 relevance (`bm25'), then by recency.  Returns nil
@@ -560,7 +566,13 @@ when QUERY has no usable token (see
   (let* ((db (superchat-db-open))
          (limit (or limit 20))
          (match-query (superchat-db--tape-search-match-query query))
-         (exclude-json (json-encode (or exclude-ids []))))
+         (exclude-json (json-encode (or exclude-ids [])))
+         ;; With no SESSION-IDS the scope clause is a constant true, so the
+         ;; three statements below keep one shape.
+         (scope-sql (if session-ids
+                        "AND t.session_id IN (SELECT value FROM json_each(?))"
+                      "AND ? IS NOT NULL"))
+         (scope-json (json-encode (vconcat session-ids))))
     (when match-query
       (cond
        (current-session-only
@@ -578,26 +590,29 @@ when QUERY has no usable token (see
        (foreign-eligible-only
         (sqlite-select
          db
-         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+         (concat "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
           FROM tape t
           JOIN tape_fts fts ON t.id = fts.rowid
           WHERE tape_fts MATCH ?
             AND (t.session_id = ? OR (t.kind = 'anchor' AND t.topic = 'remember'))
             AND t.id NOT IN (SELECT value FROM json_each(?))
+            " scope-sql "
           ORDER BY (t.session_id = ?) DESC, bm25(tape_fts) ASC, t.id DESC
-          LIMIT ?"
-         (list match-query current-session-id exclude-json current-session-id limit)))
+          LIMIT ?")
+         (list match-query current-session-id exclude-json scope-json
+               current-session-id limit)))
        (t
         (sqlite-select
          db
-         "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
+         (concat "SELECT t.id, t.session_id, t.topic, t.kind, t.content, t.created_at
           FROM tape t
           JOIN tape_fts fts ON t.id = fts.rowid
           WHERE tape_fts MATCH ?
             AND t.id NOT IN (SELECT value FROM json_each(?))
+            " scope-sql "
           ORDER BY (t.session_id = ?) DESC, bm25(tape_fts) ASC, t.id DESC
-          LIMIT ?"
-         (list match-query exclude-json current-session-id limit)))))))
+          LIMIT ?")
+         (list match-query exclude-json scope-json current-session-id limit)))))))
 
 ;; ═══════════════════════════════════════════════════════════
 ;; Memory operations (extracted facts)
