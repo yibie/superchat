@@ -63,6 +63,54 @@ LIMIT caps the result count."
      GROUP BY session_id
      ORDER BY last_id DESC")))
 
+(defun superchat-view-workspace-session-ids (workspace-id)
+  "Return the Sessions bound to WORKSPACE-ID, most recently active first.
+A Session counts when the last `workspace.bound' or `workspace.unbound' fact
+on its Tape binds it to exactly WORKSPACE-ID; the id is compared whole.
+Activity is the Session's newest Tape row of any kind, so a Workspace's
+main conversation is the first element and no pointer to it is stored.
+Nil when WORKSPACE-ID is not a non-empty string."
+  (when (and (stringp workspace-id) (not (string-empty-p workspace-id)))
+    (let ((bound-to (make-hash-table :test #'equal))
+          sessions)
+      (dolist (row (superchat-db-tape-select
+                    "SELECT session_id, meta
+                     FROM tape
+                     WHERE kind = 'system'
+                       AND (meta LIKE '%workspace.bound%'
+                            OR meta LIKE '%workspace.unbound%')
+                     ORDER BY id ASC"))
+        (let* ((json-object-type 'alist)
+               (json-array-type 'list)
+               (json-key-type 'symbol)
+               (meta (ignore-errors
+                       (json-read-from-string (or (nth 1 row) ""))))
+               (type (superchat-view--object-get meta '(event_type event-type)))
+               (payload (superchat-view--object-get meta '(payload))))
+          (pcase type
+            ("workspace.bound"
+             (puthash (nth 0 row)
+                      (superchat-view--object-get
+                       payload '(workspace_id workspace-id id))
+                      bound-to))
+            ("workspace.unbound"
+             (puthash (nth 0 row) nil bound-to)))))
+      (maphash (lambda (session id)
+                 (when (equal id workspace-id)
+                   (push session sessions)))
+               bound-to)
+      (when sessions
+        (mapcar
+         #'car
+         (superchat-db-tape-select
+          (format "SELECT session_id, MAX(id) AS last_id
+                   FROM tape
+                   WHERE session_id IN (%s)
+                   GROUP BY session_id
+                   ORDER BY last_id DESC"
+                  (mapconcat (lambda (_) "?") sessions ","))
+          sessions))))))
+
 (defun superchat-view--branch-parent (rows)
   "Return (SESSION-ID . TURN-ID) from the branch anchor in ROWS."
   (when-let* ((anchor (cl-find-if
