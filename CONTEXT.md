@@ -119,10 +119,10 @@ _Avoid_: Agent, Agent Profile, profile
 
 ## Workspace
 
-Accepted language (user, 2026-10-01).  The behaviour behind Workspace,
-Temporary Workspace, Personal Workspace and Work Record is specified in the
-[contract](docs/decisions/proposed/2026-10-01-workspace-work-record-session-rules.md)
-and is not built: today a Session is tied to a directory only by `/workspace`.
+The behaviour behind Workspace, Temporary Workspace, Personal Workspace and
+Work Record is the
+[accepted contract](docs/decisions/accepted/2026-10-01-workspace-work-record-session-rules.md);
+which of it is built is stated per slice in the roadmap's M11.
 
 **Workspace**:
 The place work happens in: one directory that Emacs treats as a project,

@@ -1,6 +1,6 @@
 # Workspace 与工作记录：参考实现里的事实
 
-这页只记录别的系统和 Emacs 自己是怎么做的，供[契约](../decisions/proposed/2026-10-01-workspace-work-record-session-rules.md)引用。每一节写明读的是什么、哪一天读的；除注明"未读代码"的以外，都是直接读原文或源码，不是摘要。
+这页只记录别的系统和 Emacs 自己是怎么做的，供[契约](../decisions/accepted/2026-10-01-workspace-work-record-session-rules.md)引用。每一节写明读的是什么、哪一天读的；除注明"未读代码"的以外，都是直接读原文或源码，不是摘要。
 
 ## Holon
 
