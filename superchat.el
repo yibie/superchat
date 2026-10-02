@@ -48,6 +48,7 @@
 (require 'superchat-dispatcher)
 (require 'superchat-agent-loop)
 (require 'superchat-artifact-board)
+(require 'superchat-workspace)
 (require 'superchat-editor-workspace)
 (require 'superchat-widgets)
 (require 'superchat-change-set)
