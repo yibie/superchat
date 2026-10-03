@@ -797,7 +797,7 @@ neither is appended to the user's own text."
   "Return FRAME's arrangement as data: tabs and windows, or nil.
 VIEW is the request's chat View, marked as this conversation.  Each window
 is (:buffer NAME :file FILE :width W :height H :left L :top T :selected B
-:conversation B), in `window-list' order from the top-left window; L and T
+:conversation B :side SIDE), in `window-list' order from the top-left window; L and T
 count from the top left of those windows.  Data
 only, so the facts are those of the moment the request is prepared."
   (when (frame-live-p frame)
@@ -825,6 +825,7 @@ only, so the facts are those of the moment the request is prepared."
                               :left (- (window-left-column window) left0)
                               :top (- (window-top-line window) top0)
                               :selected (eq window (frame-selected-window frame))
+                              :side (window-parameter window 'window-side)
                               :conversation (and view (eq buffer view)))))
                     windows)))))
 
@@ -866,6 +867,10 @@ only, so the facts are those of the moment the request is prepared."
             (format ", %d columns wide at column %d, line %d"
                     (plist-get window :width)
                     (plist-get window :left) (plist-get window :top))
+            ;; A side window cannot be split or made the only window; saying
+            ;; so saves the model finding out by trial (task T6).
+            (when-let* ((side (plist-get window :side)))
+              (format ", side window (%s)" side))
             (when (plist-get window :selected) ", selected")))
          (seq-take windows superchat-prompt--windows-max)
          "\n")

@@ -129,6 +129,21 @@
           (should-not (string-match-p "warr-chat" text))
           (should-not (string-match-p "\n\\'" text)))))))
 
+(ert-deftest window-arrangement/a-side-window-is-said-to-be-one ()
+  (let ((text (superchat-prompt--window-arrangement-render
+               (list :windows (list (list :buffer "main" :width 80 :height 20 :left 0 :top 0)
+                                    (list :buffer "chat" :width 40 :height 20 :left 80 :top 0
+                                          :side 'right :selected t :conversation t))))))
+    (should (string-match-p "^- main, 80 columns wide at column 0, line 0$" text))
+    (should (string-match-p "^- this conversation, 40 columns wide at column 80, line 0, side window (right), selected$" text)))
+  (warr--with '((:text "ok")) (p)
+    (warr--in-frame
+      (let* ((src (warr--file p))
+             (view (with-current-buffer src (superchat))))
+        (should (window-parameter (get-buffer-window view) 'window-side))
+        (hm--turn view "where am I")
+        (should (string-match-p "^- this conversation, .*, side window (right)" (warr--user-text 1)))))))
+
 (ert-deftest window-arrangement/a-file-is-shown-beside-its-buffer ()
   (warr--in-frame
     (let ((root (warr--temp-dir)))
