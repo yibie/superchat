@@ -127,7 +127,9 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "queue.queued" "queue.dispatched" "queue.dropped"
              "admission.dropped" "edit.applied" "turn.superseded"
              "workspace.artifact.added" "workspace.artifact.changed"
-             "workspace.artifact.removed"))
+             "workspace.artifact.removed"
+             ;; Timers (M11 slice 4): a timer is these facts.
+             "timer.created" "timer.fired" "timer.cancelled"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))

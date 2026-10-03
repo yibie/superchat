@@ -67,6 +67,10 @@
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-timer-tool-create "superchat-timer"
+                  (text kind &optional in-minutes at repeat))
+(declare-function superchat-timer-tool-list "superchat-timer" ())
+(declare-function superchat-timer-tool-cancel "superchat-timer" (id))
 (declare-function superchat-db-tape-search-prioritized "superchat-db"
                   (query current-session-id limit &optional foreign-eligible-only
                          exclude-ids current-session-only session-ids))
@@ -1416,14 +1420,16 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-    "read_reference" "open_file" "edit_buffer" "eval_elisp")
+    "read_reference" "open_file" "edit_buffer" "eval_elisp"
+    "timer_create" "timer_list" "timer_cancel")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
 explicit Preset or Request tool list, never by this default or by a level.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
-hand-written copies of the same names did.")
+hand-written copies of the same names did.  The three timer tools write
+timer facts to the Tape and nothing else (`superchat-timer.el').")
 
 (defcustom superchat-llm-tool-names
   superchat-llm-default-tool-names
@@ -1877,6 +1883,33 @@ Use this to compose complex views across the conversation tape."
           :function #'superchat-tool-sql)
 
          (superchat--maybe-make-llm-tool
+          "timer_create"
+          :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
+          :args (list (list :name "text" :type 'string
+                            :description "What to remind the user of, or the task to do, in the user's language.")
+                      (list :name "kind" :type 'string
+                            :description "reminder or task.")
+                      (list :name "in_minutes" :type 'number
+                            :description "Minutes from now." :optional t)
+                      (list :name "at" :type 'string
+                            :description "Local time, YYYY-MM-DD HH:MM." :optional t)
+                      (list :name "repeat" :type 'string
+                            :description "hourly, daily, weekly, or none (the default)." :optional t))
+          :function #'superchat-timer-tool-create)
+
+         (superchat--maybe-make-llm-tool
+          "timer_list"
+          :description "List the pending timers: id, next time, kind, text."
+          :args nil
+          :function #'superchat-timer-tool-list)
+
+         (superchat--maybe-make-llm-tool
+          "timer_cancel"
+          :description "Cancel a pending timer by the id timer_list or timer_create gave."
+          :args (list (list :name "id" :type 'string :description "The timer id."))
+          :function #'superchat-timer-tool-cancel)
+
+         (superchat--maybe-make-llm-tool
           "memory_search"
           :description "Search the conversation tape for relevant entries. \
 Returns matching tape rows as JSON."
@@ -2062,6 +2095,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "delegate_to_subagent_parallel" "define_tool" "render_ui" "emit_plan"
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
+    "timer_create" "timer_list" "timer_cancel"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
     "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")

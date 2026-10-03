@@ -313,11 +313,13 @@ withdrawn name is dropped while an ordinary built-in stays."
 (ert-deftest composition/row-tools/default-surface-unchanged ()
   "The default tool surface is unchanged by the row-owned move.
 Captured on the unmodified tree before this slice (superchat.el mounted
-profile, default `superchat-llm-tool-names')."
+profile, default `superchat-llm-tool-names'); the three timer tools joined
+the default list in M11 slice 4."
   (composition--fixture nil
     (should (equal '("list_buffers" "read_buffer" "read_file" "read_reference"
                      "open_file" "edit_buffer" "describe-function" "apropos"
-                     "eval_elisp" "ask_user")
+                     "eval_elisp" "timer_create" "timer_list" "timer_cancel"
+                     "ask_user")
                    (plist-get (superchat-select-tools-decision
                                (list :surface 'chat
                                      :input-core (list :operation 'chat))
