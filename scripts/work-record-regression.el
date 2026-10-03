@@ -292,5 +292,115 @@
         (should (equal "user" (plist-get record :completed-by))))
       (should-error (superchat-work-mark-complete a "again")))))
 
+;;;; Waking a record whose time has come (slice 8.1) -------------------------------
+
+(defvar wrec--now 1800000000.0)
+
+(defmacro wrec--with-clock (&rest body)
+  "Run BODY with the Work Record clock at `wrec--now', disarming afterwards."
+  (declare (indent 0))
+  `(let ((superchat-work-now-function (lambda () wrec--now)))
+     (unwind-protect (progn ,@body)
+       (superchat-work-disarm-all))))
+
+(defun wrec--facts (session type)
+  (mapcar (lambda (event) (plist-get event :payload)) (hm--events session type)))
+
+(ert-deftest work-record/a-wait-for-a-time-names-the-time ()
+  (wrec--with nil (p)
+    (wrec--with-clock
+      (let* ((session (hm--session (wrec--view p)))
+             (id (superchat-work-start session "Check the build later")))
+        (should-error (superchat-work-wait session id "time" "the build"))
+        (let ((superchat--tool-execution-context (list :session-id session)))
+          (superchat-work-tool "wait" nil nil nil nil nil "time" "the build" nil nil 30))
+        (let ((record (superchat-work-get id)))
+          (should (= (+ wrec--now 1800) (plist-get (plist-get record :waiting) :until)))
+          (should (eq 'waiting-other (superchat-work-status record)))
+          (should (string-match-p
+                   (regexp-quote (format "(waiting for %s: the build)"
+                                         (format-time-string "%Y-%m-%d %H:%M"
+                                                             (seconds-to-time (+ wrec--now 1800)))))
+                   (superchat-work-render record))))))))
+
+(ert-deftest work-record/nothing-wakes-before-its-time ()
+  (wrec--with nil (p)
+    (wrec--with-clock
+      (let* ((session (hm--session (wrec--view p)))
+             (id (superchat-work-start session "Later")))
+        (superchat-work-wait session id "time" nil (+ wrec--now 600))
+        (setq wrec--now (+ wrec--now 599))
+        (should-not (superchat-work-wake-due))
+        ;; A wait for the user never wakes by itself.
+        (superchat-work-wait session id "user" "an answer")
+        (setq wrec--now (+ wrec--now 10000))
+        (should-not (superchat-work-wake-due))))))
+
+(ert-deftest work-record/at-its-time-a-record-goes-on-in-a-new-conversation ()
+  (wrec--with '((:text "CONTINUED-ANSWER")) (p)
+    (wrec--with-clock
+      (let* ((main-view (wrec--view p))
+             (main (hm--session main-view))
+             (id (superchat-work-start main "WAKE-GOAL-MARKER")))
+        (superchat-work-update main id "half done" nil "the second half")
+        (superchat-work-wait main id "time" "tonight" (+ wrec--now 600))
+        (setq wrec--now (+ wrec--now 600))
+        (let* ((views (superchat-work-wake-due))
+               (view (car views))
+               (session (hm--session view)))
+          (should (= 1 (length views)))
+          (should-not (equal main session))
+          ;; The new conversation is in the same Workspace, on this record.
+          (should (equal (plist-get (superchat-workspace-of-directory p) :id)
+                         (plist-get (buffer-local-value 'superchat--workspace-binding view) :id)))
+          (should (equal id (superchat-work-current session)))
+          (wrec--settled)
+          (let ((text (mapconcat #'hm--text (hm--wire 1) "\n")))
+            (should (string-match-p (regexp-quote (format superchat-work-wake-prompt id)) text))
+            (should (string-match-p "To deliver: WAKE-GOAL-MARKER" text))
+            (should (string-match-p "Pick up from: the second half" text)))
+          ;; Woken once, the wait cleared, the outcome decided as for any run.
+          (let ((record (superchat-work-get id)))
+            (should (= 1 (length (plist-get record :woken))))
+            (should-not (plist-get record :waiting))
+            (should (equal "continuable" (car (last (plist-get record :outcomes))))))
+          ;; The main conversation has a line saying so; the model's words are not in it.
+          (let ((reported (wrec--facts main "work.reported")))
+            (should (= 1 (length reported)))
+            (should (equal session (plist-get (car reported) :conversation))))
+          (should (string-match-p (concat "Work record " (regexp-quote id)
+                                          " was taken up at its time in conversation "
+                                          (regexp-quote session) ": continuable\\.")
+                                  (with-current-buffer main-view (buffer-string))))
+          (should-not (superchat-work-wake-due)))))))
+
+(ert-deftest work-record/a-wait-missed-while-emacs-was-closed-wakes-once-after-loading ()
+  (wrec--with '((:text "ok")) (p)
+    (wrec--with-clock
+      (let* ((main (hm--session (wrec--view p)))
+             (id (superchat-work-start main "Missed")))
+        (superchat-work-wait main id "time" nil (+ wrec--now 60))
+        (superchat-work-disarm-all)
+        (setq wrec--now (+ wrec--now 7200))
+        (superchat-work-arm-all)
+        (wrec--settled)
+        (should (= 1 (length (plist-get (superchat-work-get id) :woken))))
+        (superchat-work-arm-all)
+        (should (= 1 (length (plist-get (superchat-work-get id) :woken))))))))
+
+(ert-deftest work-record/a-wait-is-armed-while-the-row-is-mounted ()
+  (wrec--with nil (p)
+    (wrec--with-clock
+      (let* ((main (hm--session (wrec--view p)))
+             (id (superchat-work-start main "Armed")))
+        (superchat-work-wait main id "time" nil (+ wrec--now 600))
+        (should (timerp (gethash id superchat-work--armed)))
+        (unwind-protect
+            (progn
+              (superchat-plugin-unmount 'work-records)
+              (should (= 0 (hash-table-count superchat-work--armed))))
+          (superchat-plugin-mount 'work-records))
+        (should (smoke--wait (lambda () (gethash id superchat-work--armed)) 5))))))
+
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here

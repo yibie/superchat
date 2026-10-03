@@ -70,7 +70,7 @@
 (declare-function superchat-script-run "superchat-script" (code))
 (declare-function superchat-work-tool "superchat-work"
                   (action &optional id goal progress blocked resume
-                          wait_for detail conclusion follows))
+                          wait_for detail conclusion follows in_minutes at))
 
 (defun superchat-tool-elisp-script (code)
   "The `elisp_script' tool: run CODE with `superchat-script-run'."
@@ -1934,7 +1934,7 @@ Use this to compose complex views across the conversation tape."
 
          (superchat--maybe-make-llm-tool
           "work_record"
-          :description "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail); an empty wait_for clears it. done completes it with a conclusion. read shows a record by id. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable."
+          :description "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail); for a time give in_minutes or at, and at that time Superchat takes the record up again in a new conversation -- use it to continue work later, not timer_create. An empty wait_for clears the wait. done completes it with a conclusion. read shows a record by id. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable."
           :args (list (list :name "action" :type 'string
                             :description "start, update, wait, done or read.")
                       (list :name "id" :type 'string :optional t
@@ -1954,7 +1954,11 @@ Use this to compose complex views across the conversation tape."
                       (list :name "conclusion" :type 'string :optional t
                             :description "done: what was delivered.")
                       (list :name "follows" :type 'string :optional t
-                            :description "start: the id of a completed record this continues."))
+                            :description "start: the id of a completed record this continues.")
+                      (list :name "in_minutes" :type 'number :optional t
+                            :description "wait for time: minutes from now.")
+                      (list :name "at" :type 'string :optional t
+                            :description "wait for time: local YYYY-MM-DD HH:MM."))
           :function #'superchat-work-tool)
 
          (superchat--maybe-make-llm-tool

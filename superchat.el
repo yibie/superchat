@@ -3966,16 +3966,21 @@ selects no window."
     (if id
         (or (superchat-editor-workspace-buffer id 'session-view)
             (superchat--render-session-view id))
-      (let* ((session-id (superchat--new-session-id))
-             (view (let ((default-directory (plist-get workspace :root)))
-                     (superchat--ensure-chat-view
-                      (superchat--session-buffer-name session-id)
-                      session-id))))
-        (with-current-buffer view
-          (superchat--apply-workspace-binding
-           (list :id (plist-get workspace :id)
-                 :root (plist-get workspace :root))))
-        view))))
+      (superchat-workspace-new-conversation workspace))))
+
+(defun superchat-workspace-new-conversation (workspace)
+  "Start a new conversation bound to WORKSPACE (:id :root) and return its View.
+Shows nothing and selects no window."
+  (let* ((session-id (superchat--new-session-id))
+         (view (let ((default-directory (plist-get workspace :root)))
+                 (superchat--ensure-chat-view
+                  (superchat--session-buffer-name session-id)
+                  session-id))))
+    (with-current-buffer view
+      (superchat--apply-workspace-binding
+       (list :id (plist-get workspace :id)
+             :root (plist-get workspace :root))))
+    view))
 
 (defun superchat--open-workspace-conversation (workspace)
   "Display and select the main conversation of WORKSPACE."

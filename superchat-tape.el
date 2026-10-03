@@ -132,7 +132,10 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "timer.created" "timer.fired" "timer.cancelled"
              ;; Work Records (M11 slice 7): a record is these facts.
              "work.created" "work.updated" "work.waiting" "work.completed"
-             "work.focused" "work.facts" "work.outcome"))
+             "work.focused" "work.facts" "work.outcome"
+             ;; M11 slice 8: a time wait woke the record; its result noted
+             ;; in the Workspace's main conversation.
+             "work.woken" "work.reported"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))
