@@ -1899,7 +1899,7 @@ Use this to compose complex views across the conversation tape."
 
          (superchat--maybe-make-llm-tool
           "timer_list"
-          :description "List the pending timers: id, next time, kind, text."
+          :description "List the pending timers (id, next time, kind, text) and the timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
           :args nil
           :function #'superchat-timer-tool-list)
 

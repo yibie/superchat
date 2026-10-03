@@ -129,6 +129,26 @@ any cancelled timer are not pending."
       (sort pending (lambda (a b) (< (plist-get a :next-due)
                                      (plist-get b :next-due)))))))
 
+(defun superchat-timer-fired-since (since)
+  "Return the timers that fired at or after SINCE, oldest first.
+Each is a plist (:id :session-id :kind :text :due :late), :due being the
+occurrence that fired.  A fired line is not sent to the model as history,
+so this is how it can answer \"did I miss a reminder?\"."
+  (let (out)
+    (dolist (row (superchat-timer--rows))
+      (cl-destructuring-bind (session type payload) row
+        (when (equal type "timer.fired")
+          (let ((occurrence (alist-get 'occurrence payload)))
+            (when (and (numberp occurrence) (>= occurrence since))
+              (push (list :id (superchat-timer--payload-get payload 'timer_id 'timer-id)
+                          :session-id session
+                          :kind (intern (or (alist-get 'kind payload) "reminder"))
+                          :text (alist-get 'text payload)
+                          :due occurrence
+                          :late (eq t (alist-get 'late payload)))
+                    out))))))
+    (nreverse out)))
+
 (defun superchat-timer--next-due (timer)
   "Return the next occurrence of TIMER that has not fired, or nil.
 For a one-shot timer that is its due time until it fires; for a repeating
@@ -418,11 +438,16 @@ Signals an error for any other shape."
     (error (format "Error: %s" (error-message-string err)))))
 
 (defun superchat-timer-tool-list ()
-  "The `timer_list' tool: the pending timers, soonest first."
-  (let ((timers (superchat-timer-list)))
-    (if (null timers)
-        "No pending timers."
-      (mapconcat (lambda (timer)
+  "The `timer_list' tool: the pending timers, then those fired in the last day."
+  (let ((timers (superchat-timer-list))
+        (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+    (concat
+     (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+     (if (null timers)
+         "No pending timers."
+       (concat
+        "Pending:\n"
+        (mapconcat (lambda (timer)
                    (format "%s  %s  %s%s  %s"
                            (plist-get timer :id)
                            (superchat-timer-format-time (plist-get timer :next-due))
@@ -432,7 +457,20 @@ Signals an error for any other shape."
                                                 (plist-get timer :repeat)))
                              "")
                            (plist-get timer :text)))
-                 timers "\n"))))
+                 timers "\n")))
+     (if (null fired)
+         "\nNone fired in the last 24 hours."
+       (concat
+        "\nFired in the last 24 hours:\n"
+        (mapconcat (lambda (timer)
+                     (format "%s  %s%s  %s"
+                             (superchat-timer-format-time (plist-get timer :due))
+                             (plist-get timer :kind)
+                             (if (plist-get timer :late)
+                                 " (Emacs was not running then; shown when it started)"
+                               "")
+                             (plist-get timer :text)))
+                   fired "\n"))))))
 
 (defun superchat-timer-tool-cancel (id)
   "The `timer_cancel' tool: cancel the pending timer ID."

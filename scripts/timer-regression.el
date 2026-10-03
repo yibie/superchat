@@ -306,6 +306,37 @@
         (should (string-match-p "cancelled" (superchat-timer-tool-cancel id)))
         (should (string-prefix-p "Error:" (superchat-timer-tool-cancel id)))))))
 
+(ert-deftest timer/the-list-tool-tells-what-fired-in-the-last-day ()
+  "A fired line is not sent to the model, so `timer_list' is how it learns
+that a reminder came -- found in the real task T1R, where the model said no
+reminder was missed right after one fired."
+  (wtimer--with nil (p)
+    (let* ((session (wtimer--session (with-current-buffer (wtimer--file p) (superchat))))
+           (start wtimer--now))
+      (should (string-match-p "None fired in the last 24 hours\\.\\'" (superchat-timer-tool-list)))
+      (superchat-timer-create session 'reminder "OLD-ONE" (+ start 60))
+      (superchat-timer-create session 'reminder "WATER" (+ start (* 2 86400)))
+      (superchat-timer-create session 'reminder "LATER-ONE" (+ start (* 5 86400)))
+      (setq wtimer--now (+ start 120))
+      (superchat-timer-catch-up)
+      ;; Emacs closed past WATER's time and started again.
+      (setq wtimer--now (+ start (* 2 86400) 3600))
+      (superchat-timer-catch-up)
+      (let ((fired (superchat-timer-fired-since (- wtimer--now 86400))))
+        (should (equal '("WATER") (mapcar (lambda (f) (plist-get f :text)) fired)))
+        (should (plist-get (car fired) :late))
+        (should (= (+ start (* 2 86400)) (plist-get (car fired) :due))))
+      (should (= 2 (length (superchat-timer-fired-since start))))
+      (let ((text (superchat-timer-tool-list)))
+        (should (string-prefix-p (format "Now %s.\n" (superchat-timer-format-time wtimer--now)) text))
+        (should (string-match-p "^Pending:\n.*LATER-ONE$" text))
+        (should (string-match-p
+                 (concat "^Fired in the last 24 hours:\n"
+                         (regexp-quote (superchat-timer-format-time (+ start (* 2 86400))))
+                         "  reminder (Emacs was not running then; shown when it started)  WATER$")
+                 text))
+        (should-not (string-match-p "OLD-ONE" text))))))
+
 (ert-deftest timer/times-are-read-and-written-in-one-shape ()
   (let ((time (superchat-timer-parse-time "2026-10-02 08:30")))
     (should (equal "2026-10-02 08:30" (superchat-timer-format-time time)))
