@@ -2,6 +2,23 @@
 
 All notable changes to superchat.
 
+## Unreleased — work records
+
+- A piece of work that takes more than one conversation now has a work
+  record: what is to be delivered, how far it got, why the next step has to
+  wait, and where to pick it up. The model keeps it with the new
+  `work_record` tool when you ask it to track something or the work clearly
+  outlives one go; ordinary questions get none.
+- At the end of every execution Superchat attaches the files that execution
+  changed and decides how the record stands — completed, waiting, failed or
+  continuable — from what was recorded, never from the wording of the answer.
+- A request carries the conversation's current record in full and the other
+  records of its workspace by status, so a new conversation, even after a
+  restart, can pick the work up. Records of other workspaces never appear.
+- `M-x superchat-work-list` lists the records of every workspace; `c`
+  completes the one at point.
+- In a temporary conversation no record is kept.
+
 ## Unreleased — the model knows how your windows are arranged
 
 - Every chat, in-place ask and in-place do request now says how the
