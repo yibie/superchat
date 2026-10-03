@@ -637,7 +637,7 @@ registered as it will be after the cutover, and unregistered afterwards."
 
 (ert-deftest m6-permissions/executor/eval-asks-once-and-reads-ask-nothing ()
   "Under edit-buffers a read runs unasked and full control asks per call."
-  (m6p--pipeline (list '(:tool-uses (("list_buffers")))
+  (m6p--pipeline (list '(:tool-uses (("read_buffer" (buffer . "*scratch*"))))
                        m6p--eval-round m6p--eval-round '(:text "done"))
     (let* ((asked nil)
            (superchat-approval-function
@@ -678,7 +678,7 @@ registered as it will be after the cutover, and unregistered afterwards."
       (should (= 0 (m6p--count session "approval.requested"))))))
 
 (ert-deftest m6-permissions/executor/read-only-denies-full-control-without-asking ()
-  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("list_buffers"))) '(:text "done"))
+  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("read_buffer" (buffer . "*scratch*")))) '(:text "done"))
     (let* ((asked 0)
            (superchat-approval-function (lambda (_public) (cl-incf asked) t))
            (view (smoke--open-chat))
@@ -751,13 +751,13 @@ request is made."
 (ert-deftest m6-permissions/executor/a-listener-cannot-skip-the-level-stage ()
   "An `allow' that ends the waterfall without delegating does not spare
 eval_elisp its question; a listener's `deny' beats the level's `allow'."
-  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("list_buffers"))) '(:text "done"))
+  (m6p--pipeline (list m6p--eval-round '(:tool-uses (("read_buffer" (buffer . "*scratch*")))) '(:text "done"))
     (let* ((asked 0)
            (superchat-approval-function (lambda (_public) (cl-incf asked) t))
            (off (superchat-on nil 'tools/pre-execute 'm6p-gate
                               (lambda (call _next)
                                 ;; The contract's shape: the call back with `:kind'.
-                                (if (equal "list_buffers" (plist-get call :tool-name))
+                                (if (equal "read_buffer" (plist-get call :tool-name))
                                     (plist-put call :kind 'deny)
                                   (plist-put call :kind 'allow)))))
            (view (smoke--open-chat))
@@ -766,7 +766,7 @@ eval_elisp its question; a listener's `deny' beats the level's `allow'."
         (funcall off))
       (should (= 1 asked))
       (should (= 1 m6p--effect))
-      ;; list_buffers was denied by the listener: one completion only.
+      ;; read_buffer was denied by the listener: one completion only.
       (should (= 1 (m6p--count session "tool.completed"))))))
 
 (ert-deftest m6-permissions/executor/tool-classes ()

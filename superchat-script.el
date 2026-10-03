@@ -80,11 +80,23 @@
            (format "`%s' is not allowed in a script" (cadr unsafe)))
           (unsafe (format "%S is not allowed in a script" unsafe)))))
 
+(defvar superchat-llm-tool-names)
+(defvar superchat-llm-script-only-tool-names)
+
+(defun superchat-script--callable-tools ()
+  "The tools a script may call: the offered ones and the script-only ones."
+  (if (eq superchat-llm-tool-names 'all)
+      (superchat-get-llm-tools)
+    (superchat-get-llm-tools
+     (cl-union (copy-sequence superchat-llm-tool-names)
+               (bound-and-true-p superchat-llm-script-only-tool-names)
+               :test #'equal))))
+
 (defun superchat-script--callable-tool (name)
   "The llm.el tool NAME a script may call, or signal why not."
   (when (member name superchat-script-not-callable)
     (error "%s cannot be called from a script" name))
-  (let ((tool (cl-find name (superchat-get-llm-tools)
+  (let ((tool (cl-find name (superchat-script--callable-tools)
                        :key #'llm-tool-name :test #'equal)))
     (cond ((null tool) (error "No tool named %s" name))
           ((llm-tool-async tool) (error "%s cannot be called from a script" name))

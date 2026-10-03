@@ -1426,17 +1426,45 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; cannot find out what exists or what it does.  `describe-variable' stays out
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
-  '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-    "read_reference" "open_file" "edit_buffer" "eval_elisp"
-    "timer_create" "timer_list" "timer_cancel" "elisp_script")
+  '("apropos" "describe-function" "read_buffer" "read_file" "read_reference"
+    "open_file" "edit_buffer" "eval_elisp" "timer_create" "elisp_script")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
 explicit Preset or Request tool list, never by this default or by a level.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
-hand-written copies of the same names did.  The three timer tools write
-timer facts to the Tape and nothing else (`superchat-timer.el').")
+hand-written copies of the same names did.  The timer tools write timer
+facts to the Tape and nothing else (`superchat-timer.el').  The tools in
+`superchat-llm-script-only-tool-names' are not declared on each request but
+can be called from an `elisp_script' script (M11 slice 6).")
+
+(defconst superchat-llm-script-only-tool-names
+  '("list_buffers" "timer_list" "timer_cancel")
+  "Built-in tools reached only from an `elisp_script' script by default.
+They are not declared on every request, which keeps each request smaller; the
+`elisp_script' description lists them with their arguments.  A Preset or
+Request that names one of them declares it as usual.  `apropos' and
+`describe-function' stay declared: the model's way to discover Emacs (the M5
+utility-closure record, kept by the user on 2026-10-03).")
+
+(defun superchat-tools--script-only-catalog ()
+  "The lines of the `elisp_script' description that list the script-only tools."
+  (let ((tools (let ((superchat-llm-tools-list nil))
+                 (superchat-get-llm-tools superchat-llm-script-only-tool-names))))
+    (when tools
+      (concat
+       "\n\nTools reached only from a script (they are not offered directly):\n"
+       (mapconcat
+        (lambda (tool)
+          (format "- %s%s: %s"
+                  (llm-tool-name tool)
+                  (mapconcat (lambda (arg)
+                               (format " :%s%s" (plist-get arg :name)
+                                       (if (plist-get arg :optional) "?" "")))
+                             (llm-tool-args tool) "")
+                  (car (split-string (llm-tool-description tool) "\n"))))
+        tools "\n")))))
 
 (defcustom superchat-llm-tool-names
   superchat-llm-default-tool-names
@@ -1889,13 +1917,15 @@ Use this to compose complex views across the conversation tape."
                             :description "SQL query (SELECT or WITH only)."))
           :function #'superchat-tool-sql)
 
-         (superchat--maybe-make-llm-tool
-          "elisp_script"
-          :description "Run a short Emacs Lisp script that calls other tools, so several steps cost one round trip. Call a tool with (tool \"NAME\" :ARGUMENT VALUE ...); it returns the tool's result as a string. Report with (out VALUE); the value of the last form is reported too. Only what the script reports reaches you, so read large things inside the script and report only what you need. The script may use let, if, cond, dolist, mapcar, string and list functions and the like; it may not set variables, define functions, loop with while, or call functions with side effects -- do those through tools. Each call is checked like a direct call. Example: (dolist (b (list \"a.org\" \"b.org\")) (out (tool \"read_buffer\" :buffer b)))"
+         (when (superchat--llm-tool-enabled-p "elisp_script")
+          (llm-make-tool
+          :name "elisp_script"
+          :description (concat "Run a short Emacs Lisp script that calls other tools, so several steps cost one round trip. Call a tool with (tool \"NAME\" :ARGUMENT VALUE ...); it returns the tool's result as a string. Report with (out VALUE); the value of the last form is reported too. Only what the script reports reaches you, so read large things inside the script and report only what you need. The script may use let, if, cond, dolist, mapcar, string and list functions and the like; it may not set variables, define functions, loop with while, or call functions with side effects -- do those through tools. Each call is checked like a direct call. Example: (dolist (b (list \"a.org\" \"b.org\")) (out (tool \"read_buffer\" :buffer b)))"
+                               (superchat-tools--script-only-catalog))
           :args (list (list :name "code"
                             :type 'string
                             :description "Emacs Lisp forms, not quoted and not in a code fence."))
-          :function #'superchat-tool-elisp-script)
+          :function #'superchat-tool-elisp-script))
 
          (superchat--maybe-make-llm-tool
           "timer_create"

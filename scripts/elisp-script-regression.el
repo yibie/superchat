@@ -259,5 +259,41 @@ and a refused call does not run, from a script as from the model."
   (should (eq 'builtin (superchat-sandbox-tool-class "elisp_script")))
   (should (eq 'full-control (superchat-sandbox-tool-class "eval_elisp"))))
 
+;;;; Tools reached only from a script (slice 6.2) -------------------------------------
+
+(ert-deftest elisp-script/some-tools-are-reached-only-from-a-script ()
+  (dolist (name superchat-llm-script-only-tool-names)
+    (should-not (member name superchat-llm-default-tool-names)))
+  (should (equal '("list_buffers" "timer_list" "timer_cancel")
+                 superchat-llm-script-only-tool-names))
+  ;; The model's way to discover Emacs stays offered (the M5 record).
+  (dolist (name '("apropos" "describe-function"))
+    (should (member name superchat-llm-default-tool-names)))
+  (let* ((offered (mapcar #'llm-tool-name (superchat-get-llm-tools)))
+         (script (cl-find "elisp_script" (superchat-get-llm-tools)
+                          :key #'llm-tool-name :test #'equal))
+         (description (llm-tool-description script)))
+    (should-not (member "list_buffers" offered))
+    (should (string-match-p "^Tools reached only from a script (they are not offered directly):$"
+                            description))
+    (should (string-match-p "^- list_buffers: List live Emacs buffers" description))
+    (should (string-match-p "^- timer_cancel :id: Cancel a pending timer" description))
+    (should-not (string-match-p "^- read_buffer" description))))
+
+(ert-deftest elisp-script/a-script-calls-a-tool-that-is-not-offered ()
+  (escr--with-buffer "escr-listed" "x\n"
+    (escr--with nil ()
+      (setq smoke--script
+            (list (escr--script-round
+                   "(let ((rows (tool \"list_buffers\")))
+                      (out (if (string-match-p \"escr-listed\" rows) \"LISTED\" \"ABSENT\")))")
+                  '(:text "done")))
+      (hm--turn (smoke--open-chat) "list")
+      (should (equal "Script completed. 1 tool call.\nLISTED" (escr--result 2)))
+      ;; The requests offered the script tool, not the listing tool.
+      (let ((first-tools (plist-get (car (last smoke--requests)) :tools)))
+        (should (member "elisp_script" first-tools))
+        (should-not (member "list_buffers" first-tools))))))
+
 (provide 'elisp-script-regression)
 ;;; elisp-script-regression.el ends here
