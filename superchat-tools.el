@@ -1426,8 +1426,9 @@ Refreshed by `superchat-llm-tools-reload'.")
 ;; cannot find out what exists or what it does.  `describe-variable' stays out
 ;; of the default surface because it returns a variable's current value.
 (defconst superchat-llm-default-tool-names
-  '("apropos" "describe-function" "read_buffer" "read_file" "read_reference"
-    "open_file" "edit_buffer" "eval_elisp" "timer_create" "elisp_script")
+  '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
+    "read_reference" "open_file" "edit_buffer" "eval_elisp"
+    "timer_create" "timer_list" "timer_cancel")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
@@ -1435,23 +1436,24 @@ explicit Preset or Request tool list, never by this default or by a level.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
 hand-written copies of the same names did.  The timer tools write timer
-facts to the Tape and nothing else (`superchat-timer.el').  The tools in
-`superchat-llm-script-only-tool-names' are not declared on each request but
-can be called from an `elisp_script' script (M11 slice 6).")
+facts to the Tape and nothing else (`superchat-timer.el').  `elisp_script'
+is not here: measured on real tasks it made the model slower and less
+reliable (M11 slice 6.5, docs/research/round-trips-first-principles.md); add
+it to `superchat-llm-tool-names' to offer it.")
 
-(defconst superchat-llm-script-only-tool-names
-  '("list_buffers" "timer_list" "timer_cancel")
-  "Built-in tools reached only from an `elisp_script' script by default.
-They are not declared on every request, which keeps each request smaller; the
-`elisp_script' description lists them with their arguments.  A Preset or
-Request that names one of them declares it as usual.  `apropos' and
-`describe-function' stay declared: the model's way to discover Emacs (the M5
-utility-closure record, kept by the user on 2026-10-03).")
+(defvar superchat-llm-script-only-tool-names nil
+  "Built-in tools reached only from an `elisp_script' script, not declared.
+Nil by default: `elisp_script' is not offered by default (M11 slice 6.5).
+When `elisp_script' is offered, a script can call the tools listed here, and
+its description lists them with their arguments; leave them out of
+`superchat-llm-tool-names' so they are not also declared on each request.")
 
 (defun superchat-tools--script-only-catalog ()
-  "The lines of the `elisp_script' description that list the script-only tools."
-  (let ((tools (let ((superchat-llm-tools-list nil))
-                 (superchat-get-llm-tools superchat-llm-script-only-tool-names))))
+  "The lines of the `elisp_script' description that list the script-only tools.
+Empty when `superchat-llm-script-only-tool-names' is nil."
+  (let ((tools (and superchat-llm-script-only-tool-names
+                    (let ((superchat-llm-tools-list nil))
+                      (superchat-get-llm-tools superchat-llm-script-only-tool-names)))))
     (when tools
       (concat
        "\n\nTools reached only from a script (they are not offered directly):\n"

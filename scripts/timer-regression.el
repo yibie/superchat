@@ -275,13 +275,8 @@
 ;;;; The tools --------------------------------------------------------------------------
 
 (ert-deftest timer/the-tools-are-on-the-default-surface-and-built-in ()
-  "`timer_create' is offered on every request; listing and cancelling are
-reached from an `elisp_script' script (M11 slice 6.2)."
-  (should (member "timer_create" superchat-llm-default-tool-names))
-  (dolist (name '("timer_list" "timer_cancel"))
-    (should-not (member name superchat-llm-default-tool-names))
-    (should (member name superchat-llm-script-only-tool-names)))
   (dolist (name '("timer_create" "timer_list" "timer_cancel"))
+    (should (member name superchat-llm-default-tool-names))
     (should (eq 'builtin (superchat-sandbox-tool-class name)))))
 
 (ert-deftest timer/the-create-tool-sets-a-timer-in-the-asking-conversation ()

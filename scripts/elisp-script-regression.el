@@ -48,7 +48,18 @@
           (superchat-display-style 'editor))
      (setq escr--roots (list ,@vars))
      (unwind-protect
-         (hm--fixture ,script ,@body)
+         (let ((superchat-llm-script-only-tool-names
+                '("list_buffers" "timer_list" "timer_cancel")))
+           (hm--fixture ,script
+             ;; `elisp_script' is not offered by default (slice 6.5): these
+             ;; tests offer it, with three tools reached only from scripts.
+             (setq superchat-llm-tool-names
+                   (append (cl-set-difference superchat-llm-default-tool-names
+                                              superchat-llm-script-only-tool-names
+                                              :test #'equal)
+                           '("elisp_script"))
+                   superchat-llm-tools-list nil)
+             ,@body))
        (dolist (b (buffer-list))
          (when-let* ((f (buffer-file-name b)))
            (when (cl-some (lambda (d) (string-prefix-p d f)) (list ,@vars))
@@ -254,31 +265,37 @@ and a refused call does not run, from a script as from the model."
 
 ;;;; The tool itself ------------------------------------------------------------------
 
-(ert-deftest elisp-script/it-is-a-built-in-on-the-default-surface ()
-  (should (member "elisp_script" superchat-llm-default-tool-names))
+(ert-deftest elisp-script/it-is-a-built-in-not-offered-by-default ()
+  "Measured on real tasks, scripts made the model slower and less reliable,
+so `elisp_script' is offered only when the user adds it (slice 6.5)."
+  (should-not (member "elisp_script" superchat-llm-default-tool-names))
+  (should-not (default-value 'superchat-llm-script-only-tool-names))
   (should (eq 'builtin (superchat-sandbox-tool-class "elisp_script")))
   (should (eq 'full-control (superchat-sandbox-tool-class "eval_elisp"))))
 
 ;;;; Tools reached only from a script (slice 6.2) -------------------------------------
 
-(ert-deftest elisp-script/some-tools-are-reached-only-from-a-script ()
-  (dolist (name superchat-llm-script-only-tool-names)
-    (should-not (member name superchat-llm-default-tool-names)))
-  (should (equal '("list_buffers" "timer_list" "timer_cancel")
-                 superchat-llm-script-only-tool-names))
-  ;; The model's way to discover Emacs stays offered (the M5 record).
-  (dolist (name '("apropos" "describe-function"))
-    (should (member name superchat-llm-default-tool-names)))
-  (let* ((offered (mapcar #'llm-tool-name (superchat-get-llm-tools)))
-         (script (cl-find "elisp_script" (superchat-get-llm-tools)
-                          :key #'llm-tool-name :test #'equal))
-         (description (llm-tool-description script)))
-    (should-not (member "list_buffers" offered))
-    (should (string-match-p "^Tools reached only from a script (they are not offered directly):$"
-                            description))
-    (should (string-match-p "^- list_buffers: List live Emacs buffers" description))
-    (should (string-match-p "^- timer_cancel :id: Cancel a pending timer" description))
-    (should-not (string-match-p "^- read_buffer" description))))
+(ert-deftest elisp-script/script-only-tools-are-listed-in-its-description ()
+  (escr--with nil ()
+    (let* ((offered (mapcar #'llm-tool-name (superchat-get-llm-tools)))
+           (script (cl-find "elisp_script" (superchat-get-llm-tools)
+                            :key #'llm-tool-name :test #'equal))
+           (description (llm-tool-description script)))
+      (should (member "elisp_script" offered))
+      (should-not (member "list_buffers" offered))
+      (should (string-match-p "^Tools reached only from a script (they are not offered directly):$"
+                              description))
+      (should (string-match-p "^- list_buffers: List live Emacs buffers" description))
+      (should (string-match-p "^- timer_cancel :id: Cancel a pending timer" description))
+      (should-not (string-match-p "^- read_buffer" description))))
+  ;; With no script-only tools, the description lists none.
+  (let ((superchat-llm-script-only-tool-names nil)
+        (superchat-llm-tool-names (append superchat-llm-default-tool-names '("elisp_script")))
+        (superchat-llm-tools-list nil))
+    (should-not (string-match-p "Tools reached only from a script"
+                                (llm-tool-description
+                                 (cl-find "elisp_script" (superchat-get-llm-tools)
+                                          :key #'llm-tool-name :test #'equal))))))
 
 (ert-deftest elisp-script/a-script-calls-a-tool-that-is-not-offered ()
   (escr--with-buffer "escr-listed" "x\n"

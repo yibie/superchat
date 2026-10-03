@@ -532,10 +532,11 @@ it, `danger-full-access' included."
   ;; 2026-09-20: `read_reference' joined the list (reference reading on demand);
   ;; it reads bundled data and persists nothing.  2026-10-02 (M11 slice 4): the
   ;; three timer tools joined; they write timer facts to the Tape, no file.
-  ;; Slice 6: `elisp_script', which persists nothing itself; `list_buffers',
-  ;; `timer_list' and `timer_cancel' are now reached from a script.
-  (should (equal '("apropos" "describe-function" "read_buffer" "read_file" "read_reference"
-                   "open_file" "edit_buffer" "eval_elisp" "timer_create" "elisp_script")
+  ;; Slice 6 added `elisp_script' and moved three tools into scripts; slice 6.5
+  ;; took both back after real runs (docs/research/round-trips-first-principles.md).
+  (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
+                   "read_reference" "open_file" "edit_buffer" "eval_elisp"
+                   "timer_create" "timer_list" "timer_cancel")
                  superchat-llm-default-tool-names))
   (dolist (level '(read-only edit-buffers danger-full-access))
     (ert-info ((format "level: %s" level))
