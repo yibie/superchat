@@ -532,9 +532,10 @@ it, `danger-full-access' included."
   ;; 2026-09-20: `read_reference' joined the list (reference reading on demand);
   ;; it reads bundled data and persists nothing.  2026-10-02 (M11 slice 4): the
   ;; three timer tools joined; they write timer facts to the Tape, no file.
+  ;; Slice 6: `elisp_script', which persists nothing itself.
   (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
                    "read_reference" "open_file" "edit_buffer" "eval_elisp"
-                   "timer_create" "timer_list" "timer_cancel")
+                   "timer_create" "timer_list" "timer_cancel" "elisp_script")
                  superchat-llm-default-tool-names))
   (dolist (level '(read-only edit-buffers danger-full-access))
     (ert-info ((format "level: %s" level))

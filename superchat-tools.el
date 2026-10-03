@@ -67,6 +67,13 @@
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
+(declare-function superchat-script-run "superchat-script" (code))
+
+(defun superchat-tool-elisp-script (code)
+  "The `elisp_script' tool: run CODE with `superchat-script-run'."
+  (require 'superchat-script)
+  (superchat-script-run code))
+
 (declare-function superchat-timer-tool-create "superchat-timer"
                   (text kind &optional in-minutes at repeat))
 (declare-function superchat-timer-tool-list "superchat-timer" ())
@@ -1421,7 +1428,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
     "read_reference" "open_file" "edit_buffer" "eval_elisp"
-    "timer_create" "timer_list" "timer_cancel")
+    "timer_create" "timer_list" "timer_cancel" "elisp_script")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
@@ -1883,6 +1890,14 @@ Use this to compose complex views across the conversation tape."
           :function #'superchat-tool-sql)
 
          (superchat--maybe-make-llm-tool
+          "elisp_script"
+          :description "Run a short Emacs Lisp script that calls other tools, so several steps cost one round trip. Call a tool with (tool \"NAME\" :ARGUMENT VALUE ...); it returns the tool's result as a string. Report with (out VALUE); the value of the last form is reported too. Only what the script reports reaches you, so read large things inside the script and report only what you need. The script may use let, if, cond, dolist, mapcar, string and list functions and the like; it may not set variables, define functions, loop with while, or call functions with side effects -- do those through tools. Each call is checked like a direct call. Example: (dolist (b (list \"a.org\" \"b.org\")) (out (tool \"read_buffer\" :buffer b)))"
+          :args (list (list :name "code"
+                            :type 'string
+                            :description "Emacs Lisp forms, not quoted and not in a code fence."))
+          :function #'superchat-tool-elisp-script)
+
+         (superchat--maybe-make-llm-tool
           "timer_create"
           :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
           :args (list (list :name "text" :type 'string
@@ -2095,7 +2110,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "delegate_to_subagent_parallel" "define_tool" "render_ui" "emit_plan"
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
-    "timer_create" "timer_list" "timer_cancel"
+    "timer_create" "timer_list" "timer_cancel" "elisp_script"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
     "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")

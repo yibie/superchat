@@ -901,8 +901,12 @@ The native callback is intentionally not used to acknowledge waiting."
                     (superchat-execution-scope-resolve nil))
                    (superchat-tool-execution--tool-installation
                     superchat-tool-execution--tool-installation)
+                   ;; The call's own id rides along, so a tool that makes
+                   ;; calls of its own (`elisp_script') can number them
+                   ;; under it.
                    (superchat--tool-execution-context
-                    (superchat-tool-execution--snapshot-value context))
+                    (plist-put (superchat-tool-execution--snapshot-value context)
+                               :execution-id execution-id))
                    (superchat-tool-mutation-target nil))
                (let ((value (superchat-tool-execution--normalize-tool-result
                              (apply original-fn args))))
