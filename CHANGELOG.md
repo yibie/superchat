@@ -2,6 +2,17 @@
 
 All notable changes to superchat.
 
+## Unreleased — fewer questions, fewer stops
+
+- When `eval_elisp` is offered, the model is told that each tool call costs a
+  round trip and to ask Emacs for several facts in one call; that on macOS
+  and Windows a case-only rename is not an overwrite; and that a change on
+  disk you asked for in so many words (rename, move, copy, delete) is your
+  decision already, so it does it and says what it did. Saving a buffer it
+  edited stays yours.
+- The `elisp_script` tool exists but is not offered by default: on real
+  tasks it made the model slower and less reliable.
+
 ## Unreleased — work records
 
 - A piece of work that takes more than one conversation now has a work
