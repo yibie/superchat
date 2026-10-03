@@ -161,6 +161,21 @@ Fewer round-trips = less context resend, which compounds over long chats."
                   "previous result.")))
   turn)
 
+(defconst superchat-prompt-script-guidance-text
+  "When a task takes several tool calls -- reading a few buffers, checking \
+something, then editing -- write them as one elisp_script: it runs them in \
+order, even when one needs another's result, and only what the script \
+reports comes back to you.  Call a tool directly when one call is enough."
+  "Guidance on `elisp_script' (M11 slice 6.3), sent when it is offered.")
+
+(defun superchat-prompt-hook--script-guidance (turn)
+  "Add `superchat-prompt-script-guidance-text' to TURN's system prompt."
+  (when superchat-llm-tools-enabled
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n"
+                  superchat-prompt-script-guidance-text)))
+  turn)
+
 ;; ═══════════════════════════════════════════════════════════
 ;; Build-prompt hooks (order matters — see add-hook calls below)
 ;; ═══════════════════════════════════════════════════════════
@@ -337,6 +352,7 @@ It never advertises an entry the request does not have.")
 A block with tool names is rendered only when one of them is on the final tool
 surface; nil is an unconditional block."
   (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
+        ((eq fn #'superchat-prompt-hook--script-guidance) '("elisp_script"))
         ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
         ((eq fn #'superchat-prompt-hook--emacs-operating-note)
          superchat-prompt--operating-note-tools)
@@ -350,6 +366,8 @@ surface; nil is an unconditional block."
               #'superchat-prompt-hook--language-instruction 40)
         (list "parallel-tool-calls"
               #'superchat-prompt-hook--parallel-tool-calls 30)
+        (list "script-guidance"
+              #'superchat-prompt-hook--script-guidance 25)
         (list "self-extension"
               #'superchat-prompt-hook--self-extension 20)
         (list "generative-ui"
@@ -400,7 +418,8 @@ compaction) never received these blocks."
                                          (bound-and-true-p superchat-llm-tool-names))))
                         (and (memq fn (list #'superchat-prompt-hook--emacs-operating-note
                                             #'superchat-prompt-hook--reference-index
-                                            #'superchat-prompt-hook--skill-catalog))
+                                            #'superchat-prompt-hook--skill-catalog
+                                            #'superchat-prompt-hook--script-guidance))
                              decided
                              (not (and (listp decided)
                                        (cl-intersection

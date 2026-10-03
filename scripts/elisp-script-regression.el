@@ -295,5 +295,20 @@ and a refused call does not run, from a script as from the model."
         (should (member "elisp_script" first-tools))
         (should-not (member "list_buffers" first-tools))))))
 
+;;;; Guidance (slice 6.3) --------------------------------------------------------------
+
+(ert-deftest elisp-script/the-model-is-told-when-to-write-a-script ()
+  (escr--with '((:text "ok") (:text "ok")) ()
+    (hm--turn (smoke--open-chat) "hello")
+    (let ((system (hm--text (car (hm--wire 1)))))
+      (should (string-match-p (regexp-quote superchat-prompt-script-guidance-text) system))
+      (should (string-match-p "even when one needs another's result" system)))
+    ;; Without the script tool on the request, nothing is said about it.
+    (let ((superchat-llm-tool-names
+           (remove "elisp_script" superchat-llm-default-tool-names))
+          (superchat-llm-tools-list nil))
+      (hm--turn (smoke--open-chat) "hello again")
+      (should-not (string-match-p "elisp_script" (hm--text (car (hm--wire 2))))))))
+
 (provide 'elisp-script-regression)
 ;;; elisp-script-regression.el ends here
