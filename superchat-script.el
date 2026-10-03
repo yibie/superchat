@@ -41,6 +41,66 @@
 (defconst superchat-script-entries '(tool out)
   "Functions a script may call besides those `unsafep' accepts.")
 
+(defconst superchat-script-read-functions
+  '(;; Files and directories: questions, never changes.
+    expand-file-name abbreviate-file-name file-truename file-relative-name
+    file-exists-p file-directory-p file-regular-p file-readable-p
+    file-symlink-p file-newer-than-file-p file-attributes
+    file-attribute-size file-attribute-modification-time file-attribute-type
+    directory-files directory-files-recursively file-expand-wildcards
+    locate-dominating-file file-name-directory file-name-nondirectory
+    file-name-extension file-name-sans-extension file-name-base
+    file-name-as-directory directory-file-name
+    ;; Buffers.
+    buffer-list get-buffer get-file-buffer find-buffer-visiting buffer-name
+    buffer-file-name buffer-live-p buffer-modified-p buffer-size
+    buffer-local-value buffer-substring-no-properties
+    save-current-buffer set-buffer
+    ;; Windows, frames and tabs.
+    selected-window selected-frame frame-list window-list window-buffer
+    window-live-p window-parameter window-dedicated-p window-total-width
+    window-total-height window-body-width window-body-height
+    window-left-column window-top-line window-edges window-point window-start
+    get-buffer-window get-buffer-window-list frame-parameter
+    frame-selected-window frame-root-window tab-bar-tabs
+    ;; Time.
+    current-time float-time format-time-string decode-time encode-time
+    time-add time-subtract time-less-p time-equal-p days-between
+    ;; Lists, sequences and strings.
+    seq-filter seq-remove seq-map seq-mapn seq-find seq-some seq-every-p
+    seq-take seq-drop seq-uniq seq-sort seq-sort-by seq-reverse seq-count
+    seq-position seq-contains-p seq-elt seq-length seq-into seq-group-by
+    cl-remove-if cl-remove-if-not cl-find cl-find-if cl-some cl-every
+    cl-position cl-count cl-subseq cl-sort-by
+    string-join string-trim string-trim-left string-trim-right
+    string-prefix-p string-suffix-p string-empty-p string-blank-p
+    split-string replace-regexp-in-string string-replace
+    format-message number-to-string string-to-number
+    ;; The environment.
+    getenv user-login-name user-full-name system-name)
+  "Functions a script may call though `unsafep' does not know them as safe.
+They ask about files, buffers, windows, time and data and change nothing a
+script could leave behind: the current buffer `set-buffer' changes is put back
+when the script ends.  Found from the real runs of 2026-10-03, where 14 of 25
+scripts were refused, most for `expand-file-name' (M11 slice 6.4).")
+
+(defconst superchat-script-macros
+  '(with-current-buffer when-let when-let* if-let if-let* and-let*)
+  "Macros a script may use; they are expanded before the check.
+Other macros are refused: one could expand into a loop with no end.")
+
+(defun superchat-script--expand (form)
+  "FORM with the macros of `superchat-script-macros' expanded, others kept."
+  (cond ((not (consp form)) form)
+        ((memq (car form) '(quote function)) form)
+        ((memq (car form) superchat-script-macros)
+         (superchat-script--expand (macroexpand-1 form)))
+        (t (let ((rest form) out)
+             (while (consp rest)
+               (push (superchat-script--expand (car rest)) out)
+               (setq rest (cdr rest)))
+             (nconc (nreverse out) rest)))))
+
 (defconst superchat-script-not-callable
   '("elisp_script" "ask_user" "delegate_to_subagent" "delegate_to_subagent_parallel")
   "Tools a script cannot call: itself, and tools that wait for an answer.")
@@ -64,20 +124,27 @@
     (goto-char (point-min))
     (let (forms)
       (while (progn (forward-comment (buffer-size)) (not (eobp)))
-        (push (read (current-buffer)) forms))
+        (push (condition-case nil
+                  (read (current-buffer))
+                (end-of-file
+                 (error "a parenthesis or a string is not closed")))
+              forms))
       (cons 'progn (nreverse forms)))))
 
 (defun superchat-script-check (form)
-  "Return why FORM may not run, as a string, or nil when it may."
+  "Return why FORM may not run, as a string, or nil when it may.
+FORM is checked with the allowed macros expanded (`superchat-script--expand')."
   (let ((forbidden (superchat-script--forbidden-in form))
-        (unsafe (let ((safe-functions superchat-script-entries))
-                  (unsafep form))))
+        (unsafe (let ((safe-functions (append superchat-script-entries
+                                              superchat-script-read-functions)))
+                  (unsafep (superchat-script--expand form)))))
     (cond (forbidden (format "`%s' is not allowed in a script" forbidden))
           ((and (consp unsafe) (eq (car unsafe) 'global-variable))
            (format "setting the variable `%s' is not allowed in a script"
                    (cadr unsafe)))
           ((and (consp unsafe) (eq (car unsafe) 'function))
-           (format "`%s' is not allowed in a script" (cadr unsafe)))
+           (format "`%s' is not allowed in a script; a script may only read \
+and compute -- make changes through a tool, or use eval_elisp" (cadr unsafe)))
           (unsafe (format "%S is not allowed in a script" unsafe)))))
 
 (defvar superchat-llm-tool-names)
@@ -108,9 +175,11 @@
     (cl-loop for (key _value) on plist by #'cddr
              unless (and (keywordp key)
                          (member (substring (symbol-name key) 1) names))
-             do (error "%s has no argument %s; its arguments are %s"
-                       (llm-tool-name tool) key
-                       (mapconcat (lambda (name) (concat ":" name)) names " ")))
+             do (if names
+                    (error "%s has no argument %s; its arguments are %s"
+                           (llm-tool-name tool) key
+                           (mapconcat (lambda (name) (concat ":" name)) names " "))
+                  (error "%s takes no arguments" (llm-tool-name tool))))
     (mapcar (lambda (arg)
               (let ((key (intern (concat ":" (plist-get arg :name)))))
                 (if (or (plist-member plist key) (plist-get arg :optional))
@@ -164,7 +233,11 @@ error; calls it made are not undone."
                   nil))
         (let* ((error-text nil)
                (value (condition-case err
-                          (eval `(cl-flet ((tool ,#'tool) (out ,#'out)) ,form) t)
+                          ;; The current buffer a script switches to is put back.
+                          (save-current-buffer
+                            (eval `(cl-flet ((tool ,#'tool) (out ,#'out))
+                                     ,(superchat-script--expand form))
+                                  t))
                         (error (setq error-text (error-message-string err)) nil))))
           (when (and value (not error-text)) (out value))
           (superchat-script--clip

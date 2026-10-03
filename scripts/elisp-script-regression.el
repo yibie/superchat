@@ -310,5 +310,61 @@ and a refused call does not run, from a script as from the model."
       (hm--turn (smoke--open-chat) "hello again")
       (should-not (string-match-p "elisp_script" (hm--text (car (hm--wire 2))))))))
 
+;;;; A wider language (slice 6.4) ------------------------------------------------------
+
+(ert-deftest elisp-script/reads-the-real-runs-asked-for-are-allowed ()
+  "The functions and macros scripts were refused for in the runs of
+2026-10-03 run now: they only read."
+  (let ((dir (file-name-as-directory (make-temp-file "escr-dir-" t))))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "a.JPG" dir) (insert "x"))
+          (with-temp-file (expand-file-name "b.txt" dir) (insert "y"))
+          (should (equal "Script completed. 0 tool calls.\n(\"a.JPG\")"
+                         (superchat-script-run
+                          (format "(let ((d (expand-file-name %S)))
+                                     (out (seq-filter (lambda (f) (string-suffix-p \".JPG\" f))
+                                                      (directory-files d nil \"\\\\`[^.]\"))))"
+                                  dir))))
+          (should (string-match-p "\\`Script completed\\. 0 tool calls\\.\n.*a\\.JPG"
+                                  (superchat-script-run
+                                   (format "(out (file-expand-wildcards %S))"
+                                           (concat dir "*.JPG"))))))
+      (delete-directory dir t)))
+  (should (string-prefix-p "Script completed. 0 tool calls.\n"
+                           (superchat-script-run
+                            "(out (mapcar (lambda (w) (buffer-name (window-buffer w))) (window-list)))")))
+  (should (equal "Script completed. 0 tool calls.\n3"
+                 (superchat-script-run "(when-let ((x 1) (y 2)) (out (+ x y)))")))
+  (should (equal "Script completed. 0 tool calls.\nnone"
+                 (superchat-script-run "(if-let* ((x nil)) (out x) (out \"none\"))"))))
+
+(ert-deftest elisp-script/with-current-buffer-reads-and-the-buffer-is-put-back ()
+  (escr--with-buffer "escr-other" "OTHER-TEXT\n"
+    (with-temp-buffer
+      (let ((here (current-buffer)))
+        (should (equal "Script completed. 0 tool calls.\nOTHER-TEXT\n"
+                       (superchat-script-run
+                        "(with-current-buffer \"escr-other\" (out (buffer-substring-no-properties (point-min) (point-max))))")))
+        ;; A bare set-buffer is undone when the script ends.
+        (superchat-script-run "(set-buffer \"escr-other\")")
+        (should (eq here (current-buffer)))))))
+
+(ert-deftest elisp-script/what-stays-refused-says-how-to-change-things ()
+  (let ((result (superchat-script-run "(rename-file \"a\" \"b\")")))
+    (should (string-match-p "`rename-file' is not allowed in a script; a script may only read and compute -- make changes through a tool, or use eval_elisp" result)))
+  (should (string-match-p "`require' is not allowed" (superchat-script-run "(require 'org)")))
+  ;; A macro outside the list stays refused: it could expand into a loop.
+  (should (string-match-p "`cl-loop' is not allowed" (superchat-script-run "(cl-loop for i below 3 collect i)")))
+  (should (equal "Script refused: the script cannot be read: a parenthesis or a string is not closed.  Nothing was run."
+                 (superchat-script-run "(out \"unclosed"))))
+
+(ert-deftest elisp-script/a-tool-without-arguments-says-so ()
+  (escr--with nil ()
+    (setq smoke--script
+          (list (escr--script-round "(tool \"list_buffers\" :filter \"x\")") '(:text "done")))
+    (hm--turn (smoke--open-chat) "go")
+    (should (string-match-p "Script error: list_buffers takes no arguments" (escr--result 2)))))
+
 (provide 'elisp-script-regression)
 ;;; elisp-script-regression.el ends here
