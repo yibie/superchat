@@ -146,6 +146,25 @@ reach sends it hunting for workarounds."
                               actions)))))
   turn)
 
+(defconst superchat-prompt-ask-once-text
+  "Each tool call costs a round trip. When you need several facts from \
+Emacs, ask for all of them in one eval_elisp that returns a list, for \
+example (list :today (format-time-string \"%F %A\") :windows (mapcar \
+(lambda (w) (buffer-name (window-buffer w))) (window-list))), not one call \
+per fact."
+  "Guidance to gather facts in one call (M11 slice 6.6).
+Most round trips in real runs were the model asking Emacs one question at a
+time (docs/research/round-trips-first-principles.md).")
+
+(defun superchat-prompt-hook--ask-once (turn)
+  "Add `superchat-prompt-ask-once-text' to TURN's system prompt.
+Rendered only when `eval_elisp' is on the request's tools."
+  (when superchat-llm-tools-enabled
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n"
+                  superchat-prompt-ask-once-text)))
+  turn)
+
 (defun superchat-prompt-hook--parallel-tool-calls (turn)
   "Add a brief guidance block encouraging parallel read-only tool calls.
 This is only injected when `superchat-llm-tools-enabled' is non-nil.
@@ -353,6 +372,7 @@ A block with tool names is rendered only when one of them is on the final tool
 surface; nil is an unconditional block."
   (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
         ((eq fn #'superchat-prompt-hook--script-guidance) '("elisp_script"))
+        ((eq fn #'superchat-prompt-hook--ask-once) '("eval_elisp"))
         ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
         ((eq fn #'superchat-prompt-hook--emacs-operating-note)
          superchat-prompt--operating-note-tools)
@@ -366,6 +386,8 @@ surface; nil is an unconditional block."
               #'superchat-prompt-hook--language-instruction 40)
         (list "parallel-tool-calls"
               #'superchat-prompt-hook--parallel-tool-calls 30)
+        (list "ask-once"
+              #'superchat-prompt-hook--ask-once 28)
         (list "script-guidance"
               #'superchat-prompt-hook--script-guidance 25)
         (list "self-extension"
@@ -419,7 +441,8 @@ compaction) never received these blocks."
                         (and (memq fn (list #'superchat-prompt-hook--emacs-operating-note
                                             #'superchat-prompt-hook--reference-index
                                             #'superchat-prompt-hook--skill-catalog
-                                            #'superchat-prompt-hook--script-guidance))
+                                            #'superchat-prompt-hook--script-guidance
+                                            #'superchat-prompt-hook--ask-once))
                              decided
                              (not (and (listp decided)
                                        (cl-intersection

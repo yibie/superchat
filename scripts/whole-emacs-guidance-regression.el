@@ -34,6 +34,21 @@
     ;; Still never an instruction to persist.
     (should-not (string-match-p "save-buffer\\|write-file" text))))
 
+(ert-deftest whole-emacs-guidance/ask-emacs-everything-in-one-call ()
+  "M11 slice 6.6: one eval_elisp returning a list, not one call per fact."
+  (let ((text (superchat-turn-system-prompt
+               (let ((superchat-llm-tools-enabled t))
+                 (superchat-prompt-hook--ask-once (superchat-turn-new ""))))))
+    (should (string-match-p "Each tool call costs a round trip\\." text))
+    (should (string-match-p "in one eval_elisp that returns a list" text))
+    (should (string-match-p "not one call per fact\\.\\'" text))
+    ;; The example in it is Lisp that reads, and it parses.
+    (should (read (substring superchat-prompt-ask-once-text
+                             (string-match "(list" superchat-prompt-ask-once-text))))
+    ;; It speaks of eval_elisp, so it is sent only when eval_elisp is offered.
+    (should (equal '("eval_elisp")
+                   (superchat-prompt--block-tools #'superchat-prompt-hook--ask-once)))))
+
 (provide 'whole-emacs-guidance-regression)
 
 ;;; whole-emacs-guidance-regression.el ends here
