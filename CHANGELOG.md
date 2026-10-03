@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — reminders and scheduled tasks that survive a restart
+
+- Ask "remind me in 20 minutes to call mom" or "every morning at 8, give me
+  today's agenda": the model sets a Superchat timer with the new
+  `timer_create` tool (`timer_list` and `timer_cancel` list and cancel them).
+- A timer belongs to the conversation's workspace and is kept on the Tape,
+  so it survives a restart. When it comes due you are told in the echo area
+  (with the bell; see `superchat-timer-notify-function`) and a line is left
+  in the workspace's main conversation; a scheduled task also starts the
+  model there. One that came due while Emacs was closed fires once after
+  Superchat loads, marked with the time it was due; a repeating one fires
+  only its latest missed occurrence.
+- The three tools are on the default tool surface and need no approval.
+
 ## Unreleased — a Personal Workspace for the agenda, feeds and chats
 
 - `M-x superchat-set-personal-workspace` designates a directory as your
