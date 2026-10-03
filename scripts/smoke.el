@@ -114,6 +114,19 @@
           (smoke--requests nil) (smoke--timers nil))
      (setenv "HOME" home)
      (superchat-db-open)
+     ;; Requests carry the window arrangement (M11 slice 5): every case starts
+     ;; from one window showing *scratch*, tab bar off, whatever an earlier
+     ;; test left on the frame, and the frame is put back afterwards.
+     (setq smoke--frame-before (list (current-window-configuration)
+                                     (bound-and-true-p tab-bar-mode)))
+     (when (fboundp 'tab-bar-mode) (tab-bar-mode -1))
+     (dolist (window (window-list nil 'no-minibuf))
+       (when (and (window-live-p window) (window-parameter window 'window-side))
+         (ignore-errors (delete-window window))))
+     (delete-other-windows)
+     ;; Show *scratch* without making it current: the current buffer keeps the
+     ;; `default-directory' bound above.
+     (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
      (unwind-protect
          (cl-letf (((symbol-function 'llm-chat-streaming)
                     (if real (symbol-function 'llm-chat-streaming)
@@ -132,7 +145,13 @@
            (let ((kill-buffer-query-functions nil)) (ignore-errors (kill-buffer buffer)))))
        (ignore-errors (superchat-db-close))
        (ignore-errors (delete-directory data t))
-       (ignore-errors (delete-directory home t)))))
+       (ignore-errors (delete-directory home t))
+       (ignore-errors
+         (when (fboundp 'tab-bar-mode) (tab-bar-mode (if (nth 1 smoke--frame-before) 1 -1)))
+         (set-window-configuration (nth 0 smoke--frame-before))))))
+
+(defvar smoke--frame-before nil
+  "The window configuration and tab-bar state a fixture put back.")
 
 (defvar smoke--origin-buffer-name " *smoke-origin*"
   "The buffer every case opens its chat from.

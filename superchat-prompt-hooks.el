@@ -781,6 +781,115 @@ neither is appended to the user's own text."
                                   :selection t))))))))))
 
 
+;;;; The window arrangement (contract W8) ---------------------------------------
+
+(defconst superchat-prompt--windows-max 12
+  "Most windows the arrangement lists; the rest are counted.")
+
+(defconst superchat-prompt--tabs-max 10
+  "Most tabs the arrangement lists; the rest are counted.")
+
+(defun superchat-prompt--short-name (name)
+  "NAME cut to 60 characters."
+  (if (> (length name) 60) (concat (substring name 0 57) "...") name))
+
+(defun superchat-prompt--window-arrangement (frame view)
+  "Return FRAME's arrangement as data: tabs and windows, or nil.
+VIEW is the request's chat View, marked as this conversation.  Each window
+is (:buffer NAME :file FILE :width W :height H :left L :top T :selected B
+:conversation B), in `window-list' order from the top-left window; L and T
+count from the top left of those windows.  Data
+only, so the facts are those of the moment the request is prepared."
+  (when (frame-live-p frame)
+    (let* ((windows (window-list frame 'no-minibuf (frame-first-window frame)))
+           ;; Positions count from the top left of the windows listed, so
+           ;; menu and tab bars do not shift them.
+           (left0 (apply #'min (mapcar #'window-left-column windows)))
+           (top0 (apply #'min (mapcar #'window-top-line windows)))
+           (tabs (and (fboundp 'tab-bar-tabs)
+                      (or (bound-and-true-p tab-bar-mode)
+                          (> (length (tab-bar-tabs frame)) 1))
+                      (tab-bar-tabs frame))))
+      (list :frames (length (visible-frame-list))
+            :tabs (mapcar (lambda (tab)
+                            (list :name (alist-get 'name tab)
+                                  :current (eq (car tab) 'current-tab)))
+                          tabs)
+            :windows
+            (mapcar (lambda (window)
+                      (let ((buffer (window-buffer window)))
+                        (list :buffer (buffer-name buffer)
+                              :file (buffer-file-name buffer)
+                              :width (window-total-width window)
+                              :height (window-total-height window)
+                              :left (- (window-left-column window) left0)
+                              :top (- (window-top-line window) top0)
+                              :selected (eq window (frame-selected-window frame))
+                              :conversation (and view (eq buffer view)))))
+                    windows)))))
+
+(defun superchat-prompt--window-arrangement-render (arrangement)
+  "Render ARRANGEMENT as the request's [Emacs windows] block, or nil."
+  (when-let* ((windows (plist-get arrangement :windows)))
+    (let ((tabs (plist-get arrangement :tabs))
+          (frames (plist-get arrangement :frames)))
+      (string-trim-right
+       (concat
+        "[Emacs windows]\n"
+        (when (and (integerp frames) (> frames 1))
+          (format "Frames: %d visible; these are the selected frame's.\n" frames))
+        (when tabs
+          (concat
+           (format "Tabs (%d): " (length tabs))
+           (mapconcat (lambda (tab)
+                        (format (if (plist-get tab :current) "[%s] (current)" "%s")
+                                (superchat-prompt--short-name (or (plist-get tab :name) ""))))
+                      (seq-take tabs superchat-prompt--tabs-max)
+                      ", ")
+           (if (> (length tabs) superchat-prompt--tabs-max)
+               (format ", and %d more" (- (length tabs) superchat-prompt--tabs-max))
+             "")
+           "\n"))
+        (format "Windows of the current tab (%d), from the top left:\n" (length windows))
+        (mapconcat
+         (lambda (window)
+           (concat
+            ;; The chat window is named by what it is: its buffer name says
+            ;; nothing the model needs.
+            (if (plist-get window :conversation)
+                "- this conversation"
+              (format "- %s" (superchat-prompt--short-name (plist-get window :buffer))))
+            (when-let* ((file (plist-get window :file)))
+              (format " (%s)" (abbreviate-file-name file)))
+            ;; Heights are left out: they follow the frame's height and the
+            ;; echo area's, which change under the user and say little.
+            (format ", %d columns wide at column %d, line %d"
+                    (plist-get window :width)
+                    (plist-get window :left) (plist-get window :top))
+            (when (plist-get window :selected) ", selected")))
+         (seq-take windows superchat-prompt--windows-max)
+         "\n")
+        (if (> (length windows) superchat-prompt--windows-max)
+            (format "\n- and %d more" (- (length windows) superchat-prompt--windows-max))
+          ""))
+       "\n+"))))
+
+(defun superchat-prompt-collector--windows (env _state _tools)
+  "Return the window arrangement of the selected frame as a `context' fragment.
+Chat, inline-ask and inline-act only.  The arrangement is taken when the
+request is collected; a request whose text the user already previewed and
+confirmed (`:chat-prompt-override') is not rendered into again."
+  (let* ((context (plist-get env :context))
+         (override (plist-get context :chat-prompt-override)))
+    (when (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
+               (not (and (stringp override) (not (string-empty-p override)))))
+      (when-let* ((text (superchat-prompt--window-arrangement-render
+                         (superchat-prompt--window-arrangement
+                          (selected-frame) (plist-get context :chat-buffer)))))
+        (list (superchat-prompt-fragment
+               :owner 'chat :id "emacs-windows" :slot 'context :text text
+               :priority 0 :budget-class 'hard))))))
+
 (defun superchat-prompt-collector--prepared (env _state _tools)
   "Return the fragments of a producer that prepared its whole user message.
 Subagent, workflow, skills-match and compaction hand the driver
@@ -826,6 +935,8 @@ selection, memory, history, plan, and a producer's prepared text."
                           #'superchat-prompt-collector--origin :owner 'chat)
     (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
+    (superchat-context-register 'windows
+                          #'superchat-prompt-collector--windows :owner 'chat)
     ;; Registered at the cutover; until then the collector list is as it was.
     (progn
       (superchat-context-register 'permission-context

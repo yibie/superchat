@@ -57,6 +57,8 @@
 (require 'superchat-plugin)
 (require 'superchat-event)
 (require 'superchat-tape)
+(declare-function superchat-view-session-configuration "superchat-tape-view"
+                  (session-id))
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-runtime-admit-between-turns "superchat-runtime"
@@ -199,13 +201,30 @@ delegated to."
         (collect child (ignore-errors (superchat-tape-replay-events child)))))
     (delete-dups (nreverse pairs))))
 
+(defun superchat-changes--workspace-root (session-id)
+  "The root of the Workspace SESSION-ID is bound to, or nil."
+  (and (fboundp 'superchat-view-session-configuration)
+       (stringp session-id)
+       (let ((root (plist-get (superchat-view-session-configuration session-id)
+                              :workspace-root)))
+         (and (stringp root) (not (string-empty-p root)) root))))
+
+(defun superchat-changes--outside-p (file root)
+  "Non-nil when FILE lies outside the directory ROOT.
+Nil when either is nil: a conversation with no Workspace has no outside."
+  (and (stringp file) (stringp root)
+       (not (file-in-directory-p (file-truename file) (file-truename root)))))
+
 (defun superchat-changes-candidates (session-id &optional run-id)
   "Return the unsaved buffers SESSION-ID's structured tool calls edited.
-Each element is (:buffer BUFFER :name NAME :file FILE :new-file BOOL).  With
-RUN-ID, only what that Run (and the Runs it delegated to) edited.  Derived
-from the Tape and the buffers' state now; see this file's commentary for what
-is not attributed."
+Each element is (:buffer BUFFER :name NAME :file FILE :new-file BOOL
+:outside ROOT).  `:outside' is the root of SESSION-ID's Workspace when FILE
+lies outside it, else nil: such an edit is not stopped, it is pointed out
+before saving (contract W9).  With RUN-ID, only what that Run (and the Runs
+it delegated to) edited.  Derived from the Tape and the buffers' state now;
+see this file's commentary for what is not attributed."
   (let ((runs (superchat-changes--editing-runs session-id run-id))
+        (root (superchat-changes--workspace-root session-id))
         rows)
     (when runs
       ;; The buffer is recognized by its own mark, never looked up by the name
@@ -217,18 +236,24 @@ is not attributed."
                    (cl-intersection runs (superchat-changes--marks buffer) :test #'equal))
           (let ((visited (buffer-file-name buffer)))
             (push (list :buffer buffer :name (buffer-name buffer) :file visited
-                        :new-file (and visited (not (file-exists-p visited)) t))
+                        :new-file (and visited (not (file-exists-p visited)) t)
+                        :outside (and (superchat-changes--outside-p visited root)
+                                      root))
                   rows)))))
     (nreverse rows)))
 
 (defun superchat-changes--lines (rows)
   (mapconcat (lambda (row)
-               (format "- %s%s"
+               (format "- %s%s%s"
                        (plist-get row :name)
                        (cond ((plist-get row :new-file)
                               (format " -> %s (new file, nothing on disk yet)" (plist-get row :file)))
                              ((plist-get row :file) (format " -> %s" (plist-get row :file)))
-                             (t " (not visiting a file)"))))
+                             (t " (not visiting a file)"))
+                       (if (plist-get row :outside)
+                           (format " [outside this workspace, %s]"
+                                   (abbreviate-file-name (plist-get row :outside)))
+                         "")))
              rows "\n"))
 
 (defun superchat-changes-run-summary (session-id run-id)
@@ -345,6 +370,9 @@ on disk yet is compared with the null device, so the whole text is added."
                       (1+ (cdr state)) (length (car state))
                       (if live (buffer-name buffer) (plist-get row :name))
                       (if file (format " (%s)" (abbreviate-file-name file)) "")))
+      (when (and file (plist-get row :outside))
+        (insert (format "Outside this conversation's workspace (%s).\n"
+                        (abbreviate-file-name (plist-get row :outside)))))
       (insert (cond ((not file) "That buffer is gone or no longer visits a file.\n")
                     ((file-exists-p file)
                      "Unsaved.  The diff below is what saving would write to disk.\n")
