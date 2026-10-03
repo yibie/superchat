@@ -282,9 +282,10 @@ A nil FOR clears the wait."
                  (and (plist-get record :follows)
                       (format "Follows: %s" (plist-get record :follows)))
                  (format "Done so far: %s" (or (plist-get record :progress) "nothing recorded yet"))
-                 (and (plist-get record :blocked)
+                 ;; A completed record has no next step: these would be stale.
+                 (and (plist-get record :blocked) (not (plist-get record :conclusion))
                       (format "Why the next step waits: %s" (plist-get record :blocked)))
-                 (and (plist-get record :resume)
+                 (and (plist-get record :resume) (not (plist-get record :conclusion))
                       (format "Pick up from: %s" (plist-get record :resume)))
                  (and files
                       (format "Files its executions changed (recorded by Superchat): %s"

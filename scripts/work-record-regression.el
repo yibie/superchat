@@ -131,9 +131,16 @@
       (should (eq 'continuable (superchat-work-status (superchat-work-get id))))
       (should-error (superchat-work-wait session id "tomorrow"))
       (should-error (superchat-work-complete session id "  "))
+      (superchat-work-update session id "Built" "Waiting for sign-off" "Tag it")
       (superchat-work-complete session id "Released 1.2")
       (let ((record (superchat-work-get id)))
         (should (eq 'completed (superchat-work-status record)))
+        ;; A completed record shows no next step (found in the real task K2C).
+        (let ((text (superchat-work-render record)))
+          (should (string-match-p "^Conclusion: Released 1\\.2$" text))
+          (should (string-match-p "^Done so far: Built$" text))
+          (should-not (string-match-p "Why the next step waits" text))
+          (should-not (string-match-p "Pick up from" text)))
         (should (equal "model" (plist-get record :completed-by))))
       ;; The current record ends with it; nothing reopens it.
       (should-not (superchat-work-current session))
