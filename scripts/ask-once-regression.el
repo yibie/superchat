@@ -38,5 +38,39 @@
                                         (hm--text (car (hm--wire 2))))))
         (kill-buffer source)))))
 
+(ert-deftest ask-once/case-only-renames-are-explained-where-eval-elisp-is-offered ()
+  "M11 slice 6.7: in A2 the model took a case-only rename for an overwrite."
+  (should (string-match-p "differ only in case are the same file"
+                          superchat-prompt-case-only-names-text))
+  (should (string-match-p "(file-name-case-insensitive-p" superchat-prompt-case-only-names-text))
+  (should (equal '("eval_elisp")
+                 (superchat-prompt--block-tools #'superchat-prompt-hook--case-only-names)))
+  (hm--fixture '((:text "ok") (:text "ok"))
+    (hm--turn (smoke--open-chat) "hello")
+    (should (string-match-p (regexp-quote superchat-prompt-case-only-names-text)
+                            (hm--text (car (hm--wire 1)))))
+    (let ((source (get-buffer-create "ask-once-source")))
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (insert "abc\n")
+              (superchat-inline-ask "what is this" (cons (point-min) (point-max))))
+            (should (smoke--wait (lambda () (= 2 (length hm--wires))) 10))
+            (should-not (string-match-p "differ only in case"
+                                        (hm--text (car (hm--wire 2))))))
+        (kill-buffer source)))))
+
+(ert-deftest ask-once/rename-file-does-a-case-only-rename-here ()
+  "The fact the line states, checked on the file system the tests run on."
+  (let ((dir (file-name-as-directory (make-temp-file "ask-once-case-" t))))
+    (unwind-protect
+        (if (not (file-name-case-insensitive-p dir))
+            (ert-skip "This file system tells case apart")
+          (with-temp-file (expand-file-name "A.JPG" dir) (insert "x"))
+          (should (file-exists-p (expand-file-name "A.jpg" dir)))
+          (rename-file (expand-file-name "A.JPG" dir) (expand-file-name "A.jpg" dir))
+          (should (equal '("A.jpg") (directory-files dir nil "\\`[^.]"))))
+      (delete-directory dir t))))
+
 (provide 'ask-once-regression)
 ;;; ask-once-regression.el ends here

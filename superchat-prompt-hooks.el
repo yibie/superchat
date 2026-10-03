@@ -156,6 +156,25 @@ per fact."
 Most round trips in real runs were the model asking Emacs one question at a
 time (docs/research/round-trips-first-principles.md).")
 
+(defconst superchat-prompt-case-only-names-text
+  "File systems on macOS and Windows usually ignore case: two names that \
+differ only in case are the same file there, so file-exists-p is true for \
+the new name of a case-only rename.  Check (file-name-case-insensitive-p \
+DIRECTORY) before treating such a rename as an overwrite; rename-file does a \
+case-only rename correctly."
+  "A fact about file names the model got wrong in real runs (M11 slice 6.7).
+In the task A2 it took the target of a case-only rename for an existing file
+and stopped to ask the user.")
+
+(defun superchat-prompt-hook--case-only-names (turn)
+  "Add `superchat-prompt-case-only-names-text' to TURN's system prompt.
+Rendered only when `eval_elisp' is on the request's tools."
+  (when superchat-llm-tools-enabled
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n"
+                  superchat-prompt-case-only-names-text)))
+  turn)
+
 (defun superchat-prompt-hook--ask-once (turn)
   "Add `superchat-prompt-ask-once-text' to TURN's system prompt.
 Rendered only when `eval_elisp' is on the request's tools."
@@ -373,6 +392,7 @@ surface; nil is an unconditional block."
   (cond ((eq fn #'superchat-prompt-hook--self-extension) '("define_tool"))
         ((eq fn #'superchat-prompt-hook--script-guidance) '("elisp_script"))
         ((eq fn #'superchat-prompt-hook--ask-once) '("eval_elisp"))
+        ((eq fn #'superchat-prompt-hook--case-only-names) '("eval_elisp"))
         ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
         ((eq fn #'superchat-prompt-hook--emacs-operating-note)
          superchat-prompt--operating-note-tools)
@@ -388,6 +408,8 @@ surface; nil is an unconditional block."
               #'superchat-prompt-hook--parallel-tool-calls 30)
         (list "ask-once"
               #'superchat-prompt-hook--ask-once 28)
+        (list "case-only-names"
+              #'superchat-prompt-hook--case-only-names 27)
         (list "script-guidance"
               #'superchat-prompt-hook--script-guidance 25)
         (list "self-extension"
@@ -442,7 +464,8 @@ compaction) never received these blocks."
                                             #'superchat-prompt-hook--reference-index
                                             #'superchat-prompt-hook--skill-catalog
                                             #'superchat-prompt-hook--script-guidance
-                                            #'superchat-prompt-hook--ask-once))
+                                            #'superchat-prompt-hook--ask-once
+                                            #'superchat-prompt-hook--case-only-names))
                              decided
                              (not (and (listp decided)
                                        (cl-intersection
