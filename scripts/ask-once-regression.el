@@ -60,6 +60,29 @@
                                         (hm--text (car (hm--wire 2))))))
         (kill-buffer source)))))
 
+(ert-deftest ask-once/a-change-on-disk-the-user-asked-for-is-theirs ()
+  "M11 slice 6.8: in A2 the model stopped before a rename the user asked for."
+  (should (string-match-p "^Saving a buffer you edited is the user's decision\\."
+                          superchat-prompt-asked-disk-changes-text))
+  (should (string-match-p "is already the user's decision: do it" superchat-prompt-asked-disk-changes-text))
+  (should (string-match-p "permission level decides" superchat-prompt-asked-disk-changes-text))
+  (should (equal '("eval_elisp")
+                 (superchat-prompt--block-tools #'superchat-prompt-hook--asked-disk-changes)))
+  (hm--fixture '((:text "ok") (:text "ok"))
+    (hm--turn (smoke--open-chat) "hello")
+    (should (string-match-p (regexp-quote superchat-prompt-asked-disk-changes-text)
+                            (hm--text (car (hm--wire 1)))))
+    (let ((source (get-buffer-create "ask-once-source")))
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (insert "abc\n")
+              (superchat-inline-ask "what is this" (cons (point-min) (point-max))))
+            (should (smoke--wait (lambda () (= 2 (length hm--wires))) 10))
+            (should-not (string-match-p "already the user's decision"
+                                        (hm--text (car (hm--wire 2))))))
+        (kill-buffer source)))))
+
 (ert-deftest ask-once/rename-file-does-a-case-only-rename-here ()
   "The fact the line states, checked on the file system the tests run on."
   (let ((dir (file-name-as-directory (make-temp-file "ask-once-case-" t))))

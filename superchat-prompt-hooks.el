@@ -175,6 +175,25 @@ Rendered only when `eval_elisp' is on the request's tools."
                   superchat-prompt-case-only-names-text)))
   turn)
 
+(defconst superchat-prompt-asked-disk-changes-text
+  "Saving a buffer you edited is the user's decision. A change on disk the \
+user asks for in so many words -- rename, move, copy or delete these files \
+-- is already the user's decision: do it (the permission level decides \
+whether you are asked first), then say exactly what you did."
+  "What the model is told about changes on disk the user asked for (M11 6.8).
+In the task A2 the model understood a case-only rename and still stopped to
+ask, reading \"saving a buffer to disk is the user's decision\" as covering
+the rename the user had just asked for.")
+
+(defun superchat-prompt-hook--asked-disk-changes (turn)
+  "Add `superchat-prompt-asked-disk-changes-text' to TURN's system prompt.
+Rendered only when `eval_elisp' is on the request's tools."
+  (when superchat-llm-tools-enabled
+    (setf (superchat-turn-system-prompt turn)
+          (concat (superchat-turn-system-prompt turn) "\n"
+                  superchat-prompt-asked-disk-changes-text)))
+  turn)
+
 (defun superchat-prompt-hook--ask-once (turn)
   "Add `superchat-prompt-ask-once-text' to TURN's system prompt.
 Rendered only when `eval_elisp' is on the request's tools."
@@ -393,6 +412,7 @@ surface; nil is an unconditional block."
         ((eq fn #'superchat-prompt-hook--script-guidance) '("elisp_script"))
         ((eq fn #'superchat-prompt-hook--ask-once) '("eval_elisp"))
         ((eq fn #'superchat-prompt-hook--case-only-names) '("eval_elisp"))
+        ((eq fn #'superchat-prompt-hook--asked-disk-changes) '("eval_elisp"))
         ((eq fn #'superchat-prompt-hook--generative-ui) '("render_ui"))
         ((eq fn #'superchat-prompt-hook--emacs-operating-note)
          superchat-prompt--operating-note-tools)
@@ -410,6 +430,8 @@ surface; nil is an unconditional block."
               #'superchat-prompt-hook--ask-once 28)
         (list "case-only-names"
               #'superchat-prompt-hook--case-only-names 27)
+        (list "asked-disk-changes"
+              #'superchat-prompt-hook--asked-disk-changes 26)
         (list "script-guidance"
               #'superchat-prompt-hook--script-guidance 25)
         (list "self-extension"
@@ -465,7 +487,8 @@ compaction) never received these blocks."
                                             #'superchat-prompt-hook--skill-catalog
                                             #'superchat-prompt-hook--script-guidance
                                             #'superchat-prompt-hook--ask-once
-                                            #'superchat-prompt-hook--case-only-names))
+                                            #'superchat-prompt-hook--case-only-names
+                                            #'superchat-prompt-hook--asked-disk-changes))
                              decided
                              (not (and (listp decided)
                                        (cl-intersection
