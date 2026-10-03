@@ -960,6 +960,20 @@ confirmed (`:chat-prompt-override') is not rendered into again."
                :owner 'chat :id "emacs-windows" :slot 'context :text text
                :priority 0 :budget-class 'hard))))))
 
+(declare-function superchat-work-request-text "superchat-work" (session-id))
+
+(defun superchat-prompt-collector--work-records (env _state _tools)
+  "Return the conversation's Work Records as a `context' fragment, or nothing.
+Chat, inline-ask and inline-act only.  See `superchat-work-request-text'."
+  (let ((session-id (plist-get env :session-id)))
+    (when-let* (((memq (plist-get env :surface) '(chat inline-ask inline-act)))
+                ((stringp session-id))
+                ((fboundp 'superchat-work-request-text))
+                (text (superchat-work-request-text session-id)))
+      (list (superchat-prompt-fragment
+             :owner 'chat :id "work-records" :slot 'context :text text
+             :priority 0 :budget-class 'hard)))))
+
 (defun superchat-prompt-collector--prepared (env _state _tools)
   "Return the fragments of a producer that prepared its whole user message.
 Subagent, workflow, skills-match and compaction hand the driver
@@ -1007,6 +1021,8 @@ selection, memory, history, plan, and a producer's prepared text."
                           #'superchat-prompt-collector--plan :owner 'chat)
     (superchat-context-register 'windows
                           #'superchat-prompt-collector--windows :owner 'chat)
+    (superchat-context-register 'work-records
+                          #'superchat-prompt-collector--work-records :owner 'chat)
     ;; Registered at the cutover; until then the collector list is as it was.
     (progn
       (superchat-context-register 'permission-context

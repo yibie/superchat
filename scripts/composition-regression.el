@@ -315,12 +315,13 @@ withdrawn name is dropped while an ordinary built-in stays."
 Captured on the unmodified tree before this slice (superchat.el mounted
 profile, default `superchat-llm-tool-names'); the three timer tools joined
 the default list in M11 slice 4.  Slice 6 added `elisp_script' and moved
-three tools into scripts; slice 6.5 took both back after real runs."
+three tools into scripts; slice 6.5 took both back after real runs; slice 7
+added `work_record'."
   (composition--fixture nil
     (should (equal '("list_buffers" "read_buffer" "read_file" "read_reference"
                      "open_file" "edit_buffer" "describe-function" "apropos"
-                     "eval_elisp" "timer_create" "timer_list" "timer_cancel"
-                     "ask_user")
+                     "eval_elisp" "work_record" "timer_create" "timer_list"
+                     "timer_cancel" "ask_user")
                    (plist-get (superchat-select-tools-decision
                                (list :surface 'chat
                                      :input-core (list :operation 'chat))

@@ -50,6 +50,7 @@
 (require 'superchat-artifact-board)
 (require 'superchat-workspace)
 (require 'superchat-timer)
+(require 'superchat-work)
 (require 'superchat-editor-workspace)
 (require 'superchat-widgets)
 (require 'superchat-change-set)

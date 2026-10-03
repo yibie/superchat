@@ -129,7 +129,10 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "workspace.artifact.added" "workspace.artifact.changed"
              "workspace.artifact.removed"
              ;; Timers (M11 slice 4): a timer is these facts.
-             "timer.created" "timer.fired" "timer.cancelled"))
+             "timer.created" "timer.fired" "timer.cancelled"
+             ;; Work Records (M11 slice 7): a record is these facts.
+             "work.created" "work.updated" "work.waiting" "work.completed"
+             "work.focused" "work.facts" "work.outcome"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))

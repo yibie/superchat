@@ -74,7 +74,7 @@ constant."
       superchat-llm-default-tool-names
     '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
       "read_reference" "open_file" "edit_buffer" "eval_elisp"
-      "timer_create" "timer_list" "timer_cancel")))
+      "timer_create" "timer_list" "timer_cancel" "work_record")))
 
 (defconst superchat--select-tools-none-surfaces
   '(inline-rewrite org-babel magit skills compaction)

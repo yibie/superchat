@@ -68,6 +68,9 @@
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
 (declare-function superchat-view-search "superchat-tape-view" (query &optional session-id limit))
 (declare-function superchat-script-run "superchat-script" (code))
+(declare-function superchat-work-tool "superchat-work"
+                  (action &optional id goal progress blocked resume
+                          wait_for detail conclusion follows))
 
 (defun superchat-tool-elisp-script (code)
   "The `elisp_script' tool: run CODE with `superchat-script-run'."
@@ -1428,7 +1431,7 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defconst superchat-llm-default-tool-names
   '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
     "read_reference" "open_file" "edit_buffer" "eval_elisp"
-    "timer_create" "timer_list" "timer_cancel")
+    "timer_create" "timer_list" "timer_cancel" "work_record")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
@@ -1930,6 +1933,31 @@ Use this to compose complex views across the conversation tape."
           :function #'superchat-tool-elisp-script))
 
          (superchat--maybe-make-llm-tool
+          "work_record"
+          :description "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail); an empty wait_for clears it. done completes it with a conclusion. read shows a record by id. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable."
+          :args (list (list :name "action" :type 'string
+                            :description "start, update, wait, done or read.")
+                      (list :name "id" :type 'string :optional t
+                            :description "The record's id; default the current record.")
+                      (list :name "goal" :type 'string :optional t
+                            :description "start: what is to be delivered.")
+                      (list :name "progress" :type 'string :optional t
+                            :description "update: how far it got.")
+                      (list :name "blocked" :type 'string :optional t
+                            :description "update: why the next step cannot be taken yet.")
+                      (list :name "resume" :type 'string :optional t
+                            :description "update: where to pick it up.")
+                      (list :name "wait_for" :type 'string :optional t
+                            :description "wait: user, agent or time; empty clears the wait.")
+                      (list :name "detail" :type 'string :optional t
+                            :description "wait: what exactly it waits for.")
+                      (list :name "conclusion" :type 'string :optional t
+                            :description "done: what was delivered.")
+                      (list :name "follows" :type 'string :optional t
+                            :description "start: the id of a completed record this continues."))
+          :function #'superchat-work-tool)
+
+         (superchat--maybe-make-llm-tool
           "timer_create"
           :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
           :args (list (list :name "text" :type 'string
@@ -2142,7 +2170,7 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "delegate_to_subagent_parallel" "define_tool" "render_ui" "emit_plan"
     "report_plan_progress" "workspace_write" "workspace_publish"
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
-    "timer_create" "timer_list" "timer_cancel" "elisp_script"
+    "timer_create" "timer_list" "timer_cancel" "elisp_script" "work_record"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
     "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")

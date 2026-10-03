@@ -534,9 +534,10 @@ it, `danger-full-access' included."
   ;; three timer tools joined; they write timer facts to the Tape, no file.
   ;; Slice 6 added `elisp_script' and moved three tools into scripts; slice 6.5
   ;; took both back after real runs (docs/research/round-trips-first-principles.md).
+  ;; Slice 7: `work_record', which writes Work Record facts to the Tape.
   (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
                    "read_reference" "open_file" "edit_buffer" "eval_elisp"
-                   "timer_create" "timer_list" "timer_cancel")
+                   "timer_create" "timer_list" "timer_cancel" "work_record")
                  superchat-llm-default-tool-names))
   (dolist (level '(read-only edit-buffers danger-full-access))
     (ert-info ((format "level: %s" level))

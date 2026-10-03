@@ -240,7 +240,7 @@ Without an applying Scope, return UNDO unchanged."
     editor-workspace change-set
     inline-ask inline-act inline-rewrite org-babel magit emacsclient
     memory experience plan agents-panel compact
-    subagent workflow workspace workspace-resolution timers)
+    subagent workflow workspace workspace-resolution timers work-records)
   "The `default' profile's one row layer, mounted when Superchat loads.
 Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
 `(require \='superchat)' to disable a built-in; `superchat-plugin-mount' and
