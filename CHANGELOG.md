@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — the model knows how your windows are arranged
+
+- Every chat, in-place ask and in-place do request now says how the
+  selected frame is arranged: its tabs, and for each window the buffer,
+  file, width and position, which is selected, which is a side window, and
+  which one is this conversation. "Put the agenda on the right" no longer
+  starts with the model querying your windows.
+- A file the model edited outside the conversation's workspace is marked on
+  `/changes` and on the review screen before you save it. It is not
+  stopped.
+- `timer_list` now starts with the current time and also lists the timers
+  that fired in the last 24 hours, so "did I miss a reminder?" gets a right
+  answer after Emacs was closed.
+
 ## Unreleased — reminders and scheduled tasks that survive a restart
 
 - Ask "remind me in 20 minutes to call mom" or "every morning at 8, give me
