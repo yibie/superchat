@@ -28,6 +28,7 @@
 (require 'superchat-db)
 (require 'superchat-tape)
 
+(declare-function superchat-work-current "superchat-work" (session-id))
 (declare-function superchat-view-workspace-session-ids "superchat-tape-view"
                   (workspace-id))
 (declare-function superchat-view-session-configuration "superchat-tape-view"
@@ -424,6 +425,13 @@ Signals an error for any other shape."
                       (t (error "repeat must be hourly, daily, weekly or none")))))
         (when (and (< due now) (null period))
           (error "That time has passed: %s" (superchat-timer-format-time due)))
+        ;; "Take this work up again at that time" is a wait on its Work
+        ;; Record, not a timer (contract T4): in the real task T4W the model
+        ;; set a task timer for it, which ran in the old conversation.
+        (when (and (eq kind 'task)
+                   (fboundp 'superchat-work-current)
+                   (superchat-work-current (superchat-timer--tool-session)))
+          (error "This conversation has a current work record; to take that work up again later, use work_record with action wait, wait_for time and in_minutes or at -- it continues in a new conversation with the record.  A task timer is for a new, separate job"))
         (let ((timer (superchat-timer-create (superchat-timer--tool-session)
                                              kind text due period)))
           (format "Timer %s set: %s at %s%s (now %s).%s"

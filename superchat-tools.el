@@ -1963,7 +1963,7 @@ Use this to compose complex views across the conversation tape."
 
          (superchat--maybe-make-llm-tool
           "timer_create"
-          :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
+          :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"; to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
           :args (list (list :name "text" :type 'string
                             :description "What to remind the user of, or the task to do, in the user's language.")
                       (list :name "kind" :type 'string

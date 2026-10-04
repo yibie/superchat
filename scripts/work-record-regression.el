@@ -27,6 +27,7 @@
 (require 'superchat-workspace)
 (require 'superchat-work)
 (require 'superchat-subagent)
+(require 'superchat-timer)
 (defvar superchat-display-style)
 
 (defvar wrec--roots nil
@@ -484,6 +485,25 @@
           (should (string-match-p (concat "^jj changes those executions left in the workspace: "
                                           (regexp-quote change) "$")
                                   (superchat-work-render record))))))))
+
+;;;; A task timer is not a wait (slice 8.4) -----------------------------------------
+
+(ert-deftest work-record/with-a-current-record-a-task-timer-is-refused ()
+  "Contract T4; in the real task T4W the model set a task timer to continue
+the work, and it ran in the old conversation."
+  (wrec--with nil (p)
+    (let* ((session (hm--session (wrec--view p)))
+           (superchat--tool-execution-context (list :session-id session)))
+      ;; No current record: a task timer is a separate job and is fine.
+      (should (string-match-p "the task will run"
+                              (superchat-timer-tool-create "daily digest" "task" 5)))
+      (superchat-work-start session "Check twice")
+      (let ((result (superchat-timer-tool-create "continue the check" "task" 2)))
+        (should (string-match-p "\\`Error: This conversation has a current work record; to take that work up again later, use work_record with action wait" result)))
+      ;; A plain reminder is still a reminder.
+      (should (string-match-p "the user will be reminded"
+                              (superchat-timer-tool-create "stretch" "reminder" 30)))
+      (superchat-timer-disarm-all))))
 
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here
