@@ -505,5 +505,20 @@ the work, and it ran in the old conversation."
                               (superchat-timer-tool-create "stretch" "reminder" 30)))
       (superchat-timer-disarm-all))))
 
+(ert-deftest work-record/a-wait-given-with-an-update-is-registered ()
+  "In the real task T4W the model put wait_for and in_minutes on an update."
+  (wrec--with nil (p)
+    (wrec--with-clock
+      (let* ((session (hm--session (wrec--view p)))
+             (superchat--tool-execution-context (list :session-id session))
+             (id (superchat-work-start session "Two steps")))
+        (superchat-work-tool "update" nil nil "step one" "two minutes" "step two"
+                             "time" "the second step" nil nil 2)
+        (let ((record (superchat-work-get id)))
+          (should (equal "step one" (plist-get record :progress)))
+          (should (= (+ wrec--now 120) (plist-get (plist-get record :waiting) :until))))
+        ;; An update with nothing in it is still refused.
+        (should (string-prefix-p "Error:" (superchat-work-tool "update")))))))
+
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here

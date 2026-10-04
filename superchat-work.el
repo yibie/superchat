@@ -474,7 +474,20 @@ completed records by status, one line each; never another Workspace's (K8)."
                      new)))
           ("update"
            (unless id (error "No current work record; start one or give its id"))
-           (superchat-work-update session id progress blocked resume)
+           (when (or progress blocked resume)
+             (superchat-work-update session id progress blocked resume))
+           ;; A wait given with an update is registered too, never dropped: in
+           ;; the real task T4W the model put wait_for and in_minutes on an
+           ;; update and believed the wait was registered.
+           (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+             (superchat-work-wait
+              session id wait_for detail
+              (cond ((and (stringp at) (not (string-empty-p at)))
+                     (superchat-timer-parse-time at))
+                    ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+           (unless (or progress blocked resume
+                       (and (stringp wait_for) (not (string-empty-p wait_for))))
+             (error "Say how far it got, why the next step waits, or where to pick it up"))
            (superchat-work-render (superchat-work-get id)))
           ("wait"
            (unless id (error "No current work record; start one or give its id"))
