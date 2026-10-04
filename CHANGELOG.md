@@ -2,6 +2,15 @@
 
 All notable changes to superchat.
 
+## Unreleased — a question you can answer later
+
+- When the model needs an answer that can wait, it registers the wait on the
+  work record and ends its turn instead of holding the conversation with a
+  question panel; `ask_user` stays for a question you can answer right now.
+- Your next plain message in that conversation ends the wait by itself: the
+  record is continuable again before the model sees your message. Commands,
+  and messages a timer or a woken record sends, do not count.
+
 ## Unreleased — work that picks itself up at its time
 
 - A work record can wait for a time ("do the rest in two hours"): at that
