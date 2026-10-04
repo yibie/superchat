@@ -39,7 +39,8 @@
 
 (defconst superchat-work-fact-types
   '("work.created" "work.updated" "work.waiting" "work.completed"
-    "work.focused" "work.facts" "work.outcome" "work.woken" "work.reported")
+    "work.focused" "work.facts" "work.outcome" "work.woken" "work.reported"
+    "work.task")
   "The Tape facts a Work Record is made of.")
 
 (defconst superchat-work-wait-kinds '("user" "agent" "time")
@@ -102,6 +103,15 @@
                                                  :detail (alist-get 'detail payload)
                                                  :until (alist-get 'until payload))))
                         table)))
+            ("work.task"
+             (when record
+               (puthash id (plist-put record :tasks
+                                      (append (plist-get record :tasks)
+                                              (list (list :task (alist-get 'task payload)
+                                                          :status (alist-get 'status payload)
+                                                          :report (alist-get 'report payload)
+                                                          :conversation (alist-get 'conversation payload)))))
+                        table)))
             ("work.woken"
              (when record
                (puthash id (plist-put record :woken
@@ -119,7 +129,8 @@
                                       (append (plist-get record :facts)
                                               (list (list :run-id (superchat-work--get payload 'run_id 'run-id)
                                                           :files (alist-get 'files payload)
-                                                          :buffers (alist-get 'buffers payload)))))
+                                                          :buffers (alist-get 'buffers payload)
+                                                          :jj-change (superchat-work--get payload 'jj_change 'jj-change)))))
                         table)))
             ("work.outcome"
              (when record
@@ -271,6 +282,37 @@ clears the wait."
 
 ;;;; Text -----------------------------------------------------------------------
 
+(defun superchat-work--clip (text max)
+  "TEXT on one line, cut to MAX characters."
+  (let ((line (replace-regexp-in-string "[\n\t ]+" " " (string-trim (or text "")))))
+    (if (> (length line) max) (concat (substring line 0 (- max 3)) "...") line)))
+
+(defun superchat-work-record-task (session-id id task status report conversation)
+  "Record on ID, from SESSION-ID, the delegated TASK, its STATUS and REPORT.
+CONVERSATION is the sub-agent's own conversation.  Written by the product
+when the sub-agent hands back (K14), whatever the record's state."
+  (when (superchat-work-get id)
+    (superchat-work--append session-id "work.task"
+                            (format "Work record %s: delegated task %s" id status)
+                            (list :work-id id
+                                  :task (superchat-work--clip task 1000)
+                                  :status status
+                                  :report (superchat-work--clip report 2000)
+                                  :conversation conversation))))
+
+(defun superchat-work-jj-change (root)
+  "The short id of the jj change at ROOT's working copy, or nil.
+Nil unless ROOT holds a `.jj' directory and jj answers; never signals."
+  (when (and (stringp root) (file-directory-p (expand-file-name ".jj" root)))
+    (ignore-errors
+      (with-temp-buffer
+        (let ((default-directory root))
+          (when (eq 0 (process-file "jj" nil t nil "log" "-r" "@" "--no-graph"
+                                    "--ignore-working-copy"
+                                    "-T" "change_id.short()"))
+            (let ((id (string-trim (buffer-string))))
+              (and (string-match-p "\\`[a-z]+\\'" id) id))))))))
+
 (defun superchat-work-status-text (record)
   "RECORD's status in words."
   (pcase (superchat-work-status record)
@@ -296,7 +338,10 @@ clears the wait."
   (let ((files (delete-dups
                 (apply #'append
                        (mapcar (lambda (f) (append (plist-get f :files) nil))
-                               (plist-get record :facts))))))
+                               (plist-get record :facts)))))
+        (changes (delete-dups
+                  (delq nil (mapcar (lambda (f) (plist-get f :jj-change))
+                                    (plist-get record :facts))))))
     (string-join
      (delq nil
            (list (format "Work record %s (%s)" (plist-get record :id)
@@ -313,6 +358,18 @@ clears the wait."
                  (and files
                       (format "Files its executions changed (recorded by Superchat): %s"
                               (string-join files ", ")))
+                 (and changes
+                      (format "jj changes those executions left in the workspace: %s"
+                              (string-join changes ", ")))
+                 (and (plist-get record :tasks)
+                      (concat "Delegated tasks (recorded by Superchat):\n"
+                              (mapconcat
+                               (lambda (task)
+                                 (format "- %s -- %s: %s"
+                                         (superchat-work--clip (plist-get task :task) 120)
+                                         (plist-get task :status)
+                                         (superchat-work--clip (plist-get task :report) 300)))
+                               (plist-get record :tasks) "\n")))
                  (and (plist-get record :conclusion)
                       (format "Conclusion: %s" (plist-get record :conclusion)))))
      "\n")))
@@ -702,7 +759,10 @@ The record is the conversation's current one, or one this execution completed."
                session "work.facts" (format "Work record %s: what the execution changed" id)
                (list :work-id id :run-id run
                      :buffers (vconcat (mapcar (lambda (r) (plist-get r :name)) rows))
-                     :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))))))
+                     :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))
+                     ;; K13: in a jj repository, the change these edits sit in.
+                     :jj-change (superchat-work-jj-change
+                                 (plist-get (superchat-work-get id) :workspace-root))))))
           (let ((outcome (superchat-work-outcome id run (plist-get status :status))))
             (superchat-work--append
              session "work.outcome" (format "Work record %s: %s" id outcome)

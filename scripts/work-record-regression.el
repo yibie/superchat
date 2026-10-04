@@ -26,6 +26,7 @@
       nil t)
 (require 'superchat-workspace)
 (require 'superchat-work)
+(require 'superchat-subagent)
 (defvar superchat-display-style)
 
 (defvar wrec--roots nil
@@ -401,6 +402,88 @@
               (should (= 0 (hash-table-count superchat-work--armed))))
           (superchat-plugin-mount 'work-records))
         (should (smoke--wait (lambda () (gethash id superchat-work--armed)) 5))))))
+
+;;;; Delegation under a record (slice 8.2) -----------------------------------------
+
+(defun wrec--subagent-wire ()
+  "The provider request whose user text holds the delegated task."
+  (let ((wire (cl-find-if
+               (lambda (wire)
+                 (cl-some (lambda (message)
+                            (and (equal "user" (alist-get 'role message))
+                                 (string-match-p "SUB-TASK-MARKER" (hm--text message))))
+                          wire))
+               (reverse hm--wires))))
+    (should wire)
+    wire))
+
+(ert-deftest work-record/a-delegated-task-is-recorded-under-its-record ()
+  (wrec--with (list (wrec--call '(action . "start") '(goal . "GOAL-SUB-MARKER"))
+                    '(:tool-uses (("delegate_to_subagent" (preset . "researcher")
+                                   (task . "SUB-TASK-MARKER look into it"))))
+                    '(:text "SUB-REPORT-MARKER found three things")
+                    '(:text "done"))
+      (p)
+    (setq superchat-llm-tool-names
+          (append superchat-llm-tool-names '("delegate_to_subagent")))
+    (let* ((view (wrec--view p))
+           (session (hm--session view)))
+      (hm--turn view "start it and delegate the research")
+      (wrec--settled)
+      (let* ((id (superchat-work-current session))
+             (record (superchat-work-get id))
+             (tasks (plist-get record :tasks))
+             (system (hm--text (car (wrec--subagent-wire)))))
+        ;; The sub-agent got a snapshot of the record, not the main conversation.
+        (should (string-match-p (regexp-quote superchat-subagent-work-record-preamble) system))
+        (should (string-match-p "To deliver: GOAL-SUB-MARKER" system))
+        ;; The task and its result are on the record.
+        (should (= 1 (length tasks)))
+        (should (string-match-p "SUB-TASK-MARKER" (plist-get (car tasks) :task)))
+        (should (string-match-p "SUB-REPORT-MARKER" (plist-get (car tasks) :report)))
+        (should (equal "completed" (plist-get (car tasks) :status)))
+        (should-not (equal session (plist-get (car tasks) :conversation)))
+        (should (string-match-p "^Delegated tasks (recorded by Superchat):\n- SUB-TASK-MARKER.* -- completed: SUB-REPORT-MARKER"
+                                (superchat-work-render record)))))))
+
+(ert-deftest work-record/a-task-without-a-record-records-nothing ()
+  (wrec--with (list '(:tool-uses (("delegate_to_subagent" (preset . "researcher")
+                                   (task . "SUB-TASK-MARKER look into it"))))
+                    '(:text "SUB-REPORT")
+                    '(:text "done"))
+      (p)
+    (setq superchat-llm-tool-names
+          (append superchat-llm-tool-names '("delegate_to_subagent")))
+    (hm--turn (wrec--view p) "delegate")
+    (wrec--settled)
+    (should-not (string-match-p (regexp-quote superchat-subagent-work-record-preamble)
+                                (hm--text (car (wrec--subagent-wire)))))
+    (should-not (superchat-work-records))))
+
+;;;; jj changes (slice 8.3) ------------------------------------------------------------
+
+(ert-deftest work-record/in-a-jj-repository-the-change-is-recorded ()
+  (unless (executable-find "jj") (ert-skip "jj is not installed"))
+  (wrec--with nil (p)
+    (let ((default-directory p))
+      (should (eq 0 (call-process "jj" nil nil nil "git" "init" "--quiet"))))
+    (let ((change (superchat-work-jj-change p)))
+      (should (string-match-p "\\`[a-z]+\\'" change))
+      (should-not (superchat-work-jj-change (wrec--temp-dir)))
+      (should-not (superchat-work-jj-change nil))
+      (let* ((src (wrec--file p))
+             (view (with-current-buffer src (superchat)))
+             (session (hm--session view)))
+        (setq smoke--script
+              (list (wrec--call '(action . "start") '(goal . "Change a.txt"))
+                    (wrec--edit-round (buffer-name src))
+                    '(:text "changed")))
+        (hm--turn view "change it")
+        (let ((record (superchat-work-get (superchat-work-current session))))
+          (should (equal change (plist-get (car (plist-get record :facts)) :jj-change)))
+          (should (string-match-p (concat "^jj changes those executions left in the workspace: "
+                                          (regexp-quote change) "$")
+                                  (superchat-work-render record))))))))
 
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here

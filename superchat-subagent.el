@@ -694,6 +694,15 @@ STATUS is the terminal Runtime status when completion came from Runtime."
            (superchat--subagent-handoff-report entry report status)))
       (ignore-errors
         (superchat--team-finish-delegated-task entry report))
+      ;; The task and its result go to the Work Record it was part of (K14).
+      (when (and (plist-get entry :work-record)
+                 (plist-get entry :parent-session-id)
+                 (fboundp 'superchat-work-record-task))
+        (ignore-errors
+          (superchat-work-record-task
+           (plist-get entry :parent-session-id) (plist-get entry :work-record)
+           (plist-get entry :task) (if status (format "%s" status) "completed")
+           report id)))
       (setq superchat--subagent-running
             (assoc-delete-all id superchat--subagent-running))
       (superchat--subagent-refresh-panel)
@@ -884,6 +893,13 @@ call counter survive across the event loop."
           :preset preset
           :workspace-id (plist-get workspace :id)
           :workspace-root (plist-get workspace :root)
+          ;; The Work Record this task is part of (K14): the parent
+          ;; conversation's current record when the task was delegated.
+          :parent-session-id (plist-get parent-context :session-id)
+          :work-record (and (fboundp 'superchat-work-current)
+                            (stringp (plist-get parent-context :session-id))
+                            (superchat-work-current
+                             (plist-get parent-context :session-id)))
           :depth depth
           :guardrails guardrails
           ;; Mutable tool-call counter: the car of this cons is
@@ -1065,6 +1081,31 @@ has no rules file."
       (concat system "\n\n" rules))
      (t rules))))
 
+(declare-function superchat-work-current "superchat-work" (session-id))
+(declare-function superchat-work-get "superchat-work" (id))
+(declare-function superchat-work-render "superchat-work" (record))
+(declare-function superchat-work-record-task "superchat-work"
+                  (session-id id task status report conversation))
+
+(defconst superchat-subagent-work-record-preamble
+  "This task is part of a work record the main agent keeps. Below is a \
+snapshot of it, for context; you cannot change it. Report what you did; the \
+main agent records it."
+  "What a sub-agent is told before the snapshot of its Work Record (K14).")
+
+(defun superchat--subagent-system-with-record (system record-id)
+  "Return SYSTEM followed by a snapshot of the Work Record RECORD-ID.
+SYSTEM unchanged when RECORD-ID is nil or names no record."
+  (let ((record (and record-id (fboundp 'superchat-work-get)
+                     (superchat-work-get record-id))))
+    (if (null record)
+        system
+      (concat (if (and (stringp system) (not (string-empty-p system)))
+                  (concat system "\n\n")
+                "")
+              superchat-subagent-work-record-preamble "\n\n"
+              (superchat-work-render record)))))
+
 (defun superchat--subagent-runtime-envelope
     (ctx task prompt result prepared-tools buffer delivery)
   "Build the Request envelope for sub-agent CTX (contract §2.2, S13a).
@@ -1084,9 +1125,11 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
                                          (and (fboundp 'llm-tool-name)
                                               (ignore-errors (llm-tool-name tool))))
                                        prepared-tools)))
-         (system (superchat--subagent-system-with-rules
-                  (plist-get result :system-prompt)
-                  (plist-get ctx :workspace-root))))
+         (system (superchat--subagent-system-with-record
+                  (superchat--subagent-system-with-rules
+                   (plist-get result :system-prompt)
+                   (plist-get ctx :workspace-root))
+                  (plist-get ctx :work-record))))
     (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (append
      (list :surface 'subagent
@@ -1159,6 +1202,10 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                                  :preset (superchat-preset-name preset)
                                  :depth (or depth 1)
                                  :started-at (float-time)
+                                 :work-record (plist-get ctx :work-record)
+                                 :parent-session-id
+                                 (plist-get ctx :parent-session-id)
+                                 :task task
                                  :callback callback))
                   superchat--subagent-running)
             (superchat--subagent-refresh-panel)

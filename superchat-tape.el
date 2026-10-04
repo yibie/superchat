@@ -135,7 +135,9 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "work.focused" "work.facts" "work.outcome"
              ;; M11 slice 8: a time wait woke the record; its result noted
              ;; in the Workspace's main conversation.
-             "work.woken" "work.reported"))
+             "work.woken" "work.reported"
+             ;; A delegated task and its result, under its record (K14).
+             "work.task"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))
