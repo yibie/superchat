@@ -2,6 +2,23 @@
 
 All notable changes to superchat.
 
+## Unreleased — work that picks itself up at its time
+
+- A work record can wait for a time ("do the rest in two hours"): at that
+  time Superchat starts a new conversation in the record's workspace, on that
+  record, and the model carries on; a line in the workspace's main
+  conversation says how it went. A wait that came due while Emacs was closed
+  wakes once after Superchat loads.
+- A record that is merely continuable is not picked up by itself: it waits
+  for you.
+- A sub-agent delegated while a record is current gets a snapshot of the
+  record; its task and result are kept on the record.
+- In a jj repository, a record's facts include the jj change each execution
+  left its edits in.
+- While a conversation has a current record, `timer_create` will not set a
+  task timer to continue it; the model registers a wait on the record
+  instead.
+
 ## Unreleased — fewer questions, fewer stops
 
 - When `eval_elisp` is offered, the model is told that each tool call costs a
