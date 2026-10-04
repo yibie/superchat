@@ -40,6 +40,7 @@
                   (text))
 (declare-function superchat-send-input "superchat-dispatcher" ())
 (defvar superchat-buffer-name)
+(defvar superchat-automated-input)
 (defvar superchat--active-run-id)
 (defvar superchat--tool-execution-context)
 (defvar superchat--session-id)
@@ -274,7 +275,9 @@ timer set in a temporary conversation speaks in that conversation."
         (let ((inhibit-read-only t))
           (goto-char (point-max))
           (insert text))
-        (superchat-send-input)
+        ;; The timer speaks here, not the user.
+        (let ((superchat-automated-input t))
+          (superchat-send-input))
         superchat--active-run-id))))
 
 (defun superchat-timer-fire (timer occurrence)

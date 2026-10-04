@@ -520,5 +520,67 @@ the work, and it ran in the old conversation."
         ;; An update with nothing in it is still refused.
         (should (string-prefix-p "Error:" (superchat-work-tool "update")))))))
 
+;;;; The user's answer (slice 9) ------------------------------------------------------
+
+(defun wrec--waiting-facts (session)
+  (cl-remove-if-not (lambda (payload) (plist-get payload :answered))
+                    (wrec--facts session "work.waiting")))
+
+(ert-deftest work-record/the-users-next-message-ends-the-wait-for-the-user ()
+  (wrec--with '((:text "thanks")) (p)
+    (let* ((view (wrec--view p))
+           (session (hm--session view))
+           (id (superchat-work-start session "Pick a plan")))
+      (superchat-work-wait session id "user" "which option")
+      (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
+      (hm--turn view "option B")
+      ;; The product cleared it, before the request was built.
+      (should (eq 'continuable (superchat-work-status (superchat-work-get id))))
+      (should (= 1 (length (wrec--waiting-facts session))))
+      (let ((text (wrec--user-text 1)))
+        (should (string-match-p (concat "Work record " (regexp-quote id) " (continuable)") text))
+        (should-not (string-match-p "waiting for the user" text))))))
+
+(ert-deftest work-record/only-the-user-in-that-conversation-ends-the-wait ()
+  (wrec--with '((:text "ok") (:text "ok")) (p)
+    (wrec--with-clock
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (id (superchat-work-start session "Pick a plan")))
+        (superchat-work-wait session id "user" "which option")
+        ;; Another conversation of the Workspace: the record is listed as
+        ;; waiting, and stays so.
+        (let ((other (with-current-buffer (wrec--file p "b.txt") (superchat-new-session))))
+          (hm--turn other "what is open")
+          (should (string-match-p (concat "Waiting for the user:\n- " (regexp-quote id))
+                                  (wrec--user-text 1))))
+        (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
+        ;; A message the user did not type, and a command, do not end it either.
+        (let ((superchat-automated-input t))
+          (hm--turn view "a timer speaking"))
+        (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
+        (with-current-buffer view
+          (let ((inhibit-read-only t)) (goto-char (point-max)) (insert "/changes"))
+          (superchat-send-input))
+        (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
+        (should-not (wrec--waiting-facts session))))))
+
+(ert-deftest work-record/a-wait-for-a-time-is-not-ended-by-the-user-speaking ()
+  (wrec--with '((:text "ok")) (p)
+    (wrec--with-clock
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (id (superchat-work-start session "Later")))
+        (superchat-work-wait session id "time" nil (+ wrec--now 600))
+        (hm--turn view "by the way")
+        (should (eq 'waiting-other (superchat-work-status (superchat-work-get id))))))))
+
+(ert-deftest work-record/the-two-ways-to-wait-for-the-user-are-told-apart ()
+  (let* ((tools (let ((superchat-llm-tools-list nil)) (superchat-get-llm-tools)))
+         (work (llm-tool-description (cl-find "work_record" tools :key #'llm-tool-name :test #'equal))))
+    (should (string-match-p "register wait_for user and end your turn" work))
+    (should (string-match-p "the user's next message in this conversation clears the wait" work))
+    (should (string-match-p "use ask_user only for a question the user can answer right now" work))))
+
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here

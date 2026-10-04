@@ -1315,6 +1315,18 @@ This is the catch-all fallback after the hook chain."
     `(:type :echo :content ,(format "Unknown command: `/%s'." command)))))
 
 ;;;###autoload
+(defvar superchat-automated-input nil
+  "Non-nil while a message the user did not type is being sent.
+A timer's task and a woken Work Record send their own text through
+`superchat-send-input'; they bind this so the message is not taken for
+the user speaking.")
+
+(defvar superchat-user-input-functions nil
+  "Functions called when the user sends a plain message in a conversation.
+Each is called with the Session id and the text, before the message is
+dispatched.  Not run for a command, nor while `superchat-automated-input'
+is non-nil.  An error in one does not stop the message.")
+
 (defun superchat-send-input ()
   "Send the visible draft, or queue it while ordinary chat is active."
   (interactive)
@@ -1363,6 +1375,9 @@ This is the catch-all fallback after the hook chain."
                            (not (eq (plist-get status :topology) 'workflow))))
                     (plist-get (superchat-runtime-status-projection) :active-runs))))
              (queue-p (and active-status t)))
+        (when (and (null command) (not superchat-automated-input))
+          (dolist (fn superchat-user-input-functions)
+            (ignore-errors (funcall fn session input))))
         (cond
          ;; This command owns its confirmation and exact View transaction.
          ;; Dispatch it before any prompt, recall, timing or text mutation.

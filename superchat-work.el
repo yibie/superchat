@@ -599,6 +599,8 @@ completed records by status, one line each; never another Workspace's (K8)."
 (declare-function superchat-send-input "superchat-dispatcher" ())
 (defvar superchat-buffer-name)
 (defvar superchat--active-run-id)
+(defvar superchat-automated-input)
+(defvar superchat-user-input-functions)
 
 (defvar superchat-work-now-function #'float-time
   "Function returning the current time in seconds; tests replace it.")
@@ -677,7 +679,9 @@ that execution ends, a line is left in the Workspace's main conversation."
       (let ((inhibit-read-only t))
         (goto-char (point-max))
         (insert (format superchat-work-wake-prompt id)))
-      (superchat-send-input)
+      ;; The product speaks here, not the user.
+      (let ((superchat-automated-input t))
+        (superchat-send-input))
       (when superchat--active-run-id
         (puthash superchat--active-run-id (cons id main) superchat-work--woken-runs)))
     view))
@@ -720,6 +724,19 @@ that execution ends, a line is left in the Workspace's main conversation."
           (let ((superchat-buffer-name (buffer-name view)))
             (with-current-buffer view
               (superchat--insert-persistent-system-message line))))))))
+
+;;;; The user's answer (slice 9) ------------------------------------------------------
+
+(defun superchat-work--on-user-input (session-id _text)
+  "The user spoke in SESSION-ID: its current record stops waiting for the user.
+The user's message is the signal the wait was registered for (K3), so the
+product clears it; the model does not have to remember to."
+  (when-let* ((id (superchat-work-current session-id))
+              (record (superchat-work-get id))
+              ((eq 'waiting-user (superchat-work-status record))))
+    (superchat-work--append session-id "work.waiting"
+                            (format "Work record %s: the user answered" id)
+                            (list :work-id id :for nil :answered t))))
 
 ;;;; The end of an execution (K3, K7) -----------------------------------------
 
@@ -789,6 +806,11 @@ it changed to the conversation's current record and decides how it stands."
   (lambda (scope _config)
     (superchat-on scope 'turn-completed 'work-outcome
                   #'superchat-work--on-turn-completed)
+    (add-hook 'superchat-user-input-functions #'superchat-work--on-user-input)
+    (superchat-scope-effect
+     scope (lambda ()
+             (remove-hook 'superchat-user-input-functions
+                          #'superchat-work--on-user-input)))
     ;; After loading finishes, so a missed wake never starts mid-`require'.
     (let ((start (run-at-time 0 nil #'superchat-work-arm-all)))
       (superchat-scope-effect scope
