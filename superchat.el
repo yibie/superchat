@@ -1705,7 +1705,7 @@ Can be set via slash commands or UI interactions.")
             :type 'agent
             :capability "research"
             :tools '("list_buffers" "read_buffer" "eval_elisp"
-                     "sql" "memory_search" "tool_history" "file_history"
+                     "memory_search" "tool_history" "file_history"
                      "recent_errors" "workspace_read" "workspace_publish"
                      "workspace_info")
             :body

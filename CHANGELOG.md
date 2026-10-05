@@ -2,6 +2,17 @@
 
 All notable changes to superchat.
 
+## Unreleased — history stays in its workspace
+
+- The `sql` tool, which reads every conversation of every workspace, is no
+  longer offered to the model by anything Superchat ships: it is out of the
+  `research` preset and out of `superchat-llm-tool-names` `all`. Name `"sql"`
+  in your own tool list if you want the model to have it.
+- `memory_search`, `tool_history`, `file_history` and `recent_errors` read
+  for the conversation whose run called them, whatever buffer you are looking
+  at by then, and return an error instead of searching every conversation
+  when there is none.
+
 ## Unreleased — a question you can answer later
 
 - When the model needs an answer that can wait, it registers the wait on the

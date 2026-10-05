@@ -35,7 +35,7 @@ Status: accepted — 用户，2026-10-02："你可以继续走向下一片"。�
 
 ## 没有覆盖的地方
 
-- 模型的 `sql` 工具能直接查整张记录表，不受 workspace 限制。
+- 模型的 `sql` 工具能直接查整张记录表，不受 workspace 限制。（2026-10-05 已处理，见 [`sql` 退出普通模型工具面](2026-10-05-sql-leaves-the-ordinary-tool-surface.md)。）
 - 用户自己输入的 `/recall` 仍然搜全部对话；它由 `superchat-memory-recall-scope` 管，本片没有改。
 - workflow 里的 agent 没有带规矩，只有 `delegate_to_subagent` 这条路带了。
 - 规矩文件还不存在时，模型第一次用 `edit_buffer` 往空 buffer 里写会失败（没有可匹配的原文），真实运行里它改用 `eval_elisp` 插入写成了。登记在 `.scratch/issues/2026-10-02-edit-buffer-cannot-fill-an-empty-buffer.md`。

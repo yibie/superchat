@@ -1260,10 +1260,31 @@ Superchat's own data directory."
 Each row becomes a JSON array so mixed-type columns encode reliably."
   (json-encode (mapcar (lambda (row) (vconcat row)) rows)))
 
+(defconst superchat-tools--no-conversation-error
+  "Error: this call belongs to no conversation, so there is nothing to search."
+  "What a history tool returns when it cannot tell whose history to read.")
+
+(defun superchat-tools--history-session ()
+  "Return the conversation a history tool reads for, or nil.
+That is the conversation of the Run making the call
+\(`superchat--tool-execution-context'), which the execution pipeline binds
+around every tool; the current buffer's is used only without one.  The
+buffer that happens to be current when a tool runs may show another
+Workspace's conversation.  Nil is never read as \"every conversation\": a
+caller that gets nil searches nothing."
+  (let ((session-id
+         (or (and (boundp 'superchat--tool-execution-context)
+                  (plist-get superchat--tool-execution-context :session-id))
+             (and (boundp 'superchat--session-id) superchat--session-id))))
+    (and (stringp session-id) (not (string-empty-p session-id)) session-id)))
+
 (defun superchat-tool-sql (query)
   "Execute a read-only SELECT/WITH QUERY against the superchat SQLite DB.
 Returns results as a JSON string.  Mutating statements are rejected
-by signaling an error."
+by signaling an error.
+The query is not kept to a Workspace: it reads every conversation's rows.
+That is why nothing Superchat ships offers this tool (see
+`superchat-tools--sql-offered-p')."
   (if (fboundp 'superchat-db-tape-select)
       (superchat-tools--rows-to-json (superchat-db-tape-select query))
     "Error: tape database is not available."))
@@ -1282,46 +1303,47 @@ Eligibility and session priority are both enforced by the search itself,
 before any row-count limit, so an eligible row is never crowded out by
 ineligible or merely better-ranked ones."
   (if (fboundp 'superchat-view-search)
-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
-             (cross-session
-              (if (boundp 'superchat-memory-auto-recall-cross-session)
-                  superchat-memory-auto-recall-cross-session
-                'all))
-             (rows
-              (cond
-               ((eq cross-session 'none)
-                (superchat-view-search query session-id 20))
-               ((fboundp 'superchat-db-tape-search-prioritized)
-                (superchat-db-tape-search-prioritized
-                 query session-id 20 (eq cross-session 'remembered) nil nil
-                 (and (fboundp 'superchat-view-recall-session-ids)
-                      (superchat-view-recall-session-ids session-id))))
-               (t (superchat-view-search query session-id 20)))))
-        (superchat-tools--rows-to-json rows))
+      (if-let* ((session-id (superchat-tools--history-session)))
+          (let* ((cross-session
+                  (if (boundp 'superchat-memory-auto-recall-cross-session)
+                      superchat-memory-auto-recall-cross-session
+                    'all))
+                 (rows
+                  (cond
+                   ((eq cross-session 'none)
+                    (superchat-view-search query session-id 20))
+                   ((fboundp 'superchat-db-tape-search-prioritized)
+                    (superchat-db-tape-search-prioritized
+                     query session-id 20 (eq cross-session 'remembered) nil nil
+                     (and (fboundp 'superchat-view-recall-session-ids)
+                          (superchat-view-recall-session-ids session-id))))
+                   (t (superchat-view-search query session-id 20)))))
+            (superchat-tools--rows-to-json rows))
+            superchat-tools--no-conversation-error)
     "Error: tape view layer is not available."))
 
 (defun superchat-tool-tool-history (tool-name)
   "Return recent tool_call/tool_result entries for TOOL-NAME as JSON."
   (if (fboundp 'superchat-view-tool-history)
-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
-             (rows (superchat-view-tool-history tool-name session-id 20)))
-        (superchat-tools--rows-to-json rows))
+      (if-let* ((session-id (superchat-tools--history-session)))
+          (superchat-tools--rows-to-json (superchat-view-tool-history tool-name session-id 20))
+        superchat-tools--no-conversation-error)
     "Error: tape view layer is not available."))
 
 (defun superchat-tool-file-history (path)
   "Return recent tool entries mentioning PATH as JSON."
   (if (fboundp 'superchat-view-file-history)
-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
-             (rows (superchat-view-file-history path session-id 20)))
-        (superchat-tools--rows-to-json rows))
+      (if-let* ((session-id (superchat-tools--history-session)))
+          (superchat-tools--rows-to-json (superchat-view-file-history path session-id 20))
+        superchat-tools--no-conversation-error)
     "Error: tape view layer is not available."))
 
 (defun superchat-tool-recent-errors ()
   "Return recent error-like tool results as JSON."
   (if (fboundp 'superchat-view-recent-errors)
-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
-             (rows (superchat-view-recent-errors session-id 10)))
-        (superchat-tools--rows-to-json rows))
+      (if-let* ((session-id (superchat-tools--history-session)))
+          (superchat-tools--rows-to-json (superchat-view-recent-errors session-id 10))
+        superchat-tools--no-conversation-error)
     "Error: tape view layer is not available."))
 
 ;;;---------------------------------------------
@@ -1485,8 +1507,9 @@ extensions declared with `superchat-define-extension' compose their
 tools only into Requests they are active for.  The full library stays
 available to any explicit tool list.
 
-Set to `all' to expose every built-in tool.  Set to nil to expose no
-built-in tools.
+Set to `all' to expose every built-in tool except `sql'.  Set to nil to
+expose no built-in tools.  `sql' reads every conversation of every
+Workspace, so it is offered only when a list names it.
 
 This variable governs only Superchat's own **built-in** tools.  A tool a
 plugin registered through `superchat-register-tool' is offered by default
@@ -1504,6 +1527,16 @@ declared-extension activation, can do that."
   "Return non-nil when built-in tool NAME should be registered."
   (or (eq superchat-llm-tool-names 'all)
       (member name superchat-llm-tool-names)))
+
+(defun superchat-tools--sql-offered-p ()
+  "Non-nil when the tool names in force name `sql' themselves.
+`sql' reads every conversation's rows, so it would undo what a Workspace
+keeps apart.  It is therefore not part of `all' and no built-in Preset
+lists it; it exists only where the user's own `superchat-llm-tool-names'
+list, or an explicit tool list of the user's Preset, names it."
+  (and (listp superchat-llm-tool-names)
+       (member "sql" superchat-llm-tool-names)
+       t))
 
 (defconst superchat-tools--buffer-edit-teaching
   " The change stays in the buffer: nothing is saved to disk, and saving is the user's decision, so tell the user which buffer you changed."
@@ -1913,14 +1946,15 @@ stale revisions are rejected. When APPEND is true, content is added at the end."
 
          ;; ── Tape / memory retrieval tools ──
 
-         (superchat--maybe-make-llm-tool
-          "sql"
+         (when (superchat-tools--sql-offered-p)
+          (llm-make-tool
+          :name "sql"
           :description "Run a read-only SELECT/WITH SQL query against the superchat SQLite database. \
-Use this to compose complex views across the conversation tape."
+It reads every conversation of every workspace, not only this one."
           :args (list (list :name "query"
                             :type 'string
                             :description "SQL query (SELECT or WITH only)."))
-          :function #'superchat-tool-sql)
+          :function #'superchat-tool-sql))
 
          (when (superchat--llm-tool-enabled-p "elisp_script")
           (llm-make-tool

@@ -16,6 +16,7 @@ Superchat is one Emacs package. Plugins contribute through Scope-accounted regis
 | Tool selection, execution and permission | `superchat-select-tools.el`, `superchat-tools.el`, `superchat-tool-execution.el` (the execution pipeline), `superchat-sandbox.el` (permission levels), `superchat-approval.el` (approval) | Widening a permission level through child Scope shadowing |
 | Prompt construction | `superchat-prompt-hooks.el`, `superchat-prompt.el` | Mutating Tape history |
 | Durable facts and read models | `superchat-tape.el`, `superchat-db.el`, `superchat-projection.el`, `superchat-tape-view.el` | Treating a Projection or selected view as mutable source history |
+| Workspaces, their rules, Work Records and timers | `superchat-workspace.el`, `superchat-work.el`, `superchat-timer.el`; binding and routing of conversations in `superchat.el` | Accepting or finishing a Run; confining what `eval_elisp` or a shell can reach |
 | Chat View and live editor resources | `superchat.el`, `superchat-render.el`, `superchat-editor-workspace.el` | Inferring ownership from a buffer name, project or selected window |
 
 Default plugin definitions live next to their implementations; `superchat-default-plugins.el` supplies lazy definitions. `superchat-plugins`, defined in `superchat-plugin.el`, is mounted at the end of `superchat.el`. Tools and entry points can be contributed by a shared plugin; feature names are not an inventory of independently removable plugins. Services have global providers, while contributions such as tools, commands and Event listeners have scoped visibility. The [composition contract](design/plugin-architecture.md) defines these distinctions.
@@ -39,7 +40,7 @@ The fixed Stage registry is retired: the eight names it declared (`parse`, `reso
 
 The chat and inline-ask history collector uses a Tape-backed Context View with source exclusions and a remaining-budget refit. Other producers, including skills, workflows, subagents and compaction, can supply prepared text through their collector. The chat View also maintains process-local conversation state; that state is not permission to overwrite Tape. Anchor-backed compaction changes the selected View and preserves the original Entries.
 
-The assembly receipt records selected fragment identities and budget decisions. Provider evidence is collected separately in `superchat-llm.el`. The `prompt-reconstructable` Invariant checks that an assembly receipt was appended; it does not independently reconstruct and compare every model-visible request. A recorded receipt is not, by itself, proof of full prompt reconstruction.
+The assembly receipt records selected fragment identities and budget decisions. Before each provider attempt `superchat--llm-record-request-evidence` appends a `request.header` (the system text and the tool schemas as the provider layer is about to send them) and a `request.message-list` (the messages as storage references, including material a Step inserted during the Run). The `prompt-reconstructable` Invariant runs after both rows exist and rebuilds the request from them; it fails when the receipt, the header reference or a named storage id does not resolve. It does not compare the rebuilt request with the bytes the provider received, and a request whose evidence the Tape refused is sent anyway: recording evidence never stops the request it describes.
 
 ## State and lifetimes
 
@@ -53,8 +54,62 @@ Session identity, execution identity, registration visibility and buffer ownersh
 | Active Preset Scope | One exact Chat View activation; same-named Presets in separate Views are distinct |
 | Run state | Runtime, from accepted Request through terminal handling and quiesce |
 | Queued input | Runtime's in-process FIFO; a queued item retains its original Sink and borrowed Scope |
+| Workspace binding of a Session | `workspace.bound` / `workspace.unbound` facts on that Session's Tape; read through `superchat-view-session-configuration` |
+| Work Records and timers | Facts on the Tape (`work.*`, `timer.*`); the lists are rebuilt from them |
+| Armed wake-ups and reminders | Emacs timers held in process memory (`superchat-work--armed`, `superchat-timer--armed`); rebuilt from the Tape when the `work-records` and `timers` rows are mounted |
+| Which Run a woken record started | Process memory only (`superchat-work--woken-runs`); not on the Tape, so it does not survive a restart |
 
 Runtime borrows execution Scopes; it creates no automatic Run Scope. There is no Session Scope level. The Preset owner calls Runtime retirement before disposing registrations on switch or View deactivation. Generic Scope disposal is not an independent Run cancellation or buffer-close authority. See the [Preset lifecycle](design/plugin-architecture.md#preset-composition-and-lifetime) and [Session close protocol](protocols/session-editor-workspace-close.md).
+
+## Workspaces, Work Records and timed work
+
+A Workspace is where a conversation belongs. `superchat-workspace-of-source` decides it from the buffer a conversation is started from: a buffer inside an Emacs project belongs to that project's Workspace; a buffer in one of `superchat-personal-workspace-modes` (agenda, calendar, feeds, chat, mail) belongs to the Personal Workspace when `superchat-personal-workspace-directory` is set; anything else is a temporary conversation with no directory. The binding is recorded on the Session's Tape as `workspace.bound`, and later readers take the root from that fact, not from the buffer that happens to be current.
+
+What a Workspace scopes today, and what it does not:
+
+| Path | Scope in the code |
+|---|---|
+| Rules (`AGENTS.md`, else `CLAUDE.md`, read from disk at collection time, at most 6000 characters) | The bound Workspace's root, on the `chat`, `inline-ask` and `inline-act` surfaces; a delegated sub-agent gets the same rules appended to its system text |
+| Automatic recall and the model's `memory_search` | The conversations of the same Workspace (`superchat-view-recall-session-ids`), narrowed further by `superchat-memory-auto-recall-cross-session`; a temporary conversation searches only itself |
+| The `[Work records]` block | Records of the same Workspace; a temporary conversation has none |
+| The model's `memory_search`, `tool_history`, `file_history`, `recent_errors` | The conversation of the Run that made the call (`superchat-tools--history-session`), not the buffer current when the tool runs; `memory_search` widens that to the Workspace as above, the other three stay in the one conversation. A call that belongs to no conversation searches nothing |
+| The model's `sql` tool | **Not scoped, and not offered.** It reads every Session's rows, so nothing Superchat ships offers it: it is in no built-in Preset and is not part of `superchat-llm-tool-names` `all`. It exists only where the user's own list names it ([decision](decisions/accepted/2026-10-05-sql-leaves-the-ordinary-tool-surface.md)) |
+| The user's `/recall` | Every conversation by default (`superchat-memory-recall-scope`); this is the user's own search, not the model's |
+| `eval_elisp`, shells, agent-written tools | Not confined by a Workspace. They are the `full-control` class and are governed by the permission level alone |
+
+A Work Record is the record of a piece of work that outlives one Run. The model registers it through the `work_record` tool (start, update, wait, done, read); `superchat-work.el` keeps it as `work.*` facts and decides the outcome of each execution from facts at `turn-completed`, without reading the answer. A record that is neither concluded nor waiting is continuable and waits for the user; nothing takes it up by itself.
+
+Two things start a Run without the user typing:
+
+- **A task timer** (`timer_create` with kind `task`). `superchat-timer-fire` appends `timer.fired` to the Workspace's most recently active conversation, tells the user, and then sends the timer's text in that conversation.
+- **A record's wait for a time.** `superchat-work-wake` opens a new conversation bound to the record's Workspace, appends `work.woken`, clears the wait, makes the record that conversation's current record and sends the wake message. When that Run ends, one line is left in the Workspace's main conversation.
+
+Both go through the chat View's own send (`superchat-send-input` with `superchat-automated-input` bound), so Runtime remains the only thing that accepts the Run. Both write their "fired" fact **before** they send. That order means one occurrence never starts twice, including after a crash. It also means the following, which is read from the code and is not yet covered by a test:
+
+- If the send is refused, signals, or Emacs exits between the fact and the send, nothing detects the occurrence again: `superchat-work--due-p` skips a wait whose time is already in the record's `:woken` list, and a timer's occurrence is already fired. The woken record is left continuable, with no fact saying that it was woken and never ran.
+- The pairing of a woken record with its Run exists only in `superchat-work--woken-runs`, and only when the send produced an active Run at once. After a restart, or when the input was queued, the line in the main conversation is not written.
+- A Run that was interrupted with an external Effect unresolved ends `audit-incomplete` under the [request lifecycle contract](protocols/request-lifecycle.md); neither a timer nor a Work Record retries it.
+
+A woken record's new conversation has no recorded permission level, so it runs under `superchat-sandbox-default-mode`. Under the default `edit-buffers` level its edits stay in buffers and each `full-control` call asks for approval, with nobody necessarily present to answer. Under `danger-full-access` a `full-control` tool can write to disk without asking. "A timed Run never reaches the disk" is therefore not a guarantee of the code; what holds is that `edit_buffer` never saves and that `save_buffer` asks on every call.
+
+## Entry matrix
+
+Each row is a producer that submits an Envelope through the `driver` Service. "Rules" means the Workspace rules described above. The permission level of a Session is its last recorded `sandbox.mode`, else `superchat-sandbox-default-mode`; a producer with `:tools 'none` offers the model no tool, so no level is consulted.
+
+| Producer (surface) | Session and Workspace | Rules | Permission level | History and Work Records |
+|---|---|---|---|---|
+| Chat window, `superchat-act` (`chat`) | The View's Session. A View opened from a buffer is its Workspace's main conversation (`superchat-conversation-session-id`), else a temporary one | The `workspace-rules` collector, from the Session's `workspace.bound` root, plus the note about remembering | The Session's | Tape Context View of the Session; recall inside the Workspace; the `[Work records]` block |
+| In-place ask and act (`inline-ask`, `inline-act`) | `superchat-inline-session-id`: the same conversation the chat window would show for the source buffer | Same collector as chat | That Session's | No earlier turn of the conversation; a follow-up in the same overlay carries that overlay's own earlier Runs. No recall. The `[Work records]` block |
+| Region rewrite (`inline-rewrite`) | Same Session as in-place ask | **None.** The collector is limited to the three surfaces above; the request carries its own rewrite system text | None consulted (`:tools 'none`) | None |
+| Task timer | The Workspace's most recently active conversation; the conversation it was set in when that was temporary | As chat: it is sent through that View | That Session's | As chat |
+| Woken Work Record | A new conversation bound to the record's Workspace | As chat | The default level (a new Session has recorded none) | A new conversation, so no earlier turns; the woken record is current and appears in the `[Work records]` block |
+| Delegated sub-agent (`subagent`) | Its own Session (`subagent-…`); Workspace id and root copied from the parent's tool execution context at delegation | The rules text appended to its system text by `superchat--subagent-system-with-rules`; not the note about remembering | The parent's effective level, pinned when it starts; approval policy `never`, so it never asks | None of the parent's. A prepared prompt, plus a snapshot of the parent's current Work Record when there is one; the task is recorded under that record |
+| Workflow step (`workflow`) | The Session of the View the workflow runs in; that View's Workspace id and root travel in `:runtime-extras` | **None.** The surface is outside the collector and `superchat-workflow.el` adds none | That Session's | A prepared step prompt; no history, no `[Work records]` block; not recorded as conversation |
+| Compaction (`compaction`) | An isolated Session `<session>/compaction-<hash>` | None | None consulted (`:tools 'none`) | Only the material it is given as a prepared prompt |
+| Skill matching (`skills`) | An ephemeral Session `skills-match-…` | None | None consulted (`:tools 'none`) | Only the prepared match prompt; not recorded as conversation |
+| Org Babel, Magit (`org-babel`, `magit`; blocking) | The Session that owns the calling buffer when there is one, else an ephemeral id. No Workspace is resolved | None | None consulted (`:tools 'none`) | None; not recorded as conversation |
+
+The Telega and emacsclient integrations were not traced for this table.
 
 ## Extension interfaces and surfaces
 
