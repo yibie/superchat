@@ -205,5 +205,98 @@ product does not put the old wait back over that."
           (should (= 0 (wwf--wake-prompts id)))
           (should-not (plist-get (superchat-work-get id) :waiting)))))))
 
+;;;; Without a restart; an execution cut off mid-way ----------------------------------
+
+(ert-deftest work-wake-fault/a-failed-wake-is-tried-again-without-a-restart ()
+  "Sending fails once.  Emacs keeps running; the wake is tried again by itself."
+  (wrec--with '((:text "ok")) (p)
+    (let ((wrec--now wrec--now)
+          (superchat-work-wake-retry-seconds 0))
+      (wrec--with-clock
+        (let* ((id (cdr (wwf--due-record p "Tried again")))
+               (send (symbol-function 'superchat-send-input))
+               (calls 0))
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda (&rest args)
+                       (setq calls (1+ calls))
+                       (if (= calls 1)
+                           (error "WWF injected: first send fails")
+                         (apply send args)))))
+            (should-not (superchat-work-wake-due))
+            (should (smoke--wait (lambda () (= 1 (wwf--wake-prompts id))) 10))
+            (wrec--settled))
+          (should (= 2 calls))
+          (should-not (plist-get (superchat-work-get id) :waiting)))))))
+
+(ert-deftest work-wake-fault/a-wake-that-keeps-failing-stops-being-retried ()
+  "Sending always fails: one try and `superchat-work-wake-retry-limit' more."
+  (wrec--with nil (p)
+    (let ((wrec--now wrec--now)
+          (superchat-work-wake-retry-seconds 0)
+          (superchat-work-wake-retry-limit 2)
+          (calls 0))
+      (wrec--with-clock
+        (let ((id (cdr (wwf--due-record p "Keeps failing"))))
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda (&rest _)
+                       (setq calls (1+ calls))
+                       (error "WWF injected: send always fails"))))
+            (superchat-work-wake-due)
+            (should (smoke--wait (lambda () (= 3 calls)) 10))
+            ;; Nothing more comes, however long Emacs keeps running.
+            (should-not (smoke--wait (lambda () (> calls 3)) 1)))
+          (should (= 0 (hash-table-count superchat-work--armed)))
+          ;; Still shown as waiting for its time.
+          (should (eq 'waiting-other
+                      (superchat-work-status (superchat-work-get id)))))))))
+
+(ert-deftest work-wake-fault/an-execution-cut-off-by-emacs-quitting-is-reported-as-interrupted ()
+  "The woken execution started and Emacs quit before it ended: its Run is on
+the Tape and this Emacs does not know it.  The main conversation is told, the
+record says its last execution was cut off, and nothing is started again."
+  (wrec--with nil (p)
+    (let ((wrec--now wrec--now))
+      (wrec--with-clock
+        (let* ((pair (wwf--due-record p "Cut off mid-way"))
+               (main (car pair))
+               (id (cdr pair)))
+          ;; Sending leaves a started Run on the Tape and nothing else.
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda (&rest _)
+                       (superchat-tape-append-event
+                        (list :type "run.started" :session-id superchat--session-id
+                              :run-id "run-wwf-cut-off" :turn-id "turn-wwf-cut-off"
+                              :actor-id "runtime"
+                              :summary "run.started: run-wwf-cut-off")))))
+            (should (= 1 (length (superchat-work-wake-due)))))
+          (should (= 0 (length (wrec--facts main "work.reported"))))
+          ;; Emacs starts again.
+          (superchat-work-arm-all)
+          (let ((reported (wrec--facts main "work.reported")))
+            (should (= 1 (length reported)))
+            (should (equal "run-wwf-cut-off" (plist-get (car reported) :run-id))))
+          (should (equal "interrupted" (car (last (wrec--outcomes id)))))
+          (should (string-match-p "was cut off when Emacs exited"
+                                  (superchat-work-render (superchat-work-get id))))
+          (should (= 0 (wwf--wake-prompts id)))
+          ;; Told once.
+          (superchat-work-arm-all)
+          (should (= 1 (length (wrec--facts main "work.reported")))))))))
+
+(ert-deftest work-wake-fault/a-running-execution-is-not-taken-for-a-cut-off-one ()
+  "A scan while the woken execution runs in this Emacs reports nothing."
+  (wrec--with '((:text "ok")) (p)
+    (let ((wrec--now wrec--now))
+      (wrec--with-clock
+        (let* ((pair (wwf--due-record p "Still running"))
+               (main (car pair))
+               (id (cdr pair)))
+          (should (= 1 (length (superchat-work-wake-due))))
+          (superchat-work-arm-all)
+          (should (= 0 (length (wrec--facts main "work.reported"))))
+          (wrec--settled)
+          (should (= 1 (length (wrec--facts main "work.reported"))))
+          (should (equal "continuable" (car (last (wrec--outcomes id))))))))))
+
 (provide 'work-wake-fault-regression)
 ;;; work-wake-fault-regression.el ends here

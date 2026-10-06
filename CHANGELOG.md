@@ -2,6 +2,23 @@
 
 All notable changes to superchat.
 
+## Unreleased — work that came due and did not start
+
+- A scheduled task whose message could not be sent is started a few minutes
+  later instead of being lost; one that came due just before Emacs quit is
+  started the next time Superchat starts. It still fires once.
+- When Superchat cannot tell whether a scheduled task started (Emacs quit
+  while it was being sent), it says so in the conversation and does not start
+  it a second time.
+- A scheduled task no longer queues behind an execution that is running in
+  its conversation; it waits and starts when the conversation is free.
+- A scheduled task that came due and has not started yet can be cancelled.
+- A work record whose wake failed is tried again after five minutes, up to
+  three times, without restarting Emacs.
+- A work record whose execution was cut off by Emacs quitting is marked
+  `interrupted`, and the workspace's main conversation is told once. It is
+  not started again.
+
 ## Unreleased — a wake that goes wrong is not lost
 
 - When a work record's time comes and the wake cannot be sent, the record

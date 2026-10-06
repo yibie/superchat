@@ -39,6 +39,10 @@
 (declare-function superchat--insert-persistent-system-message "superchat-render"
                   (text))
 (declare-function superchat-send-input "superchat-dispatcher" ())
+(declare-function superchat-runtime-active-runs "superchat-runtime" ())
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+(declare-function superchat-tape-replay-events "superchat-tape"
+                  (session-id &optional since-id limit))
 (defvar superchat-buffer-name)
 (defvar superchat-automated-input)
 (defvar superchat--active-run-id)
@@ -65,6 +69,21 @@ Tests replace it to move time.")
   '(("hourly" . 3600) ("daily" . 86400) ("weekly" . 604800))
   "The repeat names a timer accepts, and their periods in seconds.")
 
+(defvar superchat-timer-retry-seconds 300
+  "Seconds after a task that could not be started before it is tried again.")
+
+(defvar superchat-timer-retry-limit 3
+  "How many times one Emacs tries a task that failed to start again by itself.")
+
+(defvar superchat-timer-busy-retry-seconds 30
+  "Seconds before a task is tried again when its conversation was busy.")
+
+(defvar superchat-timer--retries (make-hash-table :test #'equal)
+  "(TIMER-ID . OCCURRENCE) -> how many starts of it failed in this Emacs.")
+
+(defvar superchat-timer--retry-timer nil
+  "The Emacs timer that will try the unstarted tasks again, or nil.")
+
 (defvar superchat-timer--armed (make-hash-table :test #'equal)
   "Timer id -> the Emacs timer that will fire it.")
 
@@ -89,7 +108,8 @@ Tests replace it to move time.")
              (json-key-type 'symbol)
              (meta (ignore-errors (json-read-from-string (or (nth 1 row) ""))))
              (type (alist-get 'event_type meta)))
-        (when (member type '("timer.created" "timer.fired" "timer.cancelled"))
+        (when (member type '("timer.created" "timer.fired" "timer.cancelled"
+                             "timer.sending" "timer.started" "timer.unconfirmed"))
           (push (list (nth 0 row) type (alist-get 'payload meta)) out))))
     (nreverse out)))
 
@@ -224,18 +244,24 @@ bound to, and is armed at once when the `timers' row is mounted."
     timer))
 
 (defun superchat-timer-cancel (id)
-  "Cancel the pending timer ID; return non-nil when there was one."
-  (when-let* ((timer (cl-find id (superchat-timer-list)
-                              :key (lambda (timer) (plist-get timer :id))
-                              :test #'equal)))
-    (superchat-tape-append-event
-     (list :type "timer.cancelled"
-           :session-id (plist-get timer :session-id)
-           :actor-id "timers"
-           :summary (format "Timer cancelled: %s" (plist-get timer :text))
-           :payload (list :timer-id id)))
-    (superchat-timer--disarm id)
-    t))
+  "Cancel the timer ID; return non-nil when there was something to cancel.
+That is a pending timer, or a fired task still waiting to be started."
+  (let ((timer (cl-find id (superchat-timer-list)
+                        :key (lambda (timer) (plist-get timer :id))
+                        :test #'equal))
+        (task (cl-find id (superchat-timer-unstarted-tasks)
+                       :key (lambda (task) (plist-get task :id))
+                       :test #'equal)))
+    (when (or timer task)
+      (superchat-tape-append-event
+       (list :type "timer.cancelled"
+             :session-id (plist-get (or timer task) :session-id)
+             :actor-id "timers"
+             :summary (format "Timer cancelled: %s"
+                              (plist-get (or timer task) :text))
+             :payload (list :timer-id id)))
+      (superchat-timer--disarm id)
+      t)))
 
 ;;;; Firing ----------------------------------------------------------------------------
 
@@ -265,20 +291,151 @@ timer set in a temporary conversation speaks in that conversation."
              "")
            (plist-get fired :text)))
 
-(defun superchat-timer--start-task (session-id text)
-  "Start the model on TEXT in the conversation SESSION-ID; return the Run id."
-  (let ((view (or (superchat-timer--live-view session-id)
-                  (and (fboundp 'superchat--render-session-view)
-                       (superchat--render-session-view session-id)))))
-    (when (buffer-live-p view)
-      (with-current-buffer view
-        (let ((inhibit-read-only t))
-          (goto-char (point-max))
-          (insert text))
-        ;; The timer speaks here, not the user.
-        (let ((superchat-automated-input t))
-          (superchat-send-input))
-        superchat--active-run-id))))
+(defun superchat-timer--fact (session-id type timer-id occurrence &optional more)
+  "Append the timer fact TYPE for OCCURRENCE of TIMER-ID to SESSION-ID's Tape."
+  (superchat-tape-append-event
+   (list :type type :session-id session-id :actor-id "timers"
+         :summary (format "%s: %s" type timer-id)
+         :payload (append (list :timer-id timer-id :occurrence occurrence) more))))
+
+(defun superchat-timer--session-busy-p (session-id)
+  "Non-nil while an execution is running in the conversation SESSION-ID."
+  (cl-some (lambda (run)
+             (equal session-id
+                    (plist-get (superchat-runtime-status run) :session-id)))
+           (superchat-runtime-active-runs)))
+
+(defun superchat-timer--note-started (session-id timer-id occurrence run-id)
+  "Record that RUN-ID is the execution of OCCURRENCE of the task TIMER-ID."
+  (superchat-timer--fact session-id "timer.started" timer-id occurrence
+                         (list :run-id run-id)))
+
+(defun superchat-timer--start-task (session-id timer-id occurrence text)
+  "Start the model on TEXT in the conversation SESSION-ID; return the Run id.
+Return `busy', sending nothing, while an execution runs there: the message
+would only be queued in memory.  Otherwise record `timer.sending', send, and
+record `timer.started' with the Run that began; nil when none began."
+  (if (superchat-timer--session-busy-p session-id)
+      'busy
+    (let ((view (or (superchat-timer--live-view session-id)
+                    (and (fboundp 'superchat--render-session-view)
+                         (superchat--render-session-view session-id)))))
+      (when (buffer-live-p view)
+        (with-current-buffer view
+          (let ((before superchat--active-run-id))
+            (superchat-timer--fact session-id "timer.sending" timer-id occurrence)
+            (let ((inhibit-read-only t)
+                  (start (copy-marker (point-max))))
+              (goto-char (point-max))
+              (insert text)
+              (condition-case err
+                  ;; The timer speaks here, not the user.
+                  (let ((superchat-automated-input t))
+                    (superchat-send-input))
+                ;; A failed send must not leave the text for the next try.
+                (error (when (<= start (point-max))
+                         (delete-region start (point-max)))
+                       (signal (car err) (cdr err)))))
+            (let ((run superchat--active-run-id))
+              (when (and (stringp run) (not (equal run before)))
+                (superchat-timer--note-started session-id timer-id occurrence run)
+                run))))))))
+
+(defun superchat-timer--retry-later (seconds)
+  "Try the unstarted tasks again in SECONDS, unless that is already set."
+  (unless (timerp superchat-timer--retry-timer)
+    (setq superchat-timer--retry-timer
+          (run-at-time seconds nil
+                       (lambda ()
+                         (setq superchat-timer--retry-timer nil)
+                         (superchat-timer-retry-tasks))))))
+
+(defun superchat-timer--try-task (session-id timer-id occurrence text)
+  "Start the task and return its Run id, or nil when no execution began.
+A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
+without limit; a failed start after `superchat-timer-retry-seconds', at most
+`superchat-timer-retry-limit' times in one Emacs."
+  (let* ((key (cons timer-id occurrence))
+         (run (condition-case err
+                  (superchat-timer--start-task session-id timer-id occurrence text)
+                (error (message "superchat: scheduled task %s was not started: %s"
+                                timer-id (error-message-string err))
+                       nil))))
+    (cond ((stringp run) (remhash key superchat-timer--retries) run)
+          ((eq run 'busy)
+           (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+           nil)
+          (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
+               (puthash key failed superchat-timer--retries)
+               (when (<= failed superchat-timer-retry-limit)
+                 (superchat-timer--retry-later superchat-timer-retry-seconds)))
+             nil))))
+
+(defun superchat-timer-unstarted-tasks ()
+  "The fired tasks with no execution on record, oldest first.
+Each is a plist (:id :session-id :occurrence :text :sending).  Only an
+occurrence whose `timer.fired' fact asks for a start is counted, so tasks
+fired before this was recorded are left alone."
+  (let ((table (make-hash-table :test #'equal)) order)
+    (dolist (row (superchat-timer--rows))
+      (cl-destructuring-bind (session type payload) row
+        (let* ((id (superchat-timer--payload-get payload 'timer_id 'timer-id))
+               (key (cons id (alist-get 'occurrence payload))))
+          (pcase type
+            ("timer.fired"
+             (when (eq t (superchat-timer--payload-get payload 'awaits_start 'awaits-start))
+               (push key order)
+               (puthash key (list :id id :session-id session
+                                  :occurrence (cdr key)
+                                  :text (alist-get 'text payload)
+                                  :sending nil)
+                        table)))
+            ("timer.sending"
+             (when-let* ((task (gethash key table)))
+               (puthash key (plist-put task :sending t) table)))
+            ((or "timer.started" "timer.unconfirmed") (remhash key table))
+            ("timer.cancelled"
+             (dolist (k order)
+               (when (equal id (car k)) (remhash k table))))))))
+    (delq nil (mapcar (lambda (key) (gethash key table)) (nreverse order)))))
+
+(defun superchat-timer--run-after-sending-p (task)
+  "Non-nil when a Run began in TASK's conversation after it was last sent."
+  (let (seen ran)
+    (dolist (event (superchat-tape-replay-events (plist-get task :session-id)))
+      (let ((payload (plist-get event :payload)))
+        (cond ((and (equal "timer.sending" (plist-get event :type))
+                    (equal (plist-get task :id) (plist-get payload :timer-id))
+                    (equal (plist-get task :occurrence) (plist-get payload :occurrence)))
+               (setq seen t ran nil))
+              ((and seen (equal "run.started" (plist-get event :type)))
+               (setq ran t)))))
+    ran))
+
+(defun superchat-timer-retry-tasks ()
+  "Start every fired task that has no execution on record.
+A task that was being sent when Emacs exited, in a conversation where a Run
+started afterwards, may or may not have run: that is said in the
+conversation, recorded as `timer.unconfirmed', and it is not started again."
+  (dolist (task (superchat-timer-unstarted-tasks))
+    (let ((session (plist-get task :session-id))
+          (id (plist-get task :id))
+          (occurrence (plist-get task :occurrence)))
+      (if (and (plist-get task :sending)
+               (not (superchat-timer--session-busy-p session))
+               (superchat-timer--run-after-sending-p task))
+          (let ((line (format "Scheduled task (due %s): %s -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again."
+                              (superchat-timer-format-time occurrence)
+                              (plist-get task :text))))
+            (superchat-timer--fact session "timer.unconfirmed" id occurrence)
+            (when-let* ((view (superchat-timer--live-view session)))
+              (ignore-errors
+                (let ((superchat-buffer-name (buffer-name view)))
+                  (with-current-buffer view
+                    (superchat--insert-persistent-system-message line)))))
+            (message "superchat: %s" line))
+        (superchat-timer--try-task session id occurrence (plist-get task :text))))))
+
 
 (defun superchat-timer-fire (timer occurrence)
   "Fire OCCURRENCE (a due time) of TIMER and return what was done.
@@ -305,7 +462,9 @@ afterwards never fires the same occurrence twice."
            :payload (list :timer-id (plist-get timer :id)
                           :occurrence occurrence
                           :kind (symbol-name kind) :text text
-                          :late (and late t))))
+                          :late (and late t)
+                          ;; A task is done only when its execution began.
+                          :awaits-start (eq kind 'task))))
     (ignore-errors (funcall superchat-timer-notify-function fired))
     (when-let* ((view (superchat-timer--live-view session)))
       (ignore-errors
@@ -314,7 +473,8 @@ afterwards never fires the same occurrence twice."
             (superchat--insert-persistent-system-message line)))))
     (when (eq kind 'task)
       (plist-put fired :run-id
-                 (ignore-errors (superchat-timer--start-task session text))))
+                 (superchat-timer--try-task session (plist-get timer :id)
+                                            occurrence text)))
     fired))
 
 ;;;; Arming -----------------------------------------------------------------------------
@@ -332,7 +492,10 @@ afterwards never fires the same occurrence twice."
   "Cancel every Emacs timer this module set; the facts stay on the Tape."
   (maphash (lambda (_id emacs-timer) (cancel-timer emacs-timer))
            superchat-timer--armed)
-  (clrhash superchat-timer--armed))
+  (clrhash superchat-timer--armed)
+  (when (timerp superchat-timer--retry-timer)
+    (cancel-timer superchat-timer--retry-timer))
+  (setq superchat-timer--retry-timer nil))
 
 (defun superchat-timer--due (id)
   "The Emacs timer for ID went off: fire what is due now, arm the rest."
@@ -360,6 +523,9 @@ afterwards never fires the same occurrence twice."
   "Fire, once each, the timers that came due while nothing was armed.
 A repeating timer fires only its most recent missed occurrence.  Return
 the fired plists."
+  (clrhash superchat-timer--retries)
+  ;; First the tasks an earlier Emacs fired and never started.
+  (superchat-timer-retry-tasks)
   (let ((now (superchat-timer--now)) fired)
     (dolist (timer (superchat-timer-list))
       (when-let* ((occurrence (superchat-timer--latest-occurrence timer now)))

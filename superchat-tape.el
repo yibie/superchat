@@ -130,6 +130,9 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "workspace.artifact.removed"
              ;; Timers (M11 slice 4): a timer is these facts.
              "timer.created" "timer.fired" "timer.cancelled"
+             ;; A fired task being sent, its Run, or a start that cannot
+             ;; be told after a restart.
+             "timer.sending" "timer.started" "timer.unconfirmed"
              ;; Work Records (M11 slice 7): a record is these facts.
              "work.created" "work.updated" "work.waiting" "work.completed"
              "work.focused" "work.facts" "work.outcome"
