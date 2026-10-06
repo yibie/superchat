@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — rules reach rewrite and workflows
+
+- Rewriting a selected region and running a workflow now follow the
+  workspace's rules (`AGENTS.md`, else `CLAUDE.md`), as the chat window
+  already did. A rewrite still answers with the replacement text only.
+- When a workspace's rules file exists but cannot be read, Superchat says so
+  instead of sending the request as if there were no rules.
+
 ## Unreleased — work that came due and did not start
 
 - A scheduled task whose message could not be sent is started a few minutes
