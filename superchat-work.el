@@ -114,9 +114,21 @@
                         table)))
             ("work.woken"
              (when record
-               (puthash id (plist-put record :woken
-                                      (append (plist-get record :woken)
-                                              (list (alist-get 'until payload))))
+               (setq record (plist-put record :woken
+                                       (append (plist-get record :woken)
+                                               (list (alist-get 'until payload)))))
+               (puthash id (plist-put record :wakes
+                                      (append (plist-get record :wakes)
+                                              (list (list :until (alist-get 'until payload)
+                                                          :detail (alist-get 'detail payload)
+                                                          :session session
+                                                          :main (alist-get 'main payload)))))
+                        table)))
+            ("work.reported"
+             (when record
+               (puthash id (plist-put record :reported
+                                      (append (plist-get record :reported)
+                                              (list (alist-get 'conversation payload))))
                         table)))
             ("work.completed"
              (when record
@@ -137,7 +149,10 @@
                (puthash id (plist-put record :outcomes
                                       (append (plist-get record :outcomes)
                                               (list (alist-get 'outcome payload))))
-                        table)))))))
+                        table))))
+          ;; Where the record's newest fact was written.
+          (when-let* ((now (and id (gethash id table))))
+            (puthash id (plist-put now :last-session session) table)))))
     (cons table (nreverse order))))
 
 (defun superchat-work-status (record)
@@ -608,9 +623,6 @@ completed records by status, one line each; never another Workspace's (K8)."
 (defvar superchat-work--armed (make-hash-table :test #'equal)
   "Record id -> the Emacs timer that will wake it.")
 
-(defvar superchat-work--woken-runs (make-hash-table :test #'equal)
-  "Run id of a woken execution -> (RECORD-ID . MAIN-SESSION-ID).")
-
 (defconst superchat-work-wake-prompt
   "Take up work record %s again: the time it was waiting for has come."
   "The first message of the conversation a woken record starts in.")
@@ -621,14 +633,47 @@ completed records by status, one line each; never another Workspace's (K8)."
   (and (fboundp 'superchat-plugin-row-active-p)
        (superchat-plugin-row-active-p 'work-records)))
 
+(defun superchat-work--session-ran-p (session-id)
+  "Non-nil when an execution ever started in SESSION-ID, by its Tape."
+  (cl-some (lambda (event) (equal "run.started" (plist-get event :type)))
+           (superchat-tape-replay-events session-id)))
+
 (defun superchat-work--due-p (record)
-  "Non-nil when RECORD waits for a time that has not woken it yet."
+  "Non-nil when RECORD waits for a time that no execution was started for.
+A wake whose conversation never ran an execution does not count: sending
+failed, or Emacs quit in between, and the wait was put back."
   (let* ((waiting (plist-get record :waiting))
          (until (plist-get waiting :until)))
     (and (equal "time" (plist-get waiting :for))
          (numberp until)
          (not (plist-get record :conclusion))
-         (not (member until (plist-get record :woken))))))
+         (not (cl-some (lambda (wake)
+                         (and (equal until (plist-get wake :until))
+                              (superchat-work--session-ran-p (plist-get wake :session))))
+                       (plist-get record :wakes))))))
+
+(defun superchat-work--restore-wait (session-id record-id until detail)
+  "Put back RECORD-ID's wait for the time UNTIL: its wake started nothing."
+  (superchat-work--append session-id "work.waiting"
+                          (format "Work record %s waits again: its wake started nothing"
+                                  record-id)
+                          (list :work-id record-id :for "time" :until until
+                                :detail detail)))
+
+(defun superchat-work--restore-lost-wake (record)
+  "Put back RECORD's wait when its last wake was cut off; non-nil if it did.
+Cut off means: the wake wrote its facts, no execution ever started in its
+conversation, and nothing was written to the record since.  This is what an
+Emacs that quit in the middle of a wake leaves behind."
+  (let ((wake (car (last (plist-get record :wakes)))))
+    (when (and wake
+               (not (plist-get record :conclusion))
+               (not (plist-get record :waiting))
+               (equal (plist-get wake :session) (plist-get record :last-session))
+               (not (superchat-work--session-ran-p (plist-get wake :session))))
+      (superchat-work--restore-wait (plist-get wake :session) (plist-get record :id)
+                                    (plist-get wake :until) (plist-get wake :detail))
+      t)))
 
 (defun superchat-work--disarm (id)
   (when-let* ((timer (gethash id superchat-work--armed)))
@@ -655,44 +700,57 @@ completed records by status, one line each; never another Workspace's (K8)."
 
 (defun superchat-work-wake (record)
   "Take RECORD up again in a new conversation of its Workspace; return the View.
-Records `work.woken' first, so one wait wakes once; clears the wait; makes
-RECORD the new conversation's current record; sends the wake message.  When
-that execution ends, a line is left in the Workspace's main conversation."
+Records `work.woken' first, naming the Workspace's main conversation; clears
+the wait; makes RECORD the new conversation's current record; sends the wake
+message.  When sending signals, the wait is put back, so the record is due
+again.  When that execution ends, a line is left in the main conversation."
   (let* ((id (plist-get record :id))
-         (until (plist-get (plist-get record :waiting) :until))
+         (waiting (plist-get record :waiting))
+         (until (plist-get waiting :until))
+         (detail (plist-get waiting :detail))
          (workspace (list :id (plist-get record :workspace-id)
                           :root (plist-get record :workspace-root)))
          (main (or (car (superchat-view-workspace-session-ids (plist-get workspace :id)))
                    (plist-get record :session-id)))
          (view (superchat-workspace-new-conversation workspace))
-         (session (buffer-local-value 'superchat--session-id view)))
+         (session (buffer-local-value 'superchat--session-id view))
+         (sent nil))
     (superchat-work--append session "work.woken"
                             (format "Work record %s woken" id)
-                            (list :work-id id :until until))
+                            (list :work-id id :until until :detail detail :main main))
     (superchat-work--append session "work.waiting"
                             (format "Work record %s no longer waits" id)
                             (list :work-id id :for nil))
     (superchat-work--append session "work.focused"
                             (format "Current work record: %s" id)
                             (list :work-id id))
-    (with-current-buffer view
-      (let ((inhibit-read-only t))
-        (goto-char (point-max))
-        (insert (format superchat-work-wake-prompt id)))
-      ;; The product speaks here, not the user.
-      (let ((superchat-automated-input t))
-        (superchat-send-input))
-      (when superchat--active-run-id
-        (puthash superchat--active-run-id (cons id main) superchat-work--woken-runs)))
+    (unwind-protect
+        (with-current-buffer view
+          (let ((inhibit-read-only t))
+            (goto-char (point-max))
+            (insert (format superchat-work-wake-prompt id)))
+          ;; The product speaks here, not the user.
+          (let ((superchat-automated-input t))
+            (superchat-send-input))
+          (setq sent t))
+      (unless sent
+        (superchat-work--restore-wait session id until detail)))
     view))
 
 (defun superchat-work-wake-due ()
-  "Wake every record whose time has come; return the Views started."
+  "Wake every record whose time has come; return the Views started.
+A wake cut off earlier is put back first.  One record's wake failing does
+not stop the others."
+  (dolist (record (superchat-work-records))
+    (superchat-work--restore-lost-wake record))
   (let ((now (superchat-work--now)) views)
     (dolist (record (superchat-work-records))
       (when (and (superchat-work--due-p record)
                  (<= (plist-get (plist-get record :waiting) :until) now))
-        (push (superchat-work-wake record) views)))
+        (condition-case err
+            (push (superchat-work-wake record) views)
+          (error (message "superchat: work record %s was not taken up: %s"
+                          (plist-get record :id) (error-message-string err))))))
     (nreverse views)))
 
 (defun superchat-work-arm-all ()
@@ -705,25 +763,27 @@ that execution ends, a line is left in the Workspace's main conversation."
                            (plist-get (plist-get record :waiting) :until)))))
 
 (defun superchat-work--report-woken (run status)
-  "When the execution RUN of a woken record ends, note it in the main conversation."
-  (when-let* ((entry (gethash run superchat-work--woken-runs)))
-    (remhash run superchat-work--woken-runs)
-    (let* ((id (car entry))
-           (main (cdr entry))
-           (record (superchat-work-get id))
-           (line (format "Work record %s was taken up at its time in conversation %s: %s."
-                         id (plist-get status :session-id)
-                         (superchat-work-status-text record))))
-      (superchat-work--append main "work.reported" line
-                              (list :work-id id :run-id run
-                                    :conversation (plist-get status :session-id)))
-      (when-let* ((view (and (fboundp 'superchat-editor-workspace-buffer)
-                             (superchat-editor-workspace-buffer main 'session-view)))
-                  ((buffer-live-p view)))
-        (ignore-errors
-          (let ((superchat-buffer-name (buffer-name view)))
-            (with-current-buffer view
-              (superchat--insert-persistent-system-message line))))))))
+  "When the execution RUN of a woken record ends, note it in the main conversation.
+Which record RUN took up, and where to say so, is read from the `work.woken'
+fact of RUN's conversation, so it holds across an Emacs restart."
+  (let ((session (plist-get status :session-id)))
+    (dolist (record (superchat-work-records))
+      (when-let* ((wake (cl-find session (plist-get record :wakes)
+                                 :key (lambda (w) (plist-get w :session)) :test #'equal))
+                  (main (plist-get wake :main))
+                  ((not (member session (plist-get record :reported)))))
+        (let* ((id (plist-get record :id))
+               (line (format "Work record %s was taken up at its time in conversation %s: %s."
+                             id session (superchat-work-status-text record))))
+          (superchat-work--append main "work.reported" line
+                                  (list :work-id id :run-id run :conversation session))
+          (when-let* ((view (and (fboundp 'superchat-editor-workspace-buffer)
+                                 (superchat-editor-workspace-buffer main 'session-view)))
+                      ((buffer-live-p view)))
+            (ignore-errors
+              (let ((superchat-buffer-name (buffer-name view)))
+                (with-current-buffer view
+                  (superchat--insert-persistent-system-message line))))))))))
 
 ;;;; The user's answer (slice 9) ------------------------------------------------------
 

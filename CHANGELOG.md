@@ -2,6 +2,17 @@
 
 All notable changes to superchat.
 
+## Unreleased — a wake that goes wrong is not lost
+
+- When a work record's time comes and the wake cannot be sent, the record
+  keeps waiting for that time instead of silently becoming an ordinary open
+  record, and Superchat takes it up the next time it starts. The same holds
+  when Emacs quit in the middle of a wake.
+- Several records due at once: one failing no longer stops the others.
+- The line in the workspace's main conversation saying a record was taken up
+  is now written even when Emacs was restarted while that work ran; it is
+  written once.
+
 ## Unreleased — history stays in its workspace
 
 - The `sql` tool, which reads every conversation of every workspace, is no
