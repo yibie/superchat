@@ -328,9 +328,33 @@ Fault injection first: `scripts/work-wake-fault-regression.el`, 8 tests, 5 red o
 
 Decision: `docs/decisions/accepted/2026-10-06-a-fired-task-that-did-not-start.md`. Timer tasks: `timer.sending` and `timer.started` record the send and the Run; a fired task without a Run is started later (retry in the same Emacs, and first thing after a restart); a send that may have been cut off is recorded as `timer.unconfirmed`, said in the conversation and not repeated; a busy conversation makes the task wait instead of queueing in memory; a fired, unstarted task can be cancelled. `scripts/timer-start-fault-regression.el`, 12 tests; they call functions the old code does not have, so all 12 fail there and that count says little. 11 mutants of the repair: 10 red, 1 survived (the `timer.sending` fact not written) until an assertion was added. Work Records: a failed wake is retried in the same Emacs (300 s, 3 times); an execution an earlier Emacs never finished gets the outcome `interrupted` and one line in the main conversation, and is not started again. 4 more tests in `scripts/work-wake-fault-regression.el` (14 in all), 3 red on the code as it stood and 1 guard. No queue and no scheduler were added. The code was written by pi with deepseek-flash from a find/replace work order and is byte-identical to the leader's prototype. No real-model run; an exit of Emacs is simulated by not sending and by hand-written facts, not by killing a process. Still open: what a cut-off execution left in unsaved buffers (step 4 of the plan).
 
-### Rules on rewrite and workflow (`implemented` 2026-10-06, offline evidence only)
+### Rules on rewrite and workflow (`implemented` 2026-10-06; the rewrite measured on real models 2026-10-07)
 
 Decision: `docs/decisions/accepted/2026-10-06-rules-on-rewrite-and-workflow.md`. Reproduced first by reading the request sent to the provider: a region rewrite carried only its own system text, a workflow step no system text at all. The one rules collector now also serves `inline-rewrite` and `workflow` (rules alone, no note about remembering; the rewrite's own instruction stays last); compaction and skill matching carry none. A rules file that exists and cannot be read is told to the user, and to the model on the chat surfaces; the request is not refused. `scripts/entry-rules-regression.el`, 12 tests; of the first 11, 8 were red on the code as it stood and 3 are guards. 8 mutants, all red. The rules, sub-agent-rules, rewrite, composition, history and scope suites, the M3 set, the canonical smoke and the Kernel check stay green. Written by pi with deepseek-flash from a find/replace work order, byte-identical to the leader's prototype. Measured on real models on 2026-10-07 with a rule "start every answer with a line of reasoning": placing the rewrite's instruction last was not enough, DeepSeek put that line into the user's file 3 times of 3 (local Qwen 0 of 1). The rules of a rewrite are now followed by a note saying which kind of rule applies to it (`superchat-prompt--rewrite-rules-note`); after it DeepSeek 0 of 5 and Qwen 0 of 3 carried the line, and the date-format rule in the same file was followed 4 of 5 and 3 of 3. One scenario and one conflicting rule; the suite is 13 tests, the new one red on the code before and on two mutants. Still open: the Telega and emacsclient entries are untraced; a queued input after a window switch has no test of its own; a workflow step is still not recorded as conversation.
+
+### Working beside the user: what real runs showed (2026-10-07, observations; nothing here is fixed)
+
+Twelve scenarios in a sandboxed Emacs with a stand-in user (`.scratch/task-sim/harness-goals/tasks-step4.el`, not in the repository), DeepSeek three times each and local Qwen once, after a first round that was used to correct the scenarios' own checks and is not counted. Counts are runs. They are small; a scenario seen once on Qwen is one run.
+
+Held every time, both models:
+
+- The user and the agent edit one buffer in turn: the user's edits and the agent's are all there (3 and 1).
+- A Run in progress when the user switches to another Workspace's conversation, or changes preset: it completes, its edit lands, its answer is in its own conversation and nothing of it in the other (3 and 1 each).
+- An approval question left unanswered for 75 seconds: Emacs keeps running timers, and after "no" the call is not run and the answer does not invent a result (3 and 1).
+- A record that wakes while the user is typing a draft: the draft's text and point are unchanged (3 and 1).
+- The user has unsaved edits and another program changes the file: the user's line and the other program's line both survive the agent's edit (3 and 1, in each of two variants).
+- After a restart the record is found in the Workspace, carried into the new conversation, and finished there (2 and 1; a third DeepSeek run left no result file).
+
+Did not hold:
+
+- **A woken record's review screen takes the cursor** out of the draft the user is typing in: 2 of 3 on DeepSeek, 1 of 1 on Qwen. This is the review screen's accepted behaviour applied to work nobody is watching; whether automatic work may take focus is the user's open decision.
+- **Killing the conversation's buffer while its Run works fails the Run** (3 of 3, 1 of 1): the edit is not made, the reason recorded is "Human input adapter is no longer available".
+- **The agent is never told the file changed on disk** (0 of 8 runs). When the buffer had no unsaved edits before the outside change, Emacs asks its own "changed on disk; really edit the buffer?" during the agent's edit (4 of 4); Superchat neither asks it nor knows of it.
+- **A Work Record's rendering does not name its executions**, only the files they changed (0 of 3): "which run did this" is answerable from the Tape, not from the record the user sees.
+- **Two Runs appending to one buffer**: no line was lost or doubled and each run saw the other's lines, but on DeepSeek, in 2 of 3 attempts one of the two Runs ended one line short with an answer that announced the next line instead of saying it stopped. Cause not established. On Qwen the second concurrent request got an error body from the local server in a shape the client did not parse, and that Run never ended (waited 240 s).
+- **An approval question that stands** blocks the minibuffer for everything. A record that came due meanwhile woke and made its edit (3 of 3 on DeepSeek in a rerun with the scenario corrected, 1 of 1 on Qwen); in those three reruns the woken Run then asked its own question, apparently on top of the standing one (the snapshot shows a second minibuffer), and neither moved until the stand-in answered at 300 s.
+
+Not exercised: a human at the keyboard; killing Emacs in mid-Run (the restart scenario restarts between Runs); more than two concurrent Runs; Telega and emacsclient.
 
 ### Minimum Emacs 30.1 (`implemented`, verified 2026-09-23)
 
