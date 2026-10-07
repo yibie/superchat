@@ -146,6 +146,11 @@
                         table)))
             ("work.outcome"
              (when record
+               (setq record (plist-put record :executions
+                                       (append (plist-get record :executions)
+                                               (list (list :run-id (superchat-work--get payload 'run_id 'run-id)
+                                                           :session session
+                                                           :outcome (alist-get 'outcome payload))))))
                (puthash id (plist-put record :outcomes
                                       (append (plist-get record :outcomes)
                                               (list (alist-get 'outcome payload))))
@@ -573,12 +578,27 @@ completed records by status, one line each; never another Workspace's (K8)."
     (pop-to-buffer buffer)
     buffer))
 
+(defun superchat-work-executions-text (record)
+  "RECORD's executions, one per line, oldest first; nil when it has none.
+For the user, who asks which execution did what; a request does not carry it."
+  (when-let* ((executions (plist-get record :executions)))
+    (concat "Executions (recorded by Superchat):\n"
+            (mapconcat (lambda (e)
+                         (format "- %s in conversation %s: %s"
+                                 (plist-get e :run-id) (plist-get e :session)
+                                 (plist-get e :outcome)))
+                       executions "\n"))))
+
 (defun superchat-work-list-show (id)
   "Show the full text of record ID, by default the one at point."
   (interactive (list (tabulated-list-get-id)))
   (when id
     (with-help-window "*superchat work record*"
-      (princ (superchat-work-render (superchat-work-get id))))))
+      (let ((record (superchat-work-get id)))
+        (princ (superchat-work-render record))
+        (when-let* ((text (superchat-work-executions-text record)))
+          (princ "\n")
+          (princ text))))))
 
 ;;;###autoload
 (defun superchat-work-mark-complete (id conclusion)

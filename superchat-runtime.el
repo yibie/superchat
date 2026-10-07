@@ -3811,12 +3811,9 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                   (car rendered)))))
                           value)))
                      ('before-input-dispatch
+                      ;; A Run whose View is gone goes on: it fails only
+                      ;; where it needs the user, in `ask_user' itself.
                       (and (superchat-runtime--input-check-deadline run-id)
-                           (or (superchat-runtime--input-adapter-current-p run-id)
-                               (progn
-                                 (superchat-runtime--finish
-                                  run-id 'failed "[Human input adapter is no longer available]")
-                                 nil))
                            (not (superchat-runtime-pending-input run-id))))
                      ('input-clock-exhausted
                       (superchat-runtime--finish run-id 'timed-out "[Response hard timeout]"))

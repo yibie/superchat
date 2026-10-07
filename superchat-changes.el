@@ -462,10 +462,29 @@ The window selected before is where the cursor returns when the review ends."
                                  #'superchat-changes--review-select-after-minibuffer)
                      (superchat-changes--review-select window))))))
 
+(defun superchat-changes--unattended-run-p (session run)
+  "Non-nil when Superchat started RUN of SESSION at a time, not the user.
+Read from SESSION's Tape: a scheduled task records `timer.started' with the
+Run it began, and a woken Work Record's Run is the first one of a
+conversation that holds `work.woken'."
+  (let ((events (ignore-errors (superchat-tape-replay-events session)))
+        first woken started)
+    (dolist (event events)
+      (pcase (plist-get event :type)
+        ("run.started" (unless first (setq first (plist-get event :run-id))))
+        ("work.woken" (setq woken t))
+        ("timer.started"
+         (when (equal run (plist-get (plist-get event :payload) :run-id))
+           (setq started t)))))
+    (or started (and woken (equal run first)))))
+
 (defun superchat-changes--review-after-run (session run)
   "Show the review screen for what RUN of SESSION left unsaved and select it.
-While the minibuffer is in use it is shown unselected and selected after."
-  (when-let* ((rows (ignore-errors (superchat-changes-candidates session run))))
+While the minibuffer is in use it is shown unselected and selected after.
+An execution Superchat started at a time shows no screen: the user is doing
+something else, and the echo area has already said what is unsaved."
+  (when-let* (((not (superchat-changes--unattended-run-p session run)))
+              (rows (ignore-errors (superchat-changes-candidates session run))))
     (let ((busy (active-minibuffer-window)))
       (when (and (superchat-changes-review rows (not busy)) busy)
         (add-hook 'minibuffer-exit-hook

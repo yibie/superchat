@@ -183,6 +183,28 @@ The binding spans llm.el's synchronous chat error callback and then ends."
     (advice-add 'llm-request-plz--handle-error :around
                 #'superchat--llm-capture-http-status)))
 
+;; A server may answer {"error": "text"} where llm.el's OpenAI provider expects
+;; an object.  Reading it then signals inside llm.el's own error handler, the
+;; error callback is never called, and the Run waits for an answer that will
+;; not come (LM Studio, two requests at once, 2026-10-07).
+
+(defun superchat--llm-extract-error-safely (original provider response)
+  "Call ORIGINAL with PROVIDER and RESPONSE; never signal over an odd error.
+When ORIGINAL cannot read RESPONSE, return the server's error as text."
+  (condition-case nil
+      (funcall original provider response)
+    (error
+     (let ((value (and (consp response) (ignore-errors (alist-get 'error response)))))
+       (format "The server returned an error: %s"
+               (if (stringp value) value (format "%S" response)))))))
+
+(with-eval-after-load 'llm-provider-utils
+  (when (and (fboundp 'llm-provider-chat-extract-error)
+             (not (advice-member-p #'superchat--llm-extract-error-safely
+                                   'llm-provider-chat-extract-error)))
+    (advice-add 'llm-provider-chat-extract-error :around
+                #'superchat--llm-extract-error-safely)))
+
 ;; plz-event-source 0.1.3 hands each server-sent event to its listeners on a
 ;; timer set to `current-time'.  Emacs runs timers of equal time newest
 ;; first, so two events parsed within one clock reading reached llm.el

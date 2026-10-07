@@ -93,6 +93,17 @@ Both go through the chat View's own send (`superchat-send-input` with `superchat
 
 A woken record's new conversation has no recorded permission level, so it runs under `superchat-sandbox-default-mode`. Under the default `edit-buffers` level its edits stay in buffers and each `full-control` call asks for approval, with nobody necessarily present to answer. Under `danger-full-access` a `full-control` tool can write to disk without asking. "A timed Run never reaches the disk" is therefore not a guarantee of the code; what holds is that `edit_buffer` never saves and that `save_buffer` asks on every call.
 
+### Working beside the user
+
+Four things hold where an agent and the user share one Emacs ([decision](decisions/accepted/2026-10-07-working-beside-the-user.md); `scripts/beside-user-regression.el`, 13 tests):
+
+- **An execution nobody started shows no review screen.** `superchat-changes--unattended-run-p` reads the conversation's Tape: a `timer.started` naming the Run, or a `work.woken` fact with the Run being that conversation's first. Such a Run's unsaved changes are announced in the echo area only; a Run the user started still gets the review screen, which takes the cursor.
+- **A Run does not need its View.** Killing the conversation's buffer leaves the Run going; only an `ask_user` call made after that fails, with a result that tells the model the user cannot be asked. Approval questions do not depend on the View.
+- **A file that changed on disk is noticed before a structured edit** (`superchat-tools--disk-change-before-edit`, by `verify-visited-file-modtime`). A buffer without unsaved changes is reloaded and the edit is returned to the model to redo against the new text; a buffer with unsaved changes is edited and the result says that saving would overwrite the disk. `read_buffer` notes the difference. The user gets one echo-area line. Edits made through `eval_elisp` or a shell do not pass this check.
+- **A Work Record shown to the user names its executions** (`superchat-work-executions-text`): Run, conversation and outcome, oldest first. The record text a request carries is unchanged.
+
+A server error body that llm.el's provider cannot read is turned into an ordinary error by an advice in `superchat-llm.el`, so the Run ends instead of waiting for a callback that never comes.
+
 ## Entry matrix
 
 Each row is a producer that submits an Envelope through the `driver` Service. "Rules" means the Workspace rules described above. The permission level of a Session is its last recorded `sandbox.mode`, else `superchat-sandbox-default-mode`; a producer with `:tools 'none` offers the model no tool, so no level is consulted.

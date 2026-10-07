@@ -2,6 +2,22 @@
 
 All notable changes to superchat.
 
+## Unreleased — working beside you
+
+- Work that Superchat starts by itself (a scheduled task, a work record that
+  wakes) no longer opens the review screen or takes the cursor; the echo area
+  still says what is unsaved. Executions you start are unchanged.
+- Closing a conversation's window no longer fails the execution running in
+  it. It goes on, and only a question it must put to you fails.
+- When a file changed on disk behind its buffer, Superchat notices before the
+  agent edits: a buffer without unsaved changes is reloaded first, one with
+  unsaved changes is edited and you are told that saving would overwrite the
+  file. Emacs's own "changed on disk; really edit the buffer?" no longer
+  appears in the middle of an edit.
+- A work record opened from the list shows which executions worked on it.
+- A server error in an unusual shape ends the execution with that error
+  instead of leaving it waiting forever.
+
 ## Unreleased — rules reach rewrite and workflows
 
 - Rewriting a selected region and running a workflow now follow the

@@ -426,6 +426,48 @@ with nothing on disk.  A failure is a string starting with `Error:'."
                "Your edits stay in the buffer; saving it is the user's decision.")))))
     (error (format "Error: %s" (error-message-string err)))))
 
+;;;; A file that changed on disk ------------------------------------------------
+;; docs/decisions/accepted/2026-10-07-working-beside-the-user.md
+;; Another program wrote the file after the buffer read it.  Emacs would ask
+;; "changed on disk; really edit the buffer?" in the middle of the agent's
+;; edit, a question nobody expects and the model never hears of.  Superchat
+;; looks first and says what it found to the model and to the user.
+
+(defun superchat-tools--disk-changed-p (buffer)
+  "Non-nil when the file BUFFER visits changed on disk after BUFFER read it.
+BUFFER's base buffer is the one asked.  A file that is gone is not a change."
+  (let ((base (or (buffer-base-buffer buffer) buffer)))
+    (and (buffer-file-name base)
+         (file-exists-p (buffer-file-name base))
+         (not (verify-visited-file-modtime base)))))
+
+(defun superchat-tools--disk-change-before-edit (buffer-name)
+  "Deal with a change on disk before a structured edit of BUFFER-NAME.
+Return nil when the file did not change.  When it did and the buffer has no
+unsaved changes, reload the buffer from disk and return (:final TEXT): the
+edit is not made and TEXT is the tool's answer.  When the buffer has unsaved
+changes, leave it alone and return (:note TEXT) to append to the edit's
+answer.  The user is told in the echo area either way."
+  (when-let* ((buffer (get-buffer buffer-name))
+              ((superchat-tools--disk-changed-p buffer))
+              (base (or (buffer-base-buffer buffer) buffer))
+              (file (buffer-file-name base)))
+    (if (buffer-modified-p base)
+        (progn
+          (message "superchat: %s changed on disk while buffer %s has unsaved changes; the agent edited the buffer"
+                   file (buffer-name base))
+          (list :note
+                (format "\nNote: %s changed on disk after buffer %s read it, and the buffer has unsaved changes, so the two differ. This edit went into the buffer. Saving the buffer would overwrite what is on disk now: tell the user."
+                        file (buffer-name base))))
+      (with-current-buffer base
+        (let ((inhibit-message t))
+          (revert-buffer t t t)))
+      (message "superchat: %s changed on disk; buffer %s was reloaded before the agent's edit"
+               file (buffer-name base))
+      (list :final
+            (format "Error: edit not applied. %s changed on disk after buffer %s read it. The buffer had no unsaved changes, so it was reloaded from disk and now holds the file's current text. Read the buffer again, then make the edit against that text."
+                    file (buffer-name base))))))
+
 (defun superchat-tool-read-buffer (buffer &optional offset limit)
   "Return lines of the live text of BUFFER, unsaved changes included.
 OFFSET is the 1-based first line (default 1); LIMIT the number of lines
@@ -460,6 +502,9 @@ not live, or a bad OFFSET or LIMIT, signals an error."
          (when (and buffer-file-name (buffer-modified-p))
            (format "Note: this is the unsaved text of %s; the version on disk differs.\n"
                    buffer-file-name))
+         (when (superchat-tools--disk-changed-p (current-buffer))
+           (format "Note: %s changed on disk after this buffer read it; this is the buffer's text, not the file's current text.\n"
+                   (buffer-file-name (or (buffer-base-buffer) (current-buffer)))))
          "Content:\n"
          (cdr window))))))
 
@@ -593,8 +638,9 @@ answer; EVIDENCE is called with no arguments once the real edit happened and
 returns the evidence lines.  Only a buffer whose mode derives from
 `lisp-data-mode' is rehearsed."
   (let* ((buffer (get-buffer buffer-name))
+         (disk (superchat-tools--disk-change-before-edit buffer-name))
          (verdict
-          (when (and buffer
+          (when (and buffer (not (plist-get disk :final))
                      (with-current-buffer buffer (derived-mode-p 'lisp-data-mode)))
             (let ((copy (generate-new-buffer " *superchat-edit-rehearsal*" t)))
               (unwind-protect
@@ -623,6 +669,7 @@ returns the evidence lines.  Only a buffer whose mode derives from
                             :where (and after (superchat-tools--lisp-problem-text after)))))
                 (kill-buffer copy))))))
     (cond
+     ((plist-get disk :final))
      ((and verdict (not (plist-get verdict :before)) (plist-get verdict :after))
       (format "Error: edit not applied; buffer %s was not changed. It reads as Lisp now, and after this edit it would not: %s. Correct the text you are inserting so that parentheses and strings balance, then call again."
               buffer-name (plist-get verdict :where)))
@@ -634,6 +681,7 @@ returns the evidence lines.  Only a buffer whose mode derives from
                             buffer-name (plist-get verdict :where))
                   (format "\nNote: buffer %s did not read as Lisp before this edit; it now reads as Lisp."
                           buffer-name)))
+              (plist-get disk :note)
               (funcall evidence))))))
 
 (defun superchat-tool-edit-buffer (buffer-name old-string new-string)
