@@ -84,12 +84,27 @@
       (should (= 1 (length body)))
       (should-not (string-match-p "RULE-MARKER-P" (hm--text (car body)))))))
 
+(ert-deftest entry-rules/a-rewrite-says-which-rules-apply-to-it ()
+  ;; Measured 2026-10-07: with a rule "start every answer with a line of
+  ;; reasoning", a rewrite put that line into the user's file 3 times out of 3.
+  (wrules--with '((:text "HELLO")) (p)
+    (wrules--write p "AGENTS.md" "RULE-MARKER-P: explain first.\n")
+    (er--rewrite (wrules--file p))
+    (let ((system (wrules--system 1)))
+      (should (= 1 (er--count "does not apply to this answer" system)))
+      ;; After the rules, before the rewrite's own text.
+      (should (< (string-match "RULE-MARKER-P" system)
+                 (string-match "does not apply to this answer" system)))
+      (should (< (string-match "does not apply to this answer" system)
+                 (string-match "Rewrite only the target" system))))))
+
 (ert-deftest entry-rules/a-rewrite-without-rules-is-as-it-was ()
   (wrules--with '((:text "HELLO")) (p)
     (er--rewrite (wrules--file p))
     (let ((system (wrules--system 1)))
       (should (string-prefix-p "You are an editor of" system))
       (should-not (string-match-p "Workspace rules" system))
+      (should-not (string-match-p "does not apply to this answer" system))
       (should-not (string-match-p er--remember system))
       (should-not (string-match-p "AGENTS.md" system)))))
 
@@ -138,6 +153,8 @@
         (let ((system (wrules--system n)))
           (should (= 1 (er--count "RULE-MARKER-P" system)))
           (should (= 1 (er--count "Workspace rules, from " system)))
+          ;; The note about rewrites is a rewrite's alone.
+          (should-not (string-match-p "does not apply to this answer" system))
           (should-not (string-match-p er--remember system))))
       ;; The step prompt itself is unchanged.
       (should (string-match-p "step one about x"

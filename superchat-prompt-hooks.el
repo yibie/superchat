@@ -522,6 +522,15 @@ remembering.  A region rewrite answers with the replacement text and a
 workflow step runs a written recipe; neither is where the user says
 \"remember this\".")
 
+(defconst superchat-prompt--rewrite-rules-note
+  "Your whole answer is put into the user's file in place of the target, so it \
+holds the replacement text and nothing else.  A rule above about how to answer \
+-- explaining first, a line of reasoning, a greeting, a summary -- is about \
+conversations and does not apply to this answer.  A rule above about the text \
+itself -- its language, date format, wording, naming -- does apply to the \
+replacement."
+  "What follows the Workspace rules in a region rewrite's request.")
+
 (defun superchat-prompt-collector--workspace-rules (env _state _tools)
   "Return the rules of the Workspace ENV's Session is bound to, as system text.
 The root comes from the Session's own Tape (`workspace.bound'), so the rules
@@ -531,7 +540,8 @@ do when the user says to remember something
 \(`superchat-workspace-remember-note'); a Session with no Workspace root (a
 temporary conversation) gets only that note, which says nothing is kept.
 The surfaces in `superchat-prompt--rules-only-surfaces' get the rules
-alone, and nothing when there are none."
+alone, and nothing when there are none; a region rewrite's rules are followed
+by `superchat-prompt--rewrite-rules-note'."
   (let* ((session-id (plist-get env :session-id))
          (surface (plist-get env :surface))
          (note-p (memq surface '(chat inline-ask inline-act)))
@@ -556,6 +566,8 @@ alone, and nothing when there are none."
                  note))
          (text (cond ((and rules note) (concat rules "\n\n" note))
                      (note-p note)
+                     ((and rules (eq surface 'inline-rewrite))
+                      (concat rules "\n\n" superchat-prompt--rewrite-rules-note))
                      (t rules))))
     ;; A request that goes without rules it should carry is said, not hidden.
     (when problem

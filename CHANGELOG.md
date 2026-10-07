@@ -7,6 +7,9 @@ All notable changes to superchat.
 - Rewriting a selected region and running a workflow now follow the
   workspace's rules (`AGENTS.md`, else `CLAUDE.md`), as the chat window
   already did. A rewrite still answers with the replacement text only.
+  A rule about how to answer (explain first, a line of reasoning) is said
+  not to apply to a rewrite, so it no longer ends up in your file; a rule
+  about the text itself (language, date format) still applies.
 - When a workspace's rules file exists but cannot be read, Superchat says so
   instead of sending the request as if there were no rules.
 
