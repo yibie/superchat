@@ -16,6 +16,10 @@ All notable changes to superchat.
   conversation stays in the mode it was in. Named at the start it still
   becomes the conversation's mode. A plan skill switches the conversation
   wherever it is named.
+- A message that invokes a skill now tells the model where you are, as a
+  plain message always did: the buffer you called Superchat from, the text
+  you selected, and the window arrangement. Before, a skill message went out
+  without them and the model could not tell which buffer you meant.
 
 ## Unreleased — working beside you
 

@@ -69,9 +69,8 @@ EXTRA is more frontmatter lines.  It may use `read_buffer' only."
           ;; This message goes out as the skill: its text, its tools.
           (should (= 1 (m5rc--count "SKO_PERSONA_sko-agent" (sko--system request))))
           (should (equal '("read_buffer") (sko--tools)))
-          (should (equal "SKO_BEFORE SKO_AFTER"
-                         (car (split-string (car (last (plist-get request :users)))
-                                            "\n")))))
+          (should (= 1 (m5rc--count "SKO_BEFORE SKO_AFTER"
+                                    (car (last (plist-get request :users)))))))
         ;; The conversation did not change: neither what the View holds nor
         ;; what its record says.
         (should-not (sko--active view))

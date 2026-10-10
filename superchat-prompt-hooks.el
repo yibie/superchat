@@ -855,19 +855,22 @@ The source is the Envelope's frozen snapshot when the dispatcher captured one
 \(a plan that previewed and then sent shares exactly that instant).  Only a
 request that was never prepared that way resolves the View's own association
 here, and captures it once, at this collection.  Nothing is guessed from
-focus, buffer names or recent use, and a request that already carries an
-assembled prompt (`:chat-prompt-override': the previewed or user-edited final
-message) is NOT rendered into again: that text is the exact body the user
-reviewed and confirmed, so re-rendering would both duplicate the facts and
-restore a selection the user deleted in the inspector.
+focus, buffer names or recent use, and a request the user previewed
+\(`:chat-prepared-context') is NOT rendered into again: that text is the exact
+body the user reviewed and confirmed, so re-rendering would both duplicate the
+facts and restore a selection the user deleted in the inspector.  A message
+whose text a skill fixed (`:chat-prompt-override' alone) was reviewed by
+nobody and is rendered into like any other.
 
 The live associated object is reported through the Envelope's
 `:emacs-origin-buffer', the data-only facts through `:emacs-origin-snapshot';
 neither is appended to the user's own text."
   (let* ((context (plist-get env :context))
-         (override (plist-get context :chat-prompt-override))
          (frozen (plist-get context :emacs-origin-snapshot)))
-    (unless (and (stringp override) (not (string-empty-p override)))
+    ;; Only a request the user previewed is left alone.  A skill also fixes
+    ;; the message text (`:chat-prompt-override'), but nobody reviewed that
+    ;; text: it still needs to say where the user is.
+    (unless (plist-get context :chat-prepared-context)
       (let* ((view (plist-get context :chat-buffer))
              (source (or (plist-get context :emacs-origin-buffer)
                          (and (buffer-live-p view)
@@ -1007,11 +1010,11 @@ only, so the facts are those of the moment the request is prepared."
   "Return the window arrangement of the selected frame as a `context' fragment.
 Chat, inline-ask and inline-act only.  The arrangement is taken when the
 request is collected; a request whose text the user already previewed and
-confirmed (`:chat-prompt-override') is not rendered into again."
-  (let* ((context (plist-get env :context))
-         (override (plist-get context :chat-prompt-override)))
+confirmed (`:chat-prepared-context') is not rendered into again.  A message
+whose text a skill fixed is rendered into like any other."
+  (let* ((context (plist-get env :context)))
     (when (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
-               (not (and (stringp override) (not (string-empty-p override)))))
+               (not (plist-get context :chat-prepared-context)))
       (when-let* ((text (superchat-prompt--window-arrangement-render
                          (superchat-prompt--window-arrangement
                           (selected-frame) (plist-get context :chat-buffer)))))
