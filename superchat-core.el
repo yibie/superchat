@@ -148,7 +148,12 @@ docs/decisions/proposed/2026-10-10-triggers-anywhere-in-the-message.md."
                                    ci ">" "[a-zA-Z0-9_-]+"
                                    #'superchat-core--known-skill-p))))
             (setf (superchat-turn-skill turn) (car found))
-            (setf (superchat-turn-clean-input turn) (cdr found))))))
+            (setf (superchat-turn-clean-input turn) (cdr found))
+            ;; Named in the middle, an agent skill applies to this message
+            ;; only; the dispatcher reads this to leave the Session as it is.
+            (setf (superchat-turn-state turn)
+                  (plist-put (superchat-turn-state turn)
+                             :skill-from-body t))))))
     ;; /command
     (unless (superchat-turn-skill turn)
       (let ((ci (superchat-turn-clean-input turn)))

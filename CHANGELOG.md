@@ -11,6 +11,11 @@ All notable changes to superchat.
   else — `a > b`, a quoted line, an e-mail address, a path — stays text.
   What opens the message still wins, and `#file` still works at the start
   only. Messages Superchat sends by itself are read at their start only.
+- An agent skill named in the middle of a message applies to that message
+  only: that request carries its persona, tools and model, and the
+  conversation stays in the mode it was in. Named at the start it still
+  becomes the conversation's mode. A plan skill switches the conversation
+  wherever it is named.
 
 ## Unreleased — working beside you
 

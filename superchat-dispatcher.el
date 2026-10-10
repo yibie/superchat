@@ -580,6 +580,14 @@ When CONSUME is non-nil, clear memories queued by `/recall'."
    (t (superchat--attach-indexed-memories turn input session-id)))
   turn)
 
+(defun superchat--skill-for-this-message-only-p (turn preset)
+  "Return non-nil when PRESET, invoked on TURN, leaves the Session as it is.
+That is an agent skill named in the middle of the message.  A plan skill
+switches the Session wherever it is named: approving a plan and leaving
+plan mode are steps of the Session, not of one message."
+  (and (plist-get (superchat-turn-state turn) :skill-from-body)
+       (superchat-preset-agent-p preset)))
+
 (defun superchat--request-plan-from-turn
     (turn &optional template target-model _finalized)
   "Build an inspectable request plan from prepared TURN.
@@ -617,6 +625,14 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
       (while configuration
         (setq plan
               (plist-put plan (pop configuration) (pop configuration)))))
+    ;; An agent skill named for this message only did not become the
+    ;; Session's Capability.  Runtime refuses a request whose Capability
+    ;; differs from its Agent Profile's, so this one request says the
+    ;; profile's own.
+    (when-let* ((preset (superchat-turn-preset turn))
+                ((superchat--skill-for-this-message-only-p turn preset))
+                (capability (superchat-preset-capability preset)))
+      (setq plan (plist-put plan :capability capability)))
     plan))
 
 (defun superchat--preview-chat-prompt (turn &optional template)
@@ -1576,10 +1592,13 @@ is non-nil.  An error in one does not stop the message.")
                           ((or (superchat-preset-agent-p preset)
                                (superchat-preset-plan-p preset)))
                           ((boundp 'superchat--active-preset)))
-                (superchat--activate-capability preset)
-                (message "🎯 Active preset: %s (%s)"
-                         (superchat-preset-name preset)
-                         (superchat-preset-type preset)))
+                (if (superchat--skill-for-this-message-only-p prepared preset)
+                    (message "🎯 %s: this message only"
+                             (superchat-preset-name preset))
+                  (superchat--activate-capability preset)
+                  (message "🎯 Active preset: %s (%s)"
+                           (superchat-preset-name preset)
+                           (superchat-preset-type preset))))
               (if (and (consp result)
                        (memq (plist-get result :type)
                              '(:llm-query :llm-query-and-mode-switch)))
