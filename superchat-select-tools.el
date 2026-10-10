@@ -77,7 +77,7 @@ constant."
       "timer_create" "timer_list" "timer_cancel" "work_record")))
 
 (defconst superchat--select-tools-none-surfaces
-  '(inline-rewrite org-babel magit skills compaction)
+  '(inline-rewrite inline-annotate org-babel magit skills compaction)
   "Surfaces whose contract §4.2 rule-3 baseline is always `none'.")
 
 (defun superchat--tool-descriptor-p (name)

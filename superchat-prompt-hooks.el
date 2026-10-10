@@ -516,7 +516,8 @@ compaction) never received these blocks."
 (declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
 (defvar superchat-workspace-rules-problem-note)
 
-(defconst superchat-prompt--rules-only-surfaces '(inline-rewrite workflow)
+(defconst superchat-prompt--rules-only-surfaces
+  '(inline-rewrite inline-annotate workflow)
   "Surfaces whose requests carry the Workspace rules without the note about
 remembering.  A region rewrite answers with the replacement text and a
 workflow step runs a written recipe; neither is where the user says
@@ -530,6 +531,15 @@ conversations and does not apply to this answer.  A rule above about the text \
 itself -- its language, date format, wording, naming -- does apply to the \
 replacement."
   "What follows the Workspace rules in a region rewrite's request.")
+
+(defconst superchat-prompt--annotate-rules-note
+  "Your whole answer is read by a program that hangs each remark on the line \
+it is about, so it holds rows of the asked form and nothing else.  A rule above \
+about how to answer -- explaining first, a line of reasoning, a greeting, a \
+summary -- is about conversations and does not apply to this answer.  A rule \
+above about the text itself -- its language, date format, wording, naming -- \
+is something your remarks may point out and are themselves written by."
+  "What follows the Workspace rules in an annotation's request.")
 
 (defun superchat-prompt-collector--workspace-rules (env _state _tools)
   "Return the rules of the Workspace ENV's Session is bound to, as system text.
@@ -568,6 +578,8 @@ by `superchat-prompt--rewrite-rules-note'."
                      (note-p note)
                      ((and rules (eq surface 'inline-rewrite))
                       (concat rules "\n\n" superchat-prompt--rewrite-rules-note))
+                     ((and rules (eq surface 'inline-annotate))
+                      (concat rules "\n\n" superchat-prompt--annotate-rules-note))
                      (t rules))))
     ;; A request that goes without rules it should carry is said, not hidden.
     (when problem

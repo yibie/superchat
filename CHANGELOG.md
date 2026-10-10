@@ -2,6 +2,23 @@
 
 All notable changes to superchat.
 
+## Unreleased — remarks hung on the text they are about
+
+- `M-x superchat-annotate` asks the model for remarks on the region, or on
+  the whole buffer, and hangs each remark on the text it is about: the
+  piece is underlined and the remark shows at the end of its line. Your
+  text is never changed. `M-n`/`M-p` on a remark go to the next and the
+  previous, `M-x superchat-annotate-list` lists them, `M-x
+  superchat-annotate-clear` removes them.
+- A remark is placed only where the model's quote is found, on the line it
+  named or within two lines of it. A remark that cannot be placed is not
+  put anywhere; the echo area says how many were placed, how many were
+  not, and how many rows of the answer were not understood, and the list
+  shows all of them. An empty answer is said to be empty.
+- Measured on DeepSeek and a local Qwen: steady on configuration and notes.
+  On code DeepSeek places most remarks; the local Qwen is not dependable
+  there (nothing at all with thinking on, uneven with it off).
+
 ## Unreleased — a notice for work nobody watched
 
 - When work Superchat started by itself ends (a scheduled task, a work

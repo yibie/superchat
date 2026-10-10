@@ -66,10 +66,13 @@ Call time needs Services `driver' and `view'."
 
 (superchat-define-plugin inline-rewrite
   :doc "Inline rewrite: surface `inline-rewrite` and command loading.
-Call time needs Services `driver' and `change-set'."
+Also the surface `inline-annotate`: remarks hung on the text, which is not
+changed.  Call time needs Services `driver' and `change-set'."
   :apply (lambda (_scope _config)
            (require 'superchat-rewrite)
-           (superchat-register-surface 'inline-rewrite)))
+           (require 'superchat-annotate)
+           (superchat-register-surface 'inline-rewrite)
+           (superchat-register-surface 'inline-annotate)))
 
 (superchat-define-plugin org-babel
   :doc "Org Babel integration: surface `org-babel` and handler loading.

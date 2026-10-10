@@ -565,6 +565,10 @@ llm, and `llm-warn-on-nonfree' itself, are unchanged."
 
 (defvar llm-warn-on-nonfree)
 
+(defconst superchat-llm-empty-response-text "[Empty response from llm]"
+  "What a Run's answer is when the model returned no text at all.
+A caller that reads the answer as data checks for this before reading it.")
+
 (defcustom superchat-llm-reasoning nil
   "Reasoning (a.k.a. thinking) effort to request from the model.
 
@@ -3604,7 +3608,7 @@ requests until it receives text, bounded by
                                           response)
                                          (response-parts
                                           (string-join (nreverse response-parts) ""))
-                                         (t "[Empty response from llm]")))))
+                                         (t superchat-llm-empty-response-text)))))
                          (funcall finalize
                                   "[Missing final response from llm]" 'failed)))))))))
 
