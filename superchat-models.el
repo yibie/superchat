@@ -85,6 +85,21 @@ command is kept for users who want to verify which local models the
       (message "⚠️ No Ollama models found or ollama command not available")
       nil)))
 
+;; A name in the middle of a message is checked against what is already
+;; known; reading the list from the provider would block the send.
+(defun superchat--models-known-without-fetch ()
+  "Return the model IDs known without asking the provider, or nil.
+The manual list when set, else the cached list while it is still valid."
+  (cond
+   (superchat-manual-models
+    (copy-sequence superchat-manual-models))
+   ((and superchat--model-list-cache
+         (consp superchat--model-list-cache)
+         (or (null superchat--model-list-cache-ttl)
+             (< (- (float-time) (cdr superchat--model-list-cache))
+                superchat--model-list-cache-ttl)))
+    (copy-sequence (car superchat--model-list-cache)))))
+
 (defun superchat--get-available-models ()
   "Get list of available model IDs (without @ prefix).
 First tries manual configuration, then `llm-models' generic on the

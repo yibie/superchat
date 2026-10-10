@@ -124,7 +124,7 @@ User: #~/src/main.py what does this function do?
 
 The file content is inlined into the prompt. superchat strips the `#path` from your query so the model sees only "what does this function do?" plus the file content.
 
-`@model`, `>skill`, and `#file` are command-head syntax: they are parsed only at the start of the input, and may be composed there, for example `@gpt-4o >code-review #~/src/main.py review this`. Once ordinary message text begins, later `@...` or `#...` text — including a trailing `#file` — remains literal body text. An unquoted file path must be absolute (`#/...`) or home-relative (`#~/...`).
+`@model`, `>skill`, `/command` and `#file` may open the input and be composed there, for example `@gpt-4o >code-review #~/src/main.py review this`. `@model`, `>skill` and `/command` also work in the middle of a message you type — `please >code-review look at this`, `explain this @gpt-4o briefly` — but there only when the name exists: an existing skill, a model on your manual list or already fetched, an existing command. The token must stand alone, with a space or the start of the input before it and a space or the end after it; it is removed from what the model receives. Anything else (`a > b`, `> a quoted line`, `name@example.com`, `/usr/bin`, a name in backticks) stays ordinary text. At most one of each kind is read, and what opens the input wins: after `/summarize`, a later `>skill` is text. A message Superchat sends by itself (a scheduled task, a work record that wakes) is read at its start only. `#file` works at the start only; a later or trailing `#file` remains literal body text. An unquoted file path must be absolute (`#/...`) or home-relative (`#~/...`).
 
 **4. Remember and recall**
 

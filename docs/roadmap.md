@@ -370,6 +370,10 @@ Still open: an automatic execution's unsaved changes are announced by one echo-a
 
 [The minimum Emacs is 30.1](decisions/implemented/2026-09-22-minimum-emacs-30-1.md), the user's ruling of 2026-09-22 after the Emacs 29.4 run. On a locally built 30.1 every suite, the canonical smoke, the kernel check and a real DeepSeek chat session (read, edit, undo, refused `eval_elisp`) pass; the run found one product fault, C-g not cancelling an approval question asked from a callback, which also affected 30.1 and is fixed for every supported Emacs. Evidence: `.scratch/g3-emacs30/README.md`. Not verified: a GUI Emacs 30.1, Emacs 30.2.
 
+### Skills, models and commands anywhere in a message (`implemented`, 2026-10-10)
+
+[Decision](decisions/accepted/2026-10-10-triggers-anywhere-in-the-message.md). `>skill`, `@model` and `/command` are read from the middle of a message the user typed, there only when the name exists; what opens the message reads as before and wins; a message a timer or a woken Work Record sends is read at its start only; a model name is checked without asking the provider. One parse point (`superchat-core--parse-input`), no second path. Evidence: `scripts/input-syntax-regression.el`, 18 tests; 12 fail on the code before the change, 6 are guards; 12 of 12 mutations caught. Not verified: a real model, the completion-then-send flow by hand in a live Emacs. Not built: a skill that applies to one request only (undecided), the other items learned from the gptel presets talk ([proposal](decisions/proposed/2026-10-10-source-turn-destination.md)).
+
 ### Fixes from the 2026-09-23 round (`implemented`)
 
 The act entry's failing and passing runs and the user's 2026-09-23 decisions produced five accepted records, all built on 2026-09-23. What each one has in the tree:

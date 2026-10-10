@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — skills, models and commands anywhere in a message
+
+- `>skill`, `@model` and `/command` no longer have to open your message:
+  `please >code-review look at this` invokes the skill. In the middle of a
+  message a name counts only when it exists (an existing skill, a known
+  model, an existing command) and stands alone between spaces; everything
+  else — `a > b`, a quoted line, an e-mail address, a path — stays text.
+  What opens the message still wins, and `#file` still works at the start
+  only. Messages Superchat sends by itself are read at their start only.
+
 ## Unreleased — working beside you
 
 - Work that Superchat starts by itself (a scheduled task, a work record that
