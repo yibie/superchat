@@ -2,6 +2,23 @@
 
 All notable changes to superchat.
 
+## Unreleased — annotations asked for in a conversation
+
+- A conversation message that holds `>annotate` is answered like any other
+  message of that conversation, with its history and without tools, and its
+  answer is also hung, as remarks, on the buffer the conversation was called
+  from. `>annotate NAME` or `>annotate "NAME"` names another buffer or a
+  file. It applies to that one message; the next one is ordinary again.
+- The answer still shows in the conversation. The echo area says how many
+  remarks were placed, how many were not, and on which buffer.
+- A message Superchat sends by itself never asks for annotations.
+- The conversation's record keeps the `>annotate` mark, so regenerating the
+  message annotates again and editing it puts the mark back in the prompt.
+- A later message of that conversation is told the earlier answer was hung
+  on the buffer and that the request is finished. Found with a real model:
+  without this, the next message was once answered by writing the remarks
+  into the buffer.
+
 ## Unreleased — remarks hung on the text they are about
 
 - `M-x superchat-annotate` asks the model for remarks on the region, or on

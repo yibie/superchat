@@ -98,6 +98,37 @@ the token."
                (ignore-errors (superchat--get-all-command-names)))
        t))
 
+(defvar superchat-annotate-default-instruction)
+
+(defun superchat-core--annotate-target-p (name)
+  "Return non-nil when the bare NAME after `>annotate' says what to annotate.
+That is the name of a live buffer or of an existing file."
+  (or (get-buffer name)
+      (file-regular-p (expand-file-name name))))
+
+(defun superchat-core--annotate-token (text)
+  "Return (REST . TARGET) when TEXT holds a `>annotate' standing alone.
+REST is TEXT without it.  TARGET is what follows it when that names what to
+annotate: anything in double quotes, or a bare word that is a live buffer's
+name or an existing file's; else nil, and the word stays in REST."
+  (let ((case-fold-search nil))
+    (when (and (stringp text)
+               (string-match
+                (concat "\\(?:\\`\\|[[:space:]]\\)\\(>annotate\\)"
+                        "\\(?:[ \t]+\\(\"[^\"\n]+\"\\|[^[:space:]]+\\)\\)?"
+                        "\\(?:[[:space:]]\\|\\'\\)")
+                text))
+      (let* ((token-start (match-beginning 1))
+             (word (match-string 2 text))
+             (target (cond ((null word) nil)
+                           ((string-prefix-p "\"" word) (substring word 1 -1))
+                           ((superchat-core--annotate-target-p word) word)))
+             (token-end (if target (match-end 2) (match-end 1))))
+        (cons (string-trim
+               (concat (string-trim-right (substring text 0 token-start)) " "
+                       (string-trim-left (substring text token-end))))
+              target)))))
+
 (defun superchat-core--parse-input (turn)
   "Parse model switch, skill, command, and file refs from TURN's inbound.
 `@model', `>skill' and `/command' are read at the start of the input as
@@ -118,6 +149,22 @@ docs/decisions/proposed/2026-10-10-triggers-anywhere-in-the-message.md."
                             (cons (cdr found) (car found)))))))
       (setf (superchat-turn-clean-input turn) (car parsed))
       (setf (superchat-turn-target-model turn) (cdr parsed)))
+    ;; >annotate [TARGET]: where this message's answer goes, not a skill.  Read
+    ;; only from a message the user sent, and not after a leading command.
+    (let ((ci (superchat-turn-clean-input turn)))
+      (when-let* ((found (and body-p (stringp ci)
+                              (not (and (fboundp 'superchat-parser-command)
+                                        (superchat-parser-command ci)))
+                              (superchat-core--annotate-token ci))))
+        (setf (superchat-turn-clean-input turn)
+              (if (string-empty-p (car found))
+                  (or (bound-and-true-p superchat-annotate-default-instruction)
+                      "Point out what is worth noticing.")
+                (car found)))
+        (setf (superchat-turn-state turn)
+              (plist-put (plist-put (superchat-turn-state turn)
+                                    :destination 'annotate)
+                         :annotate-target (cdr found)))))
     ;; >>workflow — dedicated workflow prefix: `>' invokes skills,
     ;; `>>' invokes .workflow recipes.  Rewrites to the reserved
     ;; `workflow' skill token so the dispatcher's workflow branch

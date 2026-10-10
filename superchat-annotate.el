@@ -471,6 +471,74 @@ The lines the active region touches, else the whole buffer."
        (delete-overlay pending)
        (signal (car err) (cdr err))))))
 
+;;;; Asked for in a conversation -------------------------------------------------
+
+(defun superchat-annotate-chat-spec (buffer)
+  "Return what a conversation's request needs to annotate all of BUFFER.
+A plist: :buffer BUFFER, :beg and :end markers around its whole lines,
+:name its name, :lines how many, :text its text with line numbers."
+  (with-current-buffer buffer
+    (let* ((beg (point-min))
+           (end (save-excursion
+                  (goto-char (point-max))
+                  (when (and (bolp) (> (point) (point-min))) (backward-char))
+                  (point))))
+      (when (= beg end)
+        (user-error "superchat: nothing to annotate: %s is empty" (buffer-name)))
+      (list :buffer buffer
+            :beg (copy-marker beg)
+            :end (copy-marker end t)
+            :name (buffer-name)
+            :lines (superchat-annotate--line-count beg end)
+            :text (superchat-annotate--numbered
+                   (buffer-substring-no-properties beg end))))))
+
+(defun superchat-annotate-chat-sink (inner spec)
+  "Return a Sink that does what INNER does and hangs the answer on SPEC's buffer.
+INNER is the conversation's own Sink: the answer is still shown and recorded
+there.  SPEC is what `superchat-annotate-chat-spec' returned."
+  (let* ((buffer (plist-get spec :buffer))
+         (beg (plist-get spec :beg))
+         (end (plist-get spec :end))
+         (done (lambda () (set-marker beg nil) (set-marker end nil)))
+         (pass (lambda (slot)
+                 (lambda (run payload)
+                   (superchat-sink-emit inner slot run payload)))))
+    (superchat-sink-create
+     :id (superchat-sink-id inner)
+     :live-p (lambda () (superchat-sink-live-p inner))
+     :stream (funcall pass 'stream)
+     :status (funcall pass 'status)
+     :final
+     (lambda (run result)
+       (superchat-sink-emit inner 'final run result)
+       (if (not (buffer-live-p buffer))
+           (message "superchat: no annotations: the buffer to annotate is gone")
+         (let ((run-id (if (stringp run) run (plist-get run :run-id))))
+           (with-current-buffer buffer
+             (dolist (overlay (superchat-annotate-overlays))
+               (when (and (>= (overlay-start overlay) (marker-position beg))
+                          (<= (overlay-end overlay) (marker-position end)))
+                 (superchat-annotate--delete overlay))))
+           (message "%s in %s"
+                    (superchat-annotate--report-text
+                     (superchat-annotate--place
+                      buffer beg end (plist-get result :text) run-id))
+                    (buffer-name buffer))))
+       (funcall done))
+     :error
+     (lambda (run failure)
+       (superchat-sink-emit inner 'error run failure)
+       (funcall done)
+       (message "superchat: no annotations: %s"
+                (if (eq (plist-get failure :status) 'cancelled)
+                    "cancelled"
+                  (or (plist-get failure :text) "the request failed"))))
+     :orphaned
+     (lambda (run reason)
+       (superchat-sink-emit inner 'orphaned run reason)
+       (funcall done)))))
+
 ;;;###autoload
 (defun superchat-annotate (instruction)
   "Ask the model for remarks on the region, else on the whole buffer.

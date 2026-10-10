@@ -541,6 +541,59 @@ above about the text itself -- its language, date format, wording, naming -- \
 is something your remarks may point out and are themselves written by."
   "What follows the Workspace rules in an annotation's request.")
 
+(defconst superchat-prompt--annotate-chat-note
+  "For this message the user asked that your answer be hung on the text below \
+as remarks.  What was said earlier in this conversation tells you what the user \
+cares about; use it.  Other instructions above about how to answer -- a persona, \
+a format, a greeting -- do not apply to this answer."
+  "What follows the row form in a conversation's request for annotations.")
+
+(defconst superchat-prompt--annotate-earlier-note
+  "Earlier in this conversation the user sent a message ending in `>annotate'.  \
+Its answer, rows of a line number, a quote and a remark, was hung by Superchat \
+on the user's buffer (%s) as remarks beside the text; the text itself was not \
+changed.  That request is finished.  Do not write those remarks into the \
+buffer and do not repeat them, unless the user asks for that now."
+  "What a later message of a conversation that annotated is told.
+The one %s is the names of the buffers annotated.")
+
+(defvar superchat--annotated-buffers)
+
+(declare-function superchat-annotate--system-text "superchat-annotate" ())
+
+(defun superchat-prompt-collector--annotate (env _state _tools)
+  "Return the fragments of a conversation message whose answer is annotations.
+The dispatcher puts `:chat-annotate' in ENV's context for a message that
+names `>annotate'.  The row form goes last among the system text, after the
+persona and the Workspace rules; the text to annotate, with line numbers,
+rides as an attachment.
+
+Any other message of a conversation that annotated before is told so
+\(`superchat-prompt--annotate-earlier-note'): the earlier answer's rows are
+in its history, and nothing there says they were already hung on the text."
+  (if-let* ((spec (plist-get (plist-get env :context) :chat-annotate)))
+    (list (superchat-prompt-fragment
+           :owner 'chat :id "annotate-form" :slot 'system
+           :text (concat (superchat-annotate--system-text) "\n\n"
+                         superchat-prompt--annotate-chat-note "\n\n"
+                         superchat-prompt--annotate-rules-note)
+           :priority -10 :budget-class 'hard)
+          (superchat-prompt-fragment
+           :owner 'chat :id "annotate-text" :slot 'attachment
+           :text (format "The text to annotate, %s, with line numbers:\n<<<TEXT>>>\n%s\n<<<END TEXT>>>\n\nReply with rows of the form LINE | QUOTE | REMARK only."
+                         (plist-get spec :name) (plist-get spec :text))
+           :priority 0 :budget-class 'hard :required t
+           :source (list :annotate (plist-get spec :name))))
+    (when-let* (((eq (plist-get env :surface) 'chat))
+                (view (plist-get (plist-get env :context) :chat-buffer))
+                ((buffer-live-p view))
+                (names (buffer-local-value 'superchat--annotated-buffers view)))
+      (list (superchat-prompt-fragment
+             :owner 'chat :id "annotate-earlier" :slot 'system
+             :text (format superchat-prompt--annotate-earlier-note
+                           (mapconcat #'identity (reverse names) ", "))
+             :priority -10 :budget-class 'hard)))))
+
 (defun superchat-prompt-collector--workspace-rules (env _state _tools)
   "Return the rules of the Workspace ENV's Session is bound to, as system text.
 The root comes from the Session's own Tape (`workspace.bound'), so the rules
@@ -1091,6 +1144,8 @@ selection, memory, history, plan, and a producer's prepared text."
                           #'superchat-prompt-collector--prepared :owner 'core)
     (superchat-context-register 'origin
                           #'superchat-prompt-collector--origin :owner 'chat)
+    (superchat-context-register 'annotate
+                          #'superchat-prompt-collector--annotate :owner 'chat)
     (superchat-context-register 'plan
                           #'superchat-prompt-collector--plan :owner 'chat)
     (superchat-context-register 'windows

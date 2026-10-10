@@ -580,6 +580,19 @@ When CONSUME is non-nil, clear memories queued by `/recall'."
    (t (superchat--attach-indexed-memories turn input session-id)))
   turn)
 
+(defun superchat--recorded-input (turn)
+  "Return the text of TURN the Tape keeps as the user's message.
+That is the clean input.  A message that named `>annotate' keeps that mark,
+put back at its end with the target it named: later requests then show what
+was asked, and regenerating or editing the message reads the mark again."
+  (let ((state (superchat-turn-state turn))
+        (clean (superchat-turn-clean-input turn)))
+    (if (eq (plist-get state :destination) 'annotate)
+        (concat clean " >annotate"
+                (when-let* ((target (plist-get state :annotate-target)))
+                  (format " \"%s\"" target)))
+      clean)))
+
 (defun superchat--skill-for-this-message-only-p (turn preset)
   "Return non-nil when PRESET, invoked on TURN, leaves the Session as it is.
 That is an agent skill named in the middle of the message.  A plan skill
@@ -602,7 +615,7 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
     ;; (already stripped by `superchat-prompt-collect' inside
     ;; `superchat-core-prepare-turn') keeps a `#file' token out of every
     ;; later Turn's history, not just this one's own prompt.
-    (setq plan (plist-put plan :input (superchat-turn-clean-input turn)))
+    (setq plan (plist-put plan :input (superchat--recorded-input turn)))
     (setq plan
           (plist-put plan :clean-input (superchat-turn-clean-input turn)))
     ;; Step 3: the parsed Turn rides to the chat Envelope's `:chat-turn'.
@@ -951,6 +964,37 @@ through B's active Preset."
           nil (plist-get composed :buffer))))
     (superchat-pipeline-submit (superchat--chat-envelope composed))))
 
+(declare-function superchat-annotate-chat-spec "superchat-annotate" (buffer))
+(declare-function superchat-annotate-chat-sink "superchat-annotate" (inner spec))
+
+(defvar-local superchat--annotated-buffers nil
+  "Names of the buffers this conversation's `>annotate' messages annotated.
+Kept in the View, for this Emacs only; later requests say what was done.")
+
+(defun superchat--chat-annotate-spec (composed)
+  "Return what COMPOSED's request annotates, or nil for an ordinary message.
+A message that named `>annotate' annotates the buffer or file named after
+it, else the buffer this conversation was called from, as the request's
+frozen origin has it.  Signal `user-error' when there is neither."
+  (when-let* ((turn (plist-get composed :chat-turn))
+              (state (superchat-turn-state turn))
+              ((eq (plist-get state :destination) 'annotate)))
+    (require 'superchat-annotate)
+    (let* ((name (plist-get state :annotate-target))
+           (file (and name (expand-file-name name)))
+           (buffer (cond ((null name)
+                          (plist-get (plist-get composed :emacs-origin-data)
+                                     :buffer))
+                         ((get-buffer name))
+                         ((file-regular-p file) (find-file-noselect file)))))
+      (unless (buffer-live-p buffer)
+        (user-error
+         (if name
+             "superchat: nothing to annotate: no buffer or file named %s"
+           "superchat: nothing to annotate: this conversation was not called from a buffer; name one after >annotate%s")
+         (or name "")))
+      (superchat-annotate-chat-spec buffer))))
+
 (defun superchat--chat-envelope (composed)
   "Translate fully-composed chat COMPOSED into a Request envelope.
 Since migration step 3 the chat prompt is assembled by the driver: the
@@ -1024,6 +1068,14 @@ active-Run match (C12/C12b) depends on."
          (clean-input (plist-get composed :clean-input))
          (context-files (plist-get composed :context-files))
          (content (cond
+                   ;; What the Tape keeps for a message that named
+                   ;; `>annotate' is `superchat--recorded-input', mark
+                   ;; included; the model is sent CLEAN-INPUT all the same.
+                   ((and (stringp (plist-get composed :input))
+                         (when-let* ((turn (plist-get composed :chat-turn)))
+                           (eq (plist-get (superchat-turn-state turn) :destination)
+                               'annotate)))
+                    (plist-get composed :input))
                    ((and (stringp clean-input) (not (string-empty-p clean-input)))
                     clean-input)
                    ((let ((input (plist-get composed :input)))
@@ -1054,6 +1106,11 @@ active-Run match (C12/C12b) depends on."
          (owner (or (plist-get composed :transcript-owner)
                     (format "chat-owner-%08x" (random #x100000000))))
          (input-core (plist-get composed :input-core))
+         (annotate (superchat--chat-annotate-spec composed))
+         (_ (when (and annotate (buffer-live-p buffer))
+              (with-current-buffer buffer
+                (cl-pushnew (plist-get annotate :name)
+                            superchat--annotated-buffers :test #'equal))))
          (extras
           (superchat-pipeline--plist-extend
            nil
@@ -1093,14 +1150,20 @@ active-Run match (C12/C12b) depends on."
     (superchat-pipeline--plist-extend
       (list :content content
             :surface 'chat
-            :sink (superchat-render-view-sink buffer session-id owner)
+            ;; A message that named `>annotate' is still shown and recorded
+            ;; in the conversation; its answer is also hung on the text.
+            :sink (let ((view (superchat-render-view-sink buffer session-id owner)))
+                    (if annotate
+                        (superchat-annotate-chat-sink view annotate)
+                      view))
             :session-id session-id
             ;; Preparation sees the contract default, never an explicit nil
-            ;; (S10-fix-2 finding 4).
-            :tools (plist-get composed :tools)
+            ;; (S10-fix-2 finding 4).  Annotations are given without tools.
+            :tools (if annotate 'none (plist-get composed :tools))
             :media images
             :context
             (append
+             (when annotate (list :chat-annotate annotate))
              (list :chat-buffer buffer
                             ;; S12: the chat composed its legacy Request
                             ;; already; marking the envelope keeps the
