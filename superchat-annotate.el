@@ -52,9 +52,27 @@ Placement by line number was measured on texts of up to 87 lines."
   "Face of the text a remark is about."
   :group 'superchat-annotate)
 
+(defcustom superchat-annotate-remark-style 'below
+  "Where a remark is shown.
+`below' shows it as a block under the line it is about; `eol' shows it
+at the end of that line."
+  :type '(choice (const :tag "Under the line" below)
+                 (const :tag "At the end of the line" eol))
+  :group 'superchat-annotate)
+
+(defcustom superchat-annotate-remark-width 72
+  "Columns a remark shown under its line may reach before it is wrapped."
+  :type 'integer
+  :group 'superchat-annotate)
+
 (defface superchat-annotate-remark
-  '((t :inherit shadow :slant italic))
-  "Face of a remark shown at the end of its line."
+  '((t :inherit (italic secondary-selection)))
+  "Face of a remark."
+  :group 'superchat-annotate)
+
+(defface superchat-annotate-marker
+  '((t :inherit warning))
+  "Face of the mark leading from a line to a remark shown under it."
   :group 'superchat-annotate)
 
 (defvar superchat-annotate-instruction-history nil
@@ -181,21 +199,85 @@ left of it is looked for.  Either way the text found is in the buffer."
     map)
   "Keys active with point on an annotated piece of text.")
 
+(defun superchat-annotate--wrapped (remark width)
+  "Return REMARK as a list of lines, wrapped at WIDTH columns."
+  (with-temp-buffer
+    (insert remark)
+    (let ((fill-column (max 20 width))
+          (fill-prefix nil)
+          (adaptive-fill-mode nil)
+          (sentence-end-double-space nil))
+      (fill-region (point-min) (point-max)))
+    (split-string (buffer-string) "\n" t)))
+
+(defun superchat-annotate--remark-string (remark indent)
+  "Return the text that shows REMARK for a line indented by INDENT columns."
+  (if (eq superchat-annotate-remark-style 'eol)
+      (propertize (concat "  ⟵ " remark) 'face 'superchat-annotate-remark)
+    (let ((pad (make-string indent ?\s))
+          (lead "└─▶ "))
+      (mapconcat
+       (lambda (line)
+         (prog1 (concat "\n" pad
+                        (propertize lead 'face 'superchat-annotate-marker)
+                        (propertize (concat " " line " ")
+                                    'face 'superchat-annotate-remark))
+           (setq lead "    ")))
+       (superchat-annotate--wrapped
+        remark (- superchat-annotate-remark-width indent 6))
+       ""))))
+
+(defun superchat-annotate--render (tail)
+  "Show on TAIL the remarks of the annotations of its line, in text order.
+TAIL is deleted when none of them is left."
+  (when (overlay-buffer tail)
+    (let ((heads (sort (cl-remove-if-not
+                        #'overlay-buffer
+                        (overlay-get tail 'superchat-annotate-heads))
+                       (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+      (overlay-put tail 'superchat-annotate-heads heads)
+      (if (null heads)
+          (delete-overlay tail)
+        (with-current-buffer (overlay-buffer tail)
+          (let* ((indent (save-excursion (goto-char (overlay-start tail))
+                                         (min (current-indentation) 16)))
+                 (string
+                  (mapconcat
+                   (lambda (head)
+                     (superchat-annotate--remark-string
+                      (plist-get (overlay-get head 'superchat-annotate) :remark)
+                      indent))
+                   heads "")))
+            ;; Keep the cursor at the end of the line, not after the block.
+            (unless (eq superchat-annotate-remark-style 'eol)
+              (put-text-property 0 1 'cursor t string))
+            (overlay-put tail 'after-string string)))))))
+
+(defun superchat-annotate--line-tail (position)
+  "Return the overlay holding the remarks of POSITION's line, making it."
+  (let ((eol (save-excursion (goto-char position) (line-end-position))))
+    (or (cl-find-if (lambda (overlay)
+                      (and (overlay-get overlay 'superchat-annotate-tail-p)
+                           (= (overlay-start overlay) eol)))
+                    (overlays-in eol eol))
+        (let ((tail (make-overlay eol eol nil t t)))
+          (overlay-put tail 'superchat-annotate-tail-p t)
+          tail))))
+
 (defun superchat-annotate--make (qbeg qend row run-id)
   "Hang ROW's remark on QBEG..QEND; RUN-ID is the Run that gave it."
   (let* ((remark (plist-get row :remark))
          (head (make-overlay qbeg qend nil t nil))
-         (eol (save-excursion (goto-char qend) (line-end-position)))
-         (tail (make-overlay eol eol nil t t)))
+         (tail (superchat-annotate--line-tail qend)))
     (overlay-put head 'superchat-annotate (append row (list :run-id run-id)))
     (overlay-put head 'superchat-annotate-tail tail)
     (overlay-put head 'face 'superchat-annotate-quote)
     (overlay-put head 'help-echo remark)
     (overlay-put head 'keymap superchat-annotate--overlay-keymap)
     (overlay-put head 'evaporate t)
-    (overlay-put tail 'superchat-annotate-head head)
-    (overlay-put tail 'after-string
-                 (propertize (concat "  ⟵ " remark) 'face 'superchat-annotate-remark))
+    (overlay-put tail 'superchat-annotate-heads
+                 (cons head (overlay-get tail 'superchat-annotate-heads)))
+    (superchat-annotate--render tail)
     head))
 
 (defun superchat-annotate-overlays (&optional buffer)
@@ -206,17 +288,18 @@ A remark whose text was deleted is dropped here, with its end-of-line text."
       (dolist (overlay (overlays-in (point-min) (point-max)))
         (cond
          ((overlay-get overlay 'superchat-annotate) (push overlay heads))
-         ((overlay-get overlay 'superchat-annotate-head)
-          (unless (overlay-buffer (overlay-get overlay 'superchat-annotate-head))
-            (delete-overlay overlay)))))
+         ((overlay-get overlay 'superchat-annotate-tail-p)
+          (unless (cl-every #'overlay-buffer
+                            (overlay-get overlay 'superchat-annotate-heads))
+            (superchat-annotate--render overlay)))))
       (sort heads (lambda (a b) (< (overlay-start a) (overlay-start b)))))))
 
 (defun superchat-annotate--delete (overlay)
   "Remove the annotation OVERLAY and its end-of-line text."
   (when (overlayp overlay)
     (let ((tail (overlay-get overlay 'superchat-annotate-tail)))
-      (when (overlayp tail) (delete-overlay tail)))
-    (delete-overlay overlay)))
+      (delete-overlay overlay)
+      (when (overlayp tail) (superchat-annotate--render tail)))))
 
 ;;;###autoload
 (defun superchat-annotate-clear (&optional buffer)

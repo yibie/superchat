@@ -6,8 +6,11 @@ All notable changes to superchat.
 
 - `M-x superchat-annotate` asks the model for remarks on the region, or on
   the whole buffer, and hangs each remark on the text it is about: the
-  piece is underlined and the remark shows at the end of its line. Your
-  text is never changed. `M-n`/`M-p` on a remark go to the next and the
+  piece is underlined and the remark shows as a block under its line,
+  wrapped at `superchat-annotate-remark-width` columns and indented like
+  the line; the remarks of one line are stacked in the order of the text.
+  `superchat-annotate-remark-style` set to `eol` shows a remark at the end
+  of its line instead. Your text is never changed. `M-n`/`M-p` on a remark go to the next and the
   previous, `M-x superchat-annotate-list` lists them, `M-x
   superchat-annotate-clear` removes them.
 - A remark is placed only where the model's quote is found, on the line it

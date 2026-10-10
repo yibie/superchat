@@ -91,6 +91,82 @@
                                      (line-end-position))))
           (should (string-match-p "REMARK-B" (overlay-get tail 'after-string))))))))
 
+;;;; How a remark is shown ------------------------------------------------------
+
+(defun ann--tails (buffer)
+  "BUFFER's overlays that show remarks, ordered by position."
+  (with-current-buffer buffer
+    (sort (cl-remove-if-not
+           (lambda (overlay) (overlay-get overlay 'superchat-annotate-tail-p))
+           (overlays-in (point-min) (point-max)))
+          (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(defun ann--shown (buffer)
+  "What BUFFER's first remark overlay shows, without text properties."
+  (substring-no-properties (overlay-get (car (ann--tails buffer)) 'after-string)))
+
+(ert-deftest annotate/a-remark-is-shown-as-a-block-under-its-line ()
+  (wrules--with '((:text "2 | beta | REMARK-B")) (p)
+    (let ((buffer (ann--file p)))
+      (ann--annotate buffer)
+      (let* ((tail (car (ann--tails buffer)))
+             (string (overlay-get tail 'after-string)))
+        (should (equal "\n└─▶  REMARK-B " (substring-no-properties string)))
+        ;; The cursor stays at the end of the line, before the block.
+        (should (get-text-property 0 'cursor string))
+        (should (eq 'superchat-annotate-remark
+                    (get-text-property (1- (length string)) 'face string)))))))
+
+(ert-deftest annotate/a-long-remark-is-wrapped-within-the-width ()
+  (let* ((remark (mapconcat #'identity (make-list 30 "word") " "))
+         (superchat-annotate-remark-width 40))
+    (wrules--with `((:text ,(concat "2 | beta | " remark))) (p)
+      (let ((buffer (ann--file p)))
+        (ann--annotate buffer)
+        (let ((lines (split-string (ann--shown buffer) "\n" t)))
+          (should (> (length lines) 3))
+          (dolist (line lines)
+            (should (<= (string-width line) 40)))
+          (should (string-prefix-p "└─▶ " (car lines)))
+          (should (string-prefix-p "    " (cadr lines)))
+          ;; Nothing of the remark is lost by wrapping.
+          (should (equal remark
+                         (mapconcat (lambda (line) (string-trim (substring line 4)))
+                                    lines " "))))))))
+
+(ert-deftest annotate/remarks-of-one-line-are-stacked-in-text-order ()
+  ;; Whichever of the two the model names first.
+  (dolist (answer '("2 | two | SECOND\n2 | beta | FIRST\n5 | five | OTHER"
+                    "2 | beta | FIRST\n2 | two | SECOND\n5 | five | OTHER"))
+    (wrules--with `((:text ,answer)) (p)
+      (let ((buffer (ann--file p)))
+        (ann--annotate buffer)
+        (should (= 2 (length (ann--tails buffer))))
+        (should (equal "\n└─▶  FIRST \n└─▶  SECOND " (ann--shown buffer)))))))
+
+(ert-deftest annotate/the-block-is-indented-like-its-line ()
+  (wrules--with '((:text "2 | inner | DEEP")) (p)
+    (let ((buffer (ann--file p "top\n    inner line\n")))
+      (ann--annotate buffer)
+      (should (equal "\n    └─▶  DEEP " (ann--shown buffer))))))
+
+(ert-deftest annotate/the-end-of-line-style-keeps-the-remark-on-the-line ()
+  (let ((superchat-annotate-remark-style 'eol))
+    (wrules--with '((:text "2 | beta | REMARK-B")) (p)
+      (let ((buffer (ann--file p)))
+        (ann--annotate buffer)
+        (should (equal "  ⟵ REMARK-B" (ann--shown buffer)))))))
+
+(ert-deftest annotate/removing-one-remark-of-a-line-keeps-the-other ()
+  (wrules--with '((:text "2 | beta | FIRST\n2 | two | SECOND")) (p)
+    (let ((buffer (ann--file p)))
+      (ann--annotate buffer)
+      (with-current-buffer buffer
+        (superchat-annotate--delete (car (superchat-annotate-overlays)))
+        (should (equal "\n└─▶  SECOND " (ann--shown buffer)))
+        (superchat-annotate--delete (car (superchat-annotate-overlays)))
+        (should-not (ann--tails buffer))))))
+
 (ert-deftest annotate/the-text-is-never-changed ()
   (wrules--with '((:text "1 | alpha | R1\n3 | gamma | R3\n9 | nowhere | R9")) (p)
     (let* ((buffer (ann--file p))
