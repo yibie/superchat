@@ -2,6 +2,15 @@
 
 All notable changes to superchat.
 
+## Unreleased — a notice for work nobody watched
+
+- When work Superchat started by itself ends (a scheduled task, a work
+  record that woke), the mode line shows `[Superchat: N]` and keeps showing
+  it until you have looked. Click it, or `M-x superchat-changes-notices`, for
+  the list: what started each one, how it ended (a failure counts too), how
+  many buffers it left unsaved. `RET` goes to that conversation, `d` forgets
+  one notice, `D` all. The notices live in this Emacs only.
+
 ## Unreleased — skills, models and commands anywhere in a message
 
 - `>skill`, `@model` and `/command` no longer have to open your message:
