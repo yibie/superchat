@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — one list of what is under way and what waits
+
+- `M-x superchat-pending` shows in one list what took three commands and
+  four screens to find: executions under way and who started them, work
+  records waiting for you or for a time, what came due and did not start,
+  scheduled tasks Superchat cannot tell were started, timers to come, work
+  that ended unseen, and buffers left unsaved. It only reads.
+
 ## Unreleased — what an execution left reaches its record; four annotation edges
 
 - When writing an execution's outcome to its work record fails, it is said

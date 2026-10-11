@@ -481,6 +481,41 @@ fired before this was recorded are left alone."
                (setq ran t)))))
     ran))
 
+(defun superchat-timer-unconfirmed-tasks (&optional since)
+  "The fired tasks Superchat could not tell were started, oldest first.
+Each is a plist (:id :session-id :occurrence :text).  That is every
+occurrence with a `timer.unconfirmed' fact: Emacs exited while the task was
+being sent, a Run started in its conversation afterwards, and it was not
+started again.  With SINCE, only occurrences due at or after that time."
+  (let ((table (make-hash-table :test #'equal)) order)
+    (dolist (row (superchat-timer--rows))
+      (cl-destructuring-bind (session type payload) row
+        (let* ((id (superchat-timer--payload-get payload 'timer_id 'timer-id))
+               (key (cons id (alist-get 'occurrence payload))))
+          (pcase type
+            ("timer.fired"
+             (puthash key (list :id id :session-id session
+                                :occurrence (cdr key)
+                                :text (alist-get 'text payload)
+                                :unconfirmed nil)
+                      table))
+            ("timer.unconfirmed"
+             (when-let* ((task (gethash key table)))
+               (unless (plist-get task :unconfirmed)
+                 (push key order))
+               (puthash key (plist-put task :unconfirmed t) table)))))))
+    (delq nil
+          (mapcar (lambda (key)
+                    (let ((task (gethash key table)))
+                      (and (or (null since)
+                               (and (numberp (plist-get task :occurrence))
+                                    (>= (plist-get task :occurrence) since)))
+                           (list :id (plist-get task :id)
+                                 :session-id (plist-get task :session-id)
+                                 :occurrence (plist-get task :occurrence)
+                                 :text (plist-get task :text)))))
+                  (nreverse order)))))
+
 (defun superchat-timer-retry-tasks ()
   "Start every fired task that has no execution on record.
 A task that was being sent when Emacs exited, in a conversation where a Run
