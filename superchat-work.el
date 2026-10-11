@@ -286,16 +286,26 @@ to pick it up; nil leaves a field as it was.  Makes ID current here."
                             (list :work-id id)))
   id)
 
+(defun superchat-work--check-wait (for until)
+  "Signal when a wait FOR something, until UNTIL for a time, cannot be kept.
+A wait for a time is a promise that the record is taken up again then.
+While the `work-records' row is not mounted nothing would do that, so the
+wait is refused rather than written and never acted on."
+  (when (and for (not (member for superchat-work-wait-kinds)))
+    (error "A record waits for one of: %s" (string-join superchat-work-wait-kinds ", ")))
+  (when (equal for "time")
+    (unless (numberp until)
+      (error "A wait for a time needs the time: in_minutes or at"))
+    (unless (superchat-work--wake-active-p)
+      (error "Taking work up again at a time is turned off in this Emacs (the work-records row is not mounted), so this wait was not registered and nothing will happen at that time; tell the user, or register wait_for user"))))
+
 (defun superchat-work-wait (session-id id for &optional detail until)
   "Register that the open record ID waits FOR (user, agent, time), with DETAIL.
 For a time, UNTIL is when, in seconds since the epoch; the record is then
 taken up again in a new conversation (`superchat-work-wake').  A nil FOR
 clears the wait."
   (superchat-work--require id)
-  (when (and for (not (member for superchat-work-wait-kinds)))
-    (error "A record waits for one of: %s" (string-join superchat-work-wait-kinds ", ")))
-  (when (and (equal for "time") (not (numberp until)))
-    (error "A wait for a time needs the time: in_minutes or at"))
+  (superchat-work--check-wait for until)
   (superchat-work--append session-id "work.waiting"
                           (cond ((equal for "time")
                                  (format "Work record %s waits until %s" id
@@ -520,25 +530,47 @@ completed records by status, one line each; never another Workspace's (K8)."
           (superchat-work--for session follows))
         (pcase action
           ("start"
-           (let ((new (superchat-work-start session goal follows)))
-             (format "Started %s; it is this conversation's current work record."
-                     new)))
+           ;; What comes with a start is recorded with it, or the start is
+           ;; refused: never "Started" with part of the call dropped.
+           (when (and (stringp conclusion) (not (string-empty-p conclusion)))
+             (error "A record is not started and completed in one call; start it, and use action done with the conclusion when it is delivered"))
+           (let* ((waits (and (stringp wait_for) (not (string-empty-p wait_for))))
+                  (until (and waits
+                              (cond ((and (stringp at) (not (string-empty-p at)))
+                                     (superchat-timer-parse-time at))
+                                    ((numberp in_minutes)
+                                     (+ (superchat-work--now) (* 60 in_minutes))))))
+                  (_ (when waits (superchat-work--check-wait wait_for until)))
+                  (new (superchat-work-start session goal follows))
+                  (said (format "Started %s; it is this conversation's current work record."
+                                new)))
+             (when (or progress blocked resume)
+               (superchat-work-update session new progress blocked resume))
+             (when waits
+               (superchat-work-wait session new wait_for detail until))
+             (if (or progress blocked resume waits)
+                 (concat said "\n" (superchat-work-render (superchat-work-get new)))
+               said)))
           ("update"
            (unless id (error "No current work record; start one or give its id"))
-           (when (or progress blocked resume)
-             (superchat-work-update session id progress blocked resume))
            ;; A wait given with an update is registered too, never dropped: in
            ;; the real task T4W the model put wait_for and in_minutes on an
-           ;; update and believed the wait was registered.
-           (when (and (stringp wait_for) (not (string-empty-p wait_for)))
-             (superchat-work-wait
-              session id wait_for detail
-              (cond ((and (stringp at) (not (string-empty-p at)))
-                     (superchat-timer-parse-time at))
-                    ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
-           (unless (or progress blocked resume
-                       (and (stringp wait_for) (not (string-empty-p wait_for))))
-             (error "Say how far it got, why the next step waits, or where to pick it up"))
+           ;; update and believed the wait was registered.  It is checked
+           ;; before anything is written, so a refused wait leaves no half
+           ;; of the call behind.
+           (let* ((waits (and (stringp wait_for) (not (string-empty-p wait_for))))
+                  (until (and waits
+                              (cond ((and (stringp at) (not (string-empty-p at)))
+                                     (superchat-timer-parse-time at))
+                                    ((numberp in_minutes)
+                                     (+ (superchat-work--now) (* 60 in_minutes)))))))
+             (unless (or progress blocked resume waits)
+               (error "Say how far it got, why the next step waits, or where to pick it up"))
+             (when waits (superchat-work--check-wait wait_for until))
+             (when (or progress blocked resume)
+               (superchat-work-update session id progress blocked resume))
+             (when waits
+               (superchat-work-wait session id wait_for detail until)))
            (superchat-work-render (superchat-work-get id)))
           ("wait"
            (unless id (error "No current work record; start one or give its id"))

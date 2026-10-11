@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — the work record tool keeps what it is given, or refuses
+
+- `work_record` with action start keeps the progress, the place to pick up
+  and the wait that come with it; before, it answered "Started" and kept
+  none of them. A start that cannot keep what it came with starts nothing.
+- With the `work-records` row unmounted, a wait for a time is refused with
+  the reason, instead of being written and never acted on. Reading,
+  updating, waiting for the user and completing a record still work.
+- An update that comes with a wait checks the wait before writing anything.
+
 ## Unreleased — a notice also for a task answered at once
 
 - A scheduled task whose model answered before the send returned left no
