@@ -869,11 +869,28 @@ assembled without its exclusions."
                  :priority 0 :budget-class 'soft
                  :refit
                  (lambda (chars)
-                   (let* ((envelope (assemble-and-store chars))
-                          (status (plist-get envelope :status)))
-                     (if (memq status '(satisfied partial))
-                         (or (plist-get envelope :prompt) "")
-                       ""))))))))))
+                   ;; The rows are chosen under a budget that counts their
+                   ;; own text; the header naming the rows kept is added
+                   ;; afterwards.  A history that fills the budget is then
+                   ;; longer than CHARS, which the assembler refuses.  So
+                   ;; choose again under less, dropping the oldest rows,
+                   ;; until what is rendered fits.
+                   (let ((budget chars) (tries 0) text)
+                     (while (and (null text) (< tries 12) (> budget 0))
+                       (let* ((envelope (assemble-and-store budget))
+                              (status (plist-get envelope :status))
+                              (prompt (if (memq status '(satisfied partial))
+                                          (or (plist-get envelope :prompt) "")
+                                        ""))
+                              (over (- (length prompt) chars)))
+                         (if (<= over 0)
+                             (setq text prompt)
+                           (setq budget (- (min budget (length prompt))
+                                           (max over 64)))))
+                       (setq tries (1+ tries)))
+                     (unless text
+                       (message "Superchat: the earlier conversation does not fit this request and was left out"))
+                     (or text ""))))))))))
 
 (defun superchat-prompt-collector--chat-input (env _state _tools)
   "Return the chat user message as the required `content' fragment.

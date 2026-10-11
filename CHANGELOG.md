@@ -2,6 +2,14 @@
 
 All notable changes to superchat.
 
+## Unreleased — a long conversation can still be sent to
+
+- A conversation long enough to fill the model's context could not be sent
+  to any more: every message failed while the request was put together
+  (reproduced at turn 59 of ordinary turns under a 40000-character budget).
+  The history is now chosen again under less room when its first choice
+  does not fit, leaving out a few more of the oldest messages.
+
 ## Unreleased — what the review of the fixes found, first three
 
 - The end of an execution no longer looks through every earlier execution of
