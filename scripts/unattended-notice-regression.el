@@ -82,6 +82,60 @@ SCRIPT is the model's; VARS is (SESSION FIRED), bound for BODY."
       (should (eq 'failed (plist-get (car superchat-changes--notices) :status)))
       (should (string-match-p "1" (un--shown))))))
 
+;;;; An execution that ended before it was on record as a task's ---------------
+
+(defmacro un--with-task-answered-at-once (script vars &rest body)
+  "Like `un--with-task', with the model answering inside the send itself.
+The answer is delivered in the call that asks for it, so the execution has
+ended before `timer.started' is written.  Everything else is the real path."
+  (declare (indent 2) (debug t))
+  `(cl-letf (((symbol-function 'smoke--fake-network)
+              (lambda (_mode provider prompt partial response error multi)
+                (push (hm--wire-of provider prompt) hm--wires)
+                (smoke--deliver provider prompt partial response error multi
+                                (or (pop smoke--script) '(:text "DONE")))
+                nil)))
+     (un--with-task ,script ,vars ,@body)))
+
+(ert-deftest unattended-notice/a-task-that-ended-inside-its-own-send-leaves-a-notice ()
+  "The review's N2."
+  (un--fresh
+    (un--with-task-answered-at-once '((:text "FAST-ANSWER")) (session fired)
+      (should (= 1 (length (hm--events session "run.completed"))))
+      (should (= 1 (length (hm--events session "timer.started"))))
+      (should (= 1 (length superchat-changes--notices)))
+      (let ((notice (car superchat-changes--notices)))
+        (should (equal session (plist-get notice :session)))
+        (should (equal (plist-get fired :run-id) (plist-get notice :run)))
+        (should (eq 'completed (plist-get notice :status)))
+        (should (string-match-p "\\`scheduled task " (plist-get notice :what))))
+      (should (= 1 (un--marks)))
+      ;; Told again, it is still one notice.
+      (superchat-changes--note-started-late session (plist-get fired :run-id))
+      (should (= 1 (length superchat-changes--notices))))))
+
+(ert-deftest unattended-notice/a-task-that-failed-inside-its-own-send-leaves-a-notice ()
+  (un--fresh
+    (un--with-task-answered-at-once '((:error (error . "UN provider down"))) (session _fired)
+      (should (= 1 (length (hm--events session "timer.started"))))
+      (should (= 1 (length superchat-changes--notices)))
+      (should (eq 'failed (plist-get (car superchat-changes--notices) :status))))))
+
+(ert-deftest unattended-notice/a-start-on-record-while-the-execution-runs-leaves-none-yet ()
+  "Guard: being told of a start is not an ending."
+  (un--fresh
+    (hm--fixture (list '(:text "ONE"))
+      (let* ((view (smoke--open-chat))
+             (session (hm--session view))
+             (run (hm--turn view "one")))
+        (bu--fact session "timer.started"
+                  (list :timer-id "t1" :occurrence 1 :run-id run))
+        (cl-letf (((symbol-function 'superchat-runtime-status)
+                   (lambda (_run) (list :status 'running :run-id run
+                                        :session-id session))))
+          (superchat-changes--note-started-late session run))
+        (should-not superchat-changes--notices)))))
+
 (ert-deftest unattended-notice/a-woken-record-names-itself-and-opens-its-conversation ()
   (un--fresh
     (wrec--with '((:text "WOKEN-ANSWER")) (p)

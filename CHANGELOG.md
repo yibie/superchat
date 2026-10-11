@@ -2,6 +2,11 @@
 
 All notable changes to superchat.
 
+## Unreleased — a notice also for a task answered at once
+
+- A scheduled task whose model answered before the send returned left no
+  `[Superchat: N]` notice. It does now, once.
+
 ## Unreleased — a scheduled task that keeps failing stops being retried
 
 - A scheduled task whose start fails is retried after five minutes, three

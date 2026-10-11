@@ -803,6 +803,19 @@ execution ends, however it ended; the mode line shows how many are pending."
     (pop-to-buffer buffer)
     buffer))
 
+(defvar superchat-timer-started-functions)
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+
+(defun superchat-changes--note-started-late (session run)
+  "Leave RUN's notice when it ended before it was on record as a task's.
+A scheduled task's `timer.started' is written after the send returns; an
+execution that ended inside that send was not yet known to be Superchat's
+own when it ended.  Called with SESSION and RUN once the fact is written."
+  (when-let* ((status (and (fboundp 'superchat-runtime-status)
+                           (superchat-runtime-status run))))
+    (superchat-changes--note-unattended
+     nil (append (list :session-id session :run-id run) status))))
+
 (superchat-define-plugin changes
   :doc "The unsaved-changes outlet's Run-end notice and review screen, and the
 notices of work Superchat started by itself.  The /changes command is
@@ -812,7 +825,14 @@ registered with the other built-in commands by `chat-commands'."
     (superchat-on scope 'turn-completed 'changes-notice
                   #'superchat-changes--on-turn-completed)
     (superchat-on scope 'turn-completed 'changes-unattended-notice
-                  #'superchat-changes--note-unattended)))
+                  #'superchat-changes--note-unattended)
+    (add-hook 'superchat-timer-started-functions
+              #'superchat-changes--note-started-late)
+    (superchat-scope-effect
+     scope
+     (lambda ()
+       (remove-hook 'superchat-timer-started-functions
+                    #'superchat-changes--note-started-late)))))
 
 (provide 'superchat-changes)
 

@@ -338,10 +338,17 @@ timer set in a temporary conversation speaks in that conversation."
                     (plist-get (superchat-runtime-status run) :session-id)))
            (superchat-runtime-active-runs)))
 
+(defvar superchat-timer-started-functions nil
+  "Functions called with SESSION-ID and RUN-ID once a task's start is on record.
+`timer.started' is written after the send returns.  An execution may have
+ended by then; whoever acts on \"Superchat started this\" at the end of an
+execution learns it here.")
+
 (defun superchat-timer--note-started (session-id timer-id occurrence run-id)
   "Record that RUN-ID is the execution of OCCURRENCE of the task TIMER-ID."
   (superchat-timer--fact session-id "timer.started" timer-id occurrence
-                         (list :run-id run-id)))
+                         (list :run-id run-id))
+  (run-hook-with-args 'superchat-timer-started-functions session-id run-id))
 
 (defun superchat-timer--start-task (session-id timer-id occurrence text)
   "Start the model on TEXT in the conversation SESSION-ID; return the Run id.
