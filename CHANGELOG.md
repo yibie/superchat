@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — three edges the third review found
+
+- A conversation's "current work record" is now only a record that
+  conversation may reach. A stale focus on another workspace's record no
+  longer puts that record into the request, clears its wait for the user,
+  or gives it this conversation's outcome.
+- A plugin installed in two places shares its global hook and its armed
+  timers: removing one installation leaves them to the other, and the last
+  one out takes them down. Before, removing either silently disarmed every
+  reminder and wake and dropped the notice of a task answered at once.
+- Turning the `timers` row off and on in the same Emacs no longer forgets
+  how often a failing task was tried or how long it still waits.
+
 ## Unreleased — a timer the tool sets will fire, or it is refused
 
 - With the `timers` row unmounted, `timer_create` is refused with the

@@ -183,9 +183,9 @@
   "The Work Record ID, or nil."
   (cl-find id (superchat-work-records) :key (lambda (r) (plist-get r :id)) :test #'equal))
 
-(defun superchat-work-current (session-id)
-  "The id of SESSION-ID's current Work Record, or nil.
-That is the record of its last `work.focused' fact, while not completed."
+(defun superchat-work--focused (session-id)
+  "The id of the open record SESSION-ID's last `work.focused' fact names, or nil.
+Whose record it is has not been asked: `superchat-work-current' asks."
   (let (current)
     (dolist (row (superchat-work--rows))
       (cl-destructuring-bind (session type payload) row
@@ -194,6 +194,17 @@ That is the record of its last `work.focused' fact, while not completed."
     (and current
          (let ((record (superchat-work-get current)))
            (and record (not (plist-get record :conclusion)) current)))))
+
+(defun superchat-work-current (session-id)
+  "The id of SESSION-ID's current Work Record, or nil.
+That is the record of its last `work.focused' fact, while not completed and
+while it is one this conversation may reach (`superchat-work--within-p').
+A focus on another Workspace's record, as a Tape written before records
+belonged to a Workspace may hold, names no current record: nothing of that
+record rides along with a request, is answered for, or is concluded here."
+  (when-let* ((id (superchat-work--focused session-id))
+              ((superchat-work--within-p session-id (superchat-work-get id))))
+    id))
 
 ;;;; Writing the facts ----------------------------------------------------------
 
@@ -518,9 +529,11 @@ completed records by status, one line each; never another Workspace's (K8)."
   "The `work_record' tool: ACTION is start, update, wait, done or read."
   (condition-case err
       (let* ((session (superchat-work--tool-session))
+             ;; The focused record, whoever's it is: one of another
+             ;; Workspace is refused below, by name, like any other.
              (id (if (and (stringp id) (not (string-empty-p id)))
                      id
-                   (superchat-work-current session))))
+                   (superchat-work--focused session))))
         ;; The record named, and the one a new record follows, are this
         ;; conversation's Workspace's, before anything is read or written.
         (when (and id (member action '("update" "wait" "done" "read")))
@@ -928,7 +941,6 @@ does not stop the others."
 A record whose wake just failed keeps the retry `superchat-work--try-wake'
 armed for it."
   (superchat-work-disarm-all)
-  (clrhash superchat-work--retries)
   (superchat-work-wake-due)
   (let ((now (superchat-work--now)))
     (dolist (record (superchat-work-records))
@@ -1035,6 +1047,9 @@ The record is the conversation's current one, or one this execution completed."
              (list :work-id id :run-id run :outcome (symbol-name outcome))))))
       (ignore-errors (superchat-work--report-woken run status)))))
 
+(defvar superchat-work--start-timer nil
+  "The Emacs timer that arms every wake once `work-records' is mounted.")
+
 (superchat-define-plugin work-records
   :doc "Work Records: at the end of every execution, the product attaches what
 it changed to the conversation's current record and decides how it stands."
@@ -1042,17 +1057,22 @@ it changed to the conversation's current record and decides how it stands."
   (lambda (scope _config)
     (superchat-on scope 'turn-completed 'work-outcome
                   #'superchat-work--on-turn-completed)
-    (add-hook 'superchat-user-input-functions #'superchat-work--on-user-input)
-    (superchat-scope-effect
-     scope (lambda ()
-             (remove-hook 'superchat-user-input-functions
-                          #'superchat-work--on-user-input)))
-    ;; After loading finishes, so a missed wake never starts mid-`require'.
-    (let ((start (run-at-time 0 nil #'superchat-work-arm-all)))
-      (superchat-scope-effect scope
-                              (lambda ()
-                                (cancel-timer start)
-                                (superchat-work-disarm-all))))))
+    ;; One hook and one table of wakes for the whole Emacs: the first
+    ;; installation sets them up, the last one out takes them down.
+    (superchat-scope-shared-effect
+     scope 'work-records-armed
+     (lambda ()
+       (add-hook 'superchat-user-input-functions #'superchat-work--on-user-input)
+       ;; After loading finishes, so a missed wake never starts mid-`require'.
+       (setq superchat-work--start-timer
+             (run-at-time 0 nil #'superchat-work-arm-all)))
+     (lambda ()
+       (remove-hook 'superchat-user-input-functions
+                    #'superchat-work--on-user-input)
+       (when (timerp superchat-work--start-timer)
+         (cancel-timer superchat-work--start-timer))
+       (setq superchat-work--start-timer nil)
+       (superchat-work-disarm-all)))))
 
 (provide 'superchat-work)
 ;;; superchat-work.el ends here

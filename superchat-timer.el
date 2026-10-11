@@ -593,9 +593,9 @@ afterwards never fires the same occurrence twice."
   "Fire, once each, the timers that came due while nothing was armed.
 A repeating timer fires only its most recent missed occurrence.  Return
 the fired plists."
-  (clrhash superchat-timer--retries)
-  (clrhash superchat-timer--not-before)
-  ;; First the tasks an earlier Emacs fired and never started.
+  ;; First the tasks an earlier Emacs fired and never started.  How often
+  ;; this Emacs already tried one, and how long it waits, is kept: turning
+  ;; the row off and on is not a new Emacs.
   (superchat-timer-retry-tasks)
   (let ((now (superchat-timer--now)) fired)
     (dolist (timer (superchat-timer-list))
@@ -755,6 +755,9 @@ started; the user's own commands cancel any."
           ((superchat-timer-cancel id) (format "Timer %s cancelled." id))
           (t (format "Error: no pending timer %s." id)))))
 
+(defvar superchat-timer--start-timer nil
+  "The Emacs timer that arms everything once the `timers' row is mounted.")
+
 ;;;; The row ------------------------------------------------------------------------------
 
 (superchat-define-plugin timers
@@ -762,12 +765,19 @@ started; the user's own commands cancel any."
 the row mounts (missed ones fire once first) and disarmed when it unmounts."
   :apply
   (lambda (scope _config)
-    ;; After loading finishes, so a missed task never starts mid-`require'.
-    (let ((start (run-at-time 0 nil #'superchat-timer-arm-all)))
-      (superchat-scope-effect scope
-                              (lambda ()
-                                (cancel-timer start)
-                                (superchat-timer-disarm-all))))))
+    ;; The armed timers are one table for the whole Emacs: the first
+    ;; installation arms them, the last one out disarms them.
+    (superchat-scope-shared-effect
+     scope 'timers-armed
+     (lambda ()
+       ;; After loading finishes, so a missed task never starts mid-`require'.
+       (setq superchat-timer--start-timer
+             (run-at-time 0 nil #'superchat-timer-arm-all)))
+     (lambda ()
+       (when (timerp superchat-timer--start-timer)
+         (cancel-timer superchat-timer--start-timer))
+       (setq superchat-timer--start-timer nil)
+       (superchat-timer-disarm-all)))))
 
 (provide 'superchat-timer)
 ;;; superchat-timer.el ends here

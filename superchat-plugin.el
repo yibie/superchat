@@ -108,6 +108,28 @@ retained completed undo does not retain its original cleanup closure."
     (push effect (superchat-scope-effects scope))
     effect))
 
+
+(defvar superchat-scope--shared (make-hash-table :test #'eq)
+  "KEY -> how many live installations hold that process-wide resource.")
+
+(defun superchat-scope-shared-effect (scope key acquire release)
+  "Hold the process-wide resource KEY for SCOPE; return the undo.
+A hook on a global variable, or one table of Emacs timers, is one thing
+however many installations of a plugin want it.  ACQUIRE is called when
+the first holder takes KEY and RELEASE when the last one lets go, so
+disposing one installation never takes the resource from another."
+  (when (= 1 (puthash key (1+ (gethash key superchat-scope--shared 0))
+                      superchat-scope--shared))
+    (funcall acquire))
+  (superchat-scope-effect
+   scope
+   (lambda ()
+     (let ((left (1- (gethash key superchat-scope--shared 1))))
+       (if (> left 0)
+           (puthash key left superchat-scope--shared)
+         (remhash key superchat-scope--shared)
+         (funcall release))))))
+
 (defun superchat-scope-dispose (scope)
   "Dispose SCOPE: children first, then its effects newest-first, then unlink."
   (dolist (child (copy-sequence (superchat-scope-children scope)))

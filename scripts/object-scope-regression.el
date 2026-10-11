@@ -187,12 +187,49 @@ the product writes when the sub-agent hands back is not the model's way in."
            (id (superchat-work-start sa "OSCOPE-PRIVATE-GOAL"))
            (sq (hm--session (wrec--view q))))
       (superchat-work--append sq "work.focused" "legacy focus" (list :work-id id))
-      (should (equal id (superchat-work-current sq)))
+      (should (equal id (superchat-work--focused sq)))
+      (should-not (superchat-work-current sq))
       (let ((rows (oscope--work-rows)))
         (oscope--as sq
           (should (string-match-p oscope--refusal
                                   (superchat-work-tool "update" nil nil "P"))))
         (should (= rows (oscope--work-rows)))))))
+
+;; Review round 3, R3-01: the tool was checked, what rides along was not.
+(ert-deftest object-scope/a-stale-focus-brings-nothing-of-another-workspace-along ()
+  "An ordinary message neither shows, answers for, nor concludes that record."
+  (wrec--with '((:text "PLAIN ANSWER")) (p q)
+    (let* ((sa (hm--session (wrec--view p)))
+           (id (superchat-work-start sa "OSCOPE-PRIVATE-GOAL"))
+           (b (wrec--view q)) (sb (hm--session b)))
+      (superchat-work-wait sa id "user" "OSCOPE-PRIVATE-QUESTION")
+      (superchat-work--append sb "work.focused" "legacy focus" (list :work-id id))
+      (hm--turn b "An unrelated question")
+      (should hm--wires)
+      (should-not (string-match-p "OSCOPE-PRIVATE" (prin1-to-string hm--wires)))
+      (should (equal "user" (plist-get (plist-get (superchat-work-get id) :waiting) :for)))
+      (should-not (plist-get (superchat-work-get id) :outcomes)))))
+
+(ert-deftest object-scope/a-stale-focus-is-not-a-reason-to-refuse-a-task-timer ()
+  "Another Workspace's record is not this conversation's current work."
+  (wrec--with nil (p q)
+    (let* ((id (superchat-work-start (hm--session (wrec--view p)) "OSCOPE-PRIVATE-GOAL"))
+           (sq (hm--session (wrec--view q))))
+      (superchat-work--append sq "work.focused" "legacy focus" (list :work-id id))
+      (oscope--as sq
+        (should (string-match-p "\\`Timer "
+                                (superchat-timer-tool-create "A separate job" "task" 30)))))))
+
+(ert-deftest object-scope/a-workspaces-own-current-record-still-rides-along ()
+  "The guard: the conversation's own record is shown, answered for and concluded."
+  (wrec--with '((:text "PLAIN ANSWER")) (p)
+    (let* ((a (wrec--view p)) (sa (hm--session a))
+           (id (superchat-work-start sa "OSCOPE-OWN-GOAL")))
+      (superchat-work-wait sa id "user" "OSCOPE-OWN-QUESTION")
+      (hm--turn a "Here is the answer")
+      (should (string-match-p "OSCOPE-OWN-GOAL" (prin1-to-string hm--wires)))
+      (should-not (plist-get (superchat-work-get id) :waiting))
+      (should (equal '("continuable") (plist-get (superchat-work-get id) :outcomes))))))
 
 (ert-deftest object-scope/the-users-list-still-shows-every-workspaces-records ()
   "Guard: what the user opens is not the model's view."

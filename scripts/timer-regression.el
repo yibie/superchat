@@ -53,6 +53,9 @@
           (superchat-timer-now-function (lambda () wtimer--now))
           (superchat-timer-notify-function (lambda (fired) (push fired wtimer--told))))
      (setq wtimer--roots (list ,@vars))
+     ;; Each test is a new Emacs: nothing has been tried or made to wait yet.
+     (clrhash superchat-timer--retries)
+     (clrhash superchat-timer--not-before)
      (unwind-protect
          (hm--fixture ,script ,@body)
        (superchat-timer-disarm-all)

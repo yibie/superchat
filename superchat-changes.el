@@ -826,10 +826,12 @@ registered with the other built-in commands by `chat-commands'."
                   #'superchat-changes--on-turn-completed)
     (superchat-on scope 'turn-completed 'changes-unattended-notice
                   #'superchat-changes--note-unattended)
-    (add-hook 'superchat-timer-started-functions
-              #'superchat-changes--note-started-late)
-    (superchat-scope-effect
-     scope
+    ;; One hook however many installations: the last one out removes it.
+    (superchat-scope-shared-effect
+     scope 'changes-task-started
+     (lambda ()
+       (add-hook 'superchat-timer-started-functions
+                 #'superchat-changes--note-started-late))
      (lambda ()
        (remove-hook 'superchat-timer-started-functions
                     #'superchat-changes--note-started-late)))))
