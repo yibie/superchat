@@ -41,7 +41,9 @@ A durable logical context spanning multiple Turns and Runs.  The chat View
 shows one Session at a time, either beside the file being edited (editor mode)
 or in the Session's own tab (agent mode); both modes show the same Session.
 Entry points invoked from an ordinary buffer — inline ask, inline act, region
-rewrite — join the Session the chat View is showing, not one chosen by project.
+rewrite, annotation — join the main conversation of the Workspace that buffer
+belongs to; from a buffer that belongs to none they join the temporary
+conversation.
 _Avoid_: Buffer, Run, project session
 
 **Session Buffer Set**:
