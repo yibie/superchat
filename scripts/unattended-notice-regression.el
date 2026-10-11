@@ -184,8 +184,12 @@ ended before `timer.started' is written.  Everything else is the real path."
     (hm--fixture (list '(:text "ONE") '(:text "TWO"))
       (let* ((view (smoke--open-chat))
              (session (hm--session view))
-             (first (hm--turn view "one"))
-             (second (hm--turn view "two")))
+             ;; The notices are read from the Tape, where a Run is
+             ;; Superchat's own by the Actor its start records.
+             (first (let ((superchat-automated-input 'timers))
+                      (hm--turn view "one")))
+             (second (let ((superchat-automated-input 'timers))
+                       (hm--turn view "two"))))
         (dolist (run (list first second))
           (bu--fact session "timer.started"
                     (list :timer-id (concat "t-" run) :occurrence 1 :run-id run))
@@ -210,10 +214,14 @@ ended before `timer.started' is written.  Everything else is the real path."
     (hm--fixture (list '(:text "ONE"))
       (let* ((view (smoke--open-chat))
              (session (hm--session view))
-             (run (hm--turn view "one")))
+             (run (let ((superchat-automated-input 'timers))
+                    (hm--turn view "one"))))
         (bu--with-candidate file
           (bu--fact session "timer.started"
                     (list :timer-id "t1" :occurrence 1 :run-id run))
+          ;; The count is taken when the execution ends; this one ended
+          ;; before the buffer was changed, so it is told of its end again.
+          (remhash run superchat-changes--unsaved-at-end)
           (superchat-changes--note-unattended
            nil (list :status 'completed :session-id session :run-id run))
           (should (= 1 (plist-get (car superchat-changes--notices) :unsaved)))

@@ -1,8 +1,9 @@
 # A Run records who started it, and five rulings on closing the loop
 
 Date: 2026-10-11
-Status: the five rulings accepted; slice 2 implemented; slices 3, 5 and 6
-not started
+Status: the five rulings accepted; slice 2 implemented; slice 3 (ruling 2)
+implemented in [giving up and looking are facts](2026-10-11-giving-up-and-looking-are-facts.md);
+rulings 1, 3, 4 and 5 not started
 Source: `reports/guidance-2026-10-11/GUIDANCE.md` (slice 2 and the five
 questions it left for the user).
 

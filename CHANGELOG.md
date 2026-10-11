@@ -2,6 +2,21 @@
 
 All notable changes to superchat.
 
+## Unreleased — giving up and looking are recorded
+
+- The notices of work Superchat did by itself (`[Superchat: N]`,
+  `superchat-changes-notices`, the "Ended, not looked at" rows of
+  `superchat-pending`) outlive a restart: they are read from the Tape, and
+  looking at one is recorded (`run.seen`), so a new Emacs shows what an
+  earlier one left and nothing already looked at.
+- A scheduled task or woken Work Record that Emacs quit in the middle of is
+  listed as "cut off when Emacs quit".
+- When this Emacs stops retrying a scheduled task or a Work Record's wake,
+  that is recorded once (`timer.gave-up`, `work.wake-gave-up`). A new Emacs
+  still tries again, as before.
+- Not changed: executions you started are not listed; an execution you
+  stopped is recorded as before.
+
 ## Unreleased — a Run records who started it
 
 - A Run Superchat started at a time says so on `run.started`: the Actor is

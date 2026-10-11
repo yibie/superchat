@@ -61,6 +61,12 @@
                   (session-id))
 
 (declare-function superchat-db-tape-select "superchat-db" (sql &optional params))
+(declare-function superchat-db-projection-checkpoint "superchat-db"
+                  (name &optional scope))
+(declare-function superchat-db-projection-set-checkpoint "superchat-db"
+                  (name version last-storage-id &optional scope))
+(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+(declare-function superchat-runtime--terminal-p "superchat-runtime" (status))
 (declare-function superchat-runtime-admit-between-turns "superchat-runtime"
                   (session-id source text))
 (declare-function superchat-plugin-row-active-p "superchat-plugin" (name))
@@ -680,8 +686,23 @@ Besides the list, it opens the review screen once the command has returned."
 (defvar superchat-changes--notices nil
   "Notices of ended executions Superchat started by itself, newest first.
 Each is a plist: `:run' and `:session' (strings), `:what' (what started it),
-`:status' (how it ended, a symbol), `:unsaved' (how many buffers it left
-unsaved, counted when it ended) and `:time'.")
+`:status' (how it ended, a symbol; `cut-off' when Emacs quit while it ran),
+`:unsaved' (how many buffers it left unsaved, counted when it ended in this
+Emacs) and `:time'.
+
+What the Tape says, kept here so that nothing redrawing reads the Tape:
+`superchat-changes-notices-reload' fills it, when an execution ends, when
+one is looked at, and when the plugin is mounted.")
+
+(defvar superchat-changes--unsaved-at-end (make-hash-table :test #'equal)
+  "Run id to the number of buffers it left unsaved, counted when it ended.
+Of this Emacs only: the marks on buffers do not outlive it.")
+
+(defvar superchat-changes--started-by (make-hash-table :test #'equal)
+  "Run id to the words for what started it, once they were worked out.")
+
+(defconst superchat-changes--unseen-checkpoint 'changes-unseen
+  "Names the storage id below which no execution is left to look at.")
 
 (defvar superchat-changes-notice-mode-line nil
   "The mode line's mark for `superchat-changes--notices'; nil when none.")
@@ -696,27 +717,6 @@ unsaved, counted when it ended) and `:time'.")
     (define-key map [mode-line mouse-1] #'superchat-changes-notices)
     map)
   "Keys of the mode line's mark.")
-
-(defun superchat-changes--notice-what (session run)
-  "Say what started RUN of SESSION, from SESSION's Tape.
-A scheduled task whose Run ended before `timer.started' was written is
-named by the send recorded just before that Run began."
-  (let (work timer sending before-run)
-    (dolist (event (ignore-errors (superchat-tape-replay-events session)))
-      (let ((payload (plist-get event :payload)))
-        (pcase (plist-get event :type)
-          ("work.woken" (setq work (plist-get payload :work-id)))
-          ("timer.sending" (setq sending (plist-get payload :timer-id)))
-          ("run.started"
-           (when (equal run (plist-get event :run-id))
-             (setq before-run sending)))
-          ("timer.started"
-           (when (equal run (plist-get payload :run-id))
-             (setq timer (plist-get payload :timer-id)))))))
-    (cond (timer (format "scheduled task %s" timer))
-          (before-run (format "scheduled task %s" before-run))
-          (work (format "work record %s" work))
-          (t "scheduled work"))))
 
 (defun superchat-changes--notices-refresh ()
   "Make the mode line's mark and the open notices list say what is pending."
@@ -741,33 +741,190 @@ M-x superchat-changes-notices"
           (tabulated-list-print t))))
     (force-mode-line-update t)))
 
+(defun superchat-changes--unseen-bound ()
+  "The storage id below which no execution is left to look at."
+  (or (cadr (superchat-db-projection-checkpoint
+             superchat-changes--unseen-checkpoint))
+      0))
+
+(defun superchat-changes--row-time (created)
+  "The time the Tape row stamped CREATED (UTC text) was written."
+  (or (ignore-errors (date-to-time (concat created " +0000")))
+      (current-time)))
+
+(defun superchat-changes--started-by (session run actor)
+  "Say what started RUN of SESSION, whose `run.started' names ACTOR.
+Asked of SESSION's Tape once for a Run."
+  (or (gethash run superchat-changes--started-by)
+      (puthash
+       run
+       (let* ((json-object-type 'alist) (json-array-type 'list)
+              (json-key-type 'symbol)
+              (payload
+               (lambda (type &optional of-run)
+                 (alist-get
+                  'payload
+                  (ignore-errors
+                    (json-read-from-string
+                     (or (caar
+                          (superchat-db-tape-select
+                           (concat
+                            "SELECT meta FROM tape WHERE session_id = ?"
+                            " AND json_extract(meta, '$.event_type') = ?"
+                            (if of-run
+                                " AND json_extract(meta, '$.payload.\"run-id\"') = ?"
+                              "")
+                            " ORDER BY id DESC LIMIT 1")
+                           (if of-run (list session type run)
+                             (list session type))))
+                         "{}"))))))
+              (id (lambda (payload &rest keys)
+                    (cl-some (lambda (key) (alist-get key payload)) keys)))
+              (timer (or (funcall id (funcall payload "timer.started" t)
+                                  'timer-id 'timer_id)
+                         (and (equal actor "timers")
+                              (funcall id (funcall payload "timer.sending")
+                                       'timer-id 'timer_id))))
+              (work (and (not timer)
+                         (funcall id (funcall payload "work.woken")
+                                  'work-id 'work_id))))
+         (cond (timer (format "scheduled task %s" timer))
+               (work (format "work record %s" work))
+               ((equal actor "timers") "scheduled task")
+               ((equal actor "work-records") "work record")
+               (t "scheduled work")))
+       superchat-changes--started-by)))
+
+(defun superchat-changes--unseen-from-tape ()
+  "Read the executions Superchat started that ended and were not looked at.
+Return them newest first, and move the bound past what is settled.
+
+One read of the Tape rows above the bound, of every conversation: the Runs
+that began there, how each ended, and which were looked at.  A Run is
+Superchat's own when its `run.started' names one of
+`superchat-changes--unattended-actors'; a Run from before the Actor was
+recorded names the user and is not listed.  A Run with no ending on the
+Tape that this Emacs is not running was cut off."
+  (let* ((bound (superchat-changes--unseen-bound))
+         (rows (superchat-db-tape-select
+                "SELECT id, session_id,
+                        json_extract(meta, '$.event_type'),
+                        json_extract(meta, '$.run_id'),
+                        json_extract(meta, '$.actor_id'),
+                        json_extract(meta, '$.payload.abandoned'),
+                        created_at
+                 FROM tape
+                 WHERE id > ?
+                   AND json_extract(meta, '$.event_type') IN
+                       ('run.started', 'run.completed', 'run.failed',
+                        'run.cancelled', 'run.seen')
+                 ORDER BY id ASC"
+                (list bound)))
+         (runs (make-hash-table :test #'equal))
+         (seen (make-hash-table :test #'equal))
+         order last unsettled notices)
+    (dolist (row rows)
+      (cl-destructuring-bind (id session type run actor abandoned created) row
+        (setq last id)
+        (pcase type
+          ("run.started"
+           (unless (gethash run runs)
+             (push run order)
+             (puthash run (list :run run :session session :actor actor
+                                :began id :time created)
+                      runs)))
+          ((or "run.completed" "run.failed" "run.cancelled")
+           (when-let* ((entry (gethash run runs)))
+             (puthash run
+                      (plist-put
+                       (plist-put entry :status
+                                  (cond ((equal type "run.completed") 'completed)
+                                        ((equal type "run.cancelled") 'cancelled)
+                                        ((memq abandoned '(1 t)) 'cut-off)
+                                        (t 'failed)))
+                       :time created)
+                      runs)))
+          ("run.seen" (puthash run t seen)))))
+    (dolist (run (nreverse order))
+      (let* ((entry (gethash run runs))
+             (session (plist-get entry :session))
+             (actor (plist-get entry :actor)))
+        (when (and (not (gethash run seen))
+                   (member actor superchat-changes--unattended-actors))
+          (let* ((live (and (fboundp 'superchat-runtime-status)
+                            (superchat-runtime-status run)))
+                 (status (or (plist-get entry :status)
+                             (if live
+                                 (and (superchat-runtime--terminal-p
+                                       (plist-get live :status))
+                                      (plist-get live :status))
+                               'cut-off))))
+            (setq unsettled (if unsettled
+                                (min unsettled (plist-get entry :began))
+                              (plist-get entry :began)))
+            (when status
+              (push (list :run run :session session
+                          :what (superchat-changes--started-by session run actor)
+                          :status status
+                          :unsaved (gethash run superchat-changes--unsaved-at-end 0)
+                          :time (superchat-changes--row-time
+                                 (plist-get entry :time)))
+                    notices))))))
+    (let ((settled (cond (unsettled (1- unsettled)) (last last) (t bound))))
+      (when (> settled bound)
+        (superchat-db-projection-set-checkpoint
+         superchat-changes--unseen-checkpoint 1 settled)))
+    notices))
+
+(defun superchat-changes-notices-reload ()
+  "Make the notices what the Tape says now, and show that."
+  (setq superchat-changes--notices (superchat-changes--unseen-from-tape))
+  (superchat-changes--notices-refresh))
+
 (defun superchat-changes--note-unattended (_run status)
   "At the end of an execution Superchat started by itself, leave a notice.
-Every way of ending counts: one that failed is the one most easily missed."
+Every way of ending counts: one that failed is the one most easily missed.
+The notice is read from the Tape; what is kept here is only how many
+buffers the execution left unsaved, which the Tape does not say."
   (when (and (listp status)
              (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status)))
     (when-let* ((session (plist-get status :session-id))
                 (run (plist-get status :run-id))
-                ((superchat-changes--unattended-run-p session run))
-                ((not (cl-some (lambda (notice)
-                                 (equal run (plist-get notice :run)))
-                               superchat-changes--notices))))
-      (push (list :run run :session session
-                  :what (superchat-changes--notice-what session run)
-                  :status (plist-get status :status)
-                  :unsaved (length (ignore-errors
-                                     (superchat-changes-candidates session run)))
-                  :time (current-time))
-            superchat-changes--notices)
-      (superchat-changes--notices-refresh))))
+                ((superchat-changes--unattended-run-p session run)))
+      (unless (gethash run superchat-changes--unsaved-at-end)
+        (puthash run (length (ignore-errors
+                               (superchat-changes-candidates session run)))
+                 superchat-changes--unsaved-at-end))
+      (superchat-changes-notices-reload))))
 
 (defun superchat-changes-notice-dismiss (run)
-  "Forget the notice of the execution RUN."
-  (setq superchat-changes--notices
-        (cl-remove-if (lambda (notice) (equal run (plist-get notice :run)))
-                      superchat-changes--notices))
-  (superchat-changes--notices-refresh))
+  "Record that the user looked at the ended execution RUN; forget its notice.
+That is the fact `run.seen' in the execution's conversation.  When it
+cannot be written the notice stays, and the echo area says so.  Return
+non-nil when the notice is gone."
+  (let ((notice (cl-find run superchat-changes--notices
+                         :key (lambda (n) (plist-get n :run))
+                         :test #'equal)))
+    (when notice
+      (condition-case err
+          (progn
+            (superchat-tape-append-event
+             (list :type "run.seen"
+                   :session-id (plist-get notice :session)
+                   :run-id run
+                   :actor-id "user"
+                   :summary (format "Looked at: %s, %s"
+                                    (plist-get notice :what)
+                                    (plist-get notice :status))
+                   :payload (list :run-id run)))
+            (remhash run superchat-changes--unsaved-at-end)
+            (superchat-changes-notices-reload)
+            t)
+        (error
+         (message "superchat: that %s was looked at could not be recorded: %s"
+                  run (error-message-string err))
+         nil)))))
 
 (defun superchat-changes--notices-entries ()
   "Rows of the notices list, newest first."
@@ -802,10 +959,10 @@ Every way of ending counts: one that failed is the one most easily missed."
   (when run (superchat-changes-notice-dismiss run)))
 
 (defun superchat-changes-notices-dismiss-all ()
-  "Forget every notice."
+  "Record every listed execution as looked at."
   (interactive)
-  (setq superchat-changes--notices nil)
-  (superchat-changes--notices-refresh))
+  (dolist (notice (copy-sequence superchat-changes--notices))
+    (superchat-changes-notice-dismiss (plist-get notice :run))))
 
 (defvar superchat-changes-notices-mode-map
   (let ((map (make-sparse-keymap)))
@@ -861,6 +1018,11 @@ registered with the other built-in commands by `chat-commands'."
                   #'superchat-changes--on-turn-completed)
     (superchat-on scope 'turn-completed 'changes-unattended-notice
                   #'superchat-changes--note-unattended)
+    ;; What ended, or was cut off, in an earlier Emacs is still to be seen.
+    (condition-case err
+        (superchat-changes-notices-reload)
+      (error (message "superchat: the notices could not be read: %s"
+                      (error-message-string err))))
     ;; One hook however many installations: the last one out removes it.
     (superchat-scope-shared-effect
      scope 'changes-task-started

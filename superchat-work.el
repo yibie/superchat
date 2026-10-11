@@ -827,6 +827,20 @@ task.  Reads; changes nothing."
             :again-at (and (not gave-up)
                            (+ (cdr earlier) superchat-work-wake-retry-seconds))))))
 
+(defun superchat-work--note-wake-gave-up (record tries)
+  "Record that this Emacs tries to wake RECORD no more, after TRIES.
+Written once, where the tries run out.  A new Emacs still tries again."
+  (condition-case err
+      (superchat-tape-append-event
+       (list :type "work.wake-gave-up"
+             :session-id (plist-get record :session-id)
+             :actor-id "work-records"
+             :summary (format "Work record %s was not taken up after %d tries"
+                              (plist-get record :id) tries)
+             :payload (list :work-id (plist-get record :id) :tries tries)))
+    (error (message "superchat: giving up on work record %s was not recorded: %s"
+                    (plist-get record :id) (error-message-string err)))))
+
 (defun superchat-work--try-wake (record)
   "Wake RECORD; return its View, or nil when the wake started nothing.
 A failed wake is tried again after `superchat-work-wake-retry-seconds', at
@@ -854,6 +868,8 @@ most `superchat-work-wake-retry-limit' times in one Emacs."
            (puthash id (cons failed (superchat-work--now)) superchat-work--retries)
            (message "superchat: work record %s was not taken up: %s"
                     id (error-message-string err))
+           (when (> failed superchat-work-wake-retry-limit)
+             (superchat-work--note-wake-gave-up record failed))
            (when (<= failed superchat-work-wake-retry-limit)
              (superchat-work--disarm id)
              (puthash id (run-at-time superchat-work-wake-retry-seconds nil

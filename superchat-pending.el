@@ -136,7 +136,7 @@ One that waits for an answer (an approval, a question) is listed as that."
         (cond (parent (format "started by execution %s" parent))
               ((superchat-changes--unattended-run-p session run)
                (format "started by Superchat: %s"
-                       (superchat-changes--notice-what session run)))
+                       (superchat-changes--started-by session run nil)))
               (t "started by you"))
         (if asking
             (format "execution %s waits for your answer%s" run
@@ -272,7 +272,10 @@ it as its current record."
             (superchat-pending--item
              'unseen (plist-get notice :run)
              (plist-get notice :what)
-             (format "%s%s" (plist-get notice :status)
+             (format "%s%s"
+                     (if (eq 'cut-off (plist-get notice :status))
+                         "cut off when Emacs quit"
+                       (plist-get notice :status))
                      (let ((n (plist-get notice :unsaved)))
                        (if (and (numberp n) (> n 0))
                            (format ", %d unsaved when it ended" n)
@@ -385,6 +388,8 @@ ended execution is thereby looked at, and leaves the list."
 (defun superchat-pending-refresh ()
   "Read everything again."
   (interactive)
+  (when (fboundp 'superchat-changes-notices-reload)
+    (ignore-errors (superchat-changes-notices-reload)))
   (when-let* ((buffer (get-buffer superchat-pending-buffer-name)))
     (with-current-buffer buffer
       (when (derived-mode-p 'superchat-pending-mode)

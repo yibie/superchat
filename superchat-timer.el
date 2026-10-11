@@ -117,7 +117,8 @@ this one forward.")
              (meta (ignore-errors (json-read-from-string (or (nth 1 row) ""))))
              (type (alist-get 'event_type meta)))
         (when (member type '("timer.created" "timer.fired" "timer.cancelled"
-                             "timer.sending" "timer.started" "timer.unconfirmed"))
+                             "timer.sending" "timer.started" "timer.unconfirmed"
+                             "timer.gave-up"))
           (push (list (nth 0 row) type (alist-get 'payload meta)) out))))
     (nreverse out)))
 
@@ -433,12 +434,32 @@ again whenever another task keeps that timer going."
                nil)
               (t (let ((failed (1+ failed)))
                    (puthash key failed superchat-timer--retries)
-                   (when (<= failed superchat-timer-retry-limit)
-                     (puthash key (+ (superchat-timer--now)
-                                     superchat-timer-retry-seconds)
-                              superchat-timer--not-before)
-                     (superchat-timer--retry-later superchat-timer-retry-seconds)))
+                   (if (<= failed superchat-timer-retry-limit)
+                       (progn
+                         (puthash key (+ (superchat-timer--now)
+                                         superchat-timer-retry-seconds)
+                                  superchat-timer--not-before)
+                         (superchat-timer--retry-later superchat-timer-retry-seconds))
+                     (superchat-timer--note-gave-up session-id timer-id
+                                                    occurrence failed)))
                  nil)))))))
+
+(defun superchat-timer--note-gave-up (session-id timer-id occurrence tries)
+  "Record that this Emacs tries the task TIMER-ID due at OCCURRENCE no more.
+Written once, where the tries run out, not each time the task is passed
+over afterwards.  A new Emacs still tries it again; the fact says what
+happened here."
+  (condition-case err
+      (superchat-tape-append-event
+       (list :type "timer.gave-up"
+             :session-id session-id
+             :actor-id "timers"
+             :summary (format "Scheduled task %s was not started after %d tries"
+                              timer-id tries)
+             :payload (list :timer-id timer-id :occurrence occurrence
+                            :tries tries)))
+    (error (message "superchat: giving up on task %s was not recorded: %s"
+                    timer-id (error-message-string err)))))
 
 (defun superchat-timer-retry-state (timer-id occurrence)
   "How the retries of the task TIMER-ID due at OCCURRENCE stand in this Emacs.

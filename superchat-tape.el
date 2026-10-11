@@ -140,7 +140,10 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              ;; in the Workspace's main conversation.
              "work.woken" "work.reported"
              ;; A delegated task and its result, under its record (K14).
-             "work.task"))
+             "work.task"
+             ;; A start or a wake this Emacs tries no more; an ended
+             ;; execution the user looked at.
+             "timer.gave-up" "work.wake-gave-up" "run.seen"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))
