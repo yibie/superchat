@@ -413,6 +413,26 @@ the other Session's."
             (should (memq b of-session))
             (should-not (memq c of-session))))))))
 
+;; The unsaved list of a whole conversation reads the Tape for delegations
+;; once, not once per Run (architecture options research, 2026-10-11: 30 s
+;; at 20 000 rows).
+(ert-deftest m7/changes/the-delegations-of-many-runs-are-read-once ()
+  (let ((reads 0)
+        (select (symbol-function 'superchat-db-tape-select)))
+    (cl-letf (((symbol-function 'superchat-db-tape-select)
+               (lambda (sql &optional params)
+                 (when (string-match-p "parent_run_id" (format "%s %s" sql params))
+                   (cl-incf reads))
+                 (funcall select sql params))))
+      (superchat-changes--child-sessions '("m7-run-a" "m7-run-b" "m7-run-c" "m7-run-d"))
+      (should (= 1 reads))
+      (setq reads 0)
+      (superchat-changes--child-sessions '("m7-run-a"))
+      (should (= 1 reads))
+      (setq reads 0)
+      (should-not (superchat-changes--child-sessions nil))
+      (should (= 0 reads)))))
+
 (ert-deftest m7/changes/a-delegated-runs-edit-belongs-to-the-run-that-started-it ()
   "A child Run in its own Session, started by a Run of this Session, edits a
 buffer.  The parent's Run and Session list it; the mark carries the child's
@@ -448,7 +468,14 @@ lists nothing."
                   (should (equal (list buffer) (m7--candidate-buffers session parent)))
                   (should (equal (list buffer) (m7--candidate-buffers session)))
                   (should (equal (list buffer) (m7--candidate-buffers child-session child)))
-                  (should-not (m7--candidate-buffers "m7-a-session-that-started-nothing"))))
+                  (should-not (m7--candidate-buffers "m7-a-session-that-started-nothing"))
+                  ;; Asked for several Runs at once, the child is found for
+                  ;; the Run that started it and for no other.
+                  (should (equal (list child-session)
+                                 (superchat-changes--child-sessions
+                                  (list "m7-some-other-run" parent))))
+                  (should-not (superchat-changes--child-sessions
+                               (list "m7-some-other-run" "m7-yet-another-run")))))
             (ignore-errors (superchat-runtime-cancel parent "[m7 done]"))))))))
 
 (ert-deftest m7/changes/revert-is-the-users-operation-too ()

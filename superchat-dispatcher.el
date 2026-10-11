@@ -656,6 +656,9 @@ submitting.  Required content over budget signals before a plan is produced.
 `superchat--preview-origin-data' supplies the frozen origin snapshot."
   (superchat--with-chat-execution-scope
     (let* ((state (superchat-turn-state turn))
+           (annotate (superchat--chat-annotate-spec
+                      (list :chat-turn turn
+                            :emacs-origin-data superchat--preview-origin-data)))
            (env (list :content (or (superchat-turn-clean-input turn) "")
                       :surface 'chat
                       :session-id (superchat-turn-session-id turn)
@@ -663,14 +666,22 @@ submitting.  Required content over budget signals before a plan is produced.
                       :system-prompt (superchat-turn-system-prompt turn)
                       :context
                       (append
+                       ;; A message that named `>annotate' is previewed as
+                       ;; it is sent: with the row form and the numbered
+                       ;; text.  Sending makes its own spec for the Sink.
+                       (when annotate (list :chat-annotate annotate))
                        (list :chat-turn turn
                              :chat-file-ref (plist-get state :file-ref)
                              :chat-template template)
                        (superchat--origin-context
                         (list :emacs-origin-data superchat--preview-origin-data)))))
            (collected
-            (superchat-pipeline--collect-context
-             env nil (superchat-turn-tools turn)))
+            (unwind-protect
+                (superchat-pipeline--collect-context
+                 env nil (superchat-turn-tools turn))
+              (when annotate
+                (set-marker (plist-get annotate :beg) nil)
+                (set-marker (plist-get annotate :end) nil))))
            (result
             (superchat-prompt-assemble
              (superchat-pipeline--context-fragments env collected)
@@ -968,23 +979,20 @@ through B's active Preset."
 (declare-function superchat-annotate-chat-sink "superchat-annotate"
                   (inner spec &optional hung))
 
-(defvar-local superchat--annotated-buffers nil
-  "What this View's conversation annotated: (SESSION-ID . BUFFER-NAMES).
-Written when a `>annotate' message's remarks were hung, newest name first;
-later requests of that Session say what was done.  Kept in the View, for
-this Emacs only, and worth nothing once the View shows another Session.")
+(defvar superchat--annotated-buffers (make-hash-table :test #'equal)
+  "SESSION-ID -> names of the buffers that conversation hung remarks on.
+Newest name first.  Written when a `>annotate' message's remarks were hung;
+later requests of that Session say what was done.  It lives as long as the
+remarks do: for this Emacs, whichever View shows the conversation and
+however often that View is closed and opened again.")
 
-(defun superchat--annotated-remember (view session-id name)
-  "Note in VIEW that SESSION-ID's conversation hung remarks on buffer NAME."
-  (when (buffer-live-p view)
-    (with-current-buffer view
-      (setq superchat--annotated-buffers
-            (cons session-id
-                  (cl-adjoin name
-                             (and (equal (car superchat--annotated-buffers)
-                                         session-id)
-                                  (cdr superchat--annotated-buffers))
-                             :test #'equal))))))
+(defun superchat--annotated-remember (session-id name)
+  "Note that SESSION-ID's conversation hung remarks on the buffer NAME."
+  (when (stringp session-id)
+    (puthash session-id
+             (cl-adjoin name (gethash session-id superchat--annotated-buffers)
+                        :test #'equal)
+             superchat--annotated-buffers)))
 
 (defun superchat--chat-annotate-spec (composed)
   "Return what COMPOSED's request annotates, or nil for an ordinary message.
@@ -1168,8 +1176,7 @@ active-Run match (C12/C12b) depends on."
                         (superchat-annotate-chat-sink
                          view annotate
                          (lambda (name)
-                           (superchat--annotated-remember
-                            buffer session-id name)))
+                           (superchat--annotated-remember session-id name)))
                       view))
             :session-id session-id
             ;; Preparation sees the contract default, never an explicit nil

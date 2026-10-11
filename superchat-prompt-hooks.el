@@ -585,11 +585,9 @@ in its history, and nothing there says they were already hung on the text."
            :priority 0 :budget-class 'hard :required t
            :source (list :annotate (plist-get spec :name))))
     (when-let* (((eq (plist-get env :surface) 'chat))
-                (view (plist-get (plist-get env :context) :chat-buffer))
-                ((buffer-live-p view))
-                (record (buffer-local-value 'superchat--annotated-buffers view))
-                ((equal (car record) (plist-get env :session-id)))
-                (names (cdr record)))
+                (session-id (plist-get env :session-id))
+                ((hash-table-p (bound-and-true-p superchat--annotated-buffers)))
+                (names (gethash session-id superchat--annotated-buffers)))
       (list (superchat-prompt-fragment
              :owner 'chat :id "annotate-earlier" :slot 'system
              :text (format superchat-prompt--annotate-earlier-note

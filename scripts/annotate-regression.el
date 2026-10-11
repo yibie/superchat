@@ -381,5 +381,42 @@
       (setq n (1+ n) start (match-end 0)))
     n))
 
+;;;; Review round 3: the quote as written, and one answer's remarks at a time --
+
+(ert-deftest annotate/a-quote-in-other-capitals-is-not-the-text ()
+  "R3-04: `target' is not found where the text says `TARGET'."
+  (wrules--with '((:text "1 | target | LOWERCASE-REMARK")) (p)
+    (let ((buffer (ann--file p "TARGET\n")))
+      (with-current-buffer buffer (setq-local case-fold-search t))
+      (ann--annotate buffer)
+      (should-not (ann--placed buffer))
+      (let ((report (buffer-local-value 'superchat-annotate--report buffer)))
+        (should (= 0 (plist-get report :placed)))
+        (should (= 1 (length (plist-get report :unplaced))))))))
+
+(ert-deftest annotate/a-quote-in-the-same-capitals-is-found ()
+  "The guard: the search is exact, not blind to capitals in the text."
+  (wrules--with '((:text "1 | TARGET | SAME-REMARK")) (p)
+    (let ((buffer (ann--file p "TARGET\n")))
+      (with-current-buffer buffer (setq-local case-fold-search nil))
+      (ann--annotate buffer)
+      (should (equal '((1 "TARGET" "SAME-REMARK")) (ann--placed buffer))))))
+
+(ert-deftest annotate/asking-twice-before-the-first-answer-leaves-the-second ()
+  "R3-07: the answer that arrives replaces what is on those lines."
+  (wrules--with '((:text "2 | beta | FIRST" :delay 0.15)
+                  (:text "2 | beta | SECOND")) (p)
+    (let ((buffer (ann--file p)))
+      (with-current-buffer buffer
+        (superchat-annotate "first")
+        (superchat-annotate "second"))
+      (should (smoke--wait
+               (lambda () (and (= 2 (length hm--wires))
+                               (null (superchat-runtime-active-runs))))
+               5))
+      (should (equal '((2 "beta" "SECOND")) (ann--placed buffer)))
+      (should (= 1 (plist-get (buffer-local-value 'superchat-annotate--report buffer)
+                              :placed))))))
+
 (provide 'annotate-regression)
 ;;; annotate-regression.el ends here

@@ -150,9 +150,12 @@ BEG is at the start of a line; END is on the last one, wherever in it."
   (1+ (- (line-number-at-pos end) (line-number-at-pos beg))))
 
 (defun superchat-annotate--quote-on-line (quote)
-  "Return (BEG . END) of QUOTE on the current line, or nil."
+  "Return (BEG . END) of QUOTE on the current line, or nil.
+QUOTE is looked for letter for letter, capitals included, whatever the
+buffer's own search setting is: in code `Target' and `target' are two names."
   (save-excursion
-    (let ((eol (line-end-position)))
+    (let ((eol (line-end-position))
+          (case-fold-search nil))
       (beginning-of-line)
       (when (search-forward quote eol t)
         (cons (match-beginning 0) (match-end 0))))))
@@ -340,12 +343,19 @@ A remark whose text was deleted is dropped here, with its end-of-line text."
 (defun superchat-annotate--place (buffer beg end answer run-id)
   "Hang the remarks of ANSWER on BEG..END of BUFFER and return the report.
 BEG and END are markers.  RUN-ID is the Run that gave ANSWER.  The report is
-the plist `superchat-annotate--report' holds; BUFFER's text is not changed."
+the plist `superchat-annotate--report' holds; BUFFER's text is not changed.
+The remarks already on those lines are replaced when the answer arrives,
+whichever request put them there: asking twice before the first answer is
+back leaves the second answer's remarks, and a report that counts them."
   (with-current-buffer buffer
     (let* ((empty (superchat-annotate--empty-answer-p answer))
            (parsed (superchat-annotate--parse (if empty "" answer)))
            (placed 0)
            unplaced)
+      (dolist (overlay (superchat-annotate-overlays))
+        (when (and (>= (overlay-start overlay) (marker-position beg))
+                   (<= (overlay-end overlay) (marker-position end)))
+          (superchat-annotate--delete overlay)))
       (dolist (row (car parsed))
         (let ((where (superchat-annotate--locate
                       (marker-position beg) (marker-position end)
@@ -517,11 +527,6 @@ text; not for an answer that placed nothing, failed, or found no buffer."
        (if (not (buffer-live-p buffer))
            (message "superchat: no annotations: the buffer to annotate is gone")
          (let ((run-id (if (stringp run) run (plist-get run :run-id))))
-           (with-current-buffer buffer
-             (dolist (overlay (superchat-annotate-overlays))
-               (when (and (>= (overlay-start overlay) (marker-position beg))
-                          (<= (overlay-end overlay) (marker-position end)))
-                 (superchat-annotate--delete overlay))))
            (let ((report (superchat-annotate--place
                           buffer beg end (plist-get result :text) run-id)))
              (message "%s in %s" (superchat-annotate--report-text report)

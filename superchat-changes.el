@@ -166,16 +166,34 @@ later save is not reported until their tools edit it again."
 
 (defun superchat-changes--child-sessions (run-ids)
   "Return the ids of Sessions whose Runs were started by one of RUN-IDS.
-A delegated child's structured edits belong to the Session that started it."
-  (when (fboundp 'superchat-db-tape-select)
-    (delete-dups
-     (cl-loop for run in run-ids
-              append (mapcar
-                      (lambda (row) (if (consp row) (car row) row))
-                      (ignore-errors
-                        (superchat-db-tape-select
-                         "SELECT DISTINCT session_id FROM tape WHERE meta LIKE ?"
-                         (list (format "%%\"parent_run_id\":\"%s\"%%" run)))))))))
+A delegated child's structured edits belong to the Session that started it.
+The Tape is read once however many RUN-IDS there are: one Run is asked for
+by name, several are picked out of every delegation on record.  Asking
+once per Run made the unsaved list of a long conversation take as long as
+its Runs times the whole Tape."
+  (when (and run-ids (fboundp 'superchat-db-tape-select))
+    (if (null (cdr run-ids))
+        (delete-dups
+         (mapcar (lambda (row) (if (consp row) (car row) row))
+                 (ignore-errors
+                   (superchat-db-tape-select
+                    "SELECT DISTINCT session_id FROM tape WHERE meta LIKE ?"
+                    (list (format "%%\"parent_run_id\":\"%s\"%%"
+                                  (car run-ids)))))))
+      (let ((wanted (make-hash-table :test #'equal))
+            found)
+        (dolist (run run-ids) (puthash run t wanted))
+        (dolist (row (ignore-errors
+                       (superchat-db-tape-select
+                        "SELECT DISTINCT session_id, meta FROM tape WHERE meta LIKE ?"
+                        (list "%\"parent_run_id\":\"%"))))
+          (let ((session (nth 0 row))
+                (meta (nth 1 row)))
+            (when (and (stringp meta)
+                       (string-match "\"parent_run_id\":\"\\([^\"]+\\)\"" meta)
+                       (gethash (match-string 1 meta) wanted))
+              (push session found))))
+        (delete-dups (nreverse found))))))
 
 (defun superchat-changes--editing-runs (session-id &optional run-id)
   "Return (SESSION . RUN) of every Run the Tape shows making a structured edit.

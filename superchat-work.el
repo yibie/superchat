@@ -183,8 +183,8 @@
   "The Work Record ID, or nil."
   (cl-find id (superchat-work-records) :key (lambda (r) (plist-get r :id)) :test #'equal))
 
-(defun superchat-work--focused (session-id)
-  "The id of the open record SESSION-ID's last `work.focused' fact names, or nil.
+(defun superchat-work--focused-record (session-id)
+  "The open record SESSION-ID's last `work.focused' fact names, or nil.
 Whose record it is has not been asked: `superchat-work-current' asks."
   (let (current)
     (dolist (row (superchat-work--rows))
@@ -193,18 +193,25 @@ Whose record it is has not been asked: `superchat-work-current' asks."
           (setq current (superchat-work--get payload 'work_id 'work-id)))))
     (and current
          (let ((record (superchat-work-get current)))
-           (and record (not (plist-get record :conclusion)) current)))))
+           (and record (not (plist-get record :conclusion)) record)))))
 
-(defun superchat-work-current (session-id)
+(defun superchat-work--focused (session-id)
+  "The id of the open record SESSION-ID's last `work.focused' fact names, or nil."
+  (plist-get (superchat-work--focused-record session-id) :id))
+
+(defun superchat-work-current (session-id &optional workspace)
   "The id of SESSION-ID's current Work Record, or nil.
 That is the record of its last `work.focused' fact, while not completed and
 while it is one this conversation may reach (`superchat-work--within-p').
 A focus on another Workspace's record, as a Tape written before records
 belonged to a Workspace may hold, names no current record: nothing of that
-record rides along with a request, is answered for, or is concluded here."
-  (when-let* ((id (superchat-work--focused session-id))
-              ((superchat-work--within-p session-id (superchat-work-get id))))
-    id))
+record rides along with a request, is answered for, or is concluded here.
+WORKSPACE, when the caller already has it, is what `superchat-work--workspace'
+returns for SESSION-ID: finding it replays the conversation, and a request
+should pay for that once."
+  (when-let* ((record (superchat-work--focused-record session-id))
+              ((superchat-work--within-p session-id record workspace)))
+    (plist-get record :id)))
 
 ;;;; Writing the facts ----------------------------------------------------------
 
@@ -235,11 +242,12 @@ record rides along with a request, is answered for, or is concluded here."
            (error "Work record %s is completed; start a new one that follows it" id))
           (t record))))
 
-(defun superchat-work--within-p (session-id record)
+(defun superchat-work--within-p (session-id record &optional known)
   "Non-nil when SESSION-ID's conversation may read and change RECORD.
 A conversation of a Workspace: RECORD is that Workspace's.  A conversation
-of no Workspace: RECORD was begun in that very conversation."
-  (let ((workspace (car (superchat-work--workspace session-id))))
+of no Workspace: RECORD was begun in that very conversation.  KNOWN is
+SESSION-ID's (ID . ROOT) when the caller already looked it up."
+  (let ((workspace (car (or known (superchat-work--workspace session-id)))))
     (if workspace
         (equal workspace (plist-get record :workspace-id))
       (and (stringp session-id)
@@ -455,7 +463,7 @@ The current record in full, then this Workspace's other open and recently
 completed records by status, one line each; never another Workspace's (K8)."
   (when-let* ((workspace (superchat-work--workspace session-id)))
     (let* ((records (superchat-work-records (car workspace)))
-           (current (superchat-work-current session-id))
+           (current (superchat-work-current session-id workspace))
            (others (cl-remove current records
                               :key (lambda (r) (plist-get r :id)) :test #'equal))
            (week-ago (- (float-time) (* 7 86400)))
@@ -941,6 +949,9 @@ does not stop the others."
 A record whose wake just failed keeps the retry `superchat-work--try-wake'
 armed for it."
   (superchat-work-disarm-all)
+  ;; What an execution left that its record was never told (a write that
+  ;; failed, an Emacs that quit in between) is written first.
+  (ignore-errors (superchat-work-settle-missing))
   (superchat-work-wake-due)
   (let ((now (superchat-work--now)))
     (dolist (record (superchat-work-records))
@@ -1010,9 +1021,98 @@ answer's words are never read (K7)."
           ((not (eq run-status 'completed)) 'failed)
           (t 'continuable))))
 
+(defvar superchat-work--start-timer nil
+  "The Emacs timer that arms every wake once `work-records' is mounted.")
+
+(defun superchat-work--settle (session run run-status id &optional known)
+  "Attach to record ID how RUN, ended with RUN-STATUS in SESSION, left it.
+Each of the two facts is written once for a record and a Run, so this may be
+called again for a Run whose facts were not all written.  KNOWN non-nil
+means this Emacs ran RUN and can still say which buffers it left unsaved."
+  (let ((written (superchat-work--facts-in-run id run)))
+    (when (and known (not (assoc "work.facts" written)))
+      (when-let* ((rows (and (fboundp 'superchat-changes-candidates)
+                             (superchat-changes-candidates session run))))
+        (superchat-work--append
+         session "work.facts" (format "Work record %s: what the execution changed" id)
+         (list :work-id id :run-id run
+               :buffers (vconcat (mapcar (lambda (r) (plist-get r :name)) rows))
+               :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))
+               ;; K13: in a jj repository, the change these edits sit in.
+               :jj-change (superchat-work-jj-change
+                           (plist-get (superchat-work-get id) :workspace-root))))))
+    (unless (assoc "work.outcome" written)
+      (let ((outcome (superchat-work-outcome id run run-status)))
+        (superchat-work--append
+         session "work.outcome" (format "Work record %s: %s" id outcome)
+         (list :work-id id :run-id run :outcome (symbol-name outcome)))))))
+
+(defun superchat-work--settle-failed (id run condition)
+  "Say that record ID did not get what RUN left: CONDITION is why.
+The execution itself ended as it ended; what is missing is the record's
+account of it, which `superchat-work-settle-missing' writes later."
+  (when (fboundp 'superchat-event-record-fault)
+    (superchat-event-record-fault 'work-outcome id 'work-records condition))
+  (message "superchat: work record %s has no outcome for execution %s yet: %s"
+           id run (error-message-string condition)))
+
+(defun superchat-work--runs-under (session-id id)
+  "The Runs that ended in SESSION-ID while ID was its focus, as (RUN . STATUS).
+Oldest first, read from the Tape alone.  A Run sealed as abandoned after a
+restart was cut off, not ended, and is not counted."
+  (let (focused runs)
+    (dolist (event (superchat-tape-replay-events session-id))
+      (let ((type (plist-get event :type))
+            (payload (plist-get event :payload)))
+        (cond ((equal type "work.focused")
+               (setq focused (equal id (or (plist-get payload :work-id)
+                                           (plist-get payload :work_id)))))
+              ((and focused
+                    (member type '("run.completed" "run.failed" "run.cancelled"))
+                    (not (eq t (plist-get payload :abandoned))))
+               (push (cons (plist-get event :run-id) (intern (substring type 4)))
+                     runs)))))
+    (nreverse runs)))
+
+(defun superchat-work-settle-missing (&optional session-id except-run)
+  "Write the outcomes a current record lacks for executions that ended under it.
+An execution can end and the record's account of it not be written: the
+write failed, or Emacs quit between the two.  For every conversation (or
+only SESSION-ID) and its current record, each Run that ended there while
+the record was its focus is given its outcome if it has none; EXCEPT-RUN is
+left to its caller.  Nothing is started again.  Return how many Runs were
+given an outcome."
+  (let ((sessions (if session-id
+                      (list session-id)
+                    (delete-dups
+                     (delq nil (mapcar (lambda (row)
+                                         (and (equal (nth 1 row) "work.focused")
+                                              (nth 0 row)))
+                                       (superchat-work--rows))))))
+        (written 0))
+    (dolist (session sessions)
+      (when-let* ((id (superchat-work-current session)))
+        (dolist (ended (superchat-work--runs-under session id))
+          (let ((run (car ended)))
+            (unless (or (equal run except-run)
+                        (assoc "work.outcome"
+                               (superchat-work--facts-in-run id run)))
+              (condition-case err
+                  (progn
+                    (superchat-work--settle
+                     session run (cdr ended) id
+                     (and (fboundp 'superchat-runtime-status)
+                          (superchat-runtime-status run) t))
+                    (cl-incf written))
+                (error (superchat-work--settle-failed id run err))))))))
+    written))
+
 (defun superchat-work--on-turn-completed (_run status)
   "At the end of an execution, attach its facts and its outcome to the record.
-The record is the conversation's current one, or one this execution completed."
+The record is the conversation's current one, or one this execution completed.
+A write that fails is said and recorded as a fault, never swallowed; the
+outcome an earlier execution of this conversation still lacks is written
+first."
   (when (and (listp status)
              (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status)))
@@ -1028,27 +1128,19 @@ The record is the conversation's current one, or one this execution completed."
                                               (equal run (superchat-work--get payload 'run_id 'run-id))
                                               (superchat-work--get payload 'work_id 'work-id))))
                                      (superchat-work--rows)))))))
+      ;; First what an earlier execution of this conversation still lacks.
+      (ignore-errors (superchat-work-settle-missing session run))
       (dolist (id ids)
-        (ignore-errors
-          (let ((rows (and (fboundp 'superchat-changes-candidates)
-                           (superchat-changes-candidates session run))))
-            (when rows
-              (superchat-work--append
-               session "work.facts" (format "Work record %s: what the execution changed" id)
-               (list :work-id id :run-id run
-                     :buffers (vconcat (mapcar (lambda (r) (plist-get r :name)) rows))
-                     :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))
-                     ;; K13: in a jj repository, the change these edits sit in.
-                     :jj-change (superchat-work-jj-change
-                                 (plist-get (superchat-work-get id) :workspace-root))))))
-          (let ((outcome (superchat-work-outcome id run (plist-get status :status))))
-            (superchat-work--append
-             session "work.outcome" (format "Work record %s: %s" id outcome)
-             (list :work-id id :run-id run :outcome (symbol-name outcome))))))
-      (ignore-errors (superchat-work--report-woken run status)))))
-
-(defvar superchat-work--start-timer nil
-  "The Emacs timer that arms every wake once `work-records' is mounted.")
+        (condition-case err
+            (superchat-work--settle session run (plist-get status :status) id t)
+          (error (superchat-work--settle-failed id run err))))
+      (condition-case err
+          (superchat-work--report-woken run status)
+        (error
+         (when (fboundp 'superchat-event-record-fault)
+           (superchat-event-record-fault 'work-report run 'work-records err))
+         (message "superchat: the main conversation was not told how execution %s ended: %s"
+                  run (error-message-string err)))))))
 
 (superchat-define-plugin work-records
   :doc "Work Records: at the end of every execution, the product attaches what

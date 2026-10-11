@@ -398,6 +398,45 @@
                  (string-trim (buffer-substring-no-properties
                                (point-min) (point-max)))))))))
 
+;;;; Review round 3: the View closed and opened, and the request inspector --
+
+(ert-deftest annotate-chat/closing-and-opening-the-view-keeps-what-was-done ()
+  "R3-05: the remarks are still on the text, and the model is still told."
+  (m5rc--fixture `((:text ,annc--answer) (:text "FOLLOWUP"))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (session (buffer-local-value 'superchat--session-id view))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (should (= 2 (length (annc--placed source))))
+      (kill-buffer view)
+      (setq view (let ((default-directory superchat-data-directory))
+                   (superchat--render-session-view session)))
+      (should (= 2 (length (annc--placed source))))
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should (annc--earlier-p (m5rc--settle 2))))))
+
+(ert-deftest annotate-chat/the-inspector-shows-and-sends-the-annotation-request ()
+  "R3-06: what is previewed is what is sent, row form and numbered text."
+  (m5rc--fixture `((:text ,annc--answer))
+    (let* ((source (m5rc--source annc--text))
+           (superchat-automated-input nil)
+           (inspector (m5rc--inspect source "ANNC_MARK_THEM >annotate")))
+      (should (string-match-p "1| alpha one" (m5rc--body inspector)))
+      (with-current-buffer inspector (superchat-request-send))
+      (let ((request (m5rc--settle 1)))
+        (should (annc--form-p request))
+        (should (string-match-p "1| alpha one" (annc--last-user request)))
+        ;; The numbered text is in the request once, not once per stage.
+        (should (= 1 (cl-count-if
+                      (lambda (text) (string-match-p "1| alpha one" text))
+                      (plist-get request :users))))
+        (should-not (annc--tools))
+        (should (equal '((2 "REMARK-B") (3 "REMARK-G")) (annc--placed source)))
+        (should-not (plist-get (buffer-local-value 'superchat-annotate--report source)
+                               :unparsed))))))
+
 (provide 'annotate-chat-regression)
 
 ;;; annotate-chat-regression.el ends here

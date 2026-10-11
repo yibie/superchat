@@ -2,6 +2,25 @@
 
 All notable changes to superchat.
 
+## Unreleased — what an execution left reaches its record; four annotation edges
+
+- When writing an execution's outcome to its work record fails, it is said
+  in the echo area and recorded as a fault; before, the error was swallowed.
+  The missing outcome is written later, once: when Superchat starts, and at
+  the end of the conversation's next execution. Nothing is run again.
+- An annotation's quote is matched letter for letter, capitals included,
+  whatever the buffer's search setting is.
+- Asking for annotations twice before the first answer is back leaves the
+  second answer's remarks; before, both sets stayed.
+- Closing and reopening a conversation's window no longer makes it forget
+  that its `>annotate` remarks were already hung on the text.
+- `>annotate` sent through the request inspector is previewed and sent as
+  an annotation request; before, the model was sent an ordinary message and
+  its prose answer was read as failed annotation rows.
+- `M-x superchat-changes` and `/changes` no longer slow down with the
+  number of executions in a conversation times the size of the whole Tape:
+  measured at 20,000 rows, 30 s before and under 1 s now.
+
 ## Unreleased — three edges the third review found
 
 - A conversation's "current work record" is now only a record that
