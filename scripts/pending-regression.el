@@ -189,6 +189,113 @@
       (should-not superchat-changes--notices)
       (should-not (pend--of 'unseen)))))
 
+;;;; What the review of the list found (FR-04 to FR-07) ---------------------------
+
+(ert-deftest pending/an-execution-that-asks-is-listed-as-asking ()
+  "While a tool waits for the user's yes or no, the row says so; answered, it
+is a running execution again and then gone."
+  (pend--fresh
+    (wrec--with nil (p)
+      (let* ((view (wrec--view p)) (session (hm--session view))
+             during run)
+        (unless (member "eval_elisp" superchat-llm-tool-names)
+          (setq superchat-llm-tool-names (append superchat-llm-tool-names '("eval_elisp"))))
+        (setq smoke--script '((:tool-uses (("eval_elisp" (expression . "(+ 1 2)"))))
+                              (:text "AFTER-THE-DENIAL")))
+        (let ((superchat-approval-function
+               (lambda (_request)
+                 (setq during (superchat-pending-items))
+                 nil)))
+          (setq run (smoke--send view "Use eval_elisp to add 1 and 2"))
+          (should (stringp run))
+          (should (smoke--wait (lambda () (smoke--run-done-p run)) 20)))
+        (should (= 1 (length during)))
+        (let ((item (car during)))
+          (should (eq 'asking (plist-get item :kind)))
+          (should (equal run (plist-get item :key)))
+          (should (equal "started by you" (plist-get item :what)))
+          (should (string-match-p "waits for your answer" (plist-get item :detail)))
+          (should (equal session (plist-get item :session))))
+        (should-not (pend--of 'asking))
+        (should-not (pend--of 'running))))))
+
+(ert-deftest pending/asking-comes-before-everything-and-can-be-stopped ()
+  (should (eq 'asking (caar superchat-pending--kinds)))
+  (should (equal "Asks you now" (cdar superchat-pending--kinds)))
+  (let (cancelled)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'superchat-runtime-cancel)
+               (lambda (run &rest _) (setq cancelled run))))
+      (superchat-pending-stop (list :kind 'asking :key "run-pend-asking"))
+      (should (equal "run-pend-asking" cancelled))
+      (should-error (superchat-pending-stop (list :kind 'unseen :key "run-x"))
+                    :type 'user-error))))
+
+(ert-deftest pending/a-sub-agents-execution-names-the-execution-that-started-it ()
+  (pend--fresh
+    (wrec--with (list '(:tool-uses (("delegate_to_subagent" (preset . "researcher")
+                                     (task . "PEND-SUB-TASK look into it"))))
+                      '(:text "PEND-SUB-REPORT" :delay 0.8)
+                      '(:text "done"))
+        (p)
+      (setq superchat-llm-tool-names
+            (append superchat-llm-tool-names '("delegate_to_subagent")))
+      (let* ((view (wrec--view p))
+             (run (smoke--send view "delegate the research")))
+        (should (smoke--wait (lambda () (>= (length (superchat-runtime-active-runs)) 2)) 5))
+        (let* ((items (pend--of 'running))
+               (lead (cl-find run items :key (lambda (i) (plist-get i :key)) :test #'equal))
+               (sub (car (remq lead items))))
+          (should (= 2 (length items)))
+          (should (equal "started by you" (plist-get lead :what)))
+          (should (equal (format "started by execution %s" run) (plist-get sub :what))))
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 20))))))
+
+(ert-deftest pending/a-record-being-worked-on-is-not-also-continuable ()
+  "While an execution runs in the conversation whose current record it is,
+the record is that execution's row; when it ends the record is listed again."
+  (pend--fresh
+    (wrec--with '((:text "SLOW" :delay 0.4)) (p)
+      (let* ((view (wrec--view p)) (session (hm--session view))
+             (id (superchat-work-start session "PEND-UNDER-WAY")))
+        (should (equal id (plist-get (car (pend--of 'continuable)) :key)))
+        (let ((run (smoke--send view "Carry on")))
+          (should (stringp run))
+          (should (= 1 (length (pend--of 'running))))
+          (should-not (pend--of 'continuable))
+          (wrec--settled))
+        (should (equal id (plist-get (car (pend--of 'continuable)) :key)))))))
+
+(ert-deftest pending/a-woken-record-being-worked-on-is-not-also-continuable ()
+  (pend--fresh
+    (wrec--with '((:text "SLOW" :delay 0.4)) (p)
+      (let ((wrec--now wrec--now))
+        (wrec--with-clock
+          (let* ((main (hm--session (wrec--view p)))
+                 (id (superchat-work-start main "PEND-WOKEN")))
+            (superchat-work-wait main id "time" nil (+ wrec--now 60))
+            (superchat-work-disarm-all)
+            (setq wrec--now (+ wrec--now 120))
+            (should (= 1 (length (superchat-work-wake-due))))
+            (let ((running (pend--of 'running)))
+              (should (= 1 (length running)))
+              (should (string-match-p (regexp-quote id) (plist-get (car running) :what))))
+            (should-not (pend--of 'continuable))
+            (wrec--settled)
+            (should (equal id (plist-get (car (pend--of 'continuable)) :key)))))))))
+
+(ert-deftest pending/an-ended-row-is-kept-when-its-conversation-cannot-be-shown ()
+  (pend--fresh
+    (un--with-task '((:text "ANSWER")) (session fired)
+      (let ((item (car (pend--of 'unseen))))
+        (should item)
+        (when-let* ((view (superchat-timer--live-view session))) (kill-buffer view))
+        (cl-letf (((symbol-function 'superchat--render-session-view)
+                   (lambda (&rest _) (error "PEND injected: the View cannot be rebuilt"))))
+          (should-error (save-window-excursion (superchat-pending-open item))))
+        (should (= 1 (length superchat-changes--notices)))
+        (should (pend--of 'unseen))))))
+
 ;;;; Unsaved buffers --------------------------------------------------------------
 
 (ert-deftest pending/a-buffer-a-tool-edited-is-listed-while-unsaved ()

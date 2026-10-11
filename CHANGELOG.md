@@ -2,6 +2,25 @@
 
 All notable changes to superchat.
 
+## Unreleased — what the review of the fixes found, first three
+
+- The end of an execution no longer looks through every earlier execution of
+  its work record. It looks only when an outcome failed to be written in this
+  Emacs, and then reads the record facts once. (A record with a thousand
+  executions made every later one wait about half a minute.)
+- A work record whose wake failed is not woken again by turning the
+  `work-records` row off and on: the number of tries and the wait between
+  them are now checked before a wake is tried.
+- `M-x superchat-pending`, `superchat-sessions` and
+  `superchat-session-history` exist after `(require 'superchat)` from a
+  checkout, not only in an installed package.
+- In `superchat-pending`: an execution that waits for your answer (an
+  approval, a question) is listed first as "Asks you now"; a sub-agent's
+  execution names the execution that started it instead of "started by
+  you"; a work record an execution is working on is no longer also listed
+  as one you can continue; and `RET` on an ended execution forgets its
+  notice only after its conversation was shown.
+
 ## Unreleased — one list of what is under way and what waits
 
 - `M-x superchat-pending` shows in one list what took three commands and

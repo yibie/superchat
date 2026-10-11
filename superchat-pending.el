@@ -36,7 +36,8 @@
   "For how many days a task that may or may not have started stays listed.")
 
 (defconst superchat-pending--kinds
-  '((running     . "Running")
+  '((asking      . "Asks you now")
+    (running     . "Running")
     (ask-user    . "Waiting for you")
     (due         . "Due, not started")
     (unconfirmed . "May have started")
@@ -60,29 +61,66 @@
       (string-trim (replace-regexp-in-string "[\n\r\t ]+" " " text))
     ""))
 
-(defun superchat-pending--running ()
-  "The executions under way, each with who started it."
+(defun superchat-pending--live-runs ()
+  "The public status of every execution under way."
   (when (fboundp 'superchat-runtime-active-runs)
     (delq nil
-          (mapcar
-           (lambda (run)
-             (when-let* ((status (superchat-runtime-status run))
-                         ((not (superchat-runtime--terminal-p
-                                (plist-get status :status))))
-                         (session (plist-get status :session-id)))
-               (superchat-pending--item
-                'running run
-                (if (superchat-changes--unattended-run-p session run)
-                    (format "started by Superchat: %s"
-                            (superchat-changes--notice-what session run))
-                  "started by you")
-                (format "execution %s" run)
-                session)))
-           (superchat-runtime-active-runs)))))
+          (mapcar (lambda (run)
+                    (when-let* ((status (superchat-runtime-status run))
+                                ((not (superchat-runtime--terminal-p
+                                       (plist-get status :status))))
+                                ((plist-get status :session-id)))
+                      status))
+                  (superchat-runtime-active-runs)))))
+
+(defun superchat-pending--asking-p (run)
+  "Whether the execution RUN waits for a person to answer something now."
+  (and (fboundp 'superchat-runtime--asking-p)
+       (fboundp 'superchat-runtime--entry)
+       (when-let* ((entry (superchat-runtime--entry run)))
+         (superchat-runtime--asking-p entry))))
+
+(defun superchat-pending--running ()
+  "The executions under way, each with who started it.
+One that waits for an answer (an approval, a question) is listed as that."
+  (mapcar
+   (lambda (status)
+     (let* ((run (plist-get status :run-id))
+            (session (plist-get status :session-id))
+            (parent (plist-get status :parent-run-id))
+            (asking (superchat-pending--asking-p run)))
+       (superchat-pending--item
+        (if asking 'asking 'running) run
+        (cond (parent (format "started by execution %s" parent))
+              ((superchat-changes--unattended-run-p session run)
+               (format "started by Superchat: %s"
+                       (superchat-changes--notice-what session run)))
+              (t "started by you"))
+        (if asking
+            (format "execution %s waits for your answer" run)
+          (format "execution %s" run))
+        session)))
+   (superchat-pending--live-runs)))
+
+(defun superchat-pending--records-under-way ()
+  "The ids of the Work Records an execution is working on right now.
+A record is being worked on when an execution runs in a conversation whose
+current record it is; a conversation that took a record up at its time has
+it as its current record."
+  (let ((sessions (delete-dups
+                   (mapcar (lambda (status) (plist-get status :session-id))
+                           (superchat-pending--live-runs))))
+        ids)
+    (dolist (session sessions)
+      (when-let* ((id (ignore-errors (superchat-work-current session))))
+        (push id ids)))
+    (delete-dups ids)))
 
 (defun superchat-pending--records ()
   "The open Work Records, each by how it stands."
-  (let ((now (superchat-work--now)) items)
+  (let ((now (superchat-work--now))
+        (under-way (superchat-pending--records-under-way))
+        items)
     (dolist (record (superchat-work-records))
       (let* ((id (plist-get record :id))
              (goal (superchat-pending--one-line (plist-get record :goal)))
@@ -120,6 +158,9 @@
                                   (or (plist-get waiting :detail) "")))
                          session)
                         items))))
+          ;; A record an execution is on right now is that execution's row,
+          ;; not also one the user is told they can continue.
+          ((guard (member id under-way)) nil)
           (_
            (push (superchat-pending--item
                   'continuable id goal
@@ -254,9 +295,11 @@ ended execution is thereby looked at, and leaves the list."
        (let ((session (plist-get item :session)))
          (unless (stringp session)
            (user-error "This row has no conversation to go to"))
+         ;; The conversation is shown first: a notice is only forgotten
+         ;; once what it points at was actually reached.
+         (pop-to-buffer (superchat-pending--view session))
          (when (eq kind 'unseen)
-           (superchat-changes-notice-dismiss (plist-get item :key)))
-         (pop-to-buffer (superchat-pending--view session)))))))
+           (superchat-changes-notice-dismiss (plist-get item :key))))))))
 
 (defun superchat-pending-show-record (item)
   "Show the full Work Record of the row at point."
@@ -270,7 +313,7 @@ ended execution is thereby looked at, and leaves the list."
 (defun superchat-pending-stop (item)
   "Stop the execution of the row at point."
   (interactive (list (tabulated-list-get-id)))
-  (unless (and item (eq 'running (plist-get item :kind)))
+  (unless (and item (memq (plist-get item :kind) '(running asking)))
     (user-error "The row at point is not a running execution"))
   (when (yes-or-no-p (format "Stop execution %s? " (plist-get item :key)))
     (superchat-runtime-cancel (plist-get item :key))
