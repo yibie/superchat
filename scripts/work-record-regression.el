@@ -49,6 +49,10 @@
           (project-find-functions (list #'wrec--finder))
           (superchat-display-style 'editor))
      (setq wrec--roots (list ,@vars))
+     ;; What one Emacs remembers of failed wakes and owed outcomes is not
+     ;; carried from one test to the next.
+     (when (boundp 'superchat-work--retries) (clrhash superchat-work--retries))
+     (when (boundp 'superchat-work--owed) (clrhash superchat-work--owed))
      (unwind-protect
          (hm--fixture ,script ,@body)
        (dolist (b (buffer-list))

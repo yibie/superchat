@@ -58,7 +58,9 @@ quit in between).  The next start of Emacs must take the record up."
           (wwf--with-broken-send
             (ignore-errors (superchat-work-wake-due)))
           (should (= 0 (wwf--wake-prompts id)))
-          ;; Emacs starts again; sending works.
+          ;; Emacs starts again; sending works.  A new Emacs remembers no
+          ;; failed wake.
+          (clrhash superchat-work--retries)
           (superchat-work-arm-all)
           (wrec--settled)
           (should (= 1 (wwf--wake-prompts id))))))))
@@ -297,6 +299,67 @@ record says its last execution was cut off, and nothing is started again."
           (wrec--settled)
           (should (= 1 (length (wrec--facts main "work.reported"))))
           (should (equal "continuable" (car (last (wrec--outcomes id))))))))))
+
+;;;; The count and the wait are read before a wake is tried (FR-02) -------------
+
+(defmacro wwf--counting-broken-sends (var &rest body)
+  "Run BODY while sending the wake message fails, counting the tries in VAR."
+  (declare (indent 1) (debug t))
+  `(cl-letf (((symbol-function 'superchat-send-input)
+              (lambda (&rest _) (cl-incf ,var) (error "WWF injected: send fails"))))
+     ,@body))
+
+(ert-deftest work-wake-fault/a-record-out-of-tries-is-not-woken-by-another-sweep ()
+  (wrec--with nil (p)
+    (let ((wrec--now wrec--now)
+          (superchat-work-wake-retry-limit 0)
+          (tries 0))
+      (wrec--with-clock
+        (let ((id (cdr (wwf--due-record p "Out of tries"))))
+          (wwf--counting-broken-sends tries
+            (superchat-work-wake-due)
+            (should (= 1 tries))
+            ;; Another sweep, a remount, and the same again long after.
+            (superchat-work-wake-due)
+            (superchat-work-arm-all)
+            (setq wrec--now (+ wrec--now 100000))
+            (superchat-work-arm-all)
+            (should (= 1 tries))
+            (should (= 1 (length (plist-get (superchat-work-get id) :wakes))))
+            (should-not (gethash id superchat-work--armed))))))))
+
+(ert-deftest work-wake-fault/a-failed-wake-waits-out-its-time-across-a-remount ()
+  (wrec--with nil (p)
+    (let ((wrec--now wrec--now)
+          (superchat-work-wake-retry-limit 3)
+          (superchat-work-wake-retry-seconds 300)
+          (tries 0))
+      (wrec--with-clock
+        (let ((id (cdr (wwf--due-record p "Inside the wait"))))
+          (wwf--counting-broken-sends tries
+            (superchat-work-wake-due)
+            (should (= 1 tries))
+            ;; Inside the wait a remount tries nothing and keeps a retry armed.
+            (setq wrec--now (+ wrec--now 10))
+            (superchat-work-arm-all)
+            (should (= 1 tries))
+            (should (timerp (gethash id superchat-work--armed)))
+            ;; Once the wait is over the next sweep tries again.
+            (setq wrec--now (+ wrec--now 300))
+            (superchat-work-wake-due)
+            (should (= 2 tries))))))))
+
+(ert-deftest work-wake-fault/a-wake-that-works-forgets-the-failures ()
+  (wrec--with '((:text "ok")) (p)
+    (let ((wrec--now wrec--now) (tries 0))
+      (wrec--with-clock
+        (let ((id (cdr (wwf--due-record p "Works the second time"))))
+          (wwf--counting-broken-sends tries (superchat-work-wake-due))
+          (should (gethash id superchat-work--retries))
+          (setq wrec--now (+ wrec--now superchat-work-wake-retry-seconds 1))
+          (should (= 1 (length (superchat-work-wake-due))))
+          (should-not (gethash id superchat-work--retries))
+          (wrec--settled))))))
 
 (provide 'work-wake-fault-regression)
 ;;; work-wake-fault-regression.el ends here

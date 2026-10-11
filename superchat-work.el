@@ -737,7 +737,8 @@ After that the record stays waiting for its past time until Superchat starts
 again.")
 
 (defvar superchat-work--retries (make-hash-table :test #'equal)
-  "Record id -> how many wakes of it failed in this Emacs.")
+  "Record id -> (FAILED . AT): how many wakes of it failed in this Emacs,
+and when the last one did.")
 
 (defconst superchat-work-wake-prompt
   "Take up work record %s again: the time it was waiting for has come."
@@ -818,21 +819,35 @@ Emacs that quit in the middle of a wake leaves behind."
   "Wake RECORD; return its View, or nil when the wake started nothing.
 A failed wake is tried again after `superchat-work-wake-retry-seconds', at
 most `superchat-work-wake-retry-limit' times in one Emacs."
-  (let ((id (plist-get record :id)))
-    (condition-case err
-        (prog1 (superchat-work-wake record)
-          (remhash id superchat-work--retries))
-      (error
-       (let ((failed (1+ (gethash id superchat-work--retries 0))))
-         (puthash id failed superchat-work--retries)
-         (message "superchat: work record %s was not taken up: %s"
-                  id (error-message-string err))
-         (when (<= failed superchat-work-wake-retry-limit)
-           (superchat-work--disarm id)
-           (puthash id (run-at-time superchat-work-wake-retry-seconds nil
-                                    #'superchat-work--wake-if-due id)
-                    superchat-work--armed)))
-       nil))))
+  (let* ((id (plist-get record :id))
+         (earlier (gethash id superchat-work--retries))
+         (left (and earlier
+                    (- (+ (cdr earlier) superchat-work-wake-retry-seconds)
+                       (superchat-work--now)))))
+    (cond
+     ;; Out of tries: whatever asks (a remount, another sweep), not again.
+     ((and earlier (> (car earlier) superchat-work-wake-retry-limit)) nil)
+     ;; Still inside the wait after a failure: keep the retry armed, no more.
+     ((and left (> left 0))
+      (unless (gethash id superchat-work--armed)
+        (puthash id (run-at-time left nil #'superchat-work--wake-if-due id)
+                 superchat-work--armed))
+      nil)
+     (t
+      (condition-case err
+          (prog1 (superchat-work-wake record)
+            (remhash id superchat-work--retries))
+        (error
+         (let ((failed (1+ (or (car earlier) 0))))
+           (puthash id (cons failed (superchat-work--now)) superchat-work--retries)
+           (message "superchat: work record %s was not taken up: %s"
+                    id (error-message-string err))
+           (when (<= failed superchat-work-wake-retry-limit)
+             (superchat-work--disarm id)
+             (puthash id (run-at-time superchat-work-wake-retry-seconds nil
+                                      #'superchat-work--wake-if-due id)
+                      superchat-work--armed)))
+         nil))))))
 
 
 (defun superchat-work-wake (record)
@@ -1047,10 +1062,17 @@ means this Emacs ran RUN and can still say which buffers it left unsaved."
          session "work.outcome" (format "Work record %s: %s" id outcome)
          (list :work-id id :run-id run :outcome (symbol-name outcome)))))))
 
-(defun superchat-work--settle-failed (id run condition)
+(defvar superchat-work--owed (make-hash-table :test #'equal)
+  "Conversation id -> t while an outcome of it failed to be written here.
+The next execution that ends in that conversation writes what is missing;
+what an earlier Emacs left is written when `work-records' is mounted.")
+
+(defun superchat-work--settle-failed (id run condition &optional session)
   "Say that record ID did not get what RUN left: CONDITION is why.
 The execution itself ended as it ended; what is missing is the record's
-account of it, which `superchat-work-settle-missing' writes later."
+account of it, which `superchat-work-settle-missing' writes later; SESSION
+is remembered as owed one."
+  (when session (puthash session t superchat-work--owed))
   (when (fboundp 'superchat-event-record-fault)
     (superchat-event-record-fault 'work-outcome id 'work-records condition))
   (message "superchat: work record %s has no outcome for execution %s yet: %s"
@@ -1082,21 +1104,28 @@ only SESSION-ID) and its current record, each Run that ended there while
 the record was its focus is given its outcome if it has none; EXCEPT-RUN is
 left to its caller.  Nothing is started again.  Return how many Runs were
 given an outcome."
-  (let ((sessions (if session-id
+  (let* ((rows (superchat-work--rows))
+         ;; Read once: which record and Run already have their outcome.
+         (settled (let ((table (make-hash-table :test #'equal)))
+                    (dolist (row rows table)
+                      (when (equal (nth 1 row) "work.outcome")
+                        (puthash (cons (superchat-work--get (nth 2 row) 'work_id 'work-id)
+                                       (superchat-work--get (nth 2 row) 'run_id 'run-id))
+                                 t table)))))
+         (sessions (if session-id
                       (list session-id)
                     (delete-dups
                      (delq nil (mapcar (lambda (row)
                                          (and (equal (nth 1 row) "work.focused")
                                               (nth 0 row)))
-                                       (superchat-work--rows))))))
+                                       rows)))))
         (written 0))
     (dolist (session sessions)
       (when-let* ((id (superchat-work-current session)))
         (dolist (ended (superchat-work--runs-under session id))
           (let ((run (car ended)))
             (unless (or (equal run except-run)
-                        (assoc "work.outcome"
-                               (superchat-work--facts-in-run id run)))
+                        (gethash (cons id run) settled))
               (condition-case err
                   (progn
                     (superchat-work--settle
@@ -1104,7 +1133,7 @@ given an outcome."
                      (and (fboundp 'superchat-runtime-status)
                           (superchat-runtime-status run) t))
                     (cl-incf written))
-                (error (superchat-work--settle-failed id run err))))))))
+                (error (superchat-work--settle-failed id run err session))))))))
     written))
 
 (defun superchat-work--on-turn-completed (_run status)
@@ -1128,12 +1157,15 @@ first."
                                               (equal run (superchat-work--get payload 'run_id 'run-id))
                                               (superchat-work--get payload 'work_id 'work-id))))
                                      (superchat-work--rows)))))))
-      ;; First what an earlier execution of this conversation still lacks.
-      (ignore-errors (superchat-work-settle-missing session run))
+      ;; First what an earlier execution of this conversation still lacks:
+      ;; only when a write of it failed here, never as a sweep at every end.
+      (when (gethash session superchat-work--owed)
+        (remhash session superchat-work--owed)
+        (ignore-errors (superchat-work-settle-missing session run)))
       (dolist (id ids)
         (condition-case err
             (superchat-work--settle session run (plist-get status :status) id t)
-          (error (superchat-work--settle-failed id run err))))
+          (error (superchat-work--settle-failed id run err session))))
       (condition-case err
           (superchat-work--report-woken run status)
         (error

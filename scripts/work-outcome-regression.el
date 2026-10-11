@@ -210,5 +210,60 @@ record being told."
       ;; The outcome itself was written.
       (should (equal '("continuable") (wout--outcomes id))))))
 
+;;;; The scan is not paid at every end (FR-01) ---------------------------------
+
+(defmacro wout--counting-selects (var &rest body)
+  "Run BODY counting the Tape SELECTs it makes in VAR."
+  (declare (indent 1) (debug t))
+  `(let ((select (symbol-function 'superchat-db-tape-select)))
+     (cl-letf (((symbol-function 'superchat-db-tape-select)
+                (lambda (&rest args) (cl-incf ,var) (apply select args))))
+       ,@body)))
+
+(ert-deftest work-outcome/an-end-with-nothing-owed-does-not-scan ()
+  "An execution that ends when no write failed here looks for nothing missing."
+  (wrec--with '((:text "FIRST") (:text "SECOND")) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL"))
+           (scans 0)
+           (scan (symbol-function 'superchat-work-settle-missing)))
+      (cl-letf (((symbol-function 'superchat-work-settle-missing)
+                 (lambda (&rest args) (cl-incf scans) (apply scan args))))
+        (hm--turn view "Do the first step")
+        (hm--turn view "Do the second step"))
+      (should (= 0 scans))
+      (should (equal '("continuable" "continuable") (wout--outcomes id))))))
+
+(ert-deftest work-outcome/a-failed-write-is-owed-until-the-next-end ()
+  "The conversation is remembered as owed, and the debt is paid once."
+  (wrec--with '((:text "FIRST") (:text "SECOND") (:text "THIRD")) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL"))
+           (hits 0) (scans 0)
+           (scan (symbol-function 'superchat-work-settle-missing)))
+      (wout--outcome-write-failing hits
+        (hm--turn view "Do the first step"))
+      (should (gethash session superchat-work--owed))
+      (cl-letf (((symbol-function 'superchat-work-settle-missing)
+                 (lambda (&rest args) (cl-incf scans) (apply scan args))))
+        (hm--turn view "Do the second step")
+        (should (= 1 scans))
+        (should-not (gethash session superchat-work--owed))
+        (hm--turn view "Do the third step")
+        (should (= 1 scans)))
+      (should (= 3 (length (wout--outcome-rows session id)))))))
+
+(ert-deftest work-outcome/the-scan-reads-the-facts-once-however-many-runs-ended ()
+  "Looking for what is missing costs the same reads after two Runs as after six."
+  (wrec--with '((:text "A") (:text "B") (:text "C") (:text "D") (:text "E") (:text "F")) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (two 0) (six 0))
+      (superchat-work-start session "WOUT-GOAL")
+      (hm--turn view "one") (hm--turn view "two")
+      (wout--counting-selects two (should (= 0 (superchat-work-settle-missing session))))
+      (dotimes (_ 4) (hm--turn view "more"))
+      (wout--counting-selects six (should (= 0 (superchat-work-settle-missing session))))
+      (should (= two six)))))
+
 (provide 'work-outcome-regression)
 ;;; work-outcome-regression.el ends here
