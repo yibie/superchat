@@ -265,5 +265,82 @@ record being told."
       (wout--counting-selects six (should (= 0 (superchat-work-settle-missing session))))
       (should (= two six)))))
 
+;;;; Stopped is not failed -------------------------------------------------------
+
+(defun wout--stopped-run (view)
+  "Send a message from VIEW, stop its execution, and return the Run id."
+  (let ((run (smoke--send view "Do this step")))
+    (should (stringp run))
+    (should (superchat-runtime-cancel run))
+    (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+    (should (eq 'cancelled (plist-get (superchat-runtime-status run) :status)))
+    run))
+
+(ert-deftest work-outcome/a-stopped-execution-is-recorded-as-stopped ()
+  (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL"))
+           (run (wout--stopped-run view)))
+      (should (equal (list (cons run "stopped")) (wout--outcome-rows session id)))
+      (should (equal '("stopped") (wout--outcomes id)))
+      (should (string-match-p (format "%s in conversation %s: stopped"
+                                      (regexp-quote run) (regexp-quote session))
+                              (superchat-work-executions-text
+                               (superchat-work-get id))))
+      ;; Whoever takes the record up is told, as after an interruption.
+      (should (string-match-p "last execution was stopped before it finished"
+                              (superchat-work-render (superchat-work-get id)))))))
+
+(ert-deftest work-outcome/a-stopped-execution-is-caught-up-as-stopped ()
+  (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL"))
+           run)
+      (wout--as-if-emacs-quit (setq run (wout--stopped-run view)))
+      (should-not (wout--outcomes id))
+      (should (= 1 (superchat-work-settle-missing)))
+      (should (equal (list (cons run "stopped")) (wout--outcome-rows session id))))))
+
+(ert-deftest work-outcome/a-stop-after-the-record-was-completed-is-completed ()
+  "What the execution did to the record comes first, as for a failure."
+  (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL"))
+           (run (smoke--send view "Do this step")))
+      (should (stringp run))
+      ;; As the model's `done' does it, inside this execution.
+      (let ((superchat--tool-execution-context
+             (list :session-id session :run-id run)))
+        (superchat-work-complete session id "WOUT-DONE"))
+      (should (superchat-runtime-cancel run))
+      (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+      (should (equal '("completed") (wout--outcomes id)))
+      (should-not (string-match-p "was stopped before it finished"
+                                  (superchat-work-render (superchat-work-get id)))))))
+
+(ert-deftest work-outcome/a-record-with-a-conclusion-is-not-told-of-the-stop ()
+  "The user completed it afterwards: nothing is left to check before going on."
+  (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL")))
+      (wout--stopped-run view)
+      (should (string-match-p "was stopped before it finished"
+                              (superchat-work-render (superchat-work-get id))))
+      (superchat-work-complete session id "WOUT-DONE-BY-HAND" 'user)
+      (should (equal '("stopped") (wout--outcomes id)))
+      (should-not (string-match-p "was stopped before it finished"
+                                  (superchat-work-render (superchat-work-get id)))))))
+
+(ert-deftest work-outcome/the-stop-is-told-only-while-it-is-the-last-thing ()
+  (wrec--with '((:text "NEVER-DELIVERED" :delay 5) (:text "DONE")) (p)
+    (let* ((view (wrec--view p)) (session (hm--session view))
+           (id (superchat-work-start session "WOUT-GOAL")))
+      (wout--stopped-run view)
+      (setq smoke--script (list '(:text "DONE")))
+      (hm--turn view "Go on")
+      (should (equal '("stopped" "continuable") (wout--outcomes id)))
+      (should-not (string-match-p "was stopped before it finished"
+                                  (superchat-work-render (superchat-work-get id)))))))
+
 (provide 'work-outcome-regression)
 ;;; work-outcome-regression.el ends here

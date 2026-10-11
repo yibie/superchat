@@ -428,6 +428,9 @@ Nil unless ROOT holds a `.jj' directory and jj answers; never signals."
                  (and (equal "interrupted" (car (last (plist-get record :outcomes))))
                       (not (plist-get record :conclusion))
                       "Its last execution was cut off when Emacs exited (recorded by Superchat): check what it left before going on.")
+                 (and (equal "stopped" (car (last (plist-get record :outcomes))))
+                      (not (plist-get record :conclusion))
+                      "Its last execution was stopped before it finished (recorded by Superchat): check what it left before going on.")
                  (and files
                       (format "Files its executions changed (recorded by Superchat): %s"
                               (string-join files ", ")))
@@ -1055,12 +1058,14 @@ product clears it; the model does not have to remember to."
 (defun superchat-work-outcome (record-id run-id run-status)
   "How RUN-ID, ended with RUN-STATUS, left RECORD-ID, from facts alone.
 `completed' when it completed the record; `waiting' when it registered a wait
-still standing; `failed' when the Run failed; otherwise `continuable'.  The
-answer's words are never read (K7)."
+still standing; `stopped' when the Run was cancelled before it finished,
+which is what the user's stop does; `failed' when the Run failed; otherwise
+`continuable'.  The answer's words are never read (K7)."
   (let* ((facts (superchat-work--facts-in-run record-id run-id))
          (record (superchat-work-get record-id)))
     (cond ((assoc "work.completed" facts) 'completed)
           ((and (assoc "work.waiting" facts) (plist-get record :waiting)) 'waiting)
+          ((eq run-status 'cancelled) 'stopped)
           ((not (eq run-status 'completed)) 'failed)
           (t 'continuable))))
 

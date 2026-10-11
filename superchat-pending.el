@@ -211,9 +211,15 @@ it as its current record."
           (_
            (push (superchat-pending--item
                   'continuable id goal
-                  (if (equal "interrupted" (car (last (plist-get record :outcomes))))
-                      "its last execution was interrupted"
-                    (superchat-pending--one-line (plist-get record :resume)))
+                  (pcase (car (last (plist-get record :outcomes)))
+                    ("interrupted" "its last execution was interrupted")
+                    ("stopped"
+                     (let ((resume (superchat-pending--one-line
+                                    (plist-get record :resume))))
+                       (if (member resume '(nil ""))
+                           "its last execution was stopped"
+                         (format "its last execution was stopped; %s" resume))))
+                    (_ (superchat-pending--one-line (plist-get record :resume))))
                   session)
                  items)))))
     (nreverse items)))
@@ -273,9 +279,10 @@ it as its current record."
              'unseen (plist-get notice :run)
              (plist-get notice :what)
              (format "%s%s"
-                     (if (eq 'cut-off (plist-get notice :status))
-                         "cut off when Emacs quit"
-                       (plist-get notice :status))
+                     (pcase (plist-get notice :status)
+                       ('cut-off "cut off when Emacs quit")
+                       ('cancelled "stopped")
+                       (status status))
                      (let ((n (plist-get notice :unsaved)))
                        (if (and (numberp n) (> n 0))
                            (format ", %d unsaved when it ended" n)

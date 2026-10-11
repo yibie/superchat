@@ -2,6 +2,13 @@
 
 All notable changes to superchat.
 
+## Unreleased — a stopped execution is not a failed one
+
+- An execution that was stopped is recorded on its Work Record as
+  `stopped`, where it was `failed`. The record's text tells whoever takes
+  it up that its last execution was stopped, and `superchat-pending` says
+  so on the record's row. Records settled earlier keep what they said.
+
 ## Unreleased — giving up and looking are recorded
 
 - The notices of work Superchat did by itself (`[Superchat: N]`,

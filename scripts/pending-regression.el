@@ -505,5 +505,50 @@ the record is that execution's row; when it ends the record is listed again."
             (should-error (superchat-pending-stop (tabulated-list-get-id))
                           :type 'user-error)))))))
 
+;;;; Stopped -----------------------------------------------------------------------
+
+(ert-deftest pending/a-record-whose-execution-was-stopped-says-so ()
+  (pend--fresh
+    (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+      (let* ((view (wrec--view p)) (session (hm--session view))
+             (id (superchat-work-start session "PEND-STOP-GOAL")))
+        (superchat-work-update session id "one line added" nil "PEND-STOP-NEXT")
+        (let ((run (smoke--send view "Go on")))
+          (let ((item (car (pend--of 'running))))
+            (should (equal run (plist-get item :key)))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (superchat-pending-stop item)))
+          (should (smoke--wait (lambda () (smoke--run-done-p run)) 10)))
+        (let ((item (car (pend--of 'continuable))))
+          (should (equal id (plist-get item :key)))
+          (should (equal "its last execution was stopped; PEND-STOP-NEXT"
+                         (plist-get item :detail))))))))
+
+(ert-deftest pending/a-stopped-record-with-no-resume-point-still-says-stopped ()
+  (pend--fresh
+    (wrec--with '((:text "NEVER-DELIVERED" :delay 5)) (p)
+      (let* ((view (wrec--view p)) (session (hm--session view))
+             (id (superchat-work-start session "PEND-STOP-GOAL"))
+             (run (smoke--send view "Go on")))
+        (should (superchat-runtime-cancel run))
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+        (let ((item (car (pend--of 'continuable))))
+          (should (equal id (plist-get item :key)))
+          (should (equal "its last execution was stopped"
+                         (plist-get item :detail))))))))
+
+(ert-deftest pending/work-superchat-started-that-was-stopped-reads-stopped ()
+  (pend--fresh
+    (hm--fixture (list '(:text "NEVER-DELIVERED" :delay 5))
+      (let* ((view (smoke--open-chat))
+             (run (let ((superchat-automated-input 'timers))
+                    (smoke--send view "a task"))))
+        (should (superchat-runtime-cancel run))
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+        (superchat-changes-notices-reload)
+        (let ((item (car (pend--of 'unseen))))
+          (should (equal run (plist-get item :key)))
+          (should (string-match-p "\\`stopped" (plist-get item :detail))))))))
+
 (provide 'pending-regression)
 ;;; pending-regression.el ends here
