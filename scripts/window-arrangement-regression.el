@@ -222,9 +222,16 @@
 (ert-deftest window-arrangement/other-surfaces-and-confirmed-text-get-none ()
   (should-not (superchat-prompt-collector--windows (list :surface 'subagent :context nil) nil nil))
   (should-not (superchat-prompt-collector--windows (list :surface 'compaction :context nil) nil nil))
+  ;; Text the user previewed and confirmed is left as it was confirmed.
   (should-not (superchat-prompt-collector--windows
-               (list :surface 'chat :context (list :chat-prompt-override "confirmed"))
+               (list :surface 'chat :context (list :chat-prompt-override "confirmed"
+                                                   :chat-prepared-context t))
                nil nil))
+  ;; Text a skill fixed was reviewed by nobody: it is told the windows
+  ;; (decision 2026-10-10, a skill message says where the user is).
+  (should (superchat-prompt-collector--windows
+           (list :surface 'chat :context (list :chat-prompt-override "from a skill"))
+           nil nil))
   (should (superchat-prompt-collector--windows (list :surface 'chat :context nil) nil nil)))
 
 ;;;; Files outside the workspace on the review screen ------------------------------------
