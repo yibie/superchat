@@ -273,7 +273,9 @@ it as its current record."
           (superchat-timer-list)))
 
 (defun superchat-pending--unseen ()
-  "Executions Superchat started by itself that ended and were not looked at."
+  "Executions that ended and were not looked at.
+Those Superchat started by itself, and those the user started that ended
+with their conversation closed."
   (mapcar (lambda (notice)
             (superchat-pending--item
              'unseen (plist-get notice :run)

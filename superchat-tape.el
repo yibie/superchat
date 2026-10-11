@@ -143,7 +143,10 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "work.task"
              ;; A start or a wake this Emacs tries no more; an ended
              ;; execution the user looked at.
-             "timer.gave-up" "work.wake-gave-up" "run.seen"))
+             "timer.gave-up" "work.wake-gave-up" "run.seen"
+             ;; An execution the user started ended with its conversation
+             ;; closed.
+             "run.ended-unwatched"))
    (mapcar (lambda (suffix)
              (list :type (format "subagent.%s" suffix)
                    :relevance 'session-annotation))

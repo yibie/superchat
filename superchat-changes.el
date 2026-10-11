@@ -688,7 +688,10 @@ Besides the list, it opens the review screen once the command has returned."
 Each is a plist: `:run' and `:session' (strings), `:what' (what started it),
 `:status' (how it ended, a symbol; `cut-off' when Emacs quit while it ran),
 `:unsaved' (how many buffers it left unsaved, counted when it ended in this
-Emacs) and `:time'.
+Emacs), `:time', and `:origin': `unattended' for an execution Superchat
+started, `user' for one the user started that ended with its conversation
+closed.  Only the first kind is counted on the mode line and shown in the
+notices list; `superchat-pending' lists both.
 
 What the Tape says, kept here so that nothing redrawing reads the Tape:
 `superchat-changes-notices-reload' fills it, when an execution ends, when
@@ -718,9 +721,15 @@ Of this Emacs only: the marks on buffers do not outlive it.")
     map)
   "Keys of the mode line's mark.")
 
+(defun superchat-changes--own-notices ()
+  "The notices of executions Superchat started by itself, newest first.
+These are what the mode line counts and the notices list shows."
+  (cl-remove-if-not (lambda (notice) (eq 'unattended (plist-get notice :origin)))
+                    superchat-changes--notices))
+
 (defun superchat-changes--notices-refresh ()
   "Make the mode line's mark and the open notices list say what is pending."
-  (let ((count (length superchat-changes--notices)))
+  (let ((count (length (superchat-changes--own-notices))))
     (setq superchat-changes-notice-mode-line
           (and (> count 0)
                (propertize
@@ -796,15 +805,17 @@ Asked of SESSION's Tape once for a Run."
        superchat-changes--started-by)))
 
 (defun superchat-changes--unseen-from-tape ()
-  "Read the executions Superchat started that ended and were not looked at.
+  "Read from the Tape the ended executions that were not looked at.
 Return them newest first, and move the bound past what is settled.
 
 One read of the Tape rows above the bound, of every conversation: the Runs
 that began there, how each ended, and which were looked at.  A Run is
 Superchat's own when its `run.started' names one of
 `superchat-changes--unattended-actors'; a Run from before the Actor was
-recorded names the user and is not listed.  A Run with no ending on the
-Tape that this Emacs is not running was cut off."
+recorded names the user.  A Run the user started is listed only when the
+fact `run.ended-unwatched' says it ended with its conversation closed.
+A Run with no ending on the Tape that this Emacs is not running was cut
+off."
   (let* ((bound (superchat-changes--unseen-bound))
          (rows (superchat-db-tape-select
                 "SELECT id, session_id,
@@ -812,19 +823,21 @@ Tape that this Emacs is not running was cut off."
                         json_extract(meta, '$.run_id'),
                         json_extract(meta, '$.actor_id'),
                         json_extract(meta, '$.payload.abandoned'),
+                        json_extract(meta, '$.payload.status'),
                         created_at
                  FROM tape
                  WHERE id > ?
                    AND json_extract(meta, '$.event_type') IN
                        ('run.started', 'run.completed', 'run.failed',
-                        'run.cancelled', 'run.seen')
+                        'run.cancelled', 'run.seen', 'run.ended-unwatched')
                  ORDER BY id ASC"
                 (list bound)))
          (runs (make-hash-table :test #'equal))
          (seen (make-hash-table :test #'equal))
+         (unwatched (make-hash-table :test #'equal))
          order last unsettled notices)
     (dolist (row rows)
-      (cl-destructuring-bind (id session type run actor abandoned created) row
+      (cl-destructuring-bind (id session type run actor abandoned ended created) row
         (setq last id)
         (pcase type
           ("run.started"
@@ -844,13 +857,24 @@ Tape that this Emacs is not running was cut off."
                                         (t 'failed)))
                        :time created)
                       runs)))
-          ("run.seen" (puthash run t seen)))))
+          ("run.seen" (puthash run t seen))
+          ;; It says how the Run ended itself: the Run's own rows may lie
+          ;; below the bound, which a Run the user started does not hold.
+          ("run.ended-unwatched"
+           (puthash run t unwatched)
+           (unless (gethash run runs)
+             (push run order)
+             (puthash run (list :run run :session session :began id
+                                :status (and (stringp ended) (intern ended))
+                                :time created)
+                      runs))))))
     (dolist (run (nreverse order))
       (let* ((entry (gethash run runs))
              (session (plist-get entry :session))
              (actor (plist-get entry :actor)))
         (when (and (not (gethash run seen))
-                   (member actor superchat-changes--unattended-actors))
+                   (or (member actor superchat-changes--unattended-actors)
+                       (gethash run unwatched)))
           (let* ((live (and (fboundp 'superchat-runtime-status)
                             (superchat-runtime-status run)))
                  (status (or (plist-get entry :status)
@@ -864,7 +888,14 @@ Tape that this Emacs is not running was cut off."
                               (plist-get entry :began)))
             (when status
               (push (list :run run :session session
-                          :what (superchat-changes--started-by session run actor)
+                          :origin (if (member actor
+                                              superchat-changes--unattended-actors)
+                                      'unattended
+                                    'user)
+                          :what (if (member actor
+                                            superchat-changes--unattended-actors)
+                                    (superchat-changes--started-by session run actor)
+                                  "started by you")
                           :status status
                           :unsaved (gethash run superchat-changes--unsaved-at-end 0)
                           :time (superchat-changes--row-time
@@ -881,22 +912,67 @@ Tape that this Emacs is not running was cut off."
   (setq superchat-changes--notices (superchat-changes--unseen-from-tape))
   (superchat-changes--notices-refresh))
 
+(defun superchat-changes--conversation-open-p (session)
+  "Non-nil while SESSION's conversation has a live View."
+  (let ((view (and (fboundp 'superchat-editor-workspace-buffer)
+                   (ignore-errors
+                     (superchat-editor-workspace-buffer session 'session-view)))))
+    (buffer-live-p view)))
+
+(defun superchat-changes--ended-unwatched-p (status)
+  "Non-nil when STATUS is of an execution the user started and could not see end.
+That is one started from a conversation -- not by Superchat at a time, not
+delegated by another execution, not asked from a buffer in place -- whose
+conversation has no live View now."
+  (and (not (member (plist-get status :actor-id)
+                    superchat-changes--unattended-actors))
+       (null (plist-get status :parent-run-id))
+       (eq 'chat (plist-get status :surface))
+       (not (superchat-changes--conversation-open-p
+             (plist-get status :session-id)))))
+
 (defun superchat-changes--note-unattended (_run status)
-  "At the end of an execution Superchat started by itself, leave a notice.
-Every way of ending counts: one that failed is the one most easily missed.
-The notice is read from the Tape; what is kept here is only how many
+  "At the end of an execution nobody watched, see that it is left to look at.
+One Superchat started by itself is listed by what its start recorded; every
+way of ending counts, and the one that failed is the one most easily
+missed.  One the user started is listed when its conversation was closed
+by the time it ended, which the fact `run.ended-unwatched' records here.
+The notices are read from the Tape; what is kept here is only how many
 buffers the execution left unsaved, which the Tape does not say."
   (when (and (listp status)
              (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status)))
     (when-let* ((session (plist-get status :session-id))
-                (run (plist-get status :run-id))
-                ((superchat-changes--unattended-run-p session run)))
-      (unless (gethash run superchat-changes--unsaved-at-end)
-        (puthash run (length (ignore-errors
-                               (superchat-changes-candidates session run)))
-                 superchat-changes--unsaved-at-end))
-      (superchat-changes-notices-reload))))
+                (run (plist-get status :run-id)))
+      (let ((own (superchat-changes--unattended-run-p session run)))
+        (when (and (not own)
+                   (superchat-changes--ended-unwatched-p status)
+                   (not (cl-find run superchat-changes--notices
+                                 :key (lambda (n) (plist-get n :run))
+                                 :test #'equal)))
+          ;; Written before the read below, which is what lists it.
+          (condition-case err
+              (progn
+                (superchat-tape-append-event
+                 (list :type "run.ended-unwatched"
+                       :session-id session
+                       :run-id run
+                       :actor-id "user"
+                       :summary (format "Ended with its conversation closed: %s"
+                                        (plist-get status :status))
+                       :payload (list :run-id run
+                                      :status (symbol-name
+                                               (plist-get status :status)))))
+                (setq own t))
+            (error
+             (message "superchat: that %s ended unwatched was not recorded: %s"
+                      run (error-message-string err)))))
+        (when own
+          (unless (gethash run superchat-changes--unsaved-at-end)
+            (puthash run (length (ignore-errors
+                                   (superchat-changes-candidates session run)))
+                     superchat-changes--unsaved-at-end))
+          (superchat-changes-notices-reload))))))
 
 (defun superchat-changes-notice-dismiss (run)
   "Record that the user looked at the ended execution RUN; forget its notice.
@@ -936,7 +1012,7 @@ non-nil when the notice is gone."
                           (let ((n (plist-get notice :unsaved)))
                             (if (> n 0) (format "%d unsaved" n) ""))
                           (plist-get notice :session))))
-          superchat-changes--notices))
+          (superchat-changes--own-notices)))
 
 (defun superchat-changes-notices-open (run)
   "Go to the conversation of the execution RUN and forget its notice."
@@ -961,7 +1037,7 @@ non-nil when the notice is gone."
 (defun superchat-changes-notices-dismiss-all ()
   "Record every listed execution as looked at."
   (interactive)
-  (dolist (notice (copy-sequence superchat-changes--notices))
+  (dolist (notice (superchat-changes--own-notices))
     (superchat-changes-notice-dismiss (plist-get notice :run))))
 
 (defvar superchat-changes-notices-mode-map

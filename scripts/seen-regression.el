@@ -278,6 +278,164 @@ last try, and counts both."
         (should-not (member mine (mapcar (lambda (n) (plist-get n :run))
                                          superchat-changes--notices)))))))
 
+;;;; The user's own, ended with the conversation closed --------------------------------
+
+(defun seen--runs-listed ()
+  (mapcar (lambda (item) (plist-get item :key)) (pend--of 'unseen)))
+
+(defun seen--closed-before-the-end (view text)
+  "Send TEXT from VIEW, close the conversation, wait for the end; return the Run."
+  (let ((run (smoke--send view text)))
+    (should (stringp run))
+    (kill-buffer view)
+    (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+    run))
+
+(ert-deftest seen/my-execution-that-ended-with-the-conversation-closed-is-listed ()
+  (pend--fresh
+    (wrec--with '((:text "LATE-ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (run (seen--closed-before-the-end view "a slow question")))
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+        (let ((facts (seen--facts session "run.ended-unwatched")))
+          (should (= 1 (length facts)))
+          (should (equal run (plist-get (car facts) :run-id)))
+          (should (equal "user" (plist-get (car facts) :actor-id)))
+          (should (equal "completed"
+                         (plist-get (plist-get (car facts) :payload) :status))))
+        (let ((item (car (pend--of 'unseen))))
+          (should (equal (list run) (seen--runs-listed)))
+          (should (equal "started by you" (plist-get item :what)))
+          (should (string-match-p "\\`completed" (plist-get item :detail)))
+          (should (equal session (plist-get item :session))))
+        ;; In the list only: the mode line counts what Superchat did by itself.
+        (should-not (un--shown))
+        (should-not (superchat-changes--notices-entries))))))
+
+(ert-deftest seen/my-execution-that-ended-in-an-open-conversation-is-not-listed ()
+  (pend--fresh
+    (wrec--with '((:text "ANSWER" :delay 0.2)) (p)
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (run (smoke--send view "a question")))
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+        (should-not (seen--facts session "run.ended-unwatched"))
+        (superchat-changes-notices-reload)
+        (should-not (pend--of 'unseen))))))
+
+(ert-deftest seen/only-an-execution-started-from-a-conversation-counts ()
+  "Told of four endings in a conversation that has no View: the user's own
+is recorded; one another execution delegated, one asked from a buffer in
+place and one Superchat started are not."
+  (pend--fresh
+    (hm--fixture nil
+      (let ((session "seen-no-view")
+            (end (lambda (run &rest more)
+                   (superchat-changes--note-unattended
+                    nil (append (list :status 'completed :session-id "seen-no-view"
+                                      :run-id run)
+                                more)))))
+        (funcall end "run-delegated" :actor-id "lead" :surface 'chat
+                 :parent-run-id "run-parent")
+        (funcall end "run-inline" :actor-id "lead" :surface 'inline-act)
+        (funcall end "run-timer" :actor-id "timers" :surface 'chat)
+        (should-not (seen--facts session "run.ended-unwatched"))
+        (funcall end "run-mine" :actor-id "lead" :surface 'chat)
+        (should (equal '("run-mine")
+                       (mapcar (lambda (e) (plist-get e :run-id))
+                               (seen--facts session "run.ended-unwatched"))))
+        ;; Told of the same ending again, it is still one fact.
+        (funcall end "run-mine" :actor-id "lead" :surface 'chat)
+        (should (= 1 (length (seen--facts session "run.ended-unwatched"))))
+        (should (equal '("run-mine") (seen--runs-listed)))))))
+
+(ert-deftest seen/work-superchat-started-is-one-row-with-the-conversation-closed ()
+  (pend--fresh
+    (wrec--with '((:text "ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (run (let ((superchat-automated-input 'timers))
+                    (seen--closed-before-the-end view "a task"))))
+        (should-not (seen--facts session "run.ended-unwatched"))
+        (should (equal (list run) (seen--runs-listed)))
+        (should (eq 'unattended
+                    (plist-get (car superchat-changes--notices) :origin)))
+        (should (string-match-p "1" (un--shown)))))))
+
+(ert-deftest seen/my-unwatched-execution-outlives-a-restart-until-looked-at ()
+  (pend--fresh
+    (wrec--with '((:text "LATE-ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (session (hm--session view))
+             (run (seen--closed-before-the-end view "a slow question")))
+        (seen--new-emacs)
+        (should (equal (list run) (seen--runs-listed)))
+        (should (eq 'user (plist-get (car superchat-changes--notices) :origin)))
+        (should-not (un--shown))
+        (should (superchat-changes-notice-dismiss run))
+        (should (equal (list run)
+                       (mapcar (lambda (e) (plist-get e :run-id))
+                               (seen--facts session "run.seen"))))
+        (seen--new-emacs)
+        (should-not (pend--of 'unseen))))))
+
+(ert-deftest seen/the-fact-lists-my-execution-though-its-start-is-settled ()
+  "A Run the user started does not hold the bound, which may pass its start
+while it runs.  The fact says how it ended by itself."
+  (pend--fresh
+    (wrec--with '((:text "LATE-ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (run (smoke--send view "a slow question")))
+        ;; Everything so far is settled, this Run's start included.
+        (superchat-db-projection-set-checkpoint
+         superchat-changes--unseen-checkpoint 1
+         (caar (superchat-db-tape-select "SELECT MAX(id) FROM tape")))
+        (kill-buffer view)
+        (should (smoke--wait (lambda () (smoke--run-done-p run)) 10))
+        (seen--new-emacs)
+        (let ((notice (car superchat-changes--notices)))
+          (should (equal (list run) (seen--runs-listed)))
+          (should (eq 'completed (plist-get notice :status))))))))
+
+(ert-deftest seen/an-unwatched-ending-that-cannot-be-recorded-breaks-nothing ()
+  (pend--fresh
+    (wrec--with '((:text "LATE-ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (append-event (symbol-function 'superchat-tape-append-event))
+             said run)
+        (cl-letf (((symbol-function 'superchat-tape-append-event)
+                   (lambda (event &rest args)
+                     (if (equal "run.ended-unwatched" (plist-get event :type))
+                         (error "SEEN injected: the Tape is closed")
+                       (apply append-event event args))))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (when format-string
+                       (push (apply #'format format-string args) said))
+                     nil)))
+          (setq run (seen--closed-before-the-end view "a slow question")))
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+        (should (cl-some (lambda (line)
+                           (string-match-p "ended unwatched was not recorded.*SEEN injected"
+                                           line))
+                         said))
+        (should-not (pend--of 'unseen))))))
+
+(ert-deftest seen/the-notices-list-dismisses-only-what-it-shows ()
+  (pend--fresh
+    (wrec--with '((:text "ONE") (:text "LATE-ANSWER" :delay 0.4)) (p)
+      (let* ((view (wrec--view p))
+             (its (let ((superchat-automated-input 'timers)) (hm--turn view "one")))
+             (mine (seen--closed-before-the-end view "a slow question")))
+        (superchat-changes-notices-reload)
+        (should (equal (sort (list its mine) #'string<)
+                       (sort (seen--runs-listed) #'string<)))
+        (should (string-match-p "1" (un--shown)))
+        (superchat-changes-notices-dismiss-all)
+        (should (equal (list mine) (seen--runs-listed)))
+        (should-not (un--shown))))))
+
 ;;;; The read is bounded --------------------------------------------------------------------
 
 (ert-deftest seen/the-list-reads-nothing-when-it-is-drawn ()

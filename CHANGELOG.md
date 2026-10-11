@@ -2,6 +2,13 @@
 
 All notable changes to superchat.
 
+## Unreleased — my execution that ended with its conversation closed
+
+- An execution you started whose conversation you closed before it ended is
+  listed in `superchat-pending` under "Ended, not looked at", as "started
+  by you", until you go to it or dismiss it. It is not counted on the mode
+  line, which still counts only what Superchat started by itself.
+
 ## Unreleased — a stopped execution is not a failed one
 
 - An execution that was stopped is recorded on its Work Record as
