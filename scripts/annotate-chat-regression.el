@@ -314,6 +314,59 @@
       (m5rc--settle 2)
       (should (equal '((1 "REMARK-A")) (annc--placed source))))))
 
+;;;; What a later message is told ---------------------------------------------
+
+(ert-deftest annotate-chat/a-request-that-failed-is-not-said-to-have-hung-anything ()
+  (m5rc--fixture '((:error (error . "ANNC_PROVIDER_DOWN")) (:text "PLAIN_ANSWER"))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (should-not (annc--placed source))
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should-not (annc--earlier-p (m5rc--settle 2))))))
+
+(ert-deftest annotate-chat/an-answer-that-placed-nothing-is-not-said-to-have-hung-anything ()
+  (m5rc--fixture '((:text "9 | nowhere | LOST") (:text "PLAIN_ANSWER"))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should-not (annc--earlier-p (m5rc--settle 2))))))
+
+(ert-deftest annotate-chat/another-conversation-in-the-same-view-is-not-told ()
+  (m5rc--fixture `((:text ,annc--answer))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (let ((session (buffer-local-value 'superchat--session-id view))
+            (context (list :chat-buffer view)))
+        ;; The conversation that annotated is told; any other Session shown
+        ;; in the same View is not.
+        (should (superchat-prompt-collector--annotate
+                 (list :surface 'chat :session-id session :context context) nil nil))
+        (should-not (superchat-prompt-collector--annotate
+                     (list :surface 'chat :session-id "annc-other-session"
+                           :context context)
+                     nil nil))))))
+
+(ert-deftest annotate-chat/the-request-can-be-rebuilt-from-the-record ()
+  (m5rc--fixture `((:text ,annc--answer))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      ;; The same verdict the smoke reads for an ordinary message.
+      (should (equal '(reproduced . 0)
+                     (smoke--case-reconstruction
+                      (buffer-local-value 'superchat--session-id view)))))))
+
 ;;;; Answering the message again ----------------------------------------------
 
 (ert-deftest annotate-chat/regenerating-the-message-annotates-again ()

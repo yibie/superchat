@@ -965,11 +965,26 @@ through B's active Preset."
     (superchat-pipeline-submit (superchat--chat-envelope composed))))
 
 (declare-function superchat-annotate-chat-spec "superchat-annotate" (buffer))
-(declare-function superchat-annotate-chat-sink "superchat-annotate" (inner spec))
+(declare-function superchat-annotate-chat-sink "superchat-annotate"
+                  (inner spec &optional hung))
 
 (defvar-local superchat--annotated-buffers nil
-  "Names of the buffers this conversation's `>annotate' messages annotated.
-Kept in the View, for this Emacs only; later requests say what was done.")
+  "What this View's conversation annotated: (SESSION-ID . BUFFER-NAMES).
+Written when a `>annotate' message's remarks were hung, newest name first;
+later requests of that Session say what was done.  Kept in the View, for
+this Emacs only, and worth nothing once the View shows another Session.")
+
+(defun superchat--annotated-remember (view session-id name)
+  "Note in VIEW that SESSION-ID's conversation hung remarks on buffer NAME."
+  (when (buffer-live-p view)
+    (with-current-buffer view
+      (setq superchat--annotated-buffers
+            (cons session-id
+                  (cl-adjoin name
+                             (and (equal (car superchat--annotated-buffers)
+                                         session-id)
+                                  (cdr superchat--annotated-buffers))
+                             :test #'equal))))))
 
 (defun superchat--chat-annotate-spec (composed)
   "Return what COMPOSED's request annotates, or nil for an ordinary message.
@@ -1107,10 +1122,6 @@ active-Run match (C12/C12b) depends on."
                     (format "chat-owner-%08x" (random #x100000000))))
          (input-core (plist-get composed :input-core))
          (annotate (superchat--chat-annotate-spec composed))
-         (_ (when (and annotate (buffer-live-p buffer))
-              (with-current-buffer buffer
-                (cl-pushnew (plist-get annotate :name)
-                            superchat--annotated-buffers :test #'equal))))
          (extras
           (superchat-pipeline--plist-extend
            nil
@@ -1154,7 +1165,11 @@ active-Run match (C12/C12b) depends on."
             ;; in the conversation; its answer is also hung on the text.
             :sink (let ((view (superchat-render-view-sink buffer session-id owner)))
                     (if annotate
-                        (superchat-annotate-chat-sink view annotate)
+                        (superchat-annotate-chat-sink
+                         view annotate
+                         (lambda (name)
+                           (superchat--annotated-remember
+                            buffer session-id name)))
                       view))
             :session-id session-id
             ;; Preparation sees the contract default, never an explicit nil

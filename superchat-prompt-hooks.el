@@ -587,7 +587,9 @@ in its history, and nothing there says they were already hung on the text."
     (when-let* (((eq (plist-get env :surface) 'chat))
                 (view (plist-get (plist-get env :context) :chat-buffer))
                 ((buffer-live-p view))
-                (names (buffer-local-value 'superchat--annotated-buffers view)))
+                (record (buffer-local-value 'superchat--annotated-buffers view))
+                ((equal (car record) (plist-get env :session-id)))
+                (names (cdr record)))
       (list (superchat-prompt-fragment
              :owner 'chat :id "annotate-earlier" :slot 'system
              :text (format superchat-prompt--annotate-earlier-note

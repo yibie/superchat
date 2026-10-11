@@ -493,10 +493,12 @@ A plist: :buffer BUFFER, :beg and :end markers around its whole lines,
             :text (superchat-annotate--numbered
                    (buffer-substring-no-properties beg end))))))
 
-(defun superchat-annotate-chat-sink (inner spec)
+(defun superchat-annotate-chat-sink (inner spec &optional hung)
   "Return a Sink that does what INNER does and hangs the answer on SPEC's buffer.
 INNER is the conversation's own Sink: the answer is still shown and recorded
-there.  SPEC is what `superchat-annotate-chat-spec' returned."
+there.  SPEC is what `superchat-annotate-chat-spec' returned.  HUNG, when
+given, is called with the buffer's name once at least one remark is on its
+text; not for an answer that placed nothing, failed, or found no buffer."
   (let* ((buffer (plist-get spec :buffer))
          (beg (plist-get spec :beg))
          (end (plist-get spec :end))
@@ -520,11 +522,12 @@ there.  SPEC is what `superchat-annotate-chat-spec' returned."
                (when (and (>= (overlay-start overlay) (marker-position beg))
                           (<= (overlay-end overlay) (marker-position end)))
                  (superchat-annotate--delete overlay))))
-           (message "%s in %s"
-                    (superchat-annotate--report-text
-                     (superchat-annotate--place
-                      buffer beg end (plist-get result :text) run-id))
-                    (buffer-name buffer))))
+           (let ((report (superchat-annotate--place
+                          buffer beg end (plist-get result :text) run-id)))
+             (message "%s in %s" (superchat-annotate--report-text report)
+                      (buffer-name buffer))
+             (when (and hung (> (plist-get report :placed) 0))
+               (funcall hung (buffer-name buffer))))))
        (funcall done))
      :error
      (lambda (run failure)
