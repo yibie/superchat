@@ -69,6 +69,15 @@ The clock is then moved to the due time."
       (with-current-buffer view
         (should (= 1 (how-many "TSF-B" (point-min) (point-max)))))
       (should (timerp superchat-timer--retry-timer))
+      ;; A retry before the task's own wait is over does not try it, and
+      ;; leaves a retry scheduled for when it is.
+      (cancel-timer superchat-timer--retry-timer)
+      (setq superchat-timer--retry-timer nil)
+      (superchat-timer-retry-tasks)
+      (wtimer--settled)
+      (should (= 0 (length hm--wires)))
+      (should (timerp superchat-timer--retry-timer))
+      (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
       (superchat-timer-retry-tasks)
       (wtimer--settled)
       (should (= 1 (length hm--wires)))
@@ -139,8 +148,15 @@ The clock is then moved to the due time."
        (dotimes (_ 2)
          (cancel-timer superchat-timer--retry-timer)
          (setq superchat-timer--retry-timer nil)
+         (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
          (superchat-timer-retry-tasks))
        ;; The third failure is past the limit: nothing more is scheduled.
+       (should-not superchat-timer--retry-timer)
+       (should (= 3 (tsf--count session "timer.sending")))
+       ;; And a later retry, whatever caused it, does not try it again.
+       (setq wtimer--now (+ wtimer--now (* 10 superchat-timer-retry-seconds)))
+       (superchat-timer-retry-tasks)
+       (should (= 3 (tsf--count session "timer.sending")))
        (should-not superchat-timer--retry-timer))
       ;; It is still on record as not started, for the next start of Emacs.
       (should (= 1 (length (superchat-timer-unstarted-tasks))))
@@ -234,6 +250,77 @@ The clock is then moved to the due time."
 (ert-deftest timer-fault/the-new-facts-are-known-tape-events ()
   (dolist (type '("timer.sending" "timer.started" "timer.unconfirmed"))
     (should (eq 'session-annotation (superchat-tape-event-relevance type)))))
+
+;;;; Two tasks on the one retry timer ------------------------------------------
+
+(defun tsf--fire-retry ()
+  "Run the retry the product scheduled, as its Emacs timer would."
+  (should (timerp superchat-timer--retry-timer))
+  (let* ((timer superchat-timer--retry-timer)
+         (function (timer--function timer))
+         (arguments (timer--args timer)))
+    (cancel-timer timer)
+    (apply function arguments)))
+
+(ert-deftest timer-fault/a-busy-task-does-not-carry-a-failing-one-past-its-limit ()
+  "The review's N1: one task keeps failing, another's conversation stays busy."
+  (wtimer--with nil (p q)
+    (let* ((failing (cdr (tsf--task p "TSF-N1-FAILING")))
+           (busy (cdr (tsf--task q "TSF-N1-BUSY")))
+           (superchat-timer-retry-limit 2)
+           (tries 0))
+      (cl-letf (((symbol-function 'superchat-timer--session-busy-p)
+                 (lambda (session) (equal session busy)))
+                ((symbol-function 'superchat-send-input)
+                 (lambda () (cl-incf tries) (error "start unavailable"))))
+        (superchat-timer-catch-up)
+        (should (= 1 tries))
+        ;; The busy task keeps the retry timer going every 30 seconds.  The
+        ;; failing one is not tried again until its own wait is over.
+        (dotimes (_ 5)
+          (setq wtimer--now (+ wtimer--now superchat-timer-busy-retry-seconds))
+          (tsf--fire-retry))
+        (should (= 1 tries))
+        ;; Its wait over, it is tried; and again; and then it is out of tries.
+        (dotimes (_ 6)
+          (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
+          (tsf--fire-retry))
+        (should (= 3 tries))
+        (should (= 3 (tsf--count failing "timer.sending")))
+        ;; The busy task was never sent, and still waits for its conversation.
+        (should (= 0 (tsf--count busy "timer.sending")))
+        (should (timerp superchat-timer--retry-timer))
+        (should (= 2 (length (superchat-timer-unstarted-tasks))))))))
+
+(ert-deftest timer-fault/the-retry-timer-is-due-at-the-soonest-time-asked ()
+  "A task that failed waits five minutes; a busy one must not wait with it."
+  (wtimer--with nil (p)
+    (unwind-protect
+        (progn
+          (superchat-timer--retry-later superchat-timer-retry-seconds)
+          (should (> (- superchat-timer--retry-at (float-time))
+                     (- superchat-timer-retry-seconds 5)))
+          (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+          (should (<= (- superchat-timer--retry-at (float-time))
+                      superchat-timer-busy-retry-seconds))
+          ;; A later time asked for afterwards does not push it back.
+          (let ((due superchat-timer--retry-at))
+            (superchat-timer--retry-later superchat-timer-retry-seconds)
+            (should (= due superchat-timer--retry-at))))
+      (superchat-timer-disarm-all))))
+
+(ert-deftest timer-fault/a-task-that-started-has-no-wait-left ()
+  "Guard: what a failure set is cleared once the task starts."
+  (wtimer--with '((:text "ANSWER")) (p)
+    (let ((session (cdr (tsf--task p "TSF-N1-RECOVERS"))))
+      (tsf--send-failing (superchat-timer-catch-up))
+      (should (= 1 (hash-table-count superchat-timer--not-before)))
+      (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
+      (superchat-timer-retry-tasks)
+      (wtimer--settled)
+      (should (= 1 (tsf--count session "timer.started")))
+      (should (= 0 (hash-table-count superchat-timer--not-before)))
+      (should (= 0 (hash-table-count superchat-timer--retries))))))
 
 (provide 'timer-start-fault-regression)
 ;;; timer-start-fault-regression.el ends here

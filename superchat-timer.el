@@ -81,8 +81,16 @@ Tests replace it to move time.")
 (defvar superchat-timer--retries (make-hash-table :test #'equal)
   "(TIMER-ID . OCCURRENCE) -> how many starts of it failed in this Emacs.")
 
+(defvar superchat-timer--not-before (make-hash-table :test #'equal)
+  "(TIMER-ID . OCCURRENCE) -> the time before which its start is not tried again.
+Set when a start fails, so that a retry another task caused does not bring
+this one forward.")
+
 (defvar superchat-timer--retry-timer nil
   "The Emacs timer that will try the unstarted tasks again, or nil.")
+
+(defvar superchat-timer--retry-at nil
+  "When `superchat-timer--retry-timer' is due, in seconds since the epoch.")
 
 (defvar superchat-timer--armed (make-hash-table :test #'equal)
   "Timer id -> the Emacs timer that will fire it.")
@@ -367,34 +375,63 @@ record `timer.started' with the Run that began; nil when none began."
                 run))))))))
 
 (defun superchat-timer--retry-later (seconds)
-  "Try the unstarted tasks again in SECONDS, unless that is already set."
-  (unless (timerp superchat-timer--retry-timer)
-    (setq superchat-timer--retry-timer
-          (run-at-time seconds nil
-                       (lambda ()
-                         (setq superchat-timer--retry-timer nil)
-                         (superchat-timer-retry-tasks))))))
+  "Try the unstarted tasks again in SECONDS, or sooner when that is already set.
+One Emacs timer serves every unstarted task, so it is due at the soonest
+time any of them asked for."
+  (let ((at (+ (float-time) seconds)))
+    (when (or (not (timerp superchat-timer--retry-timer))
+              (not (numberp superchat-timer--retry-at))
+              (< at superchat-timer--retry-at))
+      (when (timerp superchat-timer--retry-timer)
+        (cancel-timer superchat-timer--retry-timer))
+      (setq superchat-timer--retry-at at
+            superchat-timer--retry-timer
+            (run-at-time seconds nil
+                         (lambda ()
+                           (setq superchat-timer--retry-timer nil
+                                 superchat-timer--retry-at nil)
+                           (superchat-timer-retry-tasks)))))))
 
 (defun superchat-timer--try-task (session-id timer-id occurrence text)
   "Start the task and return its Run id, or nil when no execution began.
 A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
 without limit; a failed start after `superchat-timer-retry-seconds', at most
-`superchat-timer-retry-limit' times in one Emacs."
+`superchat-timer-retry-limit' times in one Emacs.
+
+Both are checked here, before the start is tried, not only when the next
+try is scheduled: the one Emacs timer that retries serves every unstarted
+task, so a task out of tries, or one that failed a moment ago, is reached
+again whenever another task keeps that timer going."
   (let* ((key (cons timer-id occurrence))
-         (run (condition-case err
-                  (superchat-timer--start-task session-id timer-id occurrence text)
-                (error (message "superchat: scheduled task %s was not started: %s"
-                                timer-id (error-message-string err))
-                       nil))))
-    (cond ((stringp run) (remhash key superchat-timer--retries) run)
-          ((eq run 'busy)
-           (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
-           nil)
-          (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
-               (puthash key failed superchat-timer--retries)
-               (when (<= failed superchat-timer-retry-limit)
-                 (superchat-timer--retry-later superchat-timer-retry-seconds)))
-             nil))))
+         (failed (gethash key superchat-timer--retries 0))
+         (wait (- (gethash key superchat-timer--not-before 0)
+                  (superchat-timer--now))))
+    (cond
+     ;; Out of tries in this Emacs: it stays on record as not started.
+     ((> failed superchat-timer-retry-limit) nil)
+     ;; It failed a moment ago: its own wait is not over.
+     ((> wait 0) (superchat-timer--retry-later wait) nil)
+     (t
+      (let ((run (condition-case err
+                     (superchat-timer--start-task session-id timer-id occurrence text)
+                   (error (message "superchat: scheduled task %s was not started: %s"
+                                   timer-id (error-message-string err))
+                          nil))))
+        (cond ((stringp run)
+               (remhash key superchat-timer--retries)
+               (remhash key superchat-timer--not-before)
+               run)
+              ((eq run 'busy)
+               (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+               nil)
+              (t (let ((failed (1+ failed)))
+                   (puthash key failed superchat-timer--retries)
+                   (when (<= failed superchat-timer-retry-limit)
+                     (puthash key (+ (superchat-timer--now)
+                                     superchat-timer-retry-seconds)
+                              superchat-timer--not-before)
+                     (superchat-timer--retry-later superchat-timer-retry-seconds)))
+                 nil)))))))
 
 (defun superchat-timer-unstarted-tasks ()
   "The fired tasks with no execution on record, oldest first.
@@ -520,7 +557,8 @@ afterwards never fires the same occurrence twice."
   (clrhash superchat-timer--armed)
   (when (timerp superchat-timer--retry-timer)
     (cancel-timer superchat-timer--retry-timer))
-  (setq superchat-timer--retry-timer nil))
+  (setq superchat-timer--retry-timer nil
+        superchat-timer--retry-at nil))
 
 (defun superchat-timer--due (id)
   "The Emacs timer for ID went off: fire what is due now, arm the rest."
@@ -549,6 +587,7 @@ afterwards never fires the same occurrence twice."
 A repeating timer fires only its most recent missed occurrence.  Return
 the fired plists."
   (clrhash superchat-timer--retries)
+  (clrhash superchat-timer--not-before)
   ;; First the tasks an earlier Emacs fired and never started.
   (superchat-timer-retry-tasks)
   (let ((now (superchat-timer--now)) fired)

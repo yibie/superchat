@@ -2,6 +2,13 @@
 
 All notable changes to superchat.
 
+## Unreleased — a scheduled task that keeps failing stops being retried
+
+- A scheduled task whose start fails is retried after five minutes, three
+  times at most in one Emacs. Another task waiting for a busy conversation
+  no longer causes it to be sent again past that limit, nor sooner than
+  five minutes after its last failure.
+
 ## Unreleased — work records and timers belong to a workspace
 
 - The model's `work_record` tool reaches only a record of the workspace the
