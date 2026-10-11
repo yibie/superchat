@@ -440,6 +440,20 @@ again whenever another task keeps that timer going."
                      (superchat-timer--retry-later superchat-timer-retry-seconds)))
                  nil)))))))
 
+(defun superchat-timer-retry-state (timer-id occurrence)
+  "How the retries of the task TIMER-ID due at OCCURRENCE stand in this Emacs.
+Nil when its start never failed here.  Otherwise a plist (:tries N
+:again-at TIME :gave-up BOOL): how often the start failed, when it is tried
+next, and whether this Emacs tries no more.  Reads; changes nothing."
+  (let* ((key (cons timer-id occurrence))
+         (failed (gethash key superchat-timer--retries 0)))
+    (when (> failed 0)
+      (let ((gave-up (> failed superchat-timer-retry-limit)))
+        (list :tries failed
+              :gave-up gave-up
+              :again-at (and (not gave-up)
+                             (gethash key superchat-timer--not-before)))))))
+
 (defun superchat-timer-unstarted-tasks ()
   "The fired tasks with no execution on record, oldest first.
 Each is a plist (:id :session-id :occurrence :text :sending).  Only an

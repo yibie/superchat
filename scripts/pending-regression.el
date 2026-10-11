@@ -323,6 +323,136 @@ the record is that execution's row; when it ends the record is listed again."
         (with-current-buffer buffer (save-buffer))
         (should-not (pend--of 'unsaved))))))
 
+;;;; What a row says (guidance slice 1) ------------------------------------------
+
+(ert-deftest pending/a-task-not-started-says-whether-it-is-tried-again ()
+  (pend--fresh
+    (wtimer--with nil (p)
+      (tsf--task p "PEND-TASK whose send fails")
+      ;; One retry allowed and one failure: that retry is still to come.
+      (let ((superchat-timer-retry-limit 1))
+        (clrhash superchat-timer--retries) (clrhash superchat-timer--not-before)
+        (tsf--send-failing (superchat-timer-catch-up))
+        (let ((detail (plist-get (car (pend--of 'due)) :detail)))
+          (should (string-match-p "not started: tried once, tried again at " detail))
+          (should-not (string-match-p "given up" detail))))
+      (let ((superchat-timer-retry-limit 0))
+        (clrhash superchat-timer--retries) (clrhash superchat-timer--not-before)
+        (superchat-timer-disarm-all)
+        (tsf--send-failing (superchat-timer-retry-tasks))
+        (let ((detail (plist-get (car (pend--of 'due)) :detail)))
+          (should (string-match-p "given up in this Emacs after 1 try" detail))
+          (should (string-match-p "after a restart" detail))))
+      (clrhash superchat-timer--retries) (clrhash superchat-timer--not-before))))
+
+(ert-deftest pending/a-record-not-taken-up-says-whether-it-is-tried-again ()
+  (pend--fresh
+    (wrec--with nil (p)
+      (wrec--with-clock
+        (let* ((session (hm--session (wrec--view p)))
+               (id (superchat-work-start session "PEND-LATER")))
+          (superchat-work-wait session id "time" "continue" (+ wrec--now 60))
+          (superchat-work-disarm-all)
+          (setq wrec--now (+ wrec--now 120))
+          ;; Never tried: nothing about tries.
+          (should (string-match-p "not taken up\\'"
+                                  (plist-get (car (pend--of 'due)) :detail)))
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda (&rest _) (error "PEND injected: nothing took the wake"))))
+            (let ((superchat-work-wake-retry-limit 1))
+              (superchat-work--try-wake (superchat-work-get id))
+              (let ((detail (plist-get (car (pend--of 'due)) :detail)))
+                (should (string-match-p "not taken up: tried once, tried again at " detail)))
+              (superchat-work-disarm-all))
+            (let ((superchat-work-wake-retry-limit 0))
+              (let ((detail (plist-get (car (pend--of 'due)) :detail)))
+                (should (string-match-p "given up in this Emacs after 1 try" detail))))
+)          (superchat-work-disarm-all)
+          (clrhash superchat-work--retries))))))
+
+(ert-deftest pending/an-asking-row-says-what-is-asked ()
+  "An approval names the tool; a question of the model is quoted."
+  (pend--fresh
+    (wrec--with nil (p)
+      (let* ((view (wrec--view p)) during run)
+        (unless (member "eval_elisp" superchat-llm-tool-names)
+          (setq superchat-llm-tool-names (append superchat-llm-tool-names '("eval_elisp"))))
+        (setq smoke--script '((:tool-uses (("eval_elisp" (expression . "(+ 1 2)"))))
+                              (:text "AFTER-THE-DENIAL")))
+        (let ((superchat-approval-function
+               (lambda (_request) (setq during (superchat-pending-items)) nil)))
+          (setq run (smoke--send view "Use eval_elisp to add 1 and 2"))
+          (should (smoke--wait (lambda () (smoke--run-done-p run)) 20)))
+        (let ((detail (plist-get (car during) :detail)))
+          (should (string-match-p "asks to run eval_elisp" detail)))
+        ;; A question of the model's.
+        (unless (member "ask_user" superchat-llm-tool-names)
+          (setq superchat-llm-tool-names (append superchat-llm-tool-names '("ask_user"))))
+        (setq smoke--script '((:tool-uses (("ask_user" (question . "PEND which one?"))))
+                              (:text "AFTER-THE-ANSWER")))
+        (setq run (smoke--send view "Ask me"))
+        (let (pending)
+          (should (smoke--wait
+                   (lambda () (setq pending (superchat-runtime-pending-input run))) 10))
+          (let ((item (car (pend--of 'asking))))
+            (should (equal run (plist-get item :key)))
+            (should (string-match-p "asks: PEND which one\\?" (plist-get item :detail))))
+          (should (superchat-runtime-answer-input run (plist-get pending :handle) "this one"))
+          (should (smoke--wait (lambda () (smoke--run-done-p run)) 20)))
+        (should-not (pend--of 'asking))))))
+
+(ert-deftest pending/what-is-asked-is-the-undecided-request-of-that-execution ()
+  "Read from the Tape: a decided request, and another execution's, do not count."
+  (pend--fresh
+    (wrec--with nil (p)
+      (let ((session (hm--session (wrec--view p))))
+        (cl-flet ((fact (type run execution tool)
+                    (superchat-tape-append-event
+                     (list :type type :session-id session :actor-id "lead"
+                           :run-id run :turn-id (concat "turn-" run)
+                           :summary type
+                           :payload (list :tool-name tool
+                                          :execution-id execution)))))
+          (fact "approval.requested" "run-pend-a" "x2" "PEND_TOOL_OPEN")
+          ;; Asked and answered after it: not what is open now.
+          (fact "approval.requested" "run-pend-a" "x1" "PEND_TOOL_DECIDED")
+          (fact "approval.decided" "run-pend-a" "x1" "PEND_TOOL_DECIDED")
+          (fact "approval.requested" "run-pend-b" "x3" "PEND_TOOL_OTHER_RUN"))
+        (should (equal "asks to run PEND_TOOL_OPEN"
+                       (superchat-pending--asked session "run-pend-a")))
+        (should-not (superchat-pending--asked session "run-pend-none"))))))
+
+(ert-deftest pending/going-to-a-row-reads-the-list-again ()
+  (pend--fresh
+    (un--with-task '((:text "ANSWER")) (_session _fired)
+      (let ((list (save-window-excursion (superchat-pending))))
+        (with-current-buffer list
+          (goto-char (point-min))
+          (should (search-forward "Ended, not looked at" nil t))
+          (beginning-of-line)
+          (save-window-excursion (superchat-pending-open (tabulated-list-get-id))))
+        ;; Without pressing g: the row that was looked at is gone.
+        (with-current-buffer list
+          (goto-char (point-min))
+          (should-not (search-forward "Ended, not looked at" nil t)))))))
+
+;; FR-09: the row leads to whoever edited the buffer last.
+(ert-deftest pending/an-unsaved-buffer-two-conversations-edited-names-the-latest ()
+  (pend--fresh
+    (wrec--with nil (p q)
+      (let* ((vp (wrec--view p)) (sp (hm--session vp))
+             (vq (wrec--view q)) (sq (hm--session vq))
+             (buffer (get-file-buffer (expand-file-name "a.txt" p))))
+        (should-not (equal sp sq))
+        (setq smoke--script (list (bu--edit-round (buffer-name buffer) "hello" "HELLO")
+                                  '(:text "P-EDITED")))
+        (hm--turn vp "Change it")
+        (setq smoke--script (list (bu--edit-round (buffer-name buffer) "HELLO" "HELLO!")
+                                  '(:text "Q-EDITED")))
+        (hm--turn vq "Change it again")
+        (should (= 2 (length (superchat-changes--marks buffer))))
+        (should (equal sq (plist-get (car (pend--of 'unsaved)) :session)))))))
+
 ;;;; The whole list ---------------------------------------------------------------
 
 (ert-deftest pending/the-kinds-come-in-the-order-that-needs-the-user-first ()

@@ -560,6 +560,7 @@ The one %s is the names of the buffers annotated.")
 (defvar superchat--annotated-buffers)
 
 (declare-function superchat-annotate--system-text "superchat-annotate" ())
+(declare-function superchat-annotate-overlays "superchat-annotate" (&optional buffer))
 
 (defun superchat-prompt-collector--annotate (env _state _tools)
   "Return the fragments of a conversation message whose answer is annotations.
@@ -587,7 +588,14 @@ in its history, and nothing there says they were already hung on the text."
     (when-let* (((eq (plist-get env :surface) 'chat))
                 (session-id (plist-get env :session-id))
                 ((hash-table-p (bound-and-true-p superchat--annotated-buffers)))
-                (names (gethash session-id superchat--annotated-buffers)))
+                ;; Said only of what is on the text now: remarks the user
+                ;; cleared, or a buffer that is gone, are not "hung".
+                (names (cl-remove-if-not
+                        (lambda (name)
+                          (when-let* ((buffer (get-buffer name))
+                                      ((fboundp 'superchat-annotate-overlays)))
+                            (superchat-annotate-overlays buffer)))
+                        (gethash session-id superchat--annotated-buffers))))
       (list (superchat-prompt-fragment
              :owner 'chat :id "annotate-earlier" :slot 'system
              :text (format superchat-prompt--annotate-earlier-note

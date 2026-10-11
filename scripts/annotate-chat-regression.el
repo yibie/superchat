@@ -417,6 +417,31 @@
       (smoke--send view "ANNC_PLAIN_NEXT")
       (should (annc--earlier-p (m5rc--settle 2))))))
 
+;; FR-10: what the model is told follows what is on the text now.
+(ert-deftest annotate-chat/remarks-cleared-are-no-longer-said-to-be-hung ()
+  (m5rc--fixture `((:text ,annc--answer) (:text "FOLLOWUP"))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (should (= 2 (length (annc--placed source))))
+      (superchat-annotate-clear source)
+      (should-not (annc--placed source))
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should-not (annc--earlier-p (m5rc--settle 2))))))
+
+(ert-deftest annotate-chat/a-killed-buffer-is-no-longer-said-to-carry-remarks ()
+  (m5rc--fixture `((:text ,annc--answer) (:text "FOLLOWUP"))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (kill-buffer source)
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should-not (annc--earlier-p (m5rc--settle 2))))))
+
 (ert-deftest annotate-chat/the-inspector-shows-and-sends-the-annotation-request ()
   "R3-06: what is previewed is what is sent, row form and numbered text."
   (m5rc--fixture `((:text ,annc--answer))

@@ -182,5 +182,32 @@
         (should (= tries 2))
         (should (= 2 (tsf--count session "timer.sending")))))))
 
+;;;; FR-08: an acquire that fails holds nothing -------------------------------
+
+(ert-deftest shared-resource/an-acquire-that-signals-holds-nothing ()
+  "A set-up that fails is not counted, so the next holder sets it up."
+  (let ((a (superchat-scope-create "shres-fa" superchat-scope-global))
+        (b (superchat-scope-create "shres-fb" superchat-scope-global))
+        (acquired 0) (released 0))
+    (unwind-protect
+        (progn
+          (remhash 'shres-fail superchat-scope--shared)
+          (should-error (superchat-scope-shared-effect
+                         a 'shres-fail (lambda () (error "acquire fails"))
+                         (lambda () (cl-incf released))))
+          (should-not (gethash 'shres-fail superchat-scope--shared))
+          (should-not (superchat-scope-effects a))
+          (superchat-scope-shared-effect
+           b 'shres-fail (lambda () (cl-incf acquired))
+           (lambda () (cl-incf released)))
+          (should (= 1 acquired))
+          (should (equal 1 (gethash 'shres-fail superchat-scope--shared)))
+          (superchat-scope-dispose b)
+          (should (= 1 released))
+          (should-not (gethash 'shres-fail superchat-scope--shared)))
+      (remhash 'shres-fail superchat-scope--shared)
+      (ignore-errors (superchat-scope-dispose a))
+      (ignore-errors (superchat-scope-dispose b)))))
+
 (provide 'shared-resource-regression)
 ;;; shared-resource-regression.el ends here

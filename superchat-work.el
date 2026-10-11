@@ -815,6 +815,18 @@ Emacs that quit in the middle of a wake leaves behind."
                (<= (plist-get (plist-get record :waiting) :until) (superchat-work--now)))
       (superchat-work--try-wake record))))
 
+(defun superchat-work-wake-retry-state (id)
+  "How the retries of waking the record ID stand in this Emacs.
+Nil when its wake never failed here.  Otherwise a plist (:tries N
+:again-at TIME :gave-up BOOL), as `superchat-timer-retry-state' gives for a
+task.  Reads; changes nothing."
+  (when-let* ((earlier (gethash id superchat-work--retries)))
+    (let ((gave-up (> (car earlier) superchat-work-wake-retry-limit)))
+      (list :tries (car earlier)
+            :gave-up gave-up
+            :again-at (and (not gave-up)
+                           (+ (cdr earlier) superchat-work-wake-retry-seconds))))))
+
 (defun superchat-work--try-wake (record)
   "Wake RECORD; return its View, or nil when the wake started nothing.
 A failed wake is tried again after `superchat-work-wake-retry-seconds', at

@@ -80,6 +80,48 @@
        (when-let* ((entry (superchat-runtime--entry run)))
          (superchat-runtime--asking-p entry))))
 
+(defun superchat-pending--tries (state)
+  "What to say of the retry STATE of something due that did not start.
+STATE is what `superchat-timer-retry-state' or
+`superchat-work-wake-retry-state' gave; the empty string when it is nil."
+  (if (null state)
+      ""
+    (let* ((n (plist-get state :tries))
+           (again (plist-get state :again-at)))
+      (cond ((plist-get state :gave-up)
+             (format ": given up in this Emacs after %d %s, tried again after a restart"
+                     n (if (= n 1) "try" "tries")))
+            ((numberp again)
+             (format ": tried %s, tried again at %s"
+                     (if (= n 1) "once" (format "%d times" n))
+                     (superchat-timer-format-time again)))
+            (t (format ": tried %s" (if (= n 1) "once" (format "%d times" n))))))))
+
+(defun superchat-pending--asked (session run)
+  "What the execution RUN of SESSION asks the user right now, as a phrase.
+A question the model put is quoted from the Runtime; an approval names the
+tool of the last request of RUN on SESSION's Tape that was not decided.
+Nil when neither can be read."
+  (let* ((entry (and (fboundp 'superchat-runtime--entry)
+                     (superchat-runtime--entry run)))
+         (question (plist-get (plist-get (plist-get entry :input-question) :question)
+                              :question)))
+    (if (stringp question)
+        (format "asks: %s" (superchat-pending--one-line question))
+      (let (open)
+        (dolist (event (ignore-errors (superchat-tape-replay-events session)))
+          (when (equal run (plist-get event :run-id))
+            (let ((execution (plist-get (plist-get event :payload) :execution-id)))
+              (pcase (plist-get event :type)
+                ("approval.requested"
+                 (push (cons execution
+                             (plist-get (plist-get event :payload) :tool-name))
+                       open))
+                ("approval.decided"
+                 (setq open (cl-remove execution open :key #'car :test #'equal)))))))
+        (when (stringp (cdar open))
+          (format "asks to run %s" (cdar open)))))))
+
 (defun superchat-pending--running ()
   "The executions under way, each with who started it.
 One that waits for an answer (an approval, a question) is listed as that."
@@ -97,7 +139,10 @@ One that waits for an answer (an approval, a question) is listed as that."
                        (superchat-changes--notice-what session run)))
               (t "started by you"))
         (if asking
-            (format "execution %s waits for your answer" run)
+            (format "execution %s waits for your answer%s" run
+                    (if-let* ((asked (superchat-pending--asked session run)))
+                        (concat ": " asked)
+                      ""))
           (format "execution %s" run))
         session)))
    (superchat-pending--live-runs)))
@@ -140,8 +185,10 @@ it as its current record."
            (cond ((and (numberp until) (superchat-work--due-p record) (<= until now))
                   (push (superchat-pending--item
                          'due id goal
-                         (format "work record, due %s, not taken up"
-                                 (superchat-timer-format-time until))
+                         (format "work record, due %s, not taken up%s"
+                                 (superchat-timer-format-time until)
+                                 (superchat-pending--tries
+                                  (superchat-work-wake-retry-state id)))
                          session)
                         items))
                  ((numberp until)
@@ -184,10 +231,14 @@ it as its current record."
                 (if unsure 'unconfirmed 'due)
                 (cons (plist-get task :id) (plist-get task :occurrence))
                 (superchat-pending--one-line (plist-get task :text))
-                (format (if unsure
-                            "scheduled task, due %s: an execution began in its conversation while it was being sent"
-                          "scheduled task, due %s, not started")
-                        (superchat-timer-format-time (plist-get task :occurrence)))
+                (if unsure
+                    (format "scheduled task, due %s: an execution began in its conversation while it was being sent"
+                            (superchat-timer-format-time (plist-get task :occurrence)))
+                  (format "scheduled task, due %s, not started%s"
+                          (superchat-timer-format-time (plist-get task :occurrence))
+                          (superchat-pending--tries
+                           (superchat-timer-retry-state
+                            (plist-get task :id) (plist-get task :occurrence)))))
                 (plist-get task :session-id))))
            (superchat-timer-unstarted-tasks))
    (mapcar (lambda (task)
@@ -241,7 +292,9 @@ it as its current record."
                (or (and (buffer-file-name buffer)
                         (abbreviate-file-name (buffer-file-name buffer)))
                    "not visiting a file")
-               (car (car (last marks)))
+               ;; Marks are kept newest first: the row leads to whoever
+               ;; edited the buffer last.
+               (car (car marks))
                buffer)
               items)))
     (nreverse items)))
@@ -299,7 +352,9 @@ ended execution is thereby looked at, and leaves the list."
          ;; once what it points at was actually reached.
          (pop-to-buffer (superchat-pending--view session))
          (when (eq kind 'unseen)
-           (superchat-changes-notice-dismiss (plist-get item :key))))))))
+           (superchat-changes-notice-dismiss (plist-get item :key)))
+         ;; What was gone to may have left the list: read it again.
+         (superchat-pending-refresh))))))
 
 (defun superchat-pending-show-record (item)
   "Show the full Work Record of the row at point."

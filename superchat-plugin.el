@@ -117,10 +117,12 @@ retained completed undo does not retain its original cleanup closure."
 A hook on a global variable, or one table of Emacs timers, is one thing
 however many installations of a plugin want it.  ACQUIRE is called when
 the first holder takes KEY and RELEASE when the last one lets go, so
-disposing one installation never takes the resource from another."
-  (when (= 1 (puthash key (1+ (gethash key superchat-scope--shared 0))
-                      superchat-scope--shared))
-    (funcall acquire))
+disposing one installation never takes the resource from another.  A first
+holder is counted only once ACQUIRE returned: one that signals holds
+nothing, and the next holder sets the resource up."
+  (let ((held (gethash key superchat-scope--shared 0)))
+    (when (= held 0) (funcall acquire))
+    (puthash key (1+ held) superchat-scope--shared))
   (superchat-scope-effect
    scope
    (lambda ()

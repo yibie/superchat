@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — what a row of the pending list says
+
+- In `superchat-pending`: a task or work record that came due and did not
+  start says whether it is tried again and when, or that this Emacs has
+  given up on it; "Asks you now" says what is asked (the model's question,
+  or the tool an approval is for); `RET` reads the list again; an unsaved
+  buffer two conversations edited leads to the one that edited it last.
+- A message after `>annotate` is told remarks are hung on a buffer only
+  while they are: clearing them or killing the buffer ends it.
+- A plugin's shared hook or timers are counted as held only once setting
+  them up succeeded.
+
 ## Unreleased — a long conversation can still be sent to
 
 - A conversation long enough to fill the model's context could not be sent
