@@ -480,16 +480,26 @@ The window selected before is where the cursor returns when the review ends."
                                  #'superchat-changes--review-select-after-minibuffer)
                      (superchat-changes--review-select window))))))
 
+(defconst superchat-changes--unattended-actors '("timers" "work-records")
+  "The Actors a Run records when Superchat started it at a time.")
+
 (defun superchat-changes--unattended-run-p (session run)
   "Non-nil when Superchat started RUN of SESSION at a time, not the user.
-Read from SESSION's Tape: a scheduled task records `timer.started' with the
-Run it began, and a woken Work Record's Run is the first one of a
-conversation that holds `work.woken'."
+Read from SESSION's Tape.  A Run says so itself: `run.started' records the
+Actor that started it.  A Run from before that was recorded is told by the
+facts around it: a scheduled task records `timer.started' with the Run it
+began, and a woken Work Record's Run is the first one of a conversation that
+holds `work.woken'."
   (let ((events (ignore-errors (superchat-tape-replay-events session)))
         first woken started)
     (dolist (event events)
       (pcase (plist-get event :type)
-        ("run.started" (unless first (setq first (plist-get event :run-id))))
+        ("run.started"
+         (when (and (equal run (plist-get event :run-id))
+                    (member (plist-get event :actor-id)
+                            superchat-changes--unattended-actors))
+           (setq started t))
+         (unless first (setq first (plist-get event :run-id))))
         ("work.woken" (setq woken t))
         ("timer.started"
          (when (equal run (plist-get (plist-get event :payload) :run-id))
@@ -688,16 +698,23 @@ unsaved, counted when it ended) and `:time'.")
   "Keys of the mode line's mark.")
 
 (defun superchat-changes--notice-what (session run)
-  "Say what started RUN of SESSION, from SESSION's Tape."
-  (let (work timer)
+  "Say what started RUN of SESSION, from SESSION's Tape.
+A scheduled task whose Run ended before `timer.started' was written is
+named by the send recorded just before that Run began."
+  (let (work timer sending before-run)
     (dolist (event (ignore-errors (superchat-tape-replay-events session)))
       (let ((payload (plist-get event :payload)))
         (pcase (plist-get event :type)
           ("work.woken" (setq work (plist-get payload :work-id)))
+          ("timer.sending" (setq sending (plist-get payload :timer-id)))
+          ("run.started"
+           (when (equal run (plist-get event :run-id))
+             (setq before-run sending)))
           ("timer.started"
            (when (equal run (plist-get payload :run-id))
              (setq timer (plist-get payload :timer-id)))))))
     (cond (timer (format "scheduled task %s" timer))
+          (before-run (format "scheduled task %s" before-run))
           (work (format "work record %s" work))
           (t "scheduled work"))))
 

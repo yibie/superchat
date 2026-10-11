@@ -894,7 +894,7 @@ again.  When that execution ends, a line is left in the main conversation."
             (goto-char (point-max))
             (insert (format superchat-work-wake-prompt id)))
           ;; The product speaks here, not the user.
-          (let ((superchat-automated-input t))
+          (let ((superchat-automated-input 'work-records))
             (superchat-send-input))
           (setq sent t))
       (unless sent

@@ -370,7 +370,7 @@ record `timer.started' with the Run that began; nil when none began."
               (insert text)
               (condition-case err
                   ;; The timer speaks here, not the user.
-                  (let ((superchat-automated-input t))
+                  (let ((superchat-automated-input 'timers))
                     (superchat-send-input))
                 ;; A failed send must not leave the text for the next try.
                 (error (when (<= start (point-max))

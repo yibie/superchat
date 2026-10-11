@@ -1355,6 +1355,7 @@ no Runtime change was needed to carry this handle back to the View)."
                (plan (superchat--request-plan-from-turn
                       prepared template target-model)))
           (plist-put plan :lang lang)
+          (superchat--plan-say-who-started plan)
           (plist-put plan :accepted-function
                      (lambda (handle)
                        (when (buffer-live-p view)
@@ -1420,7 +1421,17 @@ This is the catch-all fallback after the hook chain."
   "Non-nil while a message the user did not type is being sent.
 A timer's task and a woken Work Record send their own text through
 `superchat-send-input'; they bind this so the message is not taken for
-the user speaking.")
+the user speaking.  Each binds it to its own name, a symbol, and the Run
+that message starts records that name as the Actor that started it.")
+
+(defun superchat--plan-say-who-started (plan)
+  "Have PLAN's Run record which part of Superchat started it, if one did.
+A Run the user started is left with the Actor it always had."
+  (when (and superchat-automated-input
+             (symbolp superchat-automated-input)
+             (not (eq t superchat-automated-input)))
+    (plist-put plan :actor-id (symbol-name superchat-automated-input)))
+  plan)
 
 (defvar superchat-user-input-functions nil
   "Functions called when the user sends a plain message in a conversation.
@@ -1732,6 +1743,7 @@ is non-nil.  An error in one does not stop the message.")
     (let ((plan (superchat--request-plan-from-turn
                  turn template target-model)))
       (plist-put plan :lang lang)
+      (superchat--plan-say-who-started plan)
       (let ((executed (superchat-execute-request-plan plan)))
         ;; Only a real Run handle may become the View's tracked Run: a refused
         ;; submission answers with an admission plist that carries no
@@ -1796,6 +1808,7 @@ Extracted from old superchat-send-input for reuse in command handlers."
                    prepared template target-model)))
        (plist-put plan :buffer-name (buffer-name))
        (plist-put plan :lang lang)
+       (superchat--plan-say-who-started plan)
        (let ((executed (superchat-execute-request-plan plan)))
          ;; Same guard as the other two sites: a refused submission's handle
          ;; carries no `:run-id' and must not clear the tracked busy Run.

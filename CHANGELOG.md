@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — a Run records who started it
+
+- A Run Superchat started at a time says so on `run.started`: the Actor is
+  `timers` for a scheduled task, `work-records` for a woken Work Record. A
+  Run the user started is recorded as before. Nothing the user sees
+  changes; it is what the next step (ended, given up and looked-at written
+  to the Tape) reads.
+- Recorded, not yet implemented: five rulings on closing the loop
+  (`docs/decisions/accepted/2026-10-11-a-run-records-who-started-it.md`).
+
 ## Unreleased — what a row of the pending list says
 
 - In `superchat-pending`: a task or work record that came due and did not
