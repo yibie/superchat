@@ -2,6 +2,13 @@
 
 All notable changes to superchat.
 
+## Unreleased — a timer the tool sets will fire, or it is refused
+
+- With the `timers` row unmounted, `timer_create` is refused with the
+  reason and writes nothing; before, it answered "the user will be
+  reminded" and wrote a timer nothing would fire. `timer_list` says that
+  timers are turned off; `timer_cancel` is unchanged.
+
 ## Unreleased — the work record tool keeps what it is given, or refuses
 
 - `work_record` with action start keeps the progress, the place to pick up

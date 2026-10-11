@@ -644,10 +644,21 @@ Signals an error for any other shape."
            (plist-get superchat--tool-execution-context :session-id))
       (and (boundp 'superchat--session-id) superchat--session-id)))
 
+(defconst superchat-timer--off
+  "Timers are turned off in this Emacs (the timers row is not mounted)"
+  "What a timer tool says while nothing would fire a timer.")
+
 (defun superchat-timer-tool-create (text kind &optional in-minutes at repeat)
-  "The `timer_create' tool: set a timer in the asking conversation."
+  "The `timer_create' tool: set a timer in the asking conversation.
+A timer is a promise that something happens at its time.  While the
+`timers' row is not mounted nothing would fire it, so it is refused
+rather than written and never acted on."
   (condition-case err
-      (let* ((now (superchat-timer--now))
+      (let* ((now (progn
+                    (unless (superchat-timer--active-p)
+                      (error "%s, so no timer was set and nothing will happen at that time; tell the user"
+                             superchat-timer--off))
+                    (superchat-timer--now)))
              (kind (pcase kind
                      ((or "task" 'task) 'task)
                      ((or "reminder" 'reminder 'nil "") 'reminder)
@@ -696,6 +707,10 @@ alone when it belongs to none."
                  mine (superchat-timer-fired-since (- (superchat-timer--now) 86400)))))
     (concat
      (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+     (if (superchat-timer--active-p)
+         ""
+       (format "%s: nothing below fires until they are turned on again.\n"
+               superchat-timer--off))
      (if (null timers)
          "No pending timers."
        (concat
