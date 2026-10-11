@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — work records and timers belong to a workspace
+
+- The model's `work_record` tool reaches only a record of the workspace the
+  conversation belongs to. Reading, updating, waiting on or completing
+  another workspace's record, or starting a record that follows one, is
+  refused, and the refusal shows nothing of that record.
+- `timer_list` lists, and `timer_cancel` cancels, only that workspace's
+  timers. A conversation that belongs to no workspace has only the timers
+  set in it.
+- Your own list of work records and your own commands still reach every
+  record and every timer.
+
 ## Unreleased — annotations asked for in a conversation
 
 - A conversation message that holds `>annotate` is answered like any other

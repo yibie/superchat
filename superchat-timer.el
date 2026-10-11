@@ -203,6 +203,31 @@ Nil when none has come due."
            (id (plist-get config :workspace-id)))
       (and (stringp id) (cons id (plist-get config :workspace-root))))))
 
+(defun superchat-timer--scope-of (session-id)
+  "The id of the Workspace SESSION-ID belongs to, or nil when it has none.
+A conversation belongs to a Workspace when it is bound to one with a root."
+  (let ((workspace (and (stringp session-id)
+                        (superchat-timer--workspace-of session-id))))
+    (and (stringp (cdr workspace)) (not (string-empty-p (cdr workspace)))
+         (car workspace))))
+
+(defun superchat-timer--within-p (session-id timer)
+  "Non-nil when SESSION-ID's conversation may see and cancel TIMER.
+TIMER is a plist with :session-id, the conversation it was set in.  A
+conversation of a Workspace: TIMER is that Workspace's.  A conversation of
+no Workspace: TIMER was set in that very conversation.  A pending timer
+carries its Workspace; a fired one is its conversation's."
+  (let ((asking (superchat-timer--scope-of session-id))
+        (owner (if (plist-member timer :workspace-root)
+                   (and (stringp (plist-get timer :workspace-root))
+                        (not (string-empty-p (plist-get timer :workspace-root)))
+                        (plist-get timer :workspace-id))
+                 (superchat-timer--scope-of (plist-get timer :session-id)))))
+    (if asking
+        (equal asking owner)
+      (and (stringp session-id)
+           (equal session-id (plist-get timer :session-id))))))
+
 (defun superchat-timer-create (session-id kind text due &optional repeat)
   "Set a timer in SESSION-ID and return its plist.
 KIND is `reminder' (tell the user, T2) or `task' (also start the model on
@@ -615,9 +640,14 @@ Signals an error for any other shape."
     (error (format "Error: %s" (error-message-string err)))))
 
 (defun superchat-timer-tool-list ()
-  "The `timer_list' tool: the pending timers, then those fired in the last day."
-  (let ((timers (superchat-timer-list))
-        (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+  "The `timer_list' tool: the pending timers, then those fired in the last day.
+Only those of the asking conversation's Workspace; of that conversation
+alone when it belongs to none."
+  (let* ((session (superchat-timer--tool-session))
+         (mine (lambda (timer) (superchat-timer--within-p session timer)))
+         (timers (cl-remove-if-not mine (superchat-timer-list)))
+         (fired (cl-remove-if-not
+                 mine (superchat-timer-fired-since (- (superchat-timer--now) 86400)))))
     (concat
      (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
      (if (null timers)
@@ -650,10 +680,19 @@ Signals an error for any other shape."
                    fired "\n"))))))
 
 (defun superchat-timer-tool-cancel (id)
-  "The `timer_cancel' tool: cancel the pending timer ID."
-  (if (superchat-timer-cancel id)
-      (format "Timer %s cancelled." id)
-    (format "Error: no pending timer %s." id)))
+  "The `timer_cancel' tool: cancel the pending timer ID.
+A timer of another Workspace is refused, pending or fired and not yet
+started; the user's own commands cancel any."
+  (let* ((session (superchat-timer--tool-session))
+         (by-id (lambda (timer) (equal id (plist-get timer :id))))
+         (timer (or (cl-find-if by-id (superchat-timer-list))
+                    (cl-find-if by-id (superchat-timer-unstarted-tasks)))))
+    (cond ((null timer) (format "Error: no pending timer %s." id))
+          ((not (superchat-timer--within-p session timer))
+           (format "Error: timer %s belongs to another workspace; this conversation cannot cancel it."
+                   id))
+          ((superchat-timer-cancel id) (format "Timer %s cancelled." id))
+          (t (format "Error: no pending timer %s." id)))))
 
 ;;;; The row ------------------------------------------------------------------------------
 

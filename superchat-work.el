@@ -224,6 +224,27 @@ That is the record of its last `work.focused' fact, while not completed."
            (error "Work record %s is completed; start a new one that follows it" id))
           (t record))))
 
+(defun superchat-work--within-p (session-id record)
+  "Non-nil when SESSION-ID's conversation may read and change RECORD.
+A conversation of a Workspace: RECORD is that Workspace's.  A conversation
+of no Workspace: RECORD was begun in that very conversation."
+  (let ((workspace (car (superchat-work--workspace session-id))))
+    (if workspace
+        (equal workspace (plist-get record :workspace-id))
+      (and (stringp session-id)
+           (equal session-id (plist-get record :session-id))))))
+
+(defun superchat-work--for (session-id id)
+  "The Work Record ID for a tool call from SESSION-ID, or signal why not.
+This is the model's way to a record: one of another Workspace is refused,
+and the refusal says nothing of what the record holds.  The user's own
+commands and the product's own writes reach every record."
+  (let ((record (superchat-work-get id)))
+    (cond ((null record) (error "No work record %s" id))
+          ((not (superchat-work--within-p session-id record))
+           (error "Work record %s belongs to another workspace; this conversation cannot read or change it" id))
+          (t record))))
+
 (defun superchat-work-start (session-id goal &optional follows)
   "Start a Work Record for GOAL in SESSION-ID and make it current; return its id.
 FOLLOWS is the id of a completed record this one continues (K11).  Signals
@@ -490,6 +511,13 @@ completed records by status, one line each; never another Workspace's (K8)."
              (id (if (and (stringp id) (not (string-empty-p id)))
                      id
                    (superchat-work-current session))))
+        ;; The record named, and the one a new record follows, are this
+        ;; conversation's Workspace's, before anything is read or written.
+        (when (and id (member action '("update" "wait" "done" "read")))
+          (superchat-work--for session id))
+        (when (and (equal action "start")
+                   (stringp follows) (not (string-empty-p follows)))
+          (superchat-work--for session follows))
         (pcase action
           ("start"
            (let ((new (superchat-work-start session goal follows)))

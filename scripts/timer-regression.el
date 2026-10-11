@@ -87,6 +87,14 @@
 
 (defun wtimer--session (view) (hm--session view))
 
+(defvar superchat--tool-execution-context)
+
+(defmacro wtimer--as (session &rest body)
+  "Run BODY as a tool call of a Run in SESSION."
+  (declare (indent 1) (debug t))
+  `(let ((superchat--tool-execution-context (list :session-id ,session)))
+     ,@body))
+
 (defun wtimer--ids () (mapcar (lambda (timer) (plist-get timer :id)) (superchat-timer-list)))
 
 (defun wtimer--fired-in (session)
@@ -313,7 +321,9 @@ reminder was missed right after one fired."
   (wtimer--with nil (p)
     (let* ((session (wtimer--session (with-current-buffer (wtimer--file p) (superchat))))
            (start wtimer--now))
-      (should (string-match-p "None fired in the last 24 hours\\.\\'" (superchat-timer-tool-list)))
+      ;; The tool lists for the conversation that asks.
+      (should (string-match-p "None fired in the last 24 hours\\.\\'"
+                              (wtimer--as session (superchat-timer-tool-list))))
       (superchat-timer-create session 'reminder "OLD-ONE" (+ start 60))
       (superchat-timer-create session 'reminder "WATER" (+ start (* 2 86400)))
       (superchat-timer-create session 'reminder "LATER-ONE" (+ start (* 5 86400)))
@@ -327,7 +337,7 @@ reminder was missed right after one fired."
         (should (plist-get (car fired) :late))
         (should (= (+ start (* 2 86400)) (plist-get (car fired) :due))))
       (should (= 2 (length (superchat-timer-fired-since start))))
-      (let ((text (superchat-timer-tool-list)))
+      (let ((text (wtimer--as session (superchat-timer-tool-list))))
         (should (string-prefix-p (format "Now %s.\n" (superchat-timer-format-time wtimer--now)) text))
         (should (string-match-p "^Pending:\n.*LATER-ONE$" text))
         (should (string-match-p

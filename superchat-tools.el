@@ -2060,7 +2060,7 @@ It reads every conversation of every workspace, not only this one."
 
          (superchat--maybe-make-llm-tool
           "timer_list"
-          :description "List the pending timers (id, next time, kind, text) and the timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
+          :description "List this workspace's pending timers (id, next time, kind, text) and its timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
           :args nil
           :function #'superchat-timer-tool-list)
 
