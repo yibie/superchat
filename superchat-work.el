@@ -695,13 +695,21 @@ For the user, who asks which execution did what; a request does not carry it."
                                  (plist-get e :outcome)))
                        executions "\n"))))
 
+(defvar superchat-work-round-limit)
+
 (defun superchat-work-list-show (id)
-  "Show the full text of record ID, by default the one at point."
+  "Show the full text of record ID, by default the one at point.
+This is the one place that says how often Superchat went on with the record
+by itself (`Tries'); everywhere else the user reads only how it stands."
   (interactive (list (tabulated-list-get-id)))
   (when id
     (with-help-window "*superchat work record*"
       (let ((record (superchat-work-get id)))
         (princ (superchat-work-render record))
+        ;; The one place that says how often Superchat went on with it.
+        (let ((tries (superchat-work-rounds id)))
+          (when (> tries 0)
+            (princ (format "\nTries: %d/%d\n" tries superchat-work-round-limit))))
         (when-let* ((text (superchat-work-executions-text record)))
           (princ "\n")
           (princ text))))))
@@ -1321,7 +1329,7 @@ on the Tape, and the rounds stop.  Return the queue id, or nil."
             (superchat-runtime-enqueue-follow-up session (list :buffer nil)))))
     (unless view
       (superchat-work-pause id)
-      (message "superchat: the conversation of work record %s is closed, so its next round was not started; reopen it and say to go on" id))
+      (message "superchat: the conversation of work record %s is closed, so Superchat did not go on with it; reopen it and say to go on" id))
     (when (stringp queue)
       (when view
         ;; The conversation says a round begins: nobody typed its message.
@@ -1329,7 +1337,9 @@ on the Tape, and the rounds stop.  Return the queue id, or nil."
           (with-current-buffer view
             (let ((superchat-buffer-name (buffer-name view)))
               (superchat--response-region-insert-transcript
-               (format "\n* Round %d/%d on work record %s\n" round limit id)
+               ;; What the user reads says the work goes on; how many
+               ;; times it did is a detail of the record (`Tries').
+               (format "\n* Superchat goes on with work record %s\n" id)
                :independent-turn))))
         (superchat-work--append
          session "work.round"
@@ -1426,24 +1436,23 @@ Nothing is done unless the rounds of the conversation's current record go on."
           (superchat-work-pause id)
           (superchat-work-wait
            session id "user"
-           (format "round limit %d reached; say to go on, or what to change"
+           (format "stopped after too many tries (%d); say to go on, or what to change"
                    superchat-work-round-limit)))
          ;; Rounds that get nowhere end here, not at the limit.
          ((and (integerp superchat-work-round-idle-limit)
                (> superchat-work-round-idle-limit 0)
                (>= (superchat-work-idle-rounds session id)
                    superchat-work-round-idle-limit))
-          (let ((why (format "no progress in %d rounds: nothing was changed and nothing was written on the record"
-                             superchat-work-round-idle-limit)))
+          (let ((why "no progress: nothing was changed and nothing was written on the record lately"))
             (superchat-work-pause id)
             (superchat-work-wait
              session id "user"
-             (concat why "; say what is left, or complete the record"))
+             (concat "stopped: " why "; say what is left, or complete the record"))
             (superchat-work--say
              session
-             (format "Rounds on work record %s stopped: %s. /work resume goes on; M-x superchat-work-list completes it."
+             (format "Superchat stopped working on work record %s: %s. /work resume goes on; M-x superchat-work-list completes it."
                      id why))
-            (message "superchat: rounds on work record %s stopped: %s" id why)))
+            (message "superchat: stopped working on work record %s: %s" id why)))
          (t (superchat-work--queue-round session id)))))))
 
 (declare-function superchat-tools-install-row-builtins "superchat-tools" (row))
@@ -1473,10 +1482,10 @@ where this returns a reason."
       "tools are turned off (`superchat-llm-tools-enabled'), so the model has no work_record tool"))))
 
 (defun superchat-work--refusal (session what)
-  "What to tell the user when WHAT is not started for lack of the tool.
+  "What to tell the user, starting with WHAT, when the tool is lacking.
 Nil when the model of SESSION is offered `work_record'."
   (when-let* ((why (superchat-work-tool-missing session)))
-    (format "%s not started: %s. Without it the model can neither complete the record nor wait, so the rounds would go on with nothing to end them."
+    (format "%s: %s. Without it the model can neither complete the record nor wait, so the work would go on with nothing to end it."
             what why)))
 
 (defun superchat-work--cmd (_cmd args _input _lang _target-model)
@@ -1494,42 +1503,46 @@ pause' starts no further round.  `/work' alone says how the record stands."
       (list :type :echo
             :content
             (if record
-                (format "Work record %s: %s; %d/%d rounds; rounds %s."
+                (format "Work record %s: %s; %s."
                         id (superchat-work-status-text record)
-                        (superchat-work-rounds id) superchat-work-round-limit
-                        (if (superchat-work-continuing-p id) "go on" "are paused"))
+                        (cond ((superchat-work-continuing-p id)
+                               "going on: Superchat keeps working on it until it is done or needs you")
+                              ((eq 'continuable (superchat-work-status record))
+                               "paused; /work resume goes on")
+                              (t "Superchat is not working on it by itself")))
               "No current work record. /work GOAL starts one.")))
      ((equal args "pause")
       (unless record (user-error "No current work record"))
       (superchat-work-pause id)
       (list :type :echo
-            :content (format "Rounds on %s are paused; /work resume goes on." id)))
+            :content (format "Work on %s is paused; /work resume goes on." id)))
      ((equal args "resume")
       (unless record (user-error "No current work record"))
       (unless (eq 'continuable (superchat-work-status record))
         (user-error "%s is %s; there is nothing to go on with"
                     id (superchat-work-status-text record)))
-      (unless (superchat-work--refusal session "Rounds were")
+      (unless (superchat-work--refusal session "Not resumed")
         (superchat-work-continue id))
       (list :type :echo
             :content
-            (cond ((superchat-work--refusal session "Rounds were"))
+            (cond ((superchat-work--refusal session "Not resumed"))
                   ((superchat-work--session-busy-p session)
-                   (format "Rounds on %s go on after the execution under way." id))
+                   (format "Superchat goes on with %s after the execution under way." id))
                   ((>= (superchat-work-rounds id) superchat-work-round-limit)
                    (superchat-work-pause id)
-                   (format "%s is at its limit of %d rounds; raise `superchat-work-round-limit' to go on."
+                   (format "%s was stopped after too many tries (%d); raise `superchat-work-round-limit' to go on."
                            id superchat-work-round-limit))
                   ((superchat-work--queue-round session id)
-                   (format "Round %d/%d on %s is starting."
-                           (superchat-work-rounds id) superchat-work-round-limit id))
-                  (t (format "The next round on %s could not be queued." id)))))
-     ((superchat-work--refusal session "The work record was")
+                   (format "Superchat goes on with %s." id))
+                  (t (format "Superchat could not go on with %s." id)))))
+     ((superchat-work--refusal session "The work record was not started")
       (list :type :echo
-            :content (superchat-work--refusal session "The work record was")))
+            :content (superchat-work--refusal session "The work record was not started")))
      (t
       (let ((new (superchat-work-start session args)))
         (superchat-work-continue new)
+        (message "Work record %s: Superchat keeps working on it until it is done or needs you; /work pause stops that."
+                 new)
         (list :type :llm-query-and-mode-switch
               :command "work" :args args :template nil))))))
 
@@ -1574,7 +1587,7 @@ first."
         (error
          (when (fboundp 'superchat-event-record-fault)
            (superchat-event-record-fault 'work-round run 'work-records err))
-         (message "superchat: the next round was not started: %s"
+         (message "superchat: the work did not go on: %s"
                   (error-message-string err))))
       (condition-case err
           (superchat-work--report-woken run status)

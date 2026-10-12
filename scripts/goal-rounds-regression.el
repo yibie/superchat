@@ -126,8 +126,9 @@ A completed record is no longer its conversation's current one."
           (should (string-match-p "1/256" round)))
         (should (equal '(1) (mapcar (lambda (e) (plist-get (plist-get e :payload) :round))
                                     (hm--events session "work.round"))))
-        ;; The conversation says a round began; nobody typed its message.
-        (should (string-match-p "^\\* Round 1/256 on work record "
+        ;; The conversation says the work goes on; nobody typed its message.
+        ;; It does not say which time this is (slice 7c).
+        (should (string-match-p "^\\* Superchat goes on with work record "
                                 (with-current-buffer view
                                   (buffer-substring-no-properties (point-min) (point-max)))))))))
 
@@ -231,7 +232,8 @@ A completed record is no longer its conversation's current one."
           (let ((waiting (plist-get (superchat-work-get (superchat-work-current session))
                                     :waiting)))
             (should (equal "user" (plist-get waiting :for)))
-            (should (string-match-p "round limit" (or (plist-get waiting :detail) ""))))
+            (should (string-match-p "stopped after too many tries"
+                                    (or (plist-get waiting :detail) ""))))
           (should (= 1 (length (pend--of 'ask-user))))
           ;; A round is the user's own conversation going on: no notice.
           (should-not superchat-changes--notices)
@@ -246,8 +248,8 @@ A completed record is no longer its conversation's current one."
       (let* ((view (wrec--view p)) (session (hm--session view)))
         (hm--turn view "tick them all off")
         (gr--round-run session)
-        ;; While the round runs the list says which round it is.
-        (should (string-match-p "round 1/256 on work record"
+        ;; While it runs the list says Superchat is going on with the record.
+        (should (string-match-p "\\`going on with work record "
                                 (plist-get (car (pend--of 'running)) :what)))
         ;; What one Emacs keeps in memory is gone in the next.
         (when (and (boundp 'superchat-work--continuing)
@@ -257,7 +259,7 @@ A completed record is no longer its conversation's current one."
         (let ((id (superchat-work-current session)))
           (should (= 1 (gr--count session "queue.queued")))
           (should (= 1 (length (pend--of 'continuable))))
-          (should (string-match-p "rounds paused at 1/256"
+          (should (string-match-p "\\`paused\\(;\\|\\'\\)"
                                   (plist-get (car (pend--of 'continuable)) :detail)))
           (should (= 1 (superchat-work-rounds id))))))))
 

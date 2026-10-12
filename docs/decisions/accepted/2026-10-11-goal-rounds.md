@@ -152,3 +152,32 @@ Superchat 已经有 DeepSeek Harness（下称 DSH）目标循环需要的三样�
 - 一轮被审批问题卡住时的样子没有测。
 - 两个前提仍在：v1 只在对话 buffer 活着时跑；审批虽已不占住 Emacs（切片 5），每次仍要人答。
 - 第 8 条没有裁定。
+
+## 用户面措辞（2026-10-12，切片 7c）
+
+用户原话："我还是不理解为何我们这里有一个 work_round 的概念"；问到要不要改用户看到的文字时："要，这个关乎用户体验的细节"。
+
+"轮"是实现单位，照 DSH 的 goal round 来的，不是用户关心的东西。用户关心的是：这件事在继续、在等我、做完了、停了。所以只改用户读到的文字，机制不动。上文和 [7b 的记录](2026-10-12-rounds-end-when-they-get-nowhere.md) 里引用的旧字样（`* Round N/256 …`、`rounds paused at N/Max`、"round limit N reached"、"no progress in N rounds"）以这一节为准。
+
+| 哪里 | 以前 | 现在 |
+|---|---|---|
+| 对话里的一行 | `* Round N/256 on work record ID` | `* Superchat goes on with work record ID` |
+| 表，正在跑的行 | `round N/M on work record ID` | `going on with work record ID` |
+| 表，记录的行 | `rounds go on, N/M started` / `rounds paused at N/M` | `going on` / `paused` |
+| 到上限时记录上的说明 | `round limit N reached; …` | `stopped after too many tries (N); …` |
+| 刹车时记录上的说明 | `no progress in N rounds: …` | `stopped: no progress: …` |
+| 刹车时对话里的一行 | `Rounds on work record ID stopped: …` | `Superchat stopped working on work record ID: …` |
+| `/work <目标>` | 不说话 | `Superchat keeps working on it until it is done or needs you; /work pause stops that.` |
+| `/work`（状态） | `N/M rounds; rounds go on` | `going on: …` / `paused; /work resume goes on` |
+| `/work pause`、`/work resume` 的回显，拒绝的话 | 说 rounds | 不说 |
+| 命令表里的说明 | `…worked on in rounds…` | `Start a work record Superchat keeps working on; resume, pause, or show it` |
+
+次数只在一处显示：记录的详情（`superchat-work-list` 里按 `RET`，表上按 `v`），写作 `Tries: N/256`；一次都没有接着做过的记录不显示这一行。
+
+没有改的：`work.round` 这个事实和它在 Tape 上的摘要、256 的上限、刹车、变量和函数的名字（`superchat-work-round-limit` 等，它们的说明文字里仍然说 rounds）、给模型的轮次提示（仍然写 `round N/M`，模型需要知道上限）、工具回给模型的话。
+
+和转达不同的一处：转达要把 `rounds paused at N/M` 改成 `paused by you`。实际写的是 `paused`。Superchat 不再自己接着做的原因不只是用户按停：重启、某次执行失败、被工具预算收尾、对话被关掉都会这样，写"by you"在这些情况下是假话。最后一次执行是被停掉的时，那一行本来就另有一句 `its last execution was stopped`。
+
+`/work resume` 在到了上限时的回显里仍然出现选项的名字 `superchat-work-round-limit`，因为用户要靠它去改上限；这是名字，不是说法。
+
+证据：`scripts/work-wording-regression.el`，6 条。最先写的 5 条在 `b3391425` 上 4 条红、1 条护栏：红在表上（暂停时、接着做时）露出了 round、命令说明里有 rounds、详情里没有 `Tries: 2/256`。后补的 1 条没在旧代码上跑。变异 16 处（把每一处文字改回带轮的说法，去掉或错放 `Tries`，去掉模型提示里的轮数），第一轮发现 14 处；一处缺"两次执行之间读表"的用例，一处是断言被另一句回显满足了，改后全部被发现。`goal-rounds` 和 `round-brake` 里断言旧字样的 7 处改成了新字样。冒烟基线没有变。脚本测试之外：2026-10-12 用户在真实的 Emacs 会话里读过这些话并同意照此提交（`paused` 也照现在的样子，不写 "by you"）。那次会话里的一次 `/work`（Tape 行 4046-4163，记录 `work-20261012173355-5d5e`）：用户发起的执行结束后 Superchat 接着做了 1 次，模型调用 `work_record` 结项，之后没有再排。只有这 1 次。

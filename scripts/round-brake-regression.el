@@ -53,10 +53,10 @@
           (should-not (superchat-work-continuing-p id))
           ;; The record says why it stopped, and waits for the user.
           (should (equal "user" (format "%s" (car waiting))))
-          (should (string-match-p "no progress in 2 rounds" (or (cdr waiting) "")))
+          (should (string-match-p "\\`stopped: no progress" (or (cdr waiting) "")))
           (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
           ;; The conversation says so too.
-          (should (string-match-p "no progress in 2 rounds"
+          (should (string-match-p "Superchat stopped working on work record .*no progress"
                                   (with-current-buffer view (buffer-string)))))))))
 
 (ert-deftest round-brake/a-round-that-edits-a-buffer-is-progress ()
@@ -112,7 +112,7 @@ record is completed."
         (gr--quiet)
         (let ((id (gr--record)))
           (should (= 3 (gr--count session "work.round")))
-          (should (string-match-p "no progress in 3 rounds"
+          (should (string-match-p "\\`stopped: no progress"
                                   (or (cdr (rb--waiting id)) ""))))))))
 
 (ert-deftest round-brake/nil-turns-the-brake-off ()

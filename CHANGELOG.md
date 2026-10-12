@@ -2,6 +2,21 @@
 
 All notable changes to superchat.
 
+## Unreleased — the user is not shown rounds
+
+- What you read no longer speaks of rounds. The conversation says
+  `* Superchat goes on with work record ID`; `superchat-pending` says
+  `going on with work record ID` on the running row and `going on` or
+  `paused` on the record's row; a record stopped at the limit says
+  `stopped after too many tries`, one stopped for lack of progress says
+  `stopped: no progress`. `/work` answers in the same words.
+- `/work GOAL` now says what will happen: Superchat keeps working on the
+  record until it is done or needs you.
+- How often Superchat went on with a record is shown in one place, the
+  record's detail (`superchat-work-list`, `RET`), as `Tries: N/256`.
+- Unchanged: the mechanism, the limits and their option names, the facts on
+  the Tape, and what the model is told (its prompt still names its round).
+
 ## Unreleased — rounds need the tool and end when they get nowhere
 
 - `work_record` now belongs to the `work-records` row: while the row is

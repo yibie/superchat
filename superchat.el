@@ -2694,7 +2694,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("workspace" . "Bind, show, or clear the Session Workspace")
             ("permissions" . "Show or select the Session permission level")
             ("changes" . "List the unsaved buffers this Session's tools edited")
-            ("work" . "Start a work record worked on in rounds; resume, pause, or show it")
+            ("work" . "Start a work record Superchat keeps working on; resume, pause, or show it")
             ("subagent" . "Delegate a task to an isolated sub-agent")
             ("agents" . "List running sub-agents")
             ("cancel-agent" . "Cancel a running sub-agent by id")

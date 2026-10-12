@@ -138,10 +138,8 @@ One that waits for an answer (an approval, a question) is listed as that."
               ((equal superchat-work-round-actor (plist-get status :actor-id))
                (let ((id (ignore-errors (superchat-work-current session))))
                  (if id
-                     (format "round %d/%d on work record %s"
-                             (superchat-work-rounds id)
-                             superchat-work-round-limit id)
-                   "a round on a work record")))
+                     (format "going on with work record %s" id)
+                   "going on with a work record")))
               ((superchat-changes--unattended-run-p session run)
                (format "started by Superchat: %s"
                        (superchat-changes--started-by session run nil)))
@@ -170,16 +168,15 @@ it as its current record."
     (delete-dups ids)))
 
 (defun superchat-pending--with-rounds (id what)
-  "WHAT, after how the goal rounds of the record ID stand, when it had any."
+  "WHAT, after whether Superchat goes on with the record ID by itself.
+How often it did is not said here: that is the record's own detail (`Tries'
+in `superchat-work-list-show')."
   (let ((rounds (superchat-work-rounds id))
         (what (if (member what '(nil "")) nil what)))
     (cond ((superchat-work-continuing-p id)
-           (format "rounds go on, %d/%d started%s" rounds
-                   superchat-work-round-limit
-                   (if what (concat "; " what) "")))
+           (concat "going on" (if what (concat "; " what) "")))
           ((> rounds 0)
-           (format "rounds paused at %d/%d%s" rounds superchat-work-round-limit
-                   (if what (concat "; " what) "")))
+           (concat "paused" (if what (concat "; " what) "")))
           (t what))))
 
 (defun superchat-pending--records ()
