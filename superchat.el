@@ -1249,11 +1249,12 @@ Minibuffer errors and quit propagate.  They neither answer nor stop a Run."
 ;; (decision of 2026-10-12, "an approval is answered where it is asked").
 
 (declare-function superchat-approval-answer "superchat-approval" (handle allow))
+(declare-function superchat-approval-answer-all "superchat-approval" (handle))
 (declare-function superchat-approval-open-questions "superchat-approval" ())
 (declare-function superchat-approval--details "superchat-approval" (request))
 
 (defun superchat--approval-panel-settle (panel label)
-  "Say LABEL on PANEL and take its two answering buttons out of use."
+  "Say LABEL on PANEL and take its three answering buttons out of use."
   (let ((from (and panel (widget-get panel :from))))
     (when (and (markerp from) (buffer-live-p (marker-buffer from)))
       (with-current-buffer (marker-buffer from)
@@ -1261,7 +1262,7 @@ Minibuffer errors and quit propagate.  They neither answer nor stop a Run."
               (children (widget-get panel :children)))
           (save-excursion
             (widget-value-set (nth 1 children) label)
-            (dolist (control (cl-subseq children 2 4))
+            (dolist (control (cl-subseq children 2 5))
               (widget-apply control :deactivate))))))))
 
 (defun superchat--approval-panel-show (handle request)
@@ -1300,6 +1301,13 @@ View, or an execution with no transcript of its own there."
                       :superchat-action
                       ,(lambda ()
                          (unless (superchat-approval-answer handle t)
+                           (message "This question is no longer open; nothing was allowed."))))
+                    `(superchat-inline-button
+                      :tag "Allow all" :format "%[%t%]  "
+                      :help-echo "Allow this, and stop asking in this conversation (level auto; saving still asks)"
+                      :superchat-action
+                      ,(lambda ()
+                         (unless (superchat-approval-answer-all handle)
                            (message "This question is no longer open; nothing was allowed."))))
                     `(superchat-inline-button
                       :tag "Deny" :format "%[%t%]  "

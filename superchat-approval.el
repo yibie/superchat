@@ -208,6 +208,27 @@ up with its Run, or never asked is not decided and nil is returned."
       (plist-put record :decision (if allow 'allow 'deny))
       t)))
 
+(declare-function superchat-permission-set "superchat-sandbox" (session-id name))
+
+(defconst superchat-approval-all-level 'auto
+  "The permission level the answer \"allow all\" selects for its conversation.")
+
+(defun superchat-approval-answer-all (handle)
+  "Allow the open question HANDLE once and stop asking in its conversation.
+The conversation is switched to the permission level `auto' first: when that
+cannot be recorded the error is signaled and the question stays open.  Return
+non-nil when this call decided the question; one already answered, given up
+with its Run, or never asked is not decided, selects nothing, and nil is
+returned.  Only that conversation is switched; /permissions edit-buffers
+brings the questions back."
+  (when-let* ((record (superchat-approval--record handle)))
+    (unless (plist-get record :decision)
+      (superchat-permission-set
+       (plist-get (plist-get record :request) :session-id)
+       superchat-approval-all-level)
+      (plist-put record :all t)
+      (superchat-approval-answer handle t))))
+
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
                   (session-id role))
 (declare-function superchat--approval-panel-show "superchat" (handle request))
@@ -234,7 +255,7 @@ up with its Run, or never asked is not decided and nil is returned."
     (concat
      "\n"
      (propertize
-      (format "Allow `%s' once?%s\n  M-x superchat-approval-allow, superchat-approval-deny, superchat-approval-details; or answer it in M-x superchat-pending\n"
+      (format "Allow `%s' once?%s\n  M-x superchat-approval-allow, superchat-approval-allow-all, superchat-approval-deny, superchat-approval-details; or answer it in M-x superchat-pending\n"
               (plist-get request :tool-name)
               (if (and (stringp reason) (not (string-empty-p reason)))
                   (format " (%s)" reason)
@@ -272,6 +293,8 @@ A panel stays in the transcript and says how the question ended."
       (ignore-errors
         (superchat--approval-panel-settle
          panel (pcase (plist-get record :decision)
+                 ((and 'allow (guard (plist-get record :all)))
+                  "Allowed; this conversation no longer asks")
                  ('allow "Allowed once")
                  ('deny "Denied")
                  (_ "No longer open; nothing was allowed"))))))
@@ -353,6 +376,19 @@ running keyboard macro is not a person and is refused either way."
     (when (superchat-approval-answer (plist-get question :handle) t)
       (superchat-approval--announce
        (format "allowed `%s' once" (plist-get question :tool-name))))))
+
+(defun superchat-approval-allow-all ()
+  "Allow this conversation's open approval question and stop asking here.
+The conversation is switched to the permission level `auto': full Emacs
+control is no longer asked about, saving a buffer still is.  Other
+conversations are not changed; /permissions edit-buffers brings the
+questions back."
+  (interactive)
+  (let ((question (superchat-approval--question-here)))
+    (when (superchat-approval-answer-all (plist-get question :handle))
+      (superchat-approval--announce
+       (format "allowed `%s'; this conversation is now at the level auto and no longer asks (/permissions edit-buffers to be asked again)"
+               (plist-get question :tool-name))))))
 
 (defun superchat-approval-deny ()
   "Refuse what this conversation's open approval question asks for."

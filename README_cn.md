@@ -267,6 +267,7 @@ Superchat 的默认修改路径不执行持久化，也不对抗你的环境：�
 | 档位 | 模型能做什么 |
 |---|---|
 | `edit-buffers`（默认） | 什么都能读；任何普通 buffer 都可以改，不用问你。凡是等于"完全控制 Emacs"的工具——`eval_elisp`、shell 命令、`define_tool` 以及 agent 自己写的工具——**每次调用**都问你（`y` 允许这一次，`n` 拒绝，`?` 先看工具名、理由和完整参数；你的回答只对你看到的那组参数有效；提问出现之前按下的键会被丢弃，不能回答它；正在执行的键盘宏不算人，会被直接拒绝）。MCP 和其它第三方工具也会问，除非它的服务器在 `superchat-mcp-trusted-servers` 里。 |
+| `auto` | 完全控制类和第三方工具不问就执行；保存 buffer（`save_buffer`，预设列了它才有）仍然问你，模型也仍然可以用 `ask_user` 向你提问。回答审批问题时选**全部允许**（面板上的 `[Allow all]` 按钮、`M-x superchat-approval-allow-all`，或在 `M-x superchat-pending` 里按 `a`），就是放行这一次并把这段对话切到这个档位；`/permissions edit-buffers` 改回逐次询问。它是这段对话的档位，不是对某一个工具的放行。 |
 | `danger-full-access` | 完全控制类和第三方工具不问就执行。谁也不问，所以模型也拿不到 `ask_user`。 |
 | `read-only` | 只观察：不修改 buffer；完全控制类和第三方工具直接拒绝。 |
 

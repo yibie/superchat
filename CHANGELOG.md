@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — "allow all" selects the level auto
+
+- A fourth permission level, `auto`: full Emacs control and third-party
+  tools run without asking, saving a buffer still asks, and the model can
+  still put a question to you. `/permissions auto` selects it.
+- An approval question has one more answer, **Allow all**: the panel's
+  button, `M-x superchat-approval-allow-all`, or `a` on the row in
+  `superchat-pending`. This call is allowed and that conversation is
+  switched to `auto`; other conversations are not. `/permissions
+  edit-buffers` brings the questions back.
+- It is a level of the conversation, not a grant per tool.
+- Not checked with a real model or by a person.
+
 ## Unreleased — a work record goes on by rounds
 
 - A work record that is not finished when its execution ends can go on by

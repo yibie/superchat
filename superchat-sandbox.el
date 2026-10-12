@@ -55,6 +55,9 @@ The former name `workspace-write' is still accepted."
   '((edit-buffers
      :sandbox edit-buffers :approval ask
      :description "Edit buffers freely; saving is yours.  Full Emacs control asks every time.")
+    (auto
+     :sandbox danger-full-access :approval ask
+     :description "Full Emacs control without asking.  Saving a buffer still asks, and the model can still put a question to you.")
     (danger-full-access
      :sandbox danger-full-access :approval never
      :description "Full Emacs control without approval prompts.")

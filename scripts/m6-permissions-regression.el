@@ -443,7 +443,7 @@ seal reports the incomplete audit instead of a clean ending."
       (should (member "permissions" (superchat--commands-list)))
       (with-current-buffer view
         (should (string-match-p
-                 "\\`Permissions: edit-buffers (available: edit-buffers, danger-full-access, read-only)\\'"
+                 "\\`Permissions: edit-buffers (available: edit-buffers, auto, danger-full-access, read-only)\\'"
                  (plist-get (superchat--cmd-permissions "permissions" "" nil nil nil)
                             :content)))
         (should (string-prefix-p
