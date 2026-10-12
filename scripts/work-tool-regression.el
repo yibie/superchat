@@ -138,26 +138,35 @@
 
 ;;;; F4: the row is not mounted ------------------------------------------------------
 
-(ert-deftest work-tool/with-the-row-off-a-wait-for-a-time-is-refused ()
-  "The review's F4, through the real tool loop."
+(ert-deftest work-tool/with-the-row-off-the-model-has-no-work-record ()
+  "The review's F4, through the real tool loop, as it stands since 2026-10-12.
+`work_record' is the `work-records' row's tool (slice 7b): with the row off
+the model is not offered it, and a call to it all the same is answered as not
+available before any body runs, so no record is started and no wait is
+registered.  Until then the
+tool stayed and only its wait for a time was refused; the function still
+answers that way when it is called directly (the tests below)."
   (wrec--with nil (p)
     (let ((view (wrec--view p)))
       (wtool--row-off
+        (setq superchat-llm-tools-list nil)
         (setq smoke--script
               (list (wrec--call '(action . "start") '(goal . "WTOOL-ROW-OFF"))
                     (wrec--call '(action . "wait") '(wait_for . "time") '(in_minutes . 60))
                     '(:text "finished")))
         (hm--turn view "register a future wait")
-        (let* ((session (hm--session view))
-               (id (superchat-work-current session))
-               (record (superchat-work-get id)))
-          ;; The model was told, in the tool's answer.
-          (should (string-match-p wtool--off (prin1-to-string hm--wires)))
-          ;; The record exists and does not claim to wait.
-          (should id)
-          (should-not (plist-get record :waiting))
+        (let ((session (hm--session view)))
+          ;; The model was not offered the tool ...
+          (should-not (member "work_record"
+                              (plist-get (car smoke--requests) :tools)))
+          ;; ... and was told why its calls did nothing.
+          (should (string-match-p "work_record.*not available"
+                                  (prin1-to-string hm--wires)))
+          (should-not (superchat-work-current session))
+          (should-not (superchat-work-records))
+          (should-not (hm--events session "work.created"))
           (should-not (hm--events session "work.waiting"))
-          (should-not (gethash id superchat-work--armed)))))))
+          (should (= 0 (hash-table-count superchat-work--armed))))))))
 
 (ert-deftest work-tool/with-the-row-off-nothing-that-comes-with-a-time-is-half-kept ()
   (wrec--with nil (p)

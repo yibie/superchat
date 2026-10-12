@@ -770,7 +770,12 @@ BUFFER has been killed."
       (superchat--cancel-status-refresh-timer timer buffer)
     (with-current-buffer buffer
       (let* ((projection (superchat--runtime-status-projection))
-             (status (superchat--runtime-status-for-current-run projection)))
+             (status (superchat--runtime-status-for-current-run projection))
+             ;; This runs from a timer, where nothing has bound the name the
+             ;; status writer looks its buffer up by: without this the line of
+             ;; a conversation not named by the default went to a buffer of
+             ;; the default name, made for it.
+             (superchat-buffer-name (buffer-name buffer)))
         (when (and status
                    (memq status (plist-get projection :active-runs)))
           (superchat--refresh-thinking-status

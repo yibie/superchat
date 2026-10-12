@@ -620,6 +620,8 @@ completed records by status, one line each; never another Workspace's (K8)."
            (superchat-work--for session id)
            (unless (superchat-work--users-own-run-p (superchat-work--tool-run-status))
              (error "Rounds are resumed only in an execution the user started with a message in the conversation"))
+           (when-let* ((why (superchat-work-tool-missing session)))
+             (error "Rounds were not resumed: %s" why))
            (unless (eq 'continuable (superchat-work-status (superchat-work-get id)))
              (error "%s is %s; there is nothing to go on with" id
                     (superchat-work-status-text (superchat-work-get id))))
@@ -1336,6 +1338,71 @@ on the Tape, and the rounds stop.  Return the queue id, or nil."
       (superchat-runtime--schedule-dispatch-next session)
       queue)))
 
+(defcustom superchat-work-round-idle-limit 2
+  "After how many rounds in a row without progress the rounds of a record end.
+A round made progress when a structured tool changed a buffer in it or the
+model wrote on the record (an update, a wait, a completion, a delegated
+task).  After this many rounds that did neither, no further round is queued
+and the record waits for the user, saying so.  What `eval_elisp' or a shell
+command changed is not tracked, so a round that worked only through them and
+wrote nothing on the record counts as one without progress.  Nil turns this
+off; `superchat-work-round-limit' then is the only end."
+  :type '(choice (const :tag "No such end" nil) (integer :tag "Rounds"))
+  :group 'superchat)
+
+(defconst superchat-work--progress-fact-types
+  '("work.updated" "work.waiting" "work.completed" "work.task" "work.facts"
+    "work.created")
+  "Work Record facts that say an execution got somewhere on its record.")
+
+(defun superchat-work--run-changed-a-buffer-p (session run)
+  "Non-nil when a structured tool of RUN changed a buffer, read from the Tape."
+  (and (stringp run)
+       (cl-some (lambda (event)
+                  (and (equal run (plist-get event :run-id))
+                       (equal "tool.completed" (plist-get event :type))
+                       (plist-get (plist-get event :payload) :buffer)))
+                (ignore-errors (superchat-tape-replay-events session)))))
+
+(defun superchat-work-idle-rounds (session id)
+  "How many of the latest rounds on record ID, in a row, made no progress.
+Read from the Tape.  Counting starts anew at whatever was written on the
+record outside a round's own execution: the user clearing a wait and saying
+to go on is such a fact."
+  (let ((idle 0) (segment nil) (done nil))
+    ;; Newest first: the facts after each `work.round' are that round's.
+    (dolist (row (reverse (superchat-work--rows)))
+      (cl-destructuring-bind (_session type payload) row
+        (when (and (not done)
+                   (equal id (superchat-work--get payload 'work_id 'work-id)))
+          (if (not (equal type "work.round"))
+              (push (cons type payload) segment)
+            (let* ((run (cl-some
+                         (lambda (fact)
+                           (and (equal "work.outcome" (car fact))
+                                (superchat-work--get (cdr fact) 'run_id 'run-id)))
+                         segment))
+                   (wrote (cl-some
+                           (lambda (fact)
+                             (member (car fact) superchat-work--progress-fact-types))
+                           segment)))
+              (if (or wrote
+                      ;; A round whose execution has not ended is not judged.
+                      (null run)
+                      (superchat-work--run-changed-a-buffer-p session run))
+                  (setq done t)
+                (setq idle (1+ idle) segment nil)))))))
+    idle))
+
+(defun superchat-work--say (session text)
+  "Write the product's line TEXT at the end of the conversation SESSION."
+  (when-let* ((view (superchat-work--round-view session)))
+    (ignore-errors
+      (with-current-buffer view
+        (let ((superchat-buffer-name (buffer-name view)))
+          (superchat--response-region-insert-transcript
+           (format "\n* %s\n" text) :independent-turn))))))
+
 (defun superchat-work--drive (session status)
   "After an execution of SESSION ended with STATUS, start the next round or stop.
 Nothing is done unless the rounds of the conversation's current record go on."
@@ -1361,7 +1428,56 @@ Nothing is done unless the rounds of the conversation's current record go on."
            session id "user"
            (format "round limit %d reached; say to go on, or what to change"
                    superchat-work-round-limit)))
+         ;; Rounds that get nowhere end here, not at the limit.
+         ((and (integerp superchat-work-round-idle-limit)
+               (> superchat-work-round-idle-limit 0)
+               (>= (superchat-work-idle-rounds session id)
+                   superchat-work-round-idle-limit))
+          (let ((why (format "no progress in %d rounds: nothing was changed and nothing was written on the record"
+                             superchat-work-round-idle-limit)))
+            (superchat-work-pause id)
+            (superchat-work-wait
+             session id "user"
+             (concat why "; say what is left, or complete the record"))
+            (superchat-work--say
+             session
+             (format "Rounds on work record %s stopped: %s. /work resume goes on; M-x superchat-work-list completes it."
+                     id why))
+            (message "superchat: rounds on work record %s stopped: %s" id why)))
          (t (superchat-work--queue-round session id)))))))
+
+(declare-function superchat-tools-install-row-builtins "superchat-tools" (row))
+(declare-function superchat-tools-builtin-descriptor-p "superchat-tools"
+                  (name &optional scope))
+(declare-function superchat-preset-tools "superchat-preset" (preset))
+(defvar superchat--active-preset)
+
+(defun superchat-work-tool-missing (session)
+  "Why the model of the conversation SESSION is not offered `work_record'.
+Nil when it is offered.  Rounds on a record end when the model completes it
+or waits, and it can do neither without the tool, so nothing starts rounds
+where this returns a reason."
+  (let* ((view (superchat-work--round-view session))
+         (preset (and view (buffer-local-value 'superchat--active-preset view)))
+         (tools (and preset (fboundp 'superchat-preset-tools)
+                     (ignore-errors (superchat-preset-tools preset)))))
+    (cond
+     ((not (and (fboundp 'superchat-tools-builtin-descriptor-p)
+                (superchat-tools-builtin-descriptor-p "work_record")))
+      "work records are turned off in this Emacs (the work-records row is not mounted), so the model has no work_record tool")
+     ((eq tools 'none)
+      "this conversation's preset gives the model no tools, so it has no work_record tool")
+     ((and (consp tools) (not (member "work_record" tools)))
+      "this conversation's preset lists its tools and work_record is not among them")
+     ((not (bound-and-true-p superchat-llm-tools-enabled))
+      "tools are turned off (`superchat-llm-tools-enabled'), so the model has no work_record tool"))))
+
+(defun superchat-work--refusal (session what)
+  "What to tell the user when WHAT is not started for lack of the tool.
+Nil when the model of SESSION is offered `work_record'."
+  (when-let* ((why (superchat-work-tool-missing session)))
+    (format "%s not started: %s. Without it the model can neither complete the record nor wait, so the rounds would go on with nothing to end them."
+            what why)))
 
 (defun superchat-work--cmd (_cmd args _input _lang _target-model)
   "The `/work' command.
@@ -1393,10 +1509,12 @@ pause' starts no further round.  `/work' alone says how the record stands."
       (unless (eq 'continuable (superchat-work-status record))
         (user-error "%s is %s; there is nothing to go on with"
                     id (superchat-work-status-text record)))
-      (superchat-work-continue id)
+      (unless (superchat-work--refusal session "Rounds were")
+        (superchat-work-continue id))
       (list :type :echo
             :content
-            (cond ((superchat-work--session-busy-p session)
+            (cond ((superchat-work--refusal session "Rounds were"))
+                  ((superchat-work--session-busy-p session)
                    (format "Rounds on %s go on after the execution under way." id))
                   ((>= (superchat-work-rounds id) superchat-work-round-limit)
                    (superchat-work-pause id)
@@ -1406,6 +1524,9 @@ pause' starts no further round.  `/work' alone says how the record stands."
                    (format "Round %d/%d on %s is starting."
                            (superchat-work-rounds id) superchat-work-round-limit id))
                   (t (format "The next round on %s could not be queued." id)))))
+     ((superchat-work--refusal session "The work record was")
+      (list :type :echo
+            :content (superchat-work--refusal session "The work record was")))
      (t
       (let ((new (superchat-work-start session args)))
         (superchat-work-continue new)
@@ -1468,6 +1589,9 @@ first."
 it changed to the conversation's current record and decides how it stands."
   :apply
   (lambda (scope _config)
+    ;; `work_record' is this row's tool: offered while the row is mounted,
+    ;; whatever the user's tool name list says, and by nothing otherwise.
+    (superchat-tools-install-row-builtins 'work-records)
     (superchat-on scope 'turn-completed 'work-outcome
                   #'superchat-work--on-turn-completed)
     ;; One hook and one table of wakes for the whole Emacs: the first

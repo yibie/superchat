@@ -1571,10 +1571,19 @@ declared-extension activation, can do that."
                  (repeat :tag "Allowlisted tool names" string))
   :group 'superchat)
 
+(defconst superchat-tools-row-offered-builtin-names '("work_record")
+  "Row-owned built-in tools that `superchat-llm-tool-names' does not narrow.
+Each is offered on the default tool surface whenever its row is mounted, and
+by nothing when it is not: the row's product behavior depends on the model
+having the tool (a Work Record's rounds end when the model completes it), so
+mounting the row is what offers it.  An explicit tool list of a request or a
+Preset is still not widened.")
+
 (defun superchat--llm-tool-enabled-p (name)
   "Return non-nil when built-in tool NAME should be registered."
   (or (eq superchat-llm-tool-names 'all)
-      (member name superchat-llm-tool-names)))
+      (member name superchat-llm-tool-names)
+      (member name superchat-tools-row-offered-builtin-names)))
 
 (defun superchat-tools--sql-offered-p ()
   "Non-nil when the tool names in force name `sql' themselves.
@@ -2450,7 +2459,8 @@ Which of them a Request may offer is decided by `select-tools' (a tool's
               "team_task" "team_message")
     (workspace "workspace_write" "workspace_publish"
                "workspace_read" "workspace_info")
-    (memory "memory_search"))
+    (memory "memory_search")
+    (work-records "work_record"))
   "Built-in tool names registered by their owning default row.
 `superchat-tools--install-builtin-descriptors' skips these, and the owning
 row calls `superchat-tools-install-row-builtins' in its own `:apply', so

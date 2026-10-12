@@ -2,6 +2,28 @@
 
 All notable changes to superchat.
 
+## Unreleased — rounds need the tool and end when they get nowhere
+
+- `work_record` now belongs to the `work-records` row: while the row is
+  mounted the default tool surface offers it whatever
+  `superchat-llm-tool-names` says, and with the row off nothing offers it.
+  A Preset's own tool list is still not widened.
+- `/work GOAL`, `/work resume` and the tool's `resume` start nothing where
+  the model would not be offered `work_record`, and say why. Before, a
+  record started under a name list without the tool went round and round
+  with nothing to end it.
+- New `superchat-work-round-idle-limit` (2; nil turns it off): after that
+  many rounds in a row in which no tool changed a buffer and the model
+  wrote nothing on the record, no further round starts and the record
+  waits for you, "no progress in N rounds". `/work resume` gives the same
+  number again.
+- Fixed: the waiting line of a slow execution in a conversation not named
+  `*superchat*` was written into a buffer of that name, made for it.
+- Changed from 2026-10-10: with the `work-records` row off the model has
+  no `work_record` at all, where before only its wait for a time was
+  refused.
+- Not checked with a real model or by a person.
+
 ## Unreleased — "allow all" selects the level auto
 
 - A fourth permission level, `auto`: full Emacs control and third-party

@@ -201,8 +201,12 @@ fix."
          ;; module independently loadable while avoiding a global mirror.
          (plugin-registered-p
           (lambda (name)
-            (and (fboundp 'superchat-tools--visible-installation)
-                 (superchat-tools--visible-installation name))))
+            (or (and (fboundp 'superchat-tools--visible-installation)
+                     (superchat-tools--visible-installation name))
+                ;; A row-owned built-in its row always offers: STRUCTS
+                ;; above holds it only while that row is mounted.
+                (member name (bound-and-true-p
+                              superchat-tools-row-offered-builtin-names)))))
          (configured
           (cond
            ((eq policy 'all) query-names)
