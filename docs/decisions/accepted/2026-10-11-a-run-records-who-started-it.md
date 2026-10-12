@@ -5,7 +5,8 @@ Status: the five rulings accepted; slice 2 implemented; slice 3 (ruling 2)
 implemented in [giving up and looking are facts](2026-10-11-giving-up-and-looking-are-facts.md);
 ruling 1 implemented in [a stopped execution is not a failed one](2026-10-11-a-stopped-execution-is-not-a-failed-one.md);
 ruling 3 implemented in [my execution that ended with its conversation closed](2026-10-11-my-execution-that-ended-with-the-conversation-closed.md);
-rulings 4 and 5 not started
+ruling 4 implemented in [an approval is published, then answered](2026-10-11-an-approval-is-published-then-answered.md);
+ruling 5 not started
 Source: `reports/guidance-2026-10-11/GUIDANCE.md` (slice 2 and the five
 questions it left for the user).
 

@@ -386,6 +386,36 @@ ended execution is thereby looked at, and leaves the list."
     (superchat-runtime-cancel (plist-get item :key))
     (superchat-pending-refresh)))
 
+(declare-function superchat-approval-open-questions "superchat-approval" ())
+(declare-function superchat-approval-answer "superchat-approval" (handle allow))
+
+(defun superchat-pending-answer (item allow)
+  "Answer the approval the row ITEM asks: allow it once when ALLOW, else refuse.
+Return non-nil when this call decided it.  The row must be an execution that
+asks for an approval; a question the model put is answered in its
+conversation."
+  (unless (and item (eq 'asking (plist-get item :kind)))
+    (user-error "The row at point asks for nothing"))
+  (let ((question (and (fboundp 'superchat-approval-open-questions)
+                       (cl-find (plist-get item :key)
+                                (superchat-approval-open-questions)
+                                :key (lambda (q) (plist-get q :run-id))
+                                :test #'equal))))
+    (unless question
+      (user-error "This row has no approval to answer here; go to its conversation with RET"))
+    (prog1 (superchat-approval-answer (plist-get question :handle) allow)
+      (superchat-pending-refresh))))
+
+(defun superchat-pending-allow (item)
+  "Allow, once, the approval the row at point asks for."
+  (interactive (list (tabulated-list-get-id)))
+  (superchat-pending-answer item t))
+
+(defun superchat-pending-deny (item)
+  "Refuse the approval the row at point asks for."
+  (interactive (list (tabulated-list-get-id)))
+  (superchat-pending-answer item nil))
+
 (defun superchat-pending-dismiss (item)
   "Forget the ended execution of the row at point without going to it."
   (interactive (list (tabulated-list-get-id)))
@@ -410,6 +440,8 @@ ended execution is thereby looked at, and leaves the list."
     (define-key map (kbd "RET") #'superchat-pending-open)
     (define-key map (kbd "v") #'superchat-pending-show-record)
     (define-key map (kbd "k") #'superchat-pending-stop)
+    (define-key map (kbd "y") #'superchat-pending-allow)
+    (define-key map (kbd "n") #'superchat-pending-deny)
     (define-key map (kbd "d") #'superchat-pending-dismiss)
     (define-key map (kbd "g") #'superchat-pending-refresh)
     map)
@@ -418,8 +450,8 @@ ended execution is thereby looked at, and leaves the list."
 (define-derived-mode superchat-pending-mode tabulated-list-mode "Superchat-Pending"
   "What Superchat is doing and what it waits for, in one list.
 RET goes to the conversation (or the unsaved buffer), v shows a work
-record, k stops a running execution, d forgets an ended one, g reads
-everything again."
+record, k stops a running execution, y and n answer the approval a row
+asks for, d forgets an ended one, g reads everything again."
   (setq tabulated-list-format
         [("State" 22 nil) ("What" 44 nil) ("Detail" 52 nil) ("Conversation" 0 nil)])
   (setq tabulated-list-entries #'superchat-pending--entries)

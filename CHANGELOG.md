@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — an approval is published, then answered
+
+- An approval question no longer holds Emacs. It is shown at the end of its
+  conversation and listed in `superchat-pending` under "Asks you now", and
+  you go on working until you answer it: `M-x superchat-approval-allow`,
+  `superchat-approval-deny` or `superchat-approval-details` from the
+  conversation, or `y` / `n` on its row in the list. While a question is
+  open Emacs is in a recursive edit, so the mode line shows brackets.
+- `superchat-approval-prompt` set to `minibuffer` restores the old question,
+  which holds Emacs until it is answered. `superchat-approval-confirm` is
+  unchanged; the default answerer is now `superchat-approval-ask`.
+- Not checked by a person: batch tests cannot enter a recursive edit.
+
 ## Unreleased — my execution that ended with its conversation closed
 
 - An execution you started whose conversation you closed before it ended is

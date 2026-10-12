@@ -41,14 +41,26 @@ before any answerer sees it: the unattended stance.")
   :type '(choice (const ask) (const never))
   :group 'superchat)
 
-(defcustom superchat-approval-function #'superchat-approval-confirm
+(defcustom superchat-approval-function #'superchat-approval-ask
   "Human answerer the approval chain ends in, called with one request plist.
 It returns non-nil to allow exactly that request once.  The request carries
 `:tool-name', `:args', `:reason', `:call-id', `:session-id' and `:run-id'; an
-answerer that wants a preview renders it from those.  The default asks in the
-minibuffer and is not available in a batch Emacs, where nobody can answer.
+answerer that wants a preview renders it from those.  The default publishes
+the question and lets Emacs go on (`superchat-approval-prompt'); it is not
+available in a batch Emacs, where nobody can answer.
 When nil, nobody can answer and every request is `unavailable'."
   :type '(choice (const nil) function)
+  :group 'superchat)
+
+;; decision of 2026-10-11, "an approval is published, then answered".
+(defcustom superchat-approval-prompt 'publish
+  "How `superchat-approval-ask' puts its question to the user.
+`publish' shows the question in its conversation and in `superchat-pending',
+lets Emacs go on, and waits for `superchat-approval-allow',
+`superchat-approval-deny' or an answer from the list.  `minibuffer' asks in
+the minibuffer and holds Emacs until it is answered."
+  :type '(choice (const :tag "Publish it and go on" publish)
+                 (const :tag "Ask in the minibuffer" minibuffer))
   :group 'superchat)
 
 (define-error 'superchat-approval-outside-run
@@ -113,6 +125,10 @@ leaves the question open: the details are `read-multiple-choice''s own
 HELP-STRING, because that function owns the `?' key in both of its input
 paths and a choice of ours on that key would never be reached.
 
+This is the minibuffer answerer: Emacs is held until the question is answered.
+The default answerer is `superchat-approval-ask', which publishes the question
+instead and comes here only when `superchat-approval-prompt' says so.
+
 Only input that arrives after the question is asked can answer it: pending
 input is discarded first, and inside a running keyboard macro nothing is read
 and the answer is no.  This keeps old input from approving; it does not prove
@@ -149,6 +165,188 @@ answered by input that came after it\")."
                       ""))
             '((?y "yes, allow once") (?n "no"))
             (superchat-approval--details request))))))))
+
+;;;; A published question -----------------------------------------------------
+;; decision of 2026-10-11, "an approval is published, then answered".  The
+;; tool pipeline calls the approval seam and waits for its value, so the call
+;; stack still waits here; what changes is that Emacs runs underneath it.
+
+(defvar superchat-approval--open nil
+  "The published questions nobody has answered yet, oldest first.
+Each is a plist (:handle :request :asked-at :decision :depth :overlay), changed
+in place.  In memory only: a question does not outlive its Run, and a Run does
+not outlive its Emacs.")
+
+(defun superchat-approval--record (handle)
+  "The open question HANDLE names, or nil."
+  (cl-find handle superchat-approval--open
+           :key (lambda (record) (plist-get record :handle))))
+
+(defun superchat-approval-open-questions ()
+  "The published approval questions still open, oldest first.
+Each is a plist (:handle :tool-name :reason :args :session-id :run-id
+:asked-at); `:handle' is what `superchat-approval-answer' takes."
+  (mapcar (lambda (record)
+            (let ((request (plist-get record :request)))
+              (list :handle (plist-get record :handle)
+                    :tool-name (plist-get request :tool-name)
+                    :reason (plist-get request :reason)
+                    :args (plist-get request :args)
+                    :session-id (plist-get request :session-id)
+                    :run-id (plist-get request :run-id)
+                    :asked-at (plist-get record :asked-at))))
+          (cl-remove-if (lambda (record) (plist-get record :decision))
+                        superchat-approval--open)))
+
+(defun superchat-approval-answer (handle allow)
+  "Answer the open question HANDLE: allow it once when ALLOW, else refuse it.
+Return non-nil when this call decided it.  A question already answered, given
+up with its Run, or never asked is not decided and nil is returned."
+  (when-let* ((record (superchat-approval--record handle)))
+    (unless (plist-get record :decision)
+      (plist-put record :decision (if allow 'allow 'deny))
+      t)))
+
+(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
+                  (session-id role))
+
+(defun superchat-approval--view (session)
+  "The live conversation buffer of SESSION, or nil."
+  (when (stringp session)
+    (let ((owned (and (fboundp 'superchat-editor-workspace-buffer)
+                      (ignore-errors
+                        (superchat-editor-workspace-buffer session 'session-view)))))
+      (if (buffer-live-p owned)
+          owned
+        (cl-find-if (lambda (buffer)
+                      (and (buffer-live-p buffer)
+                           (local-variable-p 'superchat--session-id buffer)
+                           (equal session
+                                  (buffer-local-value 'superchat--session-id buffer))))
+                    (buffer-list))))))
+
+(defun superchat-approval--line (request)
+  "What the conversation shows of the open question REQUEST."
+  (let ((reason (plist-get request :reason)))
+    (concat
+     "\n"
+     (propertize
+      (format "Allow `%s' once?%s\n  M-x superchat-approval-allow, superchat-approval-deny, superchat-approval-details; or answer it in M-x superchat-pending\n"
+              (plist-get request :tool-name)
+              (if (and (stringp reason) (not (string-empty-p reason)))
+                  (format " (%s)" reason)
+                ""))
+      'face 'warning))))
+
+(defun superchat-approval--show (record)
+  "Show RECORD's question in its conversation and in the echo area."
+  (let* ((request (plist-get record :request))
+         (view (superchat-approval--view (plist-get request :session-id))))
+    (when view
+      (with-current-buffer view
+        (let ((overlay (make-overlay (point-max) (point-max) view t t)))
+          (overlay-put overlay 'superchat-approval (plist-get record :handle))
+          (overlay-put overlay 'after-string (superchat-approval--line request))
+          (plist-put record :overlay overlay))))
+    (superchat-approval--announce
+     (format "`%s' asks to be allowed once; answer with M-x superchat-approval-allow or superchat-approval-deny, or in M-x superchat-pending"
+             (plist-get request :tool-name)))))
+
+(defun superchat-approval--unshow (record)
+  "Take RECORD's question out of its conversation."
+  (when-let* ((overlay (plist-get record :overlay)))
+    (when (overlayp overlay) (delete-overlay overlay))))
+
+(defun superchat-approval--wait (record)
+  "Return once RECORD is decided, with Emacs running meanwhile.
+At a keyboard that is a recursive edit: the user goes on editing, and the
+edit is left when the question is decided.  A level the user entered on top of
+it is theirs and is not left for them; the decision then takes effect when
+they leave it.  Without a keyboard, timers and processes run."
+  ;; A tool call, and so this wait, usually runs from a timer or a process
+  ;; filter, where `inhibit-quit' is t: C-g must work in the Emacs that goes on.
+  (let ((inhibit-quit nil))
+    (if noninteractive
+        (while (null (plist-get record :decision))
+          (accept-process-output nil 0.05))
+      (let* ((depth (1+ (recursion-depth)))
+             (leave (run-with-timer
+                     0.1 0.1
+                     (lambda ()
+                       (when (and (plist-get record :decision)
+                                  (= depth (recursion-depth)))
+                         (throw 'exit nil))))))
+        (plist-put record :depth depth)
+        (unwind-protect
+            (while (null (plist-get record :decision))
+              (recursive-edit))
+          (cancel-timer leave))))))
+
+(defun superchat-approval-publish (request)
+  "Publish REQUEST as an open question and return non-nil once it is allowed.
+An answerer for `superchat-approval-function'.  The question is listed by
+`superchat-approval-open-questions' until `superchat-approval-answer' decides
+it or the wait is abandoned -- by a quit, or because its Run ended."
+  (let ((record (list :handle (make-symbol "approval") :request request
+                      :asked-at (float-time) :decision nil :depth nil
+                      :overlay nil)))
+    (setq superchat-approval--open (append superchat-approval--open (list record)))
+    (unwind-protect
+        (progn
+          (superchat-approval--show record)
+          (superchat-approval--wait record)
+          (eq 'allow (plist-get record :decision)))
+      (setq superchat-approval--open (delq record superchat-approval--open))
+      (superchat-approval--unshow record))))
+
+(defun superchat-approval-ask (request)
+  "Ask the user to allow REQUEST once.  Return non-nil to allow.
+The default answerer.  It publishes the question and lets Emacs go on
+\(`superchat-approval-publish'), or asks in the minibuffer
+\(`superchat-approval-confirm') when `superchat-approval-prompt' says so.  A
+running keyboard macro is not a person and is refused either way."
+  (cond (executing-kbd-macro nil)
+        ((eq superchat-approval-prompt 'minibuffer)
+         (superchat-approval-confirm request))
+        (t (superchat-approval-publish request))))
+
+(defun superchat-approval--question-here ()
+  "The open question the user means: this conversation's, or the only one."
+  (let* ((open (superchat-approval-open-questions))
+         (session (and (boundp 'superchat--session-id)
+                       (symbol-value 'superchat--session-id)))
+         (here (and (stringp session)
+                    (cl-find session open
+                             :key (lambda (q) (plist-get q :session-id))
+                             :test #'equal))))
+    (cond (here here)
+          ((null open) (user-error "No approval question is open"))
+          ((null (cdr open)) (car open))
+          (t (user-error "%d approval questions are open; answer them in M-x superchat-pending or from their conversations"
+                         (length open))))))
+
+(defun superchat-approval-allow ()
+  "Allow, once, what this conversation's open approval question asks for."
+  (interactive)
+  (let ((question (superchat-approval--question-here)))
+    (when (superchat-approval-answer (plist-get question :handle) t)
+      (superchat-approval--announce
+       (format "allowed `%s' once" (plist-get question :tool-name))))))
+
+(defun superchat-approval-deny ()
+  "Refuse what this conversation's open approval question asks for."
+  (interactive)
+  (let ((question (superchat-approval--question-here)))
+    (when (superchat-approval-answer (plist-get question :handle) nil)
+      (superchat-approval--announce
+       (format "did not allow `%s'" (plist-get question :tool-name))))))
+
+(defun superchat-approval-details ()
+  "Show the tool, the reason and the whole arguments of the open question."
+  (interactive)
+  (let ((question (superchat-approval--question-here)))
+    (with-help-window "*superchat approval*"
+      (princ (superchat-approval--details question)))))
 
 ;;;; A question does not outlive its Run ---------------------------------------
 ;; decision of 2026-09-19, "a question is dismissed when its Run ends".
@@ -203,10 +401,11 @@ Run to begin with is asked as it always was."
 
 (defun superchat-approval--fallback-answerer ()
   "Return the human answerer the chain ends in, or nil when nobody can answer.
-The default minibuffer answerer counts as nobody in a batch Emacs and while a
-keyboard macro is running; a function a script or a plugin put in its place
-still answers there."
-  (cond ((and (eq superchat-approval-function #'superchat-approval-confirm)
+The default answerer, and the minibuffer one, count as nobody in a batch
+Emacs and while a keyboard macro is running; a function a script or a plugin
+put in its place still answers there."
+  (cond ((and (memq superchat-approval-function
+                    '(superchat-approval-ask superchat-approval-confirm))
               ;; Nobody is at the keyboard in batch, and a running keyboard
               ;; macro is not somebody: its `y' is not a person's consent.
               (or noninteractive executing-kbd-macro))
