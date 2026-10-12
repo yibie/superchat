@@ -53,6 +53,7 @@
      ;; carried from one test to the next.
      (when (boundp 'superchat-work--retries) (clrhash superchat-work--retries))
      (when (boundp 'superchat-work--owed) (clrhash superchat-work--owed))
+     (when (boundp 'superchat-work--continuing) (clrhash superchat-work--continuing))
      (unwind-protect
          (hm--fixture ,script ,@body)
        (dolist (b (buffer-list))
@@ -168,7 +169,13 @@
   (should (member "work_record" superchat-llm-default-tool-names))
   (should (eq 'builtin (superchat-sandbox-tool-class "work_record"))))
 
+(defvar superchat-work-rounds-when-started)
+
 (ert-deftest work-record/the-tool-keeps-the-record-through-a-conversation ()
+  ;; About the record being carried from one request to the next, not about
+  ;; goal rounds: with rounds, the record started here would be taken up
+  ;; again at once (scripts/goal-rounds-regression.el covers that).
+  (let ((superchat-work-rounds-when-started nil))
   (wrec--with (list (wrec--call '(action . "start") '(goal . "GOAL-MARKER: tidy the notes"))
                     (wrec--call '(action . "update") '(progress . "PROGRESS-MARKER")
                                 '(resume . "RESUME-MARKER"))
@@ -192,7 +199,7 @@
                                   text))
           (should (string-match-p "To deliver: GOAL-MARKER: tidy the notes" text))
           (should (string-match-p "Pick up from: RESUME-MARKER" text))
-          (should (string-match-p (regexp-quote superchat-work-background-text) text)))))))
+          (should (string-match-p (regexp-quote superchat-work-background-text) text))))))))
 
 ;;;; The end of an execution ----------------------------------------------------------
 
@@ -423,6 +430,10 @@
     wire))
 
 (ert-deftest work-record/a-delegated-task-is-recorded-under-its-record ()
+  ;; This is about the delegated task, not about goal rounds: the record the
+  ;; model starts here is not worked on in rounds (scripts/goal-rounds-regression.el
+  ;; covers those).
+  (let ((superchat-work-rounds-when-started nil))
   (wrec--with (list (wrec--call '(action . "start") '(goal . "GOAL-SUB-MARKER"))
                     '(:tool-uses (("delegate_to_subagent" (preset . "researcher")
                                    (task . "SUB-TASK-MARKER look into it"))))
@@ -449,7 +460,7 @@
         (should (equal "completed" (plist-get (car tasks) :status)))
         (should-not (equal session (plist-get (car tasks) :conversation)))
         (should (string-match-p "^Delegated tasks (recorded by Superchat):\n- SUB-TASK-MARKER.* -- completed: SUB-REPORT-MARKER"
-                                (superchat-work-render record)))))))
+                                (superchat-work-render record))))))))
 
 (ert-deftest work-record/a-task-without-a-record-records-nothing ()
   (wrec--with (list '(:tool-uses (("delegate_to_subagent" (preset . "researcher")

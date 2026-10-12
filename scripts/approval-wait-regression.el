@@ -61,10 +61,13 @@
 
 (defun aw--settle (run)
   (should (stringp run))
+  ;; The clock test reads for the whole window that was left, and that
+  ;; window grows with the request: it took 19.5 s of a 20 s limit, and one
+  ;; longer tool description took it past (measured 2026-10-12).
   (should (smoke--wait
            (lambda () (superchat-runtime--terminal-p
                        (plist-get (superchat-runtime-status run) :status)))
-           20))
+           40))
   run)
 
 (defun aw--count (session type)

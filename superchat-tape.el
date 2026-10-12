@@ -139,6 +139,8 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              ;; M11 slice 8: a time wait woke the record; its result noted
              ;; in the Workspace's main conversation.
              "work.woken" "work.reported"
+             ;; A goal round queued on a record (2026-10-12).
+             "work.round"
              ;; A delegated task and its result, under its record (K14).
              "work.task"
              ;; A start or a wake this Emacs tries no more; an ended

@@ -134,6 +134,14 @@ One that waits for an answer (an approval, a question) is listed as that."
        (superchat-pending--item
         (if asking 'asking 'running) run
         (cond (parent (format "started by execution %s" parent))
+              ;; A goal round: the user's conversation going on by itself.
+              ((equal superchat-work-round-actor (plist-get status :actor-id))
+               (let ((id (ignore-errors (superchat-work-current session))))
+                 (if id
+                     (format "round %d/%d on work record %s"
+                             (superchat-work-rounds id)
+                             superchat-work-round-limit id)
+                   "a round on a work record")))
               ((superchat-changes--unattended-run-p session run)
                (format "started by Superchat: %s"
                        (superchat-changes--started-by session run nil)))
@@ -160,6 +168,19 @@ it as its current record."
       (when-let* ((id (ignore-errors (superchat-work-current session))))
         (push id ids)))
     (delete-dups ids)))
+
+(defun superchat-pending--with-rounds (id what)
+  "WHAT, after how the goal rounds of the record ID stand, when it had any."
+  (let ((rounds (superchat-work-rounds id))
+        (what (if (member what '(nil "")) nil what)))
+    (cond ((superchat-work-continuing-p id)
+           (format "rounds go on, %d/%d started%s" rounds
+                   superchat-work-round-limit
+                   (if what (concat "; " what) "")))
+          ((> rounds 0)
+           (format "rounds paused at %d/%d%s" rounds superchat-work-round-limit
+                   (if what (concat "; " what) "")))
+          (t what))))
 
 (defun superchat-pending--records ()
   "The open Work Records, each by how it stands."
@@ -211,6 +232,8 @@ it as its current record."
           (_
            (push (superchat-pending--item
                   'continuable id goal
+                  (superchat-pending--with-rounds
+                   id
                   (pcase (car (last (plist-get record :outcomes)))
                     ("interrupted" "its last execution was interrupted")
                     ("stopped"
@@ -219,7 +242,7 @@ it as its current record."
                        (if (member resume '(nil ""))
                            "its last execution was stopped"
                          (format "its last execution was stopped; %s" resume))))
-                    (_ (superchat-pending--one-line (plist-get record :resume))))
+                    (_ (superchat-pending--one-line (plist-get record :resume)))))
                   session)
                  items)))))
     (nreverse items)))

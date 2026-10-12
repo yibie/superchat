@@ -2681,6 +2681,7 @@ This separates built-in commands and user-defined prompt files into two sections
             ("workspace" . "Bind, show, or clear the Session Workspace")
             ("permissions" . "Show or select the Session permission level")
             ("changes" . "List the unsaved buffers this Session's tools edited")
+            ("work" . "Start a work record worked on in rounds; resume, pause, or show it")
             ("subagent" . "Delegate a task to an isolated sub-agent")
             ("agents" . "List running sub-agents")
             ("cancel-agent" . "Cancel a running sub-agent by id")
@@ -5403,6 +5404,7 @@ nothing recording that it did when this row is unmounted mid-Run."
       (superchat-register-command (car entry) (cdr entry)))
     (superchat-register-command "permissions" #'superchat--cmd-permissions)
     (superchat-register-command "changes" #'superchat--cmd-changes)
+    (superchat-register-command "work" #'superchat-work--cmd)
     ;; The zero-argument built-ins (/backend, /models, /mcp*, /refresh-models)
     ;; go through the same registry: unmounting this plugin removes them.
     (dolist (entry superchat--builtin-commands)

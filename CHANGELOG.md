@@ -2,6 +2,26 @@
 
 All notable changes to superchat.
 
+## Unreleased — a work record goes on by rounds
+
+- A work record that is not finished when its execution ends can go on by
+  itself: the next round starts in the same conversation, as a new
+  execution, until the record is completed, waits for you, reaches
+  `superchat-work-round-limit` (256; recorded as waiting for you, "round
+  limit reached"), or the round is stopped, fails or runs out of tool
+  budget. The conversation shows `* Round N/Max on work record …`.
+- `/work <goal>` starts a record that goes on this way and sends the goal
+  to the model. `/work resume` starts the next round after a stop,
+  `/work pause` turns the rounds off, `/work` alone says where it is. The
+  model has `work_record resume`, valid only in an execution you started.
+- A record the model starts in your own execution also goes on by rounds
+  while `superchat-work-rounds-when-started` is non-nil.
+- Rounds run only while the conversation's buffer is alive, do not survive
+  a restart (the count does), and leave no mode-line notice.
+  `superchat-pending` shows the round on the running row and
+  `rounds paused at N/Max` on a record that can be continued.
+- Not checked with a real model or by a person.
+
 ## Unreleased — an approval is answered where it is asked
 
 - An approval question is now a panel in its conversation, drawn the way an
