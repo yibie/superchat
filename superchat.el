@@ -694,10 +694,19 @@ become a third recurrence."
 
 (defun superchat--thinking-status-message (status latest)
   "Return the dynamic waiting message for STATUS and latest reasoning line."
-  (if (eq 'retry-wait (plist-get status :model-phase))
+  (cond
+   ;; An approval question is open: the time that passes is the user's, not
+   ;; the model's.
+   ((superchat--approval-asked-at (plist-get status :run-id))
+    (concat "Waiting for your answer… "
+            (superchat--format-duration
+             (max 0 (- (float-time)
+                       (superchat--approval-asked-at (plist-get status :run-id)))))))
+   ((eq 'retry-wait (plist-get status :model-phase))
       (let ((retry (plist-get status :retry)))
         (concat (superchat-sink-retry-text retry) " · "
-                (plist-get retry :error)))
+                (plist-get retry :error))))
+   (t
     (concat (pcase (plist-get status :model-phase)
               ('waiting-first-token "Prefill / waiting first token… ")
               ('reasoning "Reasoning… ")
@@ -708,7 +717,7 @@ become a third recurrence."
                 (superchat--format-duration 0))
             (when (and (stringp latest)
                        (not (string-empty-p (string-trim latest))))
-              (concat " · " (string-trim latest))))))
+              (concat " · " (string-trim latest)))))))
 
 (defun superchat--refresh-thinking-status (&optional owner)
   "Refresh the current Run's waiting status, optionally selected by OWNER."
@@ -1233,6 +1242,86 @@ Minibuffer errors and quit propagate.  They neither answer nor stop a Run."
                                               :superchat-action ,(lambda () (superchat--input-panel-action panel 'hide))))))))))
     (superchat--input-panel-refresh panel)
     panel))
+
+;; An approval question is shown the way `ask_user' shows its question: a
+;; panel of native buttons in the conversation.  The question itself is not
+;; `ask_user': the product asks it and its tool call waits for the answer
+;; (decision of 2026-10-12, "an approval is answered where it is asked").
+
+(declare-function superchat-approval-answer "superchat-approval" (handle allow))
+(declare-function superchat-approval-open-questions "superchat-approval" ())
+(declare-function superchat-approval--details "superchat-approval" (request))
+
+(defun superchat--approval-panel-settle (panel label)
+  "Say LABEL on PANEL and take its two answering buttons out of use."
+  (let ((from (and panel (widget-get panel :from))))
+    (when (and (markerp from) (buffer-live-p (marker-buffer from)))
+      (with-current-buffer (marker-buffer from)
+        (let ((inhibit-read-only t)
+              (children (widget-get panel :children)))
+          (save-excursion
+            (widget-value-set (nth 1 children) label)
+            (dolist (control (cl-subseq children 2 4))
+              (widget-apply control :deactivate))))))))
+
+(defun superchat--approval-panel-show (handle request)
+  "Show the approval question HANDLE of REQUEST as a panel in its conversation.
+Return the panel, or nil when the conversation cannot hold one: no live owned
+View, or an execution with no transcript of its own there."
+  (let* ((session (plist-get request :session-id))
+         (run (plist-get request :run-id))
+         (view (and (stringp session)
+                    (superchat-editor-workspace-buffer session 'session-view)))
+         (owner (and run (plist-get (superchat-runtime-status run)
+                                    :transcript-owner)))
+         (reason (plist-get request :reason))
+         panel)
+    (when (and owner (superchat--input-view-p view session))
+      (require 'superchat-widgets)
+      (with-current-buffer view
+        (let ((superchat-buffer-name (buffer-name view)))
+          (superchat--response-region-close nil nil owner)
+          (superchat--response-region-insert-transcript
+           "" :current-run owner
+           (lambda ()
+             (setq panel
+                   (widget-create
+                    'group :format "%v" :approval-handle handle
+                    `(item :format "%v\n"
+                           ,(format "*** Approval needed\nAllow `%s' once?%s"
+                                    (plist-get request :tool-name)
+                                    (if (and (stringp reason)
+                                             (not (string-empty-p reason)))
+                                        (format " (%s)" reason)
+                                      "")))
+                    '(item :format "%v\n" "Waiting for your answer")
+                    `(superchat-inline-button
+                      :tag "Allow once" :format "%[%t%]  "
+                      :superchat-action
+                      ,(lambda ()
+                         (unless (superchat-approval-answer handle t)
+                           (message "This question is no longer open; nothing was allowed."))))
+                    `(superchat-inline-button
+                      :tag "Deny" :format "%[%t%]  "
+                      :superchat-action
+                      ,(lambda ()
+                         (unless (superchat-approval-answer handle nil)
+                           (message "This question is no longer open."))))
+                    `(superchat-inline-button
+                      :tag "Details" :format "%[%t%]\n"
+                      :superchat-action
+                      ,(lambda ()
+                         (with-help-window "*superchat approval*"
+                           (princ (superchat-approval--details request))))))))))))
+    panel))
+
+(defun superchat--approval-asked-at (run-id)
+  "When the open approval question of RUN-ID was asked, or nil."
+  (and run-id (fboundp 'superchat-approval-open-questions)
+       (plist-get (cl-find run-id (superchat-approval-open-questions)
+                           :key (lambda (question) (plist-get question :run-id))
+                           :test #'equal)
+                  :asked-at)))
 
 (defun superchat--input-presenter-config (view session tool-name)
   "Return presentation callbacks for exact owned VIEW and TOOL-NAME.

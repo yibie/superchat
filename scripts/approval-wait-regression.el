@@ -116,7 +116,7 @@
       (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
       (should (= 0 aw--effect))
       (should (= 2 (length smoke--requests)))
-      (should (string-match-p "Tool call cancelled by user"
+      (should (string-match-p "Tool call denied by user"
                               (or (plist-get (car smoke--requests) :prompt-text) "")))
       (should-not (string-match-p "Response timeout" (aw--shown view))))))
 

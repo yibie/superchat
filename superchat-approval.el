@@ -173,7 +173,8 @@ answered by input that came after it\")."
 
 (defvar superchat-approval--open nil
   "The published questions nobody has answered yet, oldest first.
-Each is a plist (:handle :request :asked-at :decision :depth :overlay), changed
+Each is a plist (:handle :request :asked-at :decision :depth :overlay :panel),
+changed
 in place.  In memory only: a question does not outlive its Run, and a Run does
 not outlive its Emacs.")
 
@@ -209,6 +210,8 @@ up with its Run, or never asked is not decided and nil is returned."
 
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
                   (session-id role))
+(declare-function superchat--approval-panel-show "superchat" (handle request))
+(declare-function superchat--approval-panel-settle "superchat" (panel label))
 
 (defun superchat-approval--view (session)
   "The live conversation buffer of SESSION, or nil."
@@ -243,17 +246,35 @@ up with its Run, or never asked is not decided and nil is returned."
   (let* ((request (plist-get record :request))
          (view (superchat-approval--view (plist-get request :session-id))))
     (when view
-      (with-current-buffer view
-        (let ((overlay (make-overlay (point-max) (point-max) view t t)))
-          (overlay-put overlay 'superchat-approval (plist-get record :handle))
-          (overlay-put overlay 'after-string (superchat-approval--line request))
-          (plist-put record :overlay overlay))))
+      ;; A panel of buttons where the conversation can hold one; the plain
+      ;; line otherwise, and whenever drawing the panel fails.
+      (let ((panel (and (fboundp 'superchat--approval-panel-show)
+                        (condition-case nil
+                            (superchat--approval-panel-show
+                             (plist-get record :handle) request)
+                          (error nil)))))
+        (if panel
+            (plist-put record :panel panel)
+          (with-current-buffer view
+            (let ((overlay (make-overlay (point-max) (point-max) view t t)))
+              (overlay-put overlay 'superchat-approval (plist-get record :handle))
+              (overlay-put overlay 'after-string (superchat-approval--line request))
+              (plist-put record :overlay overlay))))))
     (superchat-approval--announce
      (format "`%s' asks to be allowed once; answer with M-x superchat-approval-allow or superchat-approval-deny, or in M-x superchat-pending"
              (plist-get request :tool-name)))))
 
 (defun superchat-approval--unshow (record)
-  "Take RECORD's question out of its conversation."
+  "Take RECORD's question out of its conversation.
+A panel stays in the transcript and says how the question ended."
+  (when-let* ((panel (plist-get record :panel)))
+    (when (fboundp 'superchat--approval-panel-settle)
+      (ignore-errors
+        (superchat--approval-panel-settle
+         panel (pcase (plist-get record :decision)
+                 ('allow "Allowed once")
+                 ('deny "Denied")
+                 (_ "No longer open; nothing was allowed"))))))
   (when-let* ((overlay (plist-get record :overlay)))
     (when (overlayp overlay) (delete-overlay overlay))))
 
@@ -289,7 +310,7 @@ An answerer for `superchat-approval-function'.  The question is listed by
 it or the wait is abandoned -- by a quit, or because its Run ended."
   (let ((record (list :handle (make-symbol "approval") :request request
                       :asked-at (float-time) :decision nil :depth nil
-                      :overlay nil)))
+                      :overlay nil :panel nil)))
     (setq superchat-approval--open (append superchat-approval--open (list record)))
     (unwind-protect
         (progn

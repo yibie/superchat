@@ -1286,7 +1286,7 @@ that must be asked about goes to the approval seam."
                          ('rejected
                           (if (eq 'never (superchat-approval-effective-policy session-id))
                               "[Tool call denied: approval prompts are disabled in this session]"
-                            "[Tool call cancelled by user]"))
+                            "[Tool call denied by user: the user answered no to the approval question, so the tool did not run]"))
                          (_ "[Tool call cancelled by user]"))))
                   (superchat-tool-execution--record-failure
                    tool-name context execution-id

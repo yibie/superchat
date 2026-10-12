@@ -662,7 +662,7 @@ registered as it will be after the cutover, and unregistered afterwards."
       (should (= 0 (m6p--count session "tool.execution.started")))
       (should (= 1 (m6p--count session "tool.failed")))
       (let ((followup (plist-get (car smoke--requests) :prompt-text)))
-        (should (string-match-p "Tool call cancelled by user" followup))
+        (should (string-match-p "Tool call denied by user" followup))
         (should (string-match-p "do not retry it" followup))))))
 
 (ert-deftest m6-permissions/executor/danger-full-access-asks-nobody ()

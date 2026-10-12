@@ -114,8 +114,10 @@
       (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
       (should (= 0 aw--effect))
       (should (equal '("rejected") (apub--decisions session)))
-      (should (string-match-p "Tool call cancelled by user"
-                              (or (plist-get (car smoke--requests) :prompt-text) ""))))))
+      ;; A no is a refusal, and the model is told so; it was not cancelled.
+      (let ((told (or (plist-get (car smoke--requests) :prompt-text) "")))
+        (should (string-match-p "Tool call denied by user" told))
+        (should-not (string-match-p "cancelled" told))))))
 
 (ert-deftest approval-publish/a-question-is-answered-once-and-only-by-its-handle ()
   (apub--pipeline (list aw--eval-round '(:text "APUB_DONE"))
@@ -170,19 +172,41 @@
       (apub--with-timers
           ((apub--later
             (lambda (_question)
-              (setq shown
-                    (with-current-buffer view
-                      (mapconcat
-                       (lambda (overlay)
-                         (or (and (overlay-get overlay 'superchat-approval)
-                                  (overlay-get overlay 'after-string))
-                             ""))
-                       (overlays-in (point-min) (point-max)) "")))
+              (setq shown (aw--shown view))
               ;; The command answers the question of the conversation it is
               ;; called in.
               (with-current-buffer view (superchat-approval-allow)))))
         (aw--settle (smoke--send view "go")))
+      (should (string-match-p "Allow `eval_elisp' once\\?" (or shown "")))
+      (should (string-match-p "Waiting for your answer" (or shown "")))
+      (should (= 1 aw--effect))
+      (should (equal '("allowed-once") (apub--decisions session)))
+      ;; The panel stays in the transcript and says how the question ended.
+      (should (string-match-p "Allowed once" (aw--shown view)))
+      (should-not (string-match-p "Waiting for your answer" (aw--shown view))))))
+
+(ert-deftest approval-publish/a-conversation-that-cannot-hold-a-panel-shows-the-line ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DONE"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           shown)
+      (cl-letf (((symbol-function 'superchat--approval-panel-show)
+                 (lambda (&rest _) (error "no panel here"))))
+        (apub--with-timers
+            ((apub--later
+              (lambda (_question)
+                (setq shown
+                      (with-current-buffer view
+                        (mapconcat
+                         (lambda (overlay)
+                           (or (and (overlay-get overlay 'superchat-approval)
+                                    (overlay-get overlay 'after-string))
+                               ""))
+                         (overlays-in (point-min) (point-max)) "")))
+                (with-current-buffer view (superchat-approval-allow)))))
+          (aw--settle (smoke--send view "go"))))
       (should (string-match-p "eval_elisp" (or shown "")))
+      (should (string-match-p "superchat-approval-allow" (or shown "")))
       (should (= 1 aw--effect))
       (should (equal '("allowed-once") (apub--decisions session)))
       ;; The line is gone with the question.
@@ -324,5 +348,118 @@ a timer while both wait, and must answer both."
                    (list :tool-name "eval_elisp" :args nil
                          :session-id "apub-session" :run-id nil)))))
   (should-not (superchat-approval-open-questions)))
+
+;;;; The question is a panel in its conversation (slice 5b) ---------------------
+
+(defvar widget-keymap)
+(declare-function widget-get "wid-edit" (widget property))
+(declare-function superchat--thinking-status-message "superchat" (status latest))
+
+(defun apub--buttons (view)
+  "The approval buttons VIEW shows, as an alist of (TAG . WIDGET)."
+  (with-current-buffer view
+    (let (found)
+      (dolist (overlay (append (car (overlay-lists)) (cdr (overlay-lists))))
+        (let ((widget (overlay-get overlay 'button)))
+          (when (and widget
+                     (member (widget-get widget :tag)
+                             '("Allow once" "Deny" "Details")))
+            (cl-pushnew (cons (widget-get widget :tag) widget) found
+                        :key #'car :test #'equal))))
+      found)))
+
+(defun apub--press (view tag)
+  "Do what pressing the button TAG in VIEW does."
+  (funcall (widget-get (cdr (assoc tag (apub--buttons view))) :superchat-action)))
+
+(ert-deftest approval-publish/the-conversation-shows-a-panel-of-three-buttons ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DONE"))
+    (let* ((view (smoke--open-chat)) run)
+      (apub--with-timers
+          ((apub--later
+            (lambda (question)
+              (setq apub--seen
+                    (list :tags (sort (mapcar #'car (apub--buttons view)) #'string<)
+                          :text (and (string-match-p "eval_elisp" (aw--shown view)) t)))
+              (superchat-approval-answer (plist-get question :handle) t))))
+        (setq run (aw--settle (smoke--send view "go"))))
+      (should (equal '(:tags ("Allow once" "Deny" "Details") :text t) apub--seen))
+      (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
+      (should (= 1 aw--effect)))))
+
+(ert-deftest approval-publish/pressing-deny-answers-no ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DECLINED"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           (answer (symbol-function 'superchat-approval-answer))
+           calls run)
+      (cl-letf (((symbol-function 'superchat-approval-answer)
+                 (lambda (handle allow)
+                   (push allow calls)
+                   (funcall answer handle allow))))
+        (apub--with-timers
+            ((apub--later (lambda (_question)
+                            (if (assoc "Deny" (apub--buttons view))
+                                (apub--press view "Deny")
+                              ;; No button: fail instead of waiting forever.
+                              (push :no-button calls)
+                              (funcall answer
+                                       (plist-get (car (superchat-approval-open-questions))
+                                                  :handle)
+                                       t)))))
+          (setq run (aw--settle (smoke--send view "go")))))
+      (should (equal '(nil) calls))
+      (should (= 0 aw--effect))
+      (should (equal '("rejected") (apub--decisions session)))
+      (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))))
+
+(ert-deftest approval-publish/pressing-allow-once-answers-yes ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DONE"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view))
+           pressed)
+      (apub--with-timers
+          ((apub--later (lambda (question)
+                          (if (assoc "Allow once" (apub--buttons view))
+                              (progn (setq pressed t) (apub--press view "Allow once"))
+                            (superchat-approval-answer (plist-get question :handle) nil)))))
+        (aw--settle (smoke--send view "go")))
+      (should pressed)
+      (should (= 1 aw--effect))
+      (should (equal '("allowed-once") (apub--decisions session))))))
+
+(ert-deftest approval-publish/an-answered-panel-says-so-and-its-buttons-do-nothing ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DECLINED"))
+    (let* ((view (smoke--open-chat))
+           (session (buffer-local-value 'superchat--session-id view)))
+      (apub--with-timers
+          ((apub--later (lambda (question)
+                          (superchat-approval-answer (plist-get question :handle) nil))))
+        (aw--settle (smoke--send view "go")))
+      ;; The label, not the refusal text the tool record may show.
+      (let ((case-fold-search nil))
+        (should (string-match-p "^Denied$" (aw--shown view)))
+        (should-not (string-match-p "^Allowed once$" (aw--shown view))))
+      (should-not (string-match-p "Waiting for your answer" (aw--shown view)))
+      ;; A stale button decides nothing.
+      (when (assoc "Allow once" (apub--buttons view))
+        (apub--press view "Allow once"))
+      (should (= 0 aw--effect))
+      (should (equal '("rejected") (apub--decisions session))))))
+
+(ert-deftest approval-publish/the-status-line-says-it-waits-for-you ()
+  (apub--pipeline (list aw--eval-round '(:text "APUB_DONE"))
+    (let* ((view (smoke--open-chat)))
+      (apub--with-timers
+          ((apub--later
+            (lambda (question)
+              (setq apub--seen
+                    (superchat--thinking-status-message
+                     (superchat-runtime-status (plist-get question :run-id)) nil))
+              (superchat-approval-answer (plist-get question :handle) t))))
+        (aw--settle (smoke--send view "go")))
+      (should (stringp apub--seen))
+      (should (string-match-p "Waiting for your answer" apub--seen))
+      (should-not (string-match-p "first token" apub--seen)))))
 
 ;;; approval-publish-regression.el ends here

@@ -2,6 +2,19 @@
 
 All notable changes to superchat.
 
+## Unreleased — an approval is answered where it is asked
+
+- An approval question is now a panel in its conversation, drawn the way an
+  `ask_user` question is: `[Allow once]` `[Deny]` `[Details]`. The panel
+  stays in the transcript and says how the question ended. The commands and
+  `y` / `n` in `superchat-pending` still work; a conversation that cannot
+  hold a panel shows the plain line.
+- A tool the user refused is reported to the model as
+  `[Tool call denied by user: ...]`, not as cancelled.
+- While an approval question is open the status line reads
+  `Waiting for your answer…` and counts from when it was asked.
+- Not checked by a person: nobody has pressed the buttons in a real window.
+
 ## Unreleased — an approval is published, then answered
 
 - An approval question no longer holds Emacs. It is shown at the end of its

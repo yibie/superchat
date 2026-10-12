@@ -134,7 +134,7 @@ The row content and full-text search stay free of the result token."
              (text (plist-get payload :result-text)))
         (should (equal "cancelled" (plist-get payload :status)))
         (should (stringp text))
-        (should (string-match-p "Tool call cancelled by user" text))
+        (should (string-match-p "Tool call denied by user" text))
         ;; The model received exactly this refusal text in the follow-up.
         (should (string-match-p
                  (regexp-quote text)

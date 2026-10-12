@@ -220,7 +220,7 @@ model received in its own Run, byte for byte, never a success."
              (seen (tool-observation--answer
                     in-run (tool-observation--call-named in-run "eval_elisp"))))
         (should seen)
-        (should (string-match-p "Tool call cancelled by user"
+        (should (string-match-p "Tool call denied by user"
                                 (tool-observation--text seen)))
         (tool-observation--run view "and now?")
         (let* ((messages (tool-observation--messages))

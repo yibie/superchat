@@ -676,7 +676,7 @@ whether any model follows the instruction or completes the original task."
             (let ((results (plist-get (nth 2 requests) :results)))
               (should (= 2 (length results)))
               (should (string-match-p "M5TF_MIXED_RUNTIME_FAILURE" (car results)))
-              (should (string-match-p "Tool call cancelled by user" (car results)))
+              (should (string-match-p "Tool call denied by user" (car results)))
               (should (string-match-p "M5TF_ALLOWED_READ" (cadr results))))))))))
 
 (provide 'm5-tool-feedback-regression)
