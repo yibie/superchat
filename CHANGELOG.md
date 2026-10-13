@@ -2,6 +2,28 @@
 
 All notable changes to superchat.
 
+## Unreleased — what the documentation says is what happens
+
+- `superchat-emacsclient-run-cancel` answers with the status the Runtime
+  holds for the Run once the cancel was asked for, and with `terminal`
+  (whether that status is final). It used to answer `"status": "cancelled"`
+  whatever the Run ended as; a Run cancelled with work unsettled ends
+  `audit-incomplete`.
+- The "Allow all" panel now reads `Allowed; this conversation no longer asks
+  for tools; saving still asks`, which is what the level `auto` does.
+- Documentation brought in line with the code, each from the architecture
+  walk of 2026-10-13: the default approval answerer publishes the question
+  (C8); `superchat-changes` records notices (C10); built-in tools a row owns
+  do not depend on `tools-builtin` (C14); attachments are recorded by the
+  Runtime at admission (C15); killing a View that owns a Preset does retire
+  its Runs (C18); the pending list's keys write (C19); the fixed Stage
+  registry is retired, said once (C21); thirteen default tools, and
+  `work_record` is not governed by `superchat-llm-tool-names` (C22); not
+  everything shown goes through the Sink (C23); in-place requests go to the
+  conversation of where you are, not the one a window shows (C24);
+  `eval_elisp` is kept from prompting but `read-key-sequence`, `read-key`
+  and `describe-key` can still wait for a key (C25).
+
 ## Unreleased — a tool the agent wrote is kept as its definition
 
 - Fixed: a tool written with `define_tool` in one execution answered

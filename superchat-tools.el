@@ -973,15 +973,17 @@ to classify it: the permission level treats every `eval_elisp' call as full
 Emacs control -- asked about per call under `edit-buffers', refused under
 `read-only', free under `danger-full-access'.
 
-The expression never asks the user anything: it runs with
-`inhibit-interaction', so a minibuffer prompt or a `read-char' or
-`read-event' stops it, and the model is told to find the value itself or to
+The expression is kept from asking the user through the minibuffer,
+`read-char' or `read-event': it runs with `inhibit-interaction', so such a
+prompt stops it, and the model is told to find the value itself or to
 ask with `ask_user' (decision of 2026-09-24).  The stop leaves the whole
 expression at once, through `signal-hook-function', because code that asks
 inside `condition-case' and retries -- Emacs 30's `read-multiple-choice' --
-would otherwise catch it and loop for ever.  `read-key-sequence', which
-Emacs does not stop that way, is outside this.  The approval question for
-the call is asked before this function runs and is not affected."
+would otherwise catch it and loop for ever.  `read-key-sequence',
+`read-key' and `describe-key', which Emacs does not stop that way, can still
+reach the user, and so can what the expression leaves to a timer.  The
+approval question for the call is asked before this function runs and is
+not affected."
   (let* ((asked (make-symbol "asked"))
          (outer-hook signal-hook-function)
          (leave-on-prompt
@@ -1556,7 +1558,10 @@ tools only into Requests they are active for.  The full library stays
 available to any explicit tool list.
 
 Set to `all' to expose every built-in tool except `sql'.  Set to nil to
-expose no built-in tools.  `sql' reads every conversation of every
+expose none of the tools this list governs.  A tool a mounted row always
+offers (`work_record' of work-records) is not governed by it; unmounting the
+row, or a Request with `:tools none', takes that tool away.  `sql' reads
+every conversation of every
 Workspace, so it is offered only when a list names it.
 
 This variable governs only Superchat's own **built-in** tools.  A tool a
@@ -2511,8 +2516,9 @@ These are the mounted built-in tools and the live plugin tool installations."
 ;; ── Plugin: the built-in tools as selectable descriptors ──
 (superchat-define-plugin tools-builtin
   :inject '(tools)
-  :doc "Installs the built-in tools as selectable descriptors; without it no
-built-in tool is selectable."
+  :doc "Installs the built-in tools no other row owns as selectable descriptors.
+A tool a row owns (`work_record' of work-records, for one) is installed by
+that row and does not depend on this one."
   :apply
   (lambda (_scope _config)
     (superchat-tools--install-builtin-descriptors)))

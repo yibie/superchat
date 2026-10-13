@@ -95,9 +95,12 @@ active; `none' sends no reference at all."
 
 (defun superchat-inline-session-id (&optional buffer)
   "Return the Session an in-place command from BUFFER joins.
-That is the conversation the chat window shows (M10 slice 2): the chat beside
-the code in this tab, else the main chat View's.  The option
-`superchat-inline-session-scope' no longer has an effect.  Never prompts."
+From a buffer inside a project that is the main conversation of that
+Workspace (a chat window beside the code that shows another conversation is
+switched to it); from any other non-chat buffer, the temporary conversation;
+from a chat View, the conversation shown (`superchat-conversation-session-id').
+The option `superchat-inline-session-scope' no longer has an effect.  Never
+prompts."
   (with-current-buffer (if (and (bufferp buffer) (buffer-live-p buffer))
                            buffer
                          (current-buffer))

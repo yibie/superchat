@@ -26,7 +26,7 @@ Status: accepted 2026-10-12, implemented。用户看过后说照现在的样子�
 
 - **先记档位，再放行。** 档位记不下（写 Tape 出错）时报错，问题仍开着，什么都没放行。
 - 已经回答过、或已随执行作废的问题，"全部允许"什么都不做，也不切档位。
-- 回答之后面板上写 `Allowed; this conversation no longer asks`；回显区说明现在是 `auto`、怎么改回去。
+- 回答之后面板上写 `Allowed; this conversation no longer asks for tools; saving still asks`（2026-10-13 改，架构走查 C6：原来写的是 `…no longer asks`，而 `auto` 档位下保存仍然会问）；回显区说明现在是 `auto`、怎么改回去。
 - 档位名单的顺序是 `edit-buffers, auto, danger-full-access, read-only`。
 - 按钮字样是英文 `Allow all`，和面板上其它按钮一致。
 - 按"全部允许"之前没有二次确认。

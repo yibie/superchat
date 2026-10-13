@@ -6,8 +6,10 @@
 
 ;; Buffer-first mutation: the model's ordinary edits end in a buffer, and
 ;; saving is the user's.  This module is the outlet that makes those edits
-;; visible when the user is not looking at the buffer.  It records nothing of
-;; its own.  The candidates are derived each time they are asked for:
+;; visible when the user is not looking at the buffer.  The list of
+;; candidates is recorded nowhere; it is derived each time it is asked for
+;; (the notices further down are recorded: this module appends
+;; `run.ended-unwatched' and `run.seen' and keeps a checkpoint of its fold):
 ;;
 ;;   the Session's (or one Run's) Runs that made a structured buffer edit, read
 ;;   from their `tool.completed' facts on the Tape, delegated Runs included

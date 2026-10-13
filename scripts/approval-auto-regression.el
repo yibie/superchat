@@ -234,7 +234,7 @@ Every question is counted.  FUNCTION must decide it, or the Run waits."
       (should (= 1 aw--effect))
       (should (eq 'auto (superchat-permission-current session)))
       (let ((case-fold-search nil))
-        (should (string-match-p "^Allowed; this conversation no longer asks$"
+        (should (string-match-p "^Allowed; this conversation no longer asks for tools; saving still asks$"
                                 (aw--shown view)))))))
 
 (ert-deftest approval-auto/the-command-answers-with-all ()

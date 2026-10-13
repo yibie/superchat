@@ -18,7 +18,7 @@ superchat 是一个运行在 Emacs 内部的 LLM 聊天界面，以共享 Runtim
 | SKILL.md 技能格式（frontmatter + body）| ✗     | ✗      | ✗             | **✓**     |
 | 独立 `.workflow` 文件的异步多步骤工作流 | ✗     | ✗      | ✗             | **✓**     |
 | SQLite + FTS5 持久化记忆               | ✗     | ✗      | ✗             | **✓**     |
-| 插件模型（Service / Stage / Event）     | ✗     | ✗      | ✗             | **✓**     |
+| 插件模型（Service / Event）             | ✗     | ✗      | ✗             | **✓**     |
 
 选择 superchat，当你需要：
 - 用 `@gpt-4o` 或 `@claude-sonnet` 在对话中随时切换模型。
@@ -242,6 +242,10 @@ emacsclient --eval '(superchat-emacsclient-session-history "SESSION-ID" 50)'
 emacsclient --eval '(superchat-emacsclient-run-cancel "RUN-ID")'
 ```
 
+`run-cancel` 的回答里，`status` 是提出取消之后 Runtime 对这次 Run 记着的状态
+（`cancelled`，或别的结局，如 `audit-incomplete`），`terminal` 说明这个状态是不是最终的；
+它不是一个固定的词。
+
 适配器不会启动 server。`emacsclient --eval` 本来就能执行任意 Emacs Lisp；
 能够连接该 server 的本地进程本来就拥有同样的能力。因此这些命令只是便利
 接口，不是沙箱、鉴权层或安全边界。
@@ -329,11 +333,11 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 | `M-x superchat-inline-act` | 让 AI 就在你所在的位置把事情做完：它可以读别的 buffer、改当前或别的 buffer，需要审批时和聊天窗一样先把问题发布出来、Emacs 照常可用，等你回答（`M-x superchat-approval-allow` / `superchat-approval-deny`，或在 `M-x superchat-pending` 里按 `y` / `n`）；聊天窗不会打开。进度和回答显示在该行下方的小框里，结束时小框会写明这次调用了几次工具、哪些 buffer 被改了还没保存（保存由你决定）。输入指令时同样可按 `C-c SPC` 切换附带的上下文。在小框上：`d` 看被改 buffer 与文件的差异，`r` 追问（仍可用工具），`v` 打开完整对话，`w` 复制，`q` 取消并清除，`M-RET` 打开菜单。 |
 | `M-x superchat-rewrite-region` | 改写选区：只改你选中的文字；它周围的内容（所在的 Org/Markdown 标题小节，或所在的函数）只给模型当参考，不许改、不许交回。回答里带着请求标记的会被拦下，比选区长很多的会提示你检查。结果边生成边在选区位置预览；你按 `C-c C-a` 接受之前，文件一个字节都不变（接受后一次撤销可全部退回），`C-c C-k` 拒绝。`C-c C-r` 在结果上再改一次，`C-c C-d` 看差异，`C-c C-m` 按冲突标记合并，`C-c C-n`/`C-c C-p` 在多个预览间跳转；矩形选区每段各有一个预览。 |
 | `M-x superchat-annotate` | 批注：对选区（没有选区就是整个 buffer）逐处给意见，每条意见挂在它说的那处文字上——那几个字加波浪线，意见显示在那一行下面，成一块（把 `superchat-annotate-remark-style` 设为 `eol` 则显示在行尾）。你的文字不会被改动。只有在模型说的那一行（或上下两行以内）找到它引用的原文时才挂；找不到的只计数并列出，不乱挂。光标在批注上时 `M-n`/`M-p` 跳到下一条、上一条，`M-x superchat-annotate-list` 列出全部，`M-x superchat-annotate-clear` 清掉。配置和笔记上稳定；代码上差一些，小的本地模型在代码上不可靠。在对话里，消息中写 `>annotate`，这一条就带着对话历史、不带工具地发出，回答同时挂到叫出这段对话时你所在的 buffer 上；`>annotate 名字` 或 `>annotate "名字"` 指定别的 buffer 或文件。它只管这一条消息。 |
-| `M-x superchat-pending` | 一张表：Superchat 正在做什么、在等什么。正在跑的执行（是你发起的，还是它自己开始的）、等你回答或等某个时间的工作记录、到点了却没启动的、说不清有没有启动的定时任务、还没到点的定时器、已经结束而你还没看的、工具改过还没保存的 buffer、存着但没有加载的 agent 自写工具（因为没有人看过它）。`RET` 去那段对话（或那个 buffer；自写工具则进入复核：批准进某个 workspace、拒绝或删除），`v` 看工作记录，`k` 停掉正在跑的执行，`d` 清掉一条已结束的，`g` 重读。它只读，不排队、不写任何东西。 |
+| `M-x superchat-pending` | 一张表：Superchat 正在做什么、在等什么。正在跑的执行（是你发起的，还是它自己开始的）、等你回答或等某个时间的工作记录、到点了却没启动的、说不清有没有启动的定时任务、还没到点的定时器、已经结束而你还没看的、工具改过还没保存的 buffer、存着但没有加载的 agent 自写工具（因为没有人看过它）。`RET` 去那段对话（或那个 buffer；自写工具则进入复核：批准进某个 workspace、拒绝或删除），`v` 看工作记录，`k` 停掉正在跑的执行，`d` 清掉一条已结束的，`g` 重读。看这张表不写任何东西，也不排队。表上的按键会写：`g` 让通知重读一遍，数据库里会更新一个检查点；`d` 记下你看过一条已结束的执行；`y`、`n`、`a` 记下你对审批的回答；复核记下你对一个工具的决定。 |
 | `/work <目标>`（在聊天输入栏里） | 开一条由 Superchat 接着做下去的工作记录：一次执行结束而记录还没做完，Superchat 就在同一段对话里自己接着做，直到做完或需要你。你按停、某次执行失败、连续一阵既没改任何东西也没在记录上写任何东西（`superchat-work-round-idle-limit`，连续 2 次）、或者试了太多次（`superchat-work-round-limit`，256）时，它也会停下，记录上写明原因并等你。`/work resume` 在停下之后接着做，`/work pause` 让 Superchat 不再自己接着做，单独的 `/work` 显示记录现在的状态。Superchat 自己接着做了多少次，只在一个地方显示：记录的详情（`M-x superchat-work-list` 里按 `RET`，或 `M-x superchat-pending` 里按 `v`），写作 `Tries: N/256`。这一切需要模型有 `work_record` 工具：`work-records` 这一行挂着就带它，不受 `superchat-llm-tool-names` 影响；预设自己的工具名单里没有它时，`/work` 不会开始。Superchat 只在对话的 buffer 还开着时接着做，重启后不会自己续；审批仍然一次一次问你。 |
 | `#+begin_src superchat` | Org-babel：块内容作为问题，回答写入 `#+RESULTS:`。 |
 
-就地问、就地做、改写选区都进对话窗口正在显示的那段对话（你文件旁边那段，没有就是主对话），不管文件在哪里；不再有单独的就地对话。每次请求只带它指着的内容和你的话，不带这段对话之前的轮次——和 Cursor 的就地编辑、gptel 的改写一样；在同一个小框里追问（`r`）会带上这个小框自己的第一问一答，以及之后你对它改过的 buffer 是否保存或丢弃。这一轮会记进对话：结束时对话窗口里会显示它，带一个按钮能跳回那个文件那一行，之后在对话窗口里发的消息也会带上它。对话正在干活时，就地的请求排队等候。想让某段代码的问题带上对话的历史，就用 `M-x superchat-send-region` 把代码送进对话，在那里问。
+就地问、就地做、改写选区进的是你所在位置的那段对话：在项目里的文件上，进那个 workspace 的主对话（文件旁边的对话窗口如果显示的是别的对话，会被切过去）；在别的 buffer 上，进临时对话；在对话窗口里，进它正在显示的那段。不再有单独的就地对话。每次请求只带它指着的内容和你的话，不带这段对话之前的轮次——和 Cursor 的就地编辑、gptel 的改写一样；在同一个小框里追问（`r`）会带上这个小框自己的第一问一答，以及之后你对它改过的 buffer 是否保存或丢弃。这一轮会记进对话：结束时对话窗口里会显示它，带一个按钮能跳回那个文件那一行，之后在对话窗口里发的消息也会带上它。对话正在干活时，就地的请求排队等候。想让某段代码的问题带上对话的历史，就用 `M-x superchat-send-region` 把代码送进对话，在那里问。
 | Magit 提交 buffer | 加载 Magit 后，superchat 根据暂存的 diff 生成规范化提交信息。 |
 
 ### 统一流水线（高级）
@@ -348,8 +352,10 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 固定的 Stage 注册表已经退役。会话身份、状态装配、工具选择、prompt 组装和准入现在都是核心
 直接调用；插件还能扩展的部分是 Event。插件在 `apply` 里往 `collect-context` Event 注册一个
-监听器（返回带预算等级的 prompt 片段），或注册生命周期 Event。所有可见输出只送到 envelope
-的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务只是 Sink 不同。prompt 文本由
+监听器（返回带预算等级的 prompt 片段），或注册生命周期 Event。模型的文字、它的思考过程和最终交付
+都送到 envelope 的 *Sink*（一小组回调），所以 inline 小框、聊天窗口和后台任务的区别在 Sink。
+但不是所有显示出来的东西都经过它：自带的 llm.el 传输还会在请求所在的 View 活着时，直接往里
+写“首个 token 用时”的提示并收起回答区，所以只换一个自己的 Sink 并不能让 View 安静下来。prompt 文本由
 插件 `apply` 里注册的 `collect-context` 监听器提供（旧的
 `superchat-build-prompt-functions` / `superchat-system-prompt-functions` 钩子已不存在）：
 
@@ -399,7 +405,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 常用新选项：
 
-- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`read_reference`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`（`read_reference` 按 ID 读取 Superchat 随包的操作资料；只要请求里有这个工具，系统文字里就带一小段资料目录）；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
+- `superchat-llm-tool-names` —— 默认给模型的内置工具：`list_buffers`、`read_buffer`、`read_file`、`read_reference`、`open_file`、`apropos`、`describe-function`、`edit_buffer`、`eval_elisp`、`timer_create`、`timer_list`、`timer_cancel`、`work_record`（`work_record` 只要它那一行 `work-records` 挂着就会提供，哪怕这个名单没写它或者是 nil；`read_reference` 按 ID 读取 Superchat 随包的操作资料；只要请求里有这个工具，系统文字里就带一小段资料目录）；插件登记的工具也会一并提供；`'all` 为全部。一次调用能做什么由 Session 的[权限档位](#权限档位)决定。
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `edit-buffers` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
@@ -407,7 +413,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的是临时对话。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
-内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误。通过 `eval_elisp` 运行的代码不会向你提问：它一旦要弹出提问、输入框或读取按键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
+内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
 
 新写入的用户消息和模型答复会完整保存，供后续对话读取。上下文预算可能整条省略较早的消息，但不会用显示摘要替换已保存的原文。旧版本已经裁掉的文字无法从指纹恢复。详见[对话历史](docs/decisions/implemented/2026-09-17-preserve-conversation-material.md)。
 
@@ -491,11 +497,11 @@ Superchat 通过 `superchat-plugins` 挂载默认组合。第三方插件是一�
 
 ## 项目状态与路线图
 
-[剩余架构计划](docs/roadmap.md)区分当前实现、已接受但未完成的决定和提案。当前实现仍使用固定 Stage；已经接受的替代方向不等于已交付功能。
+[剩余架构计划](docs/roadmap.md)区分当前实现、已接受但未完成的决定和提案。固定的 Stage 注册表已经退役（路线图 M3）；每一项做到哪一步，以路线图为准。
 
 当前包版本为 v1.4.0。稳定功能包括聊天、流式、模型切换、技能、记忆、
 MCP、按 Session 权限档位并带批准的工具调用、任意 buffer 里的 inline 提问与预览改写、带子
-Agent 委派的 agent 模式、带固定 Stage 主线的插件内核、自动压缩，以及异步 `.workflow`
+Agent 委派的 agent 模式、带单一执行主线的插件内核、自动压缩，以及异步 `.workflow`
 引擎（`>>name [args]` 或 `/workflow <name>`）。
 
 ## 许可证

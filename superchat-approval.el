@@ -214,7 +214,8 @@ up with its Run, or never asked is not decided and nil is returned."
   "The permission level the answer \"allow all\" selects for its conversation.")
 
 (defun superchat-approval-answer-all (handle)
-  "Allow the open question HANDLE once and stop asking in its conversation.
+  "Allow the open question HANDLE once; its conversation stops asking for tools.
+Saving a buffer still asks under `auto'.
 The conversation is switched to the permission level `auto' first: when that
 cannot be recorded the error is signaled and the question stays open.  Return
 non-nil when this call decided the question; one already answered, given up
@@ -294,7 +295,7 @@ A panel stays in the transcript and says how the question ended."
         (superchat--approval-panel-settle
          panel (pcase (plist-get record :decision)
                  ((and 'allow (guard (plist-get record :all)))
-                  "Allowed; this conversation no longer asks")
+                  "Allowed; this conversation no longer asks for tools; saving still asks")
                  ('allow "Allowed once")
                  ('deny "Denied")
                  (_ "No longer open; nothing was allowed"))))))
@@ -378,7 +379,7 @@ running keyboard macro is not a person and is refused either way."
        (format "allowed `%s' once" (plist-get question :tool-name))))))
 
 (defun superchat-approval-allow-all ()
-  "Allow this conversation's open approval question and stop asking here.
+  "Allow this conversation's open approval question; stop asking for tools here.
 The conversation is switched to the permission level `auto': full Emacs
 control is no longer asked about, saving a buffer still is.  Other
 conversations are not changed; /permissions edit-buffers brings the
@@ -387,7 +388,7 @@ questions back."
   (let ((question (superchat-approval--question-here)))
     (when (superchat-approval-answer-all (plist-get question :handle))
       (superchat-approval--announce
-       (format "allowed `%s'; this conversation is now at the level auto and no longer asks (/permissions edit-buffers to be asked again)"
+       (format "allowed `%s'; this conversation is now at the level auto and no longer asks for tools; saving still asks (/permissions edit-buffers to be asked again)"
                (plist-get question :tool-name))))))
 
 (defun superchat-approval-deny ()

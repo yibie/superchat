@@ -351,7 +351,10 @@ the tool into a workspace, rejects it or deletes it."
   "Everything under way and everything waiting, as a list of plists.
 Each is (:kind :key :what :detail :session :buffer).  `:kind' is one of the
 symbols of `superchat-pending--kinds', and the list is in that order.  Read
-from what the other modules keep; nothing is written."
+from what the other modules keep: this reading writes nothing.  Reading the
+notices again (`superchat-pending-refresh') keeps a checkpoint in the
+database, and the list's actions record facts: `d' that an ended execution
+was looked at, `y', `n' and `a' the answer to an approval."
   (let ((items (append (superchat-pending--running)
                        (superchat-pending--records)
                        (superchat-pending--tasks)
@@ -436,7 +439,8 @@ leaves the list."
 (defun superchat-pending-answer (item allow)
   "Answer the approval the row ITEM asks: allow it once when ALLOW, else refuse.
 ALLOW `all' allows it and switches its conversation to the level `auto', so
-that conversation no longer asks.  Return non-nil when this call decided it.
+that conversation no longer asks for tools (saving still asks).  Return
+non-nil when this call decided it.
 The row must be an execution that asks for an approval; a question the model
 put is answered in its conversation."
   (unless (and item (eq 'asking (plist-get item :kind)))
@@ -454,7 +458,7 @@ put is answered in its conversation."
       (superchat-pending-refresh))))
 
 (defun superchat-pending-allow-all (item)
-  "Allow the approval the row at point asks for, and stop asking there.
+  "Allow the approval the row at point asks for; stop asking for tools there.
 Its conversation is switched to the permission level `auto'."
   (interactive (list (tabulated-list-get-id)))
   (superchat-pending-answer item 'all))
@@ -506,7 +510,8 @@ Its conversation is switched to the permission level `auto'."
 RET goes to the conversation (or the unsaved buffer; for a tool the
 agent wrote that nobody looked at, to its review), v shows a work
 record, k stops a running execution, y and n answer the approval a row
-asks for, a allows it and stops asking in that conversation, d forgets an
+asks for, a allows it and stops asking for tools in that conversation, d
+forgets an
 ended one, g reads everything again."
   (setq tabulated-list-format
         [("State" 22 nil) ("What" 44 nil) ("Detail" 52 nil) ("Conversation" 0 nil)])

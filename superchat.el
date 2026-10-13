@@ -3701,8 +3701,10 @@ openings in this Emacs session use the mode switched to."
 
 ;; ── Turns started elsewhere (M10 slice 2) ──
 ;;
-;; In-place ask, act and rewrite go into the conversation the chat window
-;; shows and are recorded there; the chat window shows each such Turn when it
+;; In-place ask, act and rewrite go into the conversation of where they are
+;; asked -- the Workspace's main one for a project file, the temporary one
+;; otherwise (`superchat-conversation-session-id') -- and are recorded there;
+;; the chat window shows each such Turn when it
 ;; ends, with a button back to where it was asked (M10 record, "共用一段对话").
 
 (defun superchat-conversation-session-id ()
@@ -3973,7 +3975,9 @@ audit rows keep their collapsed line."
   "Run restart reconciliation for SESSION-ID only when no Run is live.
 `superchat-runtime-reconcile-session' is restart reconciliation: it
 deliberately ignores the process-local Run registry and seals unfinished
-Runs `abandoned'.  Killing a View does not cancel its Run, so a Session
+Runs `abandoned'.  Killing a plain View does not cancel its Run (a View
+that owns a Preset is the exception: killing it retires that Preset's Runs,
+`superchat--deactivate-active-preset'), so a Session
 observed in the same Emacs while that Run is still current must be left
 untouched -- otherwise the false seal could later be contradicted by the
 Run's real terminal fact (S22-fix-1)."

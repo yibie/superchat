@@ -28,7 +28,7 @@ Choose this seam whenever code runs a tool on the model's behalf. Choose a `tool
 
 ### Minimal configuration
 
-None. A Session starts at `superchat-sandbox-default-mode` (`edit-buffers`; the former name `workspace-write` is still accepted) and `superchat-approval-default-policy` (`ask`); `/permissions` changes the level for one Session. `superchat-approval-function` is the human answerer the approval chain ends in (default: `superchat-approval-confirm`, `y`/`n`/`?`).
+None. A Session starts at `superchat-sandbox-default-mode` (`edit-buffers`; the former name `workspace-write` is still accepted) and `superchat-approval-default-policy` (`ask`); `/permissions` changes the level for one Session. `superchat-approval-function` is the human answerer the approval chain ends in (default: `superchat-approval-ask`. With `superchat-approval-prompt` at `publish`, the default, the question is published in the conversation and listed in `superchat-pending`, Emacs goes on, and it is answered there; at `minibuffer` it is the former `y`/`n`/`?` question).
 
 ### The decision
 
@@ -99,7 +99,7 @@ What is and is not protected: the texts pass through the Tape's keyed-field reda
 
 ### Absent dependencies
 
-Without the `tape` plugin there is no audit, and a call is blocked rather than executed without its evidence. Without `tools-builtin` no built-in tool is a selectable descriptor. Without any answerer (a batch Emacs with the default minibuffer answerer) an `ask` is `unavailable` and the call is refused.
+Without the `tape` plugin there is no audit, and a call is blocked rather than executed without its evidence. Without `tools-builtin` the built-in tools that row installs are not selectable descriptors; a built-in tool another row owns (`work_record` of `work-records`, and the tools of the memory, sub-agent and workspace rows) is installed by its own row and stays selectable while that row is mounted. Without any answerer (a batch Emacs with the default answerer) an `ask` is `unavailable` and the call is refused.
 
 ## Understand the implementation
 

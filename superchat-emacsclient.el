@@ -202,8 +202,12 @@ SESSION-ID or malformed LIMIT returns a JSON error object."
 (defun superchat-emacsclient-run-cancel (run-id)
   "Cancel active RUN-ID through the existing Runtime cancel seam.
 
-Return a JSON string.  This is the only mutating adapter operation; it never
-implements cancellation itself and does not start an Emacs server."
+Return a JSON string.  On success `status' is what the Runtime holds for
+the Run once the cancel was asked for -- `cancelled', or another ending
+such as `audit-incomplete' or one the Run already had -- and `terminal'
+says whether that status is final.  This is the only mutating adapter
+operation; it never implements cancellation itself and does not start an
+Emacs server."
   (superchat-emacsclient--safe
    (lambda ()
      (superchat-plugin-require-active-row 'emacsclient)
@@ -216,10 +220,21 @@ implements cancellation itself and does not start an Emacs server."
           (superchat-emacsclient--error-object
            "run-not-found" (format "Run %s does not exist" run-id))))
         ((superchat-service-call nil 'driver 'cancel run-id "[Cancelled via emacsclient]")
-         (superchat-emacsclient--encode
-          (list (cons "ok" t)
-                (cons "run_id" run-id)
-                (cons "status" "cancelled"))))
+         ;; The Runtime's word, read after the cancel: a Run that had
+         ;; already ended keeps its ending, and one cancelled with work
+         ;; unsettled ends `audit-incomplete'.
+         (let ((now (plist-get (superchat-service-call nil 'driver 'status run-id)
+                               :status)))
+           (superchat-emacsclient--encode
+            (list (cons "ok" t)
+                  (cons "run_id" run-id)
+                  (cons "status" (format "%s" (or now "unknown")))
+                  (cons "terminal"
+                        (if (and (fboundp 'superchat-runtime--terminal-p)
+                                 now
+                                 (superchat-runtime--terminal-p now))
+                            t
+                          json-false))))))
         (t
          (superchat-emacsclient--encode
           (superchat-emacsclient--error-object
