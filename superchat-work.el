@@ -1066,12 +1066,20 @@ fact of RUN's conversation, so it holds across an Emacs restart."
   "The user spoke in SESSION-ID: its current record stops waiting for the user.
 The user's message is the signal the wait was registered for (K3), so the
 product clears it; the model does not have to remember to."
-  (when-let* ((id (superchat-work-current session-id))
-              (record (superchat-work-get id))
+  (when-let* ((id (superchat-work-current session-id)))
+    (superchat-work--answered session-id id)))
+
+(defun superchat-work--answered (session-id id)
+  "Record that the user answered the wait of the record ID; non-nil if it waited.
+Only a wait for the user is cleared.  An ordinary message does this through
+`superchat-work--on-user-input'; `/work resume' is the user's answer too,
+and a command does not run that hook."
+  (when-let* ((record (superchat-work-get id))
               ((eq 'waiting-user (superchat-work-status record))))
     (superchat-work--append session-id "work.waiting"
                             (format "Work record %s: the user answered" id)
-                            (list :work-id id :for nil :answered t))))
+                            (list :work-id id :for nil :answered t))
+    t))
 
 ;;;; The end of an execution (K3, K7) -----------------------------------------
 
@@ -1518,10 +1526,17 @@ pause' starts no further round.  `/work' alone says how the record stands."
             :content (format "Work on %s is paused; /work resume goes on." id)))
      ((equal args "resume")
       (unless record (user-error "No current work record"))
-      (unless (eq 'continuable (superchat-work-status record))
+      ;; A record Superchat stopped waits for the user, and this command is
+      ;; the user's answer; a record that is done, or that waits for a time
+      ;; or another agent, has nothing to go on with.
+      (unless (memq (superchat-work-status record) '(continuable waiting-user))
         (user-error "%s is %s; there is nothing to go on with"
                     id (superchat-work-status-text record)))
       (unless (superchat-work--refusal session "Not resumed")
+        ;; At the limit the command cannot go on, so the record keeps saying
+        ;; why it stopped.
+        (when (< (superchat-work-rounds id) superchat-work-round-limit)
+          (superchat-work--answered session id))
         (superchat-work-continue id))
       (list :type :echo
             :content

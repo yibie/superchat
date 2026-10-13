@@ -2,6 +2,17 @@
 
 All notable changes to superchat.
 
+## Unreleased — `/work resume` goes on after Superchat stopped
+
+- Fixed: when Superchat stopped working on a record for lack of progress it
+  said "/work resume goes on", and `/work resume` then refused the record as
+  "waiting for the user". The command is now the user's answer: it clears a
+  wait for the user, with the fact an ordinary message writes, and goes on.
+  The same holds after "stopped after too many tries" once the limit is
+  raised; at the limit the command still names the limit and the record
+  keeps its reason. A record that is done, or that waits for a time or for
+  another agent, is refused as before.
+
 ## Unreleased — the user is not shown rounds
 
 - What you read no longer speaks of rounds. The conversation says
