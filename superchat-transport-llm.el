@@ -11,7 +11,24 @@
 (require 'superchat-service)
 
 (declare-function superchat--llm-generate-answer "superchat-llm")
-(declare-function superchat--llm-resolve-streaming "superchat-llm")
+(declare-function superchat--llm-context-budget-chars "superchat-llm")
+(declare-function superchat--effective-llm-backend "superchat-llm")
+(declare-function superchat--provider-chat-model "superchat-llm")
+(declare-function superchat-llm--resolve-streaming "superchat-llm")
+
+(defun superchat-transport-llm--capabilities (model)
+  "What MODEL can do, as (:streaming BOOL :tools BOOL).
+Streaming is what `superchat-llm--resolve-streaming' says of the backend
+and model a request for MODEL would use -- the resolver the request loop
+itself asks.  An error from it reaches the caller: \"could not tell\" is
+not \"does not stream\"."
+  (require 'superchat-llm)
+  (let* ((backend (superchat--effective-llm-backend model))
+         (name (or (superchat--provider-chat-model backend) model "unknown")))
+    (list :streaming (and (plist-get (superchat-llm--resolve-streaming backend name nil)
+                                     :streaming)
+                          t)
+          :tools t)))
 
 (superchat-define-plugin transport-llm
   :doc "The llm.el model loop as the default model-transport."
@@ -27,13 +44,7 @@
                  (lambda (&rest args)
                    (require 'superchat-llm)
                    (apply #'superchat--llm-context-budget-chars args)))
-           (cons 'capabilities
-                 (lambda (_model)
-                   (require 'superchat-llm)
-                   (list :streaming (and (fboundp 'superchat--llm-resolve-streaming)
-                                         (ignore-errors (superchat--llm-resolve-streaming))
-                                         t)
-                         :tools t)))))))
+           (cons 'capabilities #'superchat-transport-llm--capabilities)))))
 
 (provide 'superchat-transport-llm)
 ;;; superchat-transport-llm.el ends here

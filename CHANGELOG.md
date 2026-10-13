@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — the transport says truly whether a model streams
+
+- Fixed: the `model-transport` Service's `capabilities MODEL` answered
+  `:streaming nil` for every model. The default transport called a function
+  by a name that does not exist, and an `fboundp` test with `ignore-errors`
+  hid it. It now asks `superchat-llm--resolve-streaming`, the resolver the
+  request loop itself uses, about the backend and model a request for MODEL
+  would use. Requests were never affected: the loop always called the right
+  name.
+- An error from the resolver now reaches the caller of `capabilities`
+  instead of being read as "does not stream".
+
 ## Unreleased — `/work resume` goes on after Superchat stopped
 
 - Fixed: when Superchat stopped working on a record for lack of progress it
