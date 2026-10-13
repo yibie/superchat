@@ -83,3 +83,4 @@ mutant; reordered, it is found. 14 of 14 after that.
 - "tried again after a restart" is what the code does (the counts live in
   this Emacs only); nothing on the Tape says a start was given up
   (guidance, slice 3).
+- 2026-10-13 (slice 8c): a row "Tool, not looked at" names a stored tool the agent wrote that is not loaded, and why (let through by the permission level, changed, or stored by an earlier version). It has no conversation; `RET` opens its review. See `2026-10-13-a-synthesized-tool-is-a-definition.md`.

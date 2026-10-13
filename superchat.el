@@ -4218,8 +4218,8 @@ programmatically to launch with a specific preset."
     (superchat-executor-initialize :lang superchat-lang))
   (superchat--ensure-directories)
   (superchat--load-user-commands)
-  ;; Rehydrate hash-approved synthesized tools (Phase 2); silent when
-  ;; everything on disk matches what the user once reviewed.
+  ;; Load the stored tools a person approved, each into its Workspace.
+  ;; Silent; the others are listed by `superchat-pending', not asked about.
   (when (fboundp 'superchat-synthesis-rehydrate)
     (ignore-errors (superchat-synthesis-rehydrate)))
   (superchat--process-cached-session-on-startup)

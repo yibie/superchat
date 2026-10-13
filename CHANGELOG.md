@@ -2,6 +2,40 @@
 
 All notable changes to superchat.
 
+## Unreleased — a tool the agent wrote is kept as its definition
+
+- Fixed: a tool written with `define_tool` in one execution answered
+  `[Tool call blocked: Run is no longer active]` in every later one, and the
+  call was recorded as a success. What was kept was the tool already wrapped
+  by the execution that wrote it. Now the definition is kept, and every
+  execution builds and wraps the tool itself.
+- A tool the agent wrote belongs to the workspace it was written in. Other
+  workspaces are not offered it, and two workspaces can each hold a tool of
+  one name. One written in a temporary conversation stays in that
+  conversation and is never written to disk.
+- A sub-agent can no longer redefine a tool a conversation holds, and what it
+  writes for itself is forgotten when its request ends.
+- The ledger says what happened: `approved` when you were asked about the
+  definition and said yes, `admitted` when the permission level let it
+  through unasked (`danger-full-access`, `auto`). Before, every definition
+  was recorded as approved by the user.
+- **After a restart only approved tools are loaded.** Admitted ones, and
+  every tool stored by an earlier version (its record says neither which
+  workspace nor whether anybody looked), are not loaded and are listed in
+  `M-x superchat-pending`, one row each. `RET` opens the review for that
+  tool: approve into a workspace, reject, or delete. Delete removes the entry
+  from `synthesized-tools.el` and marks its ledger line; nothing else on
+  disk is touched. Loading itself writes nothing.
+- A tool call refused because its execution has ended, made from inside
+  another tool's body, now fails that outer call (`tool.failed`, with the
+  reason) instead of being handed on as its result.
+- Wording: the tool's description, the answer to `define_tool` and the review
+  screen no longer say "every call asks"; each call is admitted under the
+  conversation's permission level. The claim that no tool can write the
+  ledger is gone: a full-control tool can.
+- `superchat-llm-synthesized-tools` is gone; `superchat-synthesis-tools` and
+  `superchat-synthesis-definitions` read a conversation's toolbox.
+
 ## Unreleased — the transport says truly whether a model streams
 
 - Fixed: the `model-transport` Service's `capabilities MODEL` answered

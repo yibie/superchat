@@ -26,7 +26,8 @@ An inline ask answers in an overlay, so by default it is offered nothing that
 could put a question in front of the user.")
 (defvar superchat-buffer-name)
 (defvar superchat-llm-tool-names)
-(defvar superchat-llm-synthesized-tools)
+(declare-function superchat-synthesis-names "superchat-synthesis" (&optional key))
+(declare-function superchat-synthesis-current-key "superchat-synthesis" (&optional request))
 (defvar superchat--active-plan)
 
 (defcustom superchat-llm-tools-enabled 'on-demand
@@ -265,7 +266,7 @@ excludes SURFACE (see `superchat-register-tool')."
        (and surfaces (not (memq surface surfaces)))))
    names))
 
-(defun superchat--select-tools-adjust-names (names reason input)
+(defun superchat--select-tools-adjust-names (names reason input &optional request)
   "Apply the three decision-time adjustments contract §4.2 rule 3 keeps,
 moved here from the materializer (S09-fix-3 item 2): the decision itself
 must already contain the final names, since nothing may add or remove a
@@ -289,8 +290,9 @@ pre-S09-fix-3 condition:
    materialize, the same guard `superchat--collect-llm-tools' already
    applies at construction time, checked here too rather than only
    there).
-3. Every session-synthesized tool's name (`superchat-llm-synthesized-tools')
-   is added, under the same two exclusions as rule 2."
+3. The name of every tool the agent wrote that the conversation of REQUEST
+   holds (`superchat-synthesis-names': its Workspace's, or its own when it
+   belongs to none) is added, under the same two exclusions as rule 2."
   (let* ((render-ui-intent (superchat--render-ui-intent-p input))
          (names (if render-ui-intent (remove "define_tool" names) names)))
     (if (or (eq reason 'explicit) render-ui-intent)
@@ -306,10 +308,11 @@ pre-S09-fix-3 condition:
                   'superchat--active-plan
                   (get-buffer superchat-buffer-name)))
         (setq names (append names (list "report_plan_progress"))))
-      (dolist (tool (bound-and-true-p superchat-llm-synthesized-tools))
-        (let ((name (llm-tool-name tool)))
-          (unless (member name names)
-            (setq names (append names (list name))))))
+      (dolist (name (and (fboundp 'superchat-synthesis-names)
+                         (superchat-synthesis-names
+                          (superchat-synthesis-current-key request))))
+        (unless (member name names)
+          (setq names (append names (list name)))))
       names)))
 
 (defun superchat-select-tools-decision (request _state)
@@ -343,7 +346,8 @@ original explicit restriction and the ordinary Authority admission boundary."
                  (superchat--select-tools-adjust-names
                   (plist-get decision :names)
                   (plist-get decision :reason)
-                  (plist-get request :input))))
+                  (plist-get request :input)
+                  request)))
     decision))
 
 (defun superchat--request-waterfall (scope candidate restriction prepared-p)

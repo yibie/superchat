@@ -1877,15 +1877,16 @@ Useful after editing tool functions or adding new ones."
 
          ;; ── Self-extension: the agent writes a tool and uses it ──
          ;; Off by default (not in `superchat-llm-tool-names'), like
-         ;; shell-command, write-file and eval-elisp.  Every definition and
-         ;; every call is confirmed; see superchat-synthesis.el.
+         ;; shell-command, write-file and eval-elisp.  The permission level
+         ;; decides each definition and each call; see superchat-synthesis.el.
 
          (superchat--maybe-make-llm-tool
           "define_tool"
           :description "Write a new tool in Emacs Lisp and register it for immediate use. \
 Use this ONLY when no existing tool can do what the task needs — the tool becomes callable on \
-your next step, in this same run. The body runs inside the user's Emacs and every call asks the \
-user for confirmation, so keep it small, safe and specific. Returning a string is best. \
+your next step, in this same run, and stays with this conversation's workspace. The body runs inside \
+the user's Emacs and each call is admitted under this conversation's permission level, so keep it \
+small, safe and specific. Returning a string is best. \
 Do NOT use this to draw UI: call the render_ui tool directly for that. The body may call \
 Superchat's own functions to compose capabilities — e.g. (superchat-subagent-map CHUNKS QUERY) \
 fans a list of text chunks out to parallel sub-agents and returns their reports as a list, for \

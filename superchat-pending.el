@@ -43,6 +43,7 @@
     (unconfirmed . "May have started")
     (unseen      . "Ended, not looked at")
     (unsaved     . "Unsaved")
+    (unreviewed  . "Tool, not looked at")
     (continuable . "Can be continued")
     (wait-time   . "Waiting for a time")
     (wait-other  . "Waiting")
@@ -331,6 +332,21 @@ with their conversation closed."
               items)))
     (nreverse items)))
 
+(declare-function superchat-synthesis-awaiting-review "superchat-synthesis" ())
+(declare-function superchat-tools-review-synthesized "superchat-synthesis" (&optional only))
+
+(defun superchat-pending--unreviewed ()
+  "Stored tools the agent wrote that are not loaded: nobody looked at them.
+One row each, with why it waits.  RET opens the review, which approves
+the tool into a workspace, rejects it or deletes it."
+  (when (fboundp 'superchat-synthesis-awaiting-review)
+    (mapcar (lambda (waiting)
+              (superchat-pending--item
+               'unreviewed (plist-get waiting :name)
+               (plist-get waiting :name)
+               (format "not loaded: %s; RET reviews" (plist-get waiting :reason))))
+            (ignore-errors (superchat-synthesis-awaiting-review)))))
+
 (defun superchat-pending-items ()
   "Everything under way and everything waiting, as a list of plists.
 Each is (:kind :key :what :detail :session :buffer).  `:kind' is one of the
@@ -341,7 +357,8 @@ from what the other modules keep; nothing is written."
                        (superchat-pending--tasks)
                        (superchat-pending--timers)
                        (superchat-pending--unseen)
-                       (superchat-pending--unsaved))))
+                       (superchat-pending--unsaved)
+                       (superchat-pending--unreviewed))))
     (cl-loop for (kind . _) in superchat-pending--kinds
              append (cl-remove-if-not
                      (lambda (item) (eq kind (plist-get item :kind)))
@@ -367,8 +384,10 @@ from what the other modules keep; nothing is written."
 
 (defun superchat-pending-open (item)
   "Go to what the row at point is about.
-An unsaved buffer is shown; anything else leads to its conversation.  An
-ended execution is thereby looked at, and leaves the list."
+An unsaved buffer is shown; a tool the agent wrote that nobody looked at
+is reviewed (approve into a workspace, reject or delete); anything else
+leads to its conversation.  An ended execution is thereby looked at, and
+leaves the list."
   (interactive (list (tabulated-list-get-id)))
   (when item
     (pcase (plist-get item :kind)
@@ -376,6 +395,9 @@ ended execution is thereby looked at, and leaves the list."
        (if (buffer-live-p (plist-get item :buffer))
            (pop-to-buffer (plist-get item :buffer))
          (user-error "That buffer is gone")))
+      ('unreviewed
+       (superchat-tools-review-synthesized (plist-get item :key))
+       (superchat-pending-refresh))
       (kind
        (let ((session (plist-get item :session)))
          (unless (stringp session)
@@ -481,7 +503,8 @@ Its conversation is switched to the permission level `auto'."
 
 (define-derived-mode superchat-pending-mode tabulated-list-mode "Superchat-Pending"
   "What Superchat is doing and what it waits for, in one list.
-RET goes to the conversation (or the unsaved buffer), v shows a work
+RET goes to the conversation (or the unsaved buffer; for a tool the
+agent wrote that nobody looked at, to its review), v shows a work
 record, k stops a running execution, y and n answer the approval a row
 asks for, a allows it and stops asking in that conversation, d forgets an
 ended one, g reads everything again."
@@ -496,8 +519,9 @@ ended one, g reads everything again."
   "Show what Superchat is doing and what it is waiting for, in one list.
 Executions under way and who started them; work records waiting for you or
 for a time; what came due and did not start; scheduled tasks Superchat
-cannot tell were started; timers still to come; work that ended unseen; and
-buffers left unsaved."
+cannot tell were started; timers still to come; work that ended unseen;
+buffers left unsaved; and stored tools the agent wrote that are not loaded
+because nobody looked at them."
   (interactive)
   (let ((buffer (get-buffer-create superchat-pending-buffer-name)))
     (with-current-buffer buffer

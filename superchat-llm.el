@@ -1976,7 +1976,7 @@ gets its own cell."
              ;; ALL's registry structs -- `report_plan_progress' is
              ;; disabled from the default registry allowlist, and
              ;; synthesized tools are deliberately kept out of the
-             ;; registry entirely (`superchat-llm-synthesized-tools').
+             ;; registry entirely (`superchat-synthesis-tools').
              ;; RESOLVABLE only ever supplies a struct for a name the
              ;; decision already listed; it can never add a name of its
              ;; own.
@@ -1999,7 +1999,10 @@ gets its own cell."
                   (apply #'llm-make-tool
                          :name "report_plan_progress"
                          (superchat--report-plan-progress-spec))))
-               (bound-and-true-p superchat-llm-synthesized-tools))))
+               ;; Built from the definitions of this conversation's toolbox,
+               ;; unwrapped: this request wraps them as it wraps the rest.
+               (and (fboundp 'superchat-synthesis-tools)
+                    (superchat-synthesis-tools)))))
         (let ((seen nil))
           (cl-remove-if
            (lambda (tool)
@@ -3037,6 +3040,9 @@ requests until it receives text, bounded by
                 (setq completed t)
                 (superchat-llm--transport-timer-owner-cancel
                  transport-timer-owner)
+                ;; What a sub-agent wrote into this request alone ends here.
+                (when (fboundp 'superchat-synthesis-forget-request)
+                  (superchat-synthesis-forget-request real-prompt))
                 (when (functionp runtime-observer)
                   (funcall runtime-observer
                            'terminal

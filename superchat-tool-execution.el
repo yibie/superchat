@@ -428,6 +428,18 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     (funcall #'superchat-runtime--note-open-work
              (plist-get context :run-id) execution-id action)))
 
+(defvar superchat-tool-execution--inner-refusal nil
+  "While a synchronous tool body runs: a cell (REASON) for a call it makes.
+When a call made from inside that body is refused at the liveness gate --
+its execution has ended, or its tool is gone -- the refusal text is put
+here, and the outer call ends as a failure with that reason.  Without
+this the body would hand the refusal on as its own result and the outer
+call would be recorded as a success (the incident of 2026-10-11).  Nil
+outside a tool body.")
+
+(define-error 'superchat-tool-execution-inner-refusal
+  "A call this tool made was refused")
+
 (defun superchat-tool-execution--inactive-result (tool-name)
   "Return the truthful refusal text for inactive TOOL-NAME."
   (if (superchat-tool-execution--installation-active-p tool-name)
@@ -907,9 +919,15 @@ The native callback is intentionally not used to acknowledge waiting."
                    (superchat--tool-execution-context
                     (plist-put (superchat-tool-execution--snapshot-value context)
                                :execution-id execution-id))
-                   (superchat-tool-mutation-target nil))
+                   (superchat-tool-mutation-target nil)
+                   (superchat-tool-execution--inner-refusal (list nil)))
                (let ((value (superchat-tool-execution--normalize-tool-result
                              (apply original-fn args))))
+                 ;; A call the body made was refused because its execution
+                 ;; had ended: that is this call's failure, not its result.
+                 (when (car superchat-tool-execution--inner-refusal)
+                   (signal 'superchat-tool-execution-inner-refusal
+                           (list (car superchat-tool-execution--inner-refusal))))
                  (when superchat-tool-mutation-target
                    (setq context
                          (plist-put (copy-sequence context) :mutation-target
@@ -1082,9 +1100,15 @@ that must be asked about goes to the approval seam."
     ;; A first arrival on a terminal Run, or through a revoked materialized
     ;; installation, was never admitted to execution audit.
     (unless (superchat-tool-execution--execution-active-p tool-name context)
-      (cl-return-from superchat-tool-execute
-        (superchat-tool-execution--deliver
-         async callback (superchat-tool-execution--inactive-result tool-name))))
+      (let ((refusal (superchat-tool-execution--inactive-result tool-name)))
+        ;; Refused inside another call's body: that call must not pass
+        ;; this text on as a success.
+        (when (and (consp superchat-tool-execution--inner-refusal)
+                   (null (car superchat-tool-execution--inner-refusal)))
+          (setcar superchat-tool-execution--inner-refusal
+                  (format "a call it made to %s was refused: %s" tool-name refusal)))
+        (cl-return-from superchat-tool-execute
+          (superchat-tool-execution--deliver async callback refusal))))
     ;; ── before the decision: normalize only, never decide ─────────────
     ;; Liveness, identity, argument normalization and the block check all
     ;; live here; none returns a verdict.
@@ -1277,7 +1301,11 @@ that must be asked about goes to the approval seam."
                    (outcome (plist-get answer :outcome)))
               (if (eq outcome 'allowed-once)
                   (superchat-tool-execution--invoke
-                   tool-name original-fn (plist-get answer :args) context
+                   tool-name original-fn (plist-get answer :args)
+                   ;; The body may need to know a question was put for
+                   ;; exactly this call and answered yes (`define_tool'
+                   ;; records it in the ledger).
+                   (plist-put (copy-sequence context) :admitted-by 'asked)
                    execution-id async callback refuse)
                 (let ((refusal
                        (pcase outcome
