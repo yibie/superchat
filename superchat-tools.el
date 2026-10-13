@@ -950,7 +950,9 @@ task simulation: one keymap dump of 108,699 bytes ended a Run.")
                                (- superchat-tool-eval-error-max-chars
                                   (length marker)))
                     marker)))
-    (concat "Error: evaluating expression: " details)))
+    (superchat-tool-execution-failed
+     (concat "Error: evaluating expression: " details)
+     (symbol-name (car err)))))
 
 (defconst superchat-tools--eval-asked-the-user
   (concat "Error: evaluating expression: it tried to ask the user for input "
@@ -989,7 +991,9 @@ not affected."
          (leave-on-prompt
           (lambda (symbol data)
             (if (eq symbol 'inhibited-interaction)
-                (throw asked superchat-tools--eval-asked-the-user)
+                (throw asked (superchat-tool-execution-failed
+                              superchat-tools--eval-asked-the-user
+                              "inhibited-interaction"))
               (when outer-hook (funcall outer-hook symbol data))))))
     (catch asked
       (condition-case err
@@ -1002,7 +1006,9 @@ not affected."
                               (signal-hook-function leave-on-prompt))
                           (eval (superchat-tools--read-one-expression expression) t))))
             (superchat-tools--eval-value-result result))
-        (inhibited-interaction superchat-tools--eval-asked-the-user)
+        (inhibited-interaction
+         (superchat-tool-execution-failed superchat-tools--eval-asked-the-user
+                                          "inhibited-interaction"))
         (error (superchat-tools--eval-error-result err))))))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)

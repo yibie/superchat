@@ -494,6 +494,10 @@ Slice 8c, [decision](decisions/accepted/2026-10-13-a-synthesized-tool-is-a-defin
 
 Slice 8d, from the architecture walk (`reports/architecture-map-2026-10-13/CONTRADICTIONS.md`). One behaviour change, C20: `superchat-emacsclient-run-cancel` answers with the Runtime's status after the cancel and whether it is final, not a fixed "cancelled" (`scripts/emacsclient-cancel-regression.el`, 4 tests, 2 red before). One wording change in the product, C6: the "Allow all" panel says saving still asks. The rest is documentation: C8, C10, C14, C15, C18, C19, C21 (the README said both that fixed Stages are retired and that they are still present; they are retired, M3, and this roadmap is where status is kept), C22, C23, C24, C25.
 
+### Tool calls — an `eval_elisp` error is a failed call (`implemented` 2026-10-18, scripted evidence only)
+
+Slice 9a (`reports/guidance-2026-10-11/SLICE-9.md`). In the user's two Runs of 2026-10-18, 25 evaluation errors were recorded as `tool.completed` ok. An evaluation error, a second expression and an attempt to ask the user now end the call as `tool.failed`; the model is given the same text. The record line counts failed Emacs Lisp runs too and says how many calls failed (`scripts/eval-failure-regression.el`, 9 tests, 5 red before). 9b–9e follow; 9f and 9g are not done.
+
 ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
 
 Source: `reports/architecture-map-2026-10-13/CONTRADICTIONS.md`. Each is a path read in the source; none was made to happen, and the user has not ruled whether any is to be repaired.

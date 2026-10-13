@@ -1580,10 +1580,11 @@ This text belongs to the View, never to the model's response body."
 It says what the Run's tools changed, read from the Tape: every buffer a
 structured tool changed (the `:buffer' of its `tool.completed' facts) with its
 state now -- unsaved, saved, or closed -- or that none was changed, and how
-many times `eval_elisp' ran, whose effects are not tracked.  It is shown to
+many times `eval_elisp' ran, whose effects are not tracked, failed or not,
+and how many calls failed (slice 9a; a refused call is not one).  It is shown to
 the person under the answer and never sent to the model
 \(docs/decisions/accepted/2026-09-27-claims-checked-against-the-record.md)."
-  (let (called buffers (evals 0))
+  (let (called buffers (evals 0) (failed 0))
     (dolist (event (and (stringp session-id) (stringp run-id)
                         (ignore-errors (superchat-tape-replay-events session-id))))
       (when (equal (plist-get event :run-id) run-id)
@@ -1594,7 +1595,14 @@ the person under the answer and never sent to the model
              (when-let* ((name (plist-get payload :buffer)))
                (unless (member name buffers) (push name buffers)))
              (when (equal (plist-get payload :tool-name) "eval_elisp")
-               (cl-incf evals)))))))
+               (cl-incf evals)))
+            ;; Refused, denied and cancelled calls are decisions, not
+            ;; failures; an `eval_elisp' that failed still ran.
+            ("tool.failed"
+             (when (equal (plist-get payload :status) "failed")
+               (cl-incf failed)
+               (when (equal (plist-get payload :tool-name) "eval_elisp")
+                 (cl-incf evals))))))))
     (when called
       (concat
        "Record of this task: "
@@ -1612,6 +1620,8 @@ the person under the answer and never sent to the model
        (when (> evals 0)
          (format "; ran Emacs Lisp %d time%s (what it changed is not tracked)"
                  evals (if (= evals 1) "" "s")))
+       (when (> failed 0)
+         (format "; %d tool call%s failed" failed (if (= failed 1) "" "s")))
        "."))))
 
 (defun superchat-render-view-sink (buffer session-id transcript-owner)

@@ -413,7 +413,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的是临时对话。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
-内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
+内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误；出错的那次调用记作失败（`tool.failed`），不记作成功，模型收到的文字不变。回答下面那行记录照样数 Emacs Lisp 跑了几次，并写出有几次调用失败。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
 
 新写入的用户消息和模型答复会完整保存，供后续对话读取。上下文预算可能整条省略较早的消息，但不会用显示摘要替换已保存的原文。旧版本已经裁掉的文字无法从指纹恢复。详见[对话历史](docs/decisions/implemented/2026-09-17-preserve-conversation-material.md)。
 

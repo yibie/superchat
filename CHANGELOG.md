@@ -2,6 +2,18 @@
 
 All notable changes to superchat.
 
+## Unreleased — an eval_elisp error is a failed call
+
+- Fixed: an `eval_elisp` evaluation error, more than one expression, or an
+  expression that tried to ask the user was recorded on the Tape as
+  `tool.completed` with status ok. It is now `tool.failed`, with the
+  condition's name as `:error-type`. The text the model receives is the same.
+- The record line under an answer counts every time Emacs Lisp ran, failed
+  or not, and ends with `; N tool calls failed` when calls failed. A call the
+  permission level refused or the user denied is not counted.
+- New: `superchat-tool-execution-failed`, for a tool body to say its result
+  is a failure.
+
 ## Unreleased — what the documentation says is what happens
 
 - `superchat-emacsclient-run-cancel` answers with the status the Runtime

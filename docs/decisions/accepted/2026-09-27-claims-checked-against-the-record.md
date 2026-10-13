@@ -42,6 +42,8 @@ The user took the recommendation ("follow advice").
 - `no buffer or file was changed by a tool` when none was;
 - `; ran Emacs Lisp N times (what it changed is not tracked)` when `eval_elisp` succeeded N > 0 times.
 
+*Amended 2026-10-18 (slice 9a):* an `eval_elisp` error is now a `tool.failed` fact, so N counts every call of `eval_elisp` that ran, failed or not, and the line ends with `; K tool call(s) failed` when K > 0 calls of any tool ended with status `failed`. Refused, denied and cancelled calls are not counted as failed.
+
 It follows the existing tool-budget notice's placement. Only the chat View shows it; in-place surfaces keep their own reports.
 
 **Part B — the reviewer (a switch, `superchat-report-review`, default nil).** When on, a chat Run that made tool calls and ends on a reply without a tool call gets, before that reply is final, one extra request to the same backend with a fresh context and no tools: the person's request, the Run's tool lines (the one-line observations later turns see), and the reply; it answers `OK` or lists the claims the record does not support and the parts of the request not met. A list goes back to the model once as a user-role correction ("A check of your report against this task's tool record found: … Correct the report: do what is missing with tools, or say plainly what was not done; claim nothing the record does not show."); the model's next reply is final. At most once per Run; not when the finish check fired; recorded on the Tape (`run.report-reviewed`, with the verdict and the findings). The task simulation compares the same tasks with it on and off (catches, false alarms, added time) before any default changes.

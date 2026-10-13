@@ -440,6 +440,27 @@ outside a tool body.")
 (define-error 'superchat-tool-execution-inner-refusal
   "A call this tool made was refused")
 
+(defvar superchat-tool-execution--body-failure nil
+  "While a synchronous tool body runs: a cell for the failure it reports.
+`superchat-tool-execution-failed' fills it with (TEXT . ERROR-TYPE); the
+call then ends as `tool.failed' and the model is given TEXT as it is.  Nil
+outside a tool body.")
+
+(define-error 'superchat-tool-execution-body-failure
+  "The tool reported that it failed")
+
+(defun superchat-tool-execution-failed (text &optional error-type)
+  "Return TEXT, the result of a tool body that did not do what it was asked.
+Inside a call the pipeline runs, the call ends as a failure: the Tape
+records `tool.failed' with ERROR-TYPE (a string), and the model is given
+TEXT unchanged.  Called anywhere else -- a direct call of the body -- only
+TEXT is returned.  Slice 9a: an `eval_elisp' error was recorded as a
+success."
+  (when superchat-tool-execution--body-failure
+    (setcar superchat-tool-execution--body-failure
+            (cons text (or error-type "tool-failed"))))
+  text)
+
 (defun superchat-tool-execution--inactive-result (tool-name)
   "Return the truthful refusal text for inactive TOOL-NAME."
   (if (superchat-tool-execution--installation-active-p tool-name)
@@ -646,10 +667,12 @@ outside a tool body.")
 (defun superchat-tool-execution--finish-error
     (tool-name args err context execution-id async callback)
   "Audit ERR from TOOL-NAME and deliver a model-readable failure."
-  (let* ((message (error-message-string err))
-         (result (format "[Tool call failed: %s]" message))
+  (let* ((reported (eq (car err) 'superchat-tool-execution-body-failure))
+         (message (if reported (nth 1 err) (error-message-string err)))
+         ;; A failure the body reported keeps the body's own text.
+         (result (if reported message (format "[Tool call failed: %s]" message)))
          (exact-error
-          (list :error-type (format "%s" (car err))
+          (list :error-type (if reported (nth 2 err) (format "%s" (car err)))
                 :error-data (copy-tree (cdr err) t)
                 :message message))
          (audit
@@ -920,7 +943,8 @@ The native callback is intentionally not used to acknowledge waiting."
                     (plist-put (superchat-tool-execution--snapshot-value context)
                                :execution-id execution-id))
                    (superchat-tool-mutation-target nil)
-                   (superchat-tool-execution--inner-refusal (list nil)))
+                   (superchat-tool-execution--inner-refusal (list nil))
+                   (superchat-tool-execution--body-failure (list nil)))
                (let ((value (superchat-tool-execution--normalize-tool-result
                              (apply original-fn args))))
                  ;; A call the body made was refused because its execution
@@ -928,6 +952,10 @@ The native callback is intentionally not used to acknowledge waiting."
                  (when (car superchat-tool-execution--inner-refusal)
                    (signal 'superchat-tool-execution-inner-refusal
                            (list (car superchat-tool-execution--inner-refusal))))
+                 ;; The body said it failed: so does the call.
+                 (when-let* ((failure (car superchat-tool-execution--body-failure)))
+                   (signal 'superchat-tool-execution-body-failure
+                           (list (car failure) (cdr failure))))
                  (when superchat-tool-mutation-target
                    (setq context
                          (plist-put (copy-sequence context) :mutation-target
