@@ -715,6 +715,11 @@ become a third recurrence."
               (_ "Thinking… "))
             (or (superchat--runtime-elapsed-label status)
                 (superchat--format-duration 0))
+            ;; How many tool calls this execution has made (slice 9d).
+            (when-let* ((calls (plist-get status :tool-calls))
+                        ((integerp (plist-get calls :used)))
+                        ((integerp (plist-get calls :limit))))
+              (format " · tools %d/%d" (plist-get calls :used) (plist-get calls :limit)))
             (when (and (stringp latest)
                        (not (string-empty-p (string-trim latest))))
               (concat " · " (string-trim latest)))))))

@@ -2,6 +2,37 @@
 
 All notable changes to superchat.
 
+## Unreleased — when tool calls go round in circles
+
+From the user's two Runs of 2026-10-18, each stopped by the limit of 50
+tool calls (slices 9b–9e).
+
+- An execution cut off by `superchat-agent-max-tool-calls` says so: the
+  Runtime entry and the ending facts carry `:tool-budget (:action cut-off
+  :limit N :used N)`, and the chat, `M-x superchat-pending` and the notices
+  list read `Cut off after N tool calls` instead of an ordinary ending.
+- New option `superchat-tool-failure-brake` (default 3, nil off): after that
+  many failed calls in a row, the next request tells the model once to change
+  approach. A success starts the count again; a refused call is not a failure.
+- At 70% of the call limit the next request says once how many calls are
+  left. The status line shows `tools N/LIMIT` while the execution runs; the
+  Runtime status has `:tool-calls (:used N :limit L)`.
+- `edit_buffer` takes `regexp`, `count_only` and `all`. `all` is refused
+  unless the same execution counted the same pattern first, and is one undo
+  step and one `edit.applied` fact with the number replaced. A count is
+  forgotten when its execution ends, however it ends. Without the new
+  arguments the tool behaves as before.
+- Fixed: an `edit_buffer` answer beginning with `Error:` (text not found,
+  more than one match, `all` without a count, an edit that would unbalance
+  Lisp, a file changed on disk) was recorded as `tool.completed`. It is now
+  `tool.failed` with a short `:error-type` (`not-found`, `ambiguous`,
+  `needs-count`, `lisp-unbalanced`, `changed-on-disk`, ...), so it counts
+  toward the failure brake. The text the model receives is the same. A
+  permission refusal and `No change:` are not failures.
+- A Work Record whose execution was cut off by the call limit goes on as
+  before; the brake on rounds that get nowhere (`superchat-work-round-idle-limit`)
+  still stops it.
+
 ## Unreleased — an eval_elisp error is a failed call
 
 - Fixed: an `eval_elisp` evaluation error, more than one expression, or an

@@ -419,12 +419,18 @@ a call's arguments by name."
                                  (> (length session-id) 0))
                         (funcall render-call args execution-id)))
                     context))
+                 (_counted
+                  (superchat-runtime-note-tool-call
+                   (plist-get context :run-id) (min (car counter) limit) limit))
                  (context
                   (if (> (car counter) limit)
-                      (plist-put
-                       context :block
-                       (format "Agent stopped: exceeded maximum of %d tool calls"
-                               limit))
+                      (progn
+                        (superchat-runtime-note-tool-cut-off
+                         (plist-get context :run-id) limit limit)
+                        (plist-put
+                         context :block
+                         (format "Agent stopped: exceeded maximum of %d tool calls"
+                                 limit)))
                     context))
                  (delivered nil)
                  (deliver
@@ -499,12 +505,18 @@ a call's arguments by name."
                                (> (length session-id) 0))
                       (funcall render-call args execution-id)))
                   context))
+               (_counted
+                (superchat-runtime-note-tool-call
+                 (plist-get context :run-id) (min (car counter) limit) limit))
                (context
                 (if (> (car counter) limit)
-                    (plist-put
-                     context :block
-                     (format "Agent stopped: exceeded maximum of %d tool calls"
-                             limit))
+                    (progn
+                      (superchat-runtime-note-tool-cut-off
+                       (plist-get context :run-id) limit limit)
+                      (plist-put
+                       context :block
+                       (format "Agent stopped: exceeded maximum of %d tool calls"
+                               limit)))
                   context))
                (result
                 (superchat-tool-execute

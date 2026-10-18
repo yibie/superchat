@@ -684,29 +684,226 @@ returns the evidence lines.  Only a buffer whose mode derives from
               (plist-get disk :note)
               (funcall evidence))))))
 
-(defun superchat-tool-edit-buffer (buffer-name old-string new-string)
+(defun superchat-tools--true-p (value)
+  "Whether a tool argument VALUE is true; JSON false arrives as a keyword."
+  (and value (not (memq value '(:false :json-false false)))))
+
+(defvar superchat-tools--edit-counted (make-hash-table :test #'equal)
+  "What `edit_buffer' counted with count_only: keys (RUN BUFFER PATTERN REGEXP).
+A replacement of all is allowed only for a key counted in the same
+execution (slice 9e).")
+
+(defun superchat-tools--edit-count-key (buffer-name pattern regexp)
+  "The key under which a count of PATTERN in BUFFER-NAME is remembered."
+  (list (plist-get superchat--tool-execution-context :run-id)
+        buffer-name pattern (and regexp t)))
+
+(defun superchat-tools--edit-matches (buffer-name pattern regexp)
+  "The non-overlapping matches of PATTERN in BUFFER-NAME, as (BEG . END).
+PATTERN is a regexp when REGEXP is non-nil, else literal text; case matters."
+  (with-current-buffer buffer-name
+    (let ((case-fold-search nil) matches)
+      (save-excursion
+        (goto-char (point-min))
+        (while (and (not (eobp))
+                    (if regexp
+                        (re-search-forward pattern nil t)
+                      (search-forward pattern nil t)))
+          (push (cons (match-beginning 0) (match-end 0)) matches)
+          ;; An empty match would be found again where it is.
+          (when (= (match-beginning 0) (match-end 0))
+            (forward-char 1))))
+      (nreverse matches))))
+
+(defun superchat-tools--edit-count-text (buffer-name matches)
+  "The answer of a count_only call: how many MATCHES, and the first three."
+  (with-current-buffer buffer-name
+    (concat
+     (format "%d match%s in buffer %s; count_only changed nothing."
+             (length matches) (if (= 1 (length matches)) "" "es") buffer-name)
+     (mapconcat (lambda (match)
+                  (save-excursion
+                    (goto-char (car match))
+                    (format "\nline %d: %s" (line-number-at-pos)
+                            (buffer-substring-no-properties
+                             (line-beginning-position) (line-end-position)))))
+                (seq-take matches 3) "")
+     (when matches
+       "\nTo replace every match, call edit_buffer again with all, the same old_string and the same regexp."))))
+
+(defun superchat-tools--edit-buffer-plan-more
+    (buffer-name old-string new-string regexp all count-only)
+  "Plan an `edit_buffer' call that uses REGEXP, ALL or COUNT-ONLY.
+The result is (:final TEXT) when nothing is to be written, or (:ready t)."
+  (cond
+   ((string-empty-p old-string)
+    (list :final "Error: old_string must be nonempty; read the buffer and supply unique text."))
+   ((and regexp (string-match-p old-string ""))
+    (list :final "Error: this regexp matches empty text; give one that matches at least one character."))
+   (t
+    (let ((matches (superchat-tools--edit-matches buffer-name old-string regexp))
+          (key (superchat-tools--edit-count-key buffer-name old-string regexp)))
+      (cond
+       (count-only
+        (when matches (puthash key t superchat-tools--edit-counted))
+        (list :final (superchat-tools--edit-count-text buffer-name matches)))
+       ((null matches)
+        (list :final (format "Error: Could not find text to replace in buffer %s" buffer-name)))
+       ((and all (not (gethash key superchat-tools--edit-counted)))
+        (list :final (format "Error: all replaces every match, so it needs a count first: call edit_buffer with count_only, the same old_string and the same regexp, in this execution, and check the matches it shows. Buffer %s was not changed."
+                             buffer-name)))
+       ((and (not all) (> (length matches) 1))
+        (list :final (format "Error: Found %d matches for the text to replace in buffer %s" (length matches) buffer-name)))
+       ((and (not regexp) (equal old-string new-string))
+        (list :final (format "No change: old_string and new_string are identical in buffer %s." buffer-name)))
+       (t (list :ready t)))))))
+
+(defun superchat-tools--edit-buffer-apply-more (buffer-name old-string new-string regexp)
+  "Replace every match of OLD-STRING in BUFFER-NAME by NEW-STRING; return how many.
+With REGEXP, OLD-STRING is a regexp and NEW-STRING may use \\N.  The
+replacements are one undo step."
+  (with-current-buffer buffer-name
+    (let ((case-fold-search nil)
+          (count 0)
+          (group (prepare-change-group))
+          (done nil))
+      (activate-change-group group)
+      (unwind-protect
+          (save-excursion
+            (goto-char (point-min))
+            (while (and (not (eobp))
+                        (if regexp
+                            (re-search-forward old-string nil t)
+                          (search-forward old-string nil t)))
+              (let ((empty (= (match-beginning 0) (match-end 0))))
+                (replace-match new-string t (not regexp))
+                (cl-incf count)
+                (when empty (forward-char 1))))
+            (setq done t))
+        (if done
+            (progn (undo-amalgamate-change-group group)
+                   (accept-change-group group))
+          (cancel-change-group group)))
+      count)))
+
+(defun superchat-tools--record-edit-all (buffer-name count)
+  "Record the replacement of COUNT matches in BUFFER-NAME as one `edit.applied'."
+  (let ((session (plist-get superchat--tool-execution-context :session-id)))
+    (when (stringp session)
+      (superchat-service-call
+       nil 'tape 'append-event-record
+       (list :type "edit.applied"
+             :session-id session
+             :run-id (plist-get superchat--tool-execution-context :run-id)
+             :payload (list :buffer buffer-name
+                            :file (buffer-file-name (get-buffer buffer-name))
+                            :edits count
+                            :source "edit_buffer"))))))
+
+(defconst superchat-tools--edit-error-types
+  '(("Error: old_string must be nonempty" . "empty-old-string")
+    ("Error: this regexp matches empty text" . "empty-regexp")
+    ("Error: Could not find text to replace" . "not-found")
+    ("Error: Found " . "ambiguous")
+    ("Error: all replaces every match" . "needs-count")
+    ("Error: edit not applied; buffer" . "lisp-unbalanced")
+    ("Error: edit not applied. " . "changed-on-disk"))
+  "How an `edit_buffer' answer that begins with \"Error:\" is named on the Tape.")
+
+(defun superchat-tools--edit-buffer-outcome (result)
+  "Return RESULT, the answer of `edit_buffer'; an \"Error:\" answer is a failure.
+The call is then recorded as `tool.failed' with a short error type, and
+the model is given the same text (the leader's ruling on slice 9e, after
+9a: a refusal returned as a successful string is the loop a model gets
+stuck in most).  A permission refusal is \"[Tool call denied: ...]\" and
+\"No change:\" is not an error; both are left as they are."
+  (if (and (stringp result) (string-prefix-p "Error:" result))
+      (superchat-tool-execution-failed
+       result
+       (or (cdr (cl-find-if (lambda (entry) (string-prefix-p (car entry) result))
+                            superchat-tools--edit-error-types))
+           "edit-error"))
+    result))
+
+(defun superchat-tools--forget-edit-counts (_run status)
+  "Forget what the execution of STATUS counted, once it has ended.
+A count allows a replacement of all only in the execution that made it."
+  (when-let* ((run (and (listp status) (plist-get status :run-id))))
+    (let (ended)
+      (maphash (lambda (key _) (when (equal run (car key)) (push key ended)))
+               superchat-tools--edit-counted)
+      (dolist (key ended) (remhash key superchat-tools--edit-counted)))))
+
+(defun superchat-tool-edit-buffer
+    (buffer-name old-string new-string &optional regexp all count-only)
   "Replace one exact occurrence of OLD-STRING in BUFFER-NAME.
 OLD-STRING must be nonempty and occur exactly once in the accessible
 buffer text.  Identical replacement text returns a no-change result.
 This edits the live buffer; it does not save or evaluate its contents.
 Whether the buffer may be edited is judged only when a replacement is about to
-happen."
-  (superchat-sandbox-run-buffer-edit
-   :args (list buffer-name old-string new-string)
-   :resolve (lambda (args)
-              (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
-                (if (plist-get plan :final)
-                    plan
-                  (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
-   :perform (lambda (args resolved)
-              (superchat-tools--checked-edit
-               (nth 0 args)
-               (lambda (name)
-                 (superchat-tools--edit-buffer-apply name (nth 1 args) (nth 2 args)))
-               (lambda ()
-                 (superchat-tools--write-evidence
-                  (plist-get resolved :target)
-                  "in memory only; the buffer was not saved or evaluated"))))))
+happen.
+
+Three more arguments (slice 9e): REGEXP makes OLD-STRING an Emacs regexp
+and lets NEW-STRING use \\N; COUNT-ONLY answers how many matches there are
+and shows the first three, changing nothing and needing no edit permission;
+ALL replaces every match, as one undo step and one `edit.applied' fact
+with the number replaced, and is refused unless the same execution counted
+the same pattern in the same buffer first.  Without them the tool does
+what it did before."
+  (superchat-tools--edit-buffer-outcome
+   (superchat-tools--edit-buffer-1 buffer-name old-string new-string
+                                   regexp all count-only)))
+
+(defun superchat-tools--edit-buffer-1
+    (buffer-name old-string new-string regexp all count-only)
+  "The body of `superchat-tool-edit-buffer', before its answer is classified."
+  (let ((regexp (superchat-tools--true-p regexp))
+        (all (superchat-tools--true-p all))
+        (count-only (superchat-tools--true-p count-only)))
+    (if (not (or regexp all count-only))
+        (superchat-sandbox-run-buffer-edit
+         :args (list buffer-name old-string new-string)
+         :resolve (lambda (args)
+                    (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
+                      (if (plist-get plan :final)
+                          plan
+                        (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
+         :perform (lambda (args resolved)
+                    (superchat-tools--checked-edit
+                     (nth 0 args)
+                     (lambda (name)
+                       (superchat-tools--edit-buffer-apply name (nth 1 args) (nth 2 args)))
+                     (lambda ()
+                       (superchat-tools--write-evidence
+                        (plist-get resolved :target)
+                        "in memory only; the buffer was not saved or evaluated")))))
+      (let (replaced)
+        (prog1
+            (superchat-sandbox-run-buffer-edit
+             :args (list buffer-name old-string new-string)
+             :resolve (lambda (args)
+                        (let ((plan (superchat-tools--edit-buffer-plan-more
+                                     (nth 0 args) (nth 1 args) (nth 2 args)
+                                     regexp all count-only)))
+                          (if (plist-get plan :final)
+                              plan
+                            (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
+             :perform (lambda (args resolved)
+                        (superchat-tools--checked-edit
+                         (nth 0 args)
+                         (lambda (name)
+                           (let ((count (superchat-tools--edit-buffer-apply-more
+                                         name (nth 1 args) (nth 2 args) regexp)))
+                             ;; The rehearsal copy is not the buffer.
+                             (when (equal name (nth 0 args)) (setq replaced count))
+                             (format "Replaced %d occurrence%s in buffer %s. This tool does not save or evaluate the buffer."
+                                     count (if (= count 1) "" "s") (nth 0 args))))
+                         (lambda ()
+                           (superchat-tools--write-evidence
+                            (plist-get resolved :target)
+                            "in memory only; the buffer was not saved or evaluated")))))
+          (when (and all replaced)
+            (superchat-tools--record-edit-all buffer-name replaced)))))))
 
 (defun superchat-tool-replace-buffer (buffer-name content)
   "Completely replace contents of BUFFER-NAME with CONTENT.
@@ -1739,7 +1936,7 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "edit_buffer"
-          :description (superchat-tools--write-description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion.")
+          :description (superchat-tools--write-description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion. regexp: old_string is an Emacs regexp, new_string may use \\N. count_only: count matches and show the first three; changes nothing. all: replace every match, only after count_only of the same old_string and regexp in this execution.")
           :args (list (list :name "buffer_name"
                     :type 'string
                     :description "Name of the buffer to modify")
@@ -1748,7 +1945,19 @@ Useful after editing tool functions or adding new ones."
                     :description "Nonempty text copied from the target buffer, with enough surrounding text to occur exactly once.")
               (list :name "new_string"
                     :type 'string
-                    :description "Text to replace old_string with"))
+                    :description "Text to replace old_string with")
+              (list :name "regexp"
+                    :type 'boolean
+                    :description "old_string is an Emacs regexp; new_string may use \\1 for groups."
+                    :optional t)
+              (list :name "all"
+                    :type 'boolean
+                    :description "Replace every match. Needs a count_only call with the same old_string and regexp first, in this execution."
+                    :optional t)
+              (list :name "count_only"
+                    :type 'boolean
+                    :description "Only count the matches and show the first three; nothing is changed."
+                    :optional t))
           :function #'superchat-tool-edit-buffer)
 
          (superchat--maybe-make-llm-tool
@@ -2526,8 +2735,11 @@ These are the mounted built-in tools and the live plugin tool installations."
 A tool a row owns (`work_record' of work-records, for one) is installed by
 that row and does not depend on this one."
   :apply
-  (lambda (_scope _config)
-    (superchat-tools--install-builtin-descriptors)))
+  (lambda (scope _config)
+    (superchat-tools--install-builtin-descriptors)
+    ;; Every ending, not only a successful one (`turn-completed').
+    (superchat-on scope 'turn-completed 'edit-count-forget
+                  #'superchat-tools--forget-edit-counts)))
 
 (provide 'superchat-tools)
 

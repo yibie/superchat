@@ -428,6 +428,15 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     (funcall #'superchat-runtime--note-open-work
              (plist-get context :run-id) execution-id action)))
 
+(defun superchat-tool-execution--note-runtime-outcome (context outcome)
+  "Tell Runtime that a call of CONTEXT's Run ended with OUTCOME.
+OUTCOME is `succeeded' or `failed'; Runtime counts failures in a row
+\(slice 9c).  A no-op outside a Runtime Run."
+  (when (and (fboundp 'superchat-runtime-note-tool-outcome)
+             (stringp (plist-get context :run-id)))
+    (funcall #'superchat-runtime-note-tool-outcome
+             (plist-get context :run-id) outcome)))
+
 (defvar superchat-tool-execution--inner-refusal nil
   "While a synchronous tool body runs: a cell (REASON) for a call it makes.
 When a call made from inside that body is refused at the liveness gate --
@@ -448,6 +457,18 @@ outside a tool body.")
 
 (define-error 'superchat-tool-execution-body-failure
   "The tool reported that it failed")
+
+(defun superchat-tool-cut-off-text (limit)
+  "How an execution cut off by the tool-call LIMIT is named to the user."
+  (format "Cut off after %d tool calls" limit))
+
+(defun superchat-tool-cut-off-limit (budget)
+  "The limit of a recorded tool BUDGET that cut the calls off, or nil.
+BUDGET is a Runtime `:tool-budget', from the entry or read back from the
+Tape, where its action is a string."
+  (and (member (plist-get budget :action) '(cut-off "cut-off"))
+       (integerp (plist-get budget :limit))
+       (plist-get budget :limit)))
 
 (defun superchat-tool-execution-failed (text &optional error-type)
   "Return TEXT, the result of a tool body that did not do what it was asked.
@@ -498,6 +519,8 @@ success."
              (superchat-tool-execution--exact-fields
               "error" (or exact-error (list :status status :result result)))))
           nil (and (plist-get context :evidence-contract) t) t)))
+    (when (equal status "failed")
+      (superchat-tool-execution--note-runtime-outcome context 'failed))
     (superchat-tool-execution--note-runtime-work
      context execution-id 'effect-settled)
     (unless (equal "user-quit" (plist-get metadata :interruption))
@@ -610,6 +633,7 @@ success."
                          (superchat-tool-execution--exact-fields
                           "result" (list :result result))))
                       nil (and evidence t) t))
+               (superchat-tool-execution--note-runtime-outcome context 'succeeded)
                (superchat-tool-execution--note-runtime-work
                 context execution-id 'effect-settled)
                ;; Runtime owns recovery state.  Notify it only after the

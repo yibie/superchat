@@ -498,6 +498,10 @@ Slice 8d, from the architecture walk (`reports/architecture-map-2026-10-13/CONTR
 
 Slice 9a (`reports/guidance-2026-10-11/SLICE-9.md`). In the user's two Runs of 2026-10-18, 25 evaluation errors were recorded as `tool.completed` ok. An evaluation error, a second expression and an attempt to ask the user now end the call as `tool.failed`; the model is given the same text. The record line counts failed Emacs Lisp runs too and says how many calls failed (`scripts/eval-failure-regression.el`, 9 tests, 5 red before). 9b–9e follow; 9f and 9g are not done.
 
+### Tool calls — cut off, failing, running short, and replacing all (`implemented` 2026-10-18, scripted evidence only)
+
+Slices 9b–9e (`reports/guidance-2026-10-11/SLICE-9.md`). 9b: the per-execution call limit is recorded as `:tool-budget (:action cut-off …)` and shown as "Cut off after N tool calls" (`scripts/tool-limit-regression.el`). 9c: `superchat-tool-failure-brake`, once per execution; 9d: a reminder at 70% of the limit and `tools N/LIMIT` on the status line (`scripts/tool-nudge-regression.el`). 9e: `edit_buffer` `regexp`, `count_only`, `all` (`scripts/edit-all-regression.el`). Both reminders are user-role messages after the tool results, as the existing tool-error feedback is. A Work Record whose execution was cut off goes on as before (the 7b brake still applies). By the leader's ruling an `edit_buffer` `Error:` answer is a failed call too, as an eval error is (9a), and so feeds the brake; a count is forgotten when its execution ends. 9f (one-expression rule) and 9g (tracking what `eval_elisp` changed) are not done.
+
 ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
 
 Source: `reports/architecture-map-2026-10-13/CONTRADICTIONS.md`. Each is a path read in the source; none was made to happen, and the user has not ruled whether any is to be repaired.

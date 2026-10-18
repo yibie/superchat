@@ -826,7 +826,9 @@ off."
                         json_extract(meta, '$.actor_id'),
                         json_extract(meta, '$.payload.abandoned'),
                         json_extract(meta, '$.payload.status'),
-                        created_at
+                        created_at,
+                        json_extract(meta, '$.payload.\"tool-budget\".action'),
+                        json_extract(meta, '$.payload.\"tool-budget\".limit')
                  FROM tape
                  WHERE id > ?
                    AND json_extract(meta, '$.event_type') IN
@@ -839,7 +841,9 @@ off."
          (unwatched (make-hash-table :test #'equal))
          order last unsettled notices)
     (dolist (row rows)
-      (cl-destructuring-bind (id session type run actor abandoned ended created) row
+      (cl-destructuring-bind (id session type run actor abandoned ended created
+                                 budget-action budget-limit)
+          row
         (setq last id)
         (pcase type
           ("run.started"
@@ -858,7 +862,9 @@ off."
                                         ((memq abandoned '(1 t)) 'cut-off)
                                         (t 'failed)))
                        :time created)
-                      runs)))
+                      runs)
+             (superchat-changes--note-calls-cut-off
+              run runs budget-action budget-limit)))
           ("run.seen" (puthash run t seen))
           ;; It says how the Run ended itself: the Run's own rows may lie
           ;; below the bound, which a Run the user started does not hold.
@@ -869,7 +875,9 @@ off."
              (puthash run (list :run run :session session :began id
                                 :status (and (stringp ended) (intern ended))
                                 :time created)
-                      runs))))))
+                      runs))
+           (superchat-changes--note-calls-cut-off
+            run runs budget-action budget-limit)))))
     (dolist (run (nreverse order))
       (let* ((entry (gethash run runs))
              (session (plist-get entry :session))
@@ -899,6 +907,7 @@ off."
                                     (superchat-changes--started-by session run actor)
                                   "started by you")
                           :status status
+                          :calls-cut-off (plist-get entry :calls-cut-off)
                           :unsaved (gethash run superchat-changes--unsaved-at-end 0)
                           :time (superchat-changes--row-time
                                  (plist-get entry :time)))
@@ -908,6 +917,21 @@ off."
         (superchat-db-projection-set-checkpoint
          superchat-changes--unseen-checkpoint 1 settled)))
     notices))
+
+(defun superchat-changes--note-calls-cut-off (run runs action limit)
+  "Mark RUN in RUNS as cut off by the tool-call LIMIT when ACTION says so.
+ACTION and LIMIT are the `:tool-budget' of the fact that ended RUN, read
+from the Tape (slice 9b)."
+  (when-let* ((entry (gethash run runs))
+              (limit (superchat-tool-cut-off-limit
+                      (list :action action :limit limit))))
+    (puthash run (plist-put entry :calls-cut-off limit) runs)))
+
+(defun superchat-changes--notice-ending (notice)
+  "How NOTICE's execution ended, in the words the lists show."
+  (if-let* ((limit (plist-get notice :calls-cut-off)))
+      (superchat-tool-cut-off-text limit)
+    (format "%s" (plist-get notice :status))))
 
 (defun superchat-changes-notices-reload ()
   "Make the notices what the Tape says now, and show that."
@@ -962,9 +986,12 @@ buffers the execution left unsaved, which the Tape does not say."
                        :actor-id "user"
                        :summary (format "Ended with its conversation closed: %s"
                                         (plist-get status :status))
-                       :payload (list :run-id run
-                                      :status (symbol-name
-                                               (plist-get status :status)))))
+                       :payload (append
+                                 (list :run-id run
+                                       :status (symbol-name
+                                                (plist-get status :status)))
+                                 (when-let* ((budget (plist-get status :tool-budget)))
+                                   (list :tool-budget budget)))))
                 (setq own t))
             (error
              (message "superchat: that %s ended unwatched was not recorded: %s"
@@ -1010,7 +1037,7 @@ non-nil when the notice is gone."
             (list (plist-get notice :run)
                   (vector (format-time-string "%m-%d %H:%M" (plist-get notice :time))
                           (plist-get notice :what)
-                          (format "%s" (plist-get notice :status))
+                          (superchat-changes--notice-ending notice)
                           (let ((n (plist-get notice :unsaved)))
                             (if (> n 0) (format "%d unsaved" n) ""))
                           (plist-get notice :session))))

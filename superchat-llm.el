@@ -3488,7 +3488,15 @@ requests until it receives text, bounded by
                             (when feedback
                               (when (fboundp 'llm-chat-prompt-append-response)
                                 (llm-chat-prompt-append-response
-                                 real-prompt feedback 'user)))))
+                                 real-prompt feedback 'user))))
+                          ;; What Runtime has to say about this execution's
+                          ;; calls: failures in a row, calls left (slices 9c
+                          ;; and 9d).  Each at most once per execution.
+                          (when (and (functionp runtime-observer)
+                                     (fboundp 'llm-chat-prompt-append-response))
+                            (dolist (nudge (funcall runtime-observer 'tool-nudges nil))
+                              (llm-chat-prompt-append-response
+                               real-prompt nudge 'user))))
                         ;; Close this round's rendered text before the next
                         ;; request: the transcript keeps the round's prose and
                         ;; the tool records, and the next round's text

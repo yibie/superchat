@@ -413,7 +413,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的是临时对话。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
-内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误；出错的那次调用记作失败（`tool.failed`），不记作成功，模型收到的文字不变。回答下面那行记录照样数 Emacs Lisp 跑了几次，并写出有几次调用失败。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
+内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；它也可以把 `old_string` 当正则（`regexp`）、只数匹配并给出前三处（`count_only`）、或替换全部匹配（`all`）——最后一种必须在同一次执行里先数过同一个模式；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误；出错的那次调用记作失败（`tool.failed`），不记作成功，模型收到的文字不变。回答下面那行记录照样数 Emacs Lisp 跑了几次，并写出有几次调用失败。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。
 
 新写入的用户消息和模型答复会完整保存，供后续对话读取。上下文预算可能整条省略较早的消息，但不会用显示摘要替换已保存的原文。旧版本已经裁掉的文字无法从指纹恢复。详见[对话历史](docs/decisions/implemented/2026-09-17-preserve-conversation-material.md)。
 
@@ -482,6 +482,8 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 **达到工具轮数上限**
 
 一轮指一次调用了一个或多个工具的模型响应。默认不限轮数：任务一直调用工具，直到模型给出答复、你用 `C-c C-k` 停下，或到了 Run 总期限（[决定](docs/decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md)）。设了上限时，达到该轮数，交互式 Emacs 询问是否再给同样多轮；拒绝或使用 batch 模式时，会撤掉工具并请求最终答复，`stop` 则立即结束。聊天中保留独立的预算提示，重新打开 Session 后也可见。将配置任务视为完成前，应核对答复中的已完成、未完成和未验证部分。可通过 `superchat-llm-max-tool-rounds` 和 `superchat-llm-round-limit-action` 调整行为，累计 hard 上限仍然有效。
+
+这个 hard 上限是 `superchat-agent-max-tool-calls`，每次执行 50 次工具调用。执行进行中，状态行显示 `tools N/50`。用到 70%（50 次里的第 35 次）时，模型会被告知一次还剩几次。超过上限的调用被拒绝，执行结束时会说明：聊天里、`M-x superchat-pending` 和通知列表里写 `Cut off after 50 tool calls`，结束的事实里带 `:tool-budget (:action cut-off :limit 50 :used 50)`。连续 `superchat-tool-failure-brake` 次（默认 3，设 nil 关掉）工具调用失败后，模型会被告知一次换个做法；中间有一次成功就重新计数，你或权限档位拒绝的调用不算失败。`edit_buffer` 报错（找不到文字、匹配不止一处）和 `eval_elisp` 报错一样算一次失败的调用。
 
 **记忆不能持久化**
 

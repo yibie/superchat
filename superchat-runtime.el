@@ -93,6 +93,20 @@ still crossing the single Render region seam.")
   '(completed failed cancelled timed-out audit-incomplete abandoned)
   "States after which a Run ignores further transport callbacks.")
 
+(defcustom superchat-tool-failure-brake 3
+  "After this many failed tool calls in a row, the model is told to change.
+It is told to change approach: the next request of the execution carries
+one sentence saying so, once per execution.  A call that succeeds starts
+the count again; a call the permission level or the user refused is not a
+failure.  Nil turns it off (slice 9c, after the user's two Runs of
+2026-10-18 that repeated failing `eval_elisp' probes)."
+  :type '(choice (const :tag "Off" nil) natnum)
+  :group 'superchat)
+
+(defconst superchat-tool-budget-reminder-share 0.7
+  "Share of the tool-call limit after which the model is told what is left.
+The limit is an execution's; it is told once per execution (slice 9d).")
+
 (defcustom superchat-runtime-default-deadline 1800
   "Default wall-clock deadline for a Runtime Run, in seconds.
 
@@ -380,7 +394,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                      :status :started-at :completed-at :error
                      :stop-requested :stop-notification-error :owner-stop-error :owner-cleanup-error
                      :attempt :attempt-reason :model-phase
-                     :tool-budget
+                     :tool-budget :tool-calls
                      :context-recovery
                      :context-used :context-limit :context-limit-source
                      :context-estimated-p
@@ -3750,6 +3764,8 @@ Absent options preserve legacy behavior; result delivery retains three args."
                                    :request-step-material-items))))
                      ('turn-stopping
                       (superchat-runtime--turn-stopping run-id))
+                     ('tool-nudges
+                      (superchat-runtime--tool-nudges run-id))
                      ('next-step
                       ;; The adapter is one caller of the driver-owned attempt
                       ;; boundary rather than the owner of it: a custom
@@ -4797,6 +4813,75 @@ on this one FIFO for its normal scope-retired drop, but is never accepted."
                     (list :accepted nil :reason 'scope-retired))
                 queue-id)))
         (error (list :accepted nil :reason 'tape-failed))))))
+
+;;;###autoload
+(defun superchat-runtime-note-tool-cut-off (run-id used limit)
+  "Record that RUN-ID's tool calls were cut off at LIMIT after USED calls.
+The agent loop calls this when it refuses the first call past
+`superchat-agent-max-tool-calls'.  The entry's `:tool-budget' becomes
+\(:action cut-off :limit LIMIT :used USED), so the ending facts carry it
+and the chat, the pending list and the notices list say the execution was
+cut off (slice 9b).  The first budget decision of an execution is kept: a
+Run that already has one, or has ended, is left as it is."
+  (let ((entry (and (stringp run-id) (superchat-runtime--entry run-id))))
+    (when (and entry
+               (not (superchat-runtime--terminal-p (plist-get entry :status)))
+               (not (plist-get entry :tool-budget)))
+      (superchat-runtime--update
+       run-id :tool-budget (list :action 'cut-off :limit limit :used used)))))
+
+(defun superchat-runtime-note-tool-call (run-id used limit)
+  "Record that RUN-ID has made USED of its LIMIT tool calls.
+The agent loop calls this for every call it counts; the status line reads
+it as \"tools USED/LIMIT\" and the reminder of slice 9d is decided by it."
+  (let ((entry (and (stringp run-id) (superchat-runtime--entry run-id))))
+    (when (and entry (not (superchat-runtime--terminal-p (plist-get entry :status))))
+      (superchat-runtime--update run-id :tool-calls (list :used used :limit limit)))))
+
+(defun superchat-runtime-note-tool-outcome (run-id outcome)
+  "Count RUN-ID's tool calls that failed in a row.
+OUTCOME is `failed' or `succeeded'.  Only these two count: a refused,
+denied or cancelled call leaves the count as it is (slice 9c)."
+  (let ((entry (and (stringp run-id) (superchat-runtime--entry run-id))))
+    (when (and entry (memq outcome '(failed succeeded)))
+      (superchat-runtime--update
+       run-id :tool-failure-streak
+       (if (eq outcome 'failed)
+           (1+ (or (plist-get entry :tool-failure-streak) 0))
+         0)))))
+
+(defun superchat-runtime--tool-nudges (run-id)
+  "The sentences RUN-ID's next request is to carry about its tool calls.
+Each is said once per execution: that the last calls failed (slice 9c),
+and how many calls are left (slice 9d).  What is said is remembered on
+the entry."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (given (plist-get entry :tool-nudges-given))
+         (streak (or (plist-get entry :tool-failure-streak) 0))
+         (calls (plist-get entry :tool-calls))
+         (used (plist-get calls :used))
+         (limit (plist-get calls :limit))
+         nudges)
+    (when entry
+      (when (and (natnump superchat-tool-failure-brake)
+                 (> superchat-tool-failure-brake 0)
+                 (>= streak superchat-tool-failure-brake)
+                 (not (memq 'failures given)))
+        (push 'failures given)
+        (push (format "The last %d tool calls failed. Change approach: test on a small sample, write the code to a scratch buffer first, or ask the user."
+                      streak)
+              nudges))
+      (when (and (integerp used) (integerp limit) (> limit 0)
+                 (< used limit)
+                 (>= used (ceiling (* superchat-tool-budget-reminder-share limit)))
+                 (not (memq 'budget given)))
+        (push 'budget given)
+        (push (format "%d tool calls left in this execution. Finish, or stop and report what is done and what is not."
+                      (- limit used))
+              nudges))
+      (when nudges
+        (superchat-runtime--update run-id :tool-nudges-given given)))
+    (nreverse nudges)))
 
 (defun superchat-runtime-pending-follow-ups (session-id)
   "Return the number of follow-ups still queued for SESSION-ID."
