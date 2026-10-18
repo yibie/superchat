@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — 120 tool calls per execution
+
+- `superchat-agent-max-tool-calls` is 120 (it was 50), the user's ruling of
+  2026-10-20.  The status line reads `tools N/120`, and a cut-off reads
+  `Cut off after 120 tool calls`.
+- The reminder of what is left comes when 15 calls are left, not at 70%:
+  after the 105th call of 120.  New option
+  `superchat-tool-budget-reminder-left` (default 15, nil off) replaces the
+  constant `superchat-tool-budget-reminder-share`.
+
 ## Unreleased — when tool calls go round in circles
 
 From the user's two Runs of 2026-10-18, each stopped by the limit of 50

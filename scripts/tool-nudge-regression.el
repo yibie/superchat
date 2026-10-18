@@ -9,9 +9,10 @@
 ;; count again; a call the permission level or the user refused is not a
 ;; failure.
 ;;
-;; 9d: when 70% of `superchat-agent-max-tool-calls' are used, the next
-;; request says how many are left.  Once per execution.  While it runs, the
-;; status line shows "tools N/LIMIT", read from the Runtime entry.
+;; 9d: when 15 calls of `superchat-agent-max-tool-calls' are left (slice
+;; 11a; it was 70%), the next request says so.  Once per execution.
+;; While it runs, the status line shows "tools N/LIMIT", read from the
+;; Runtime entry.
 ;;
 ;; Run with the canonical smoke dependency load paths, then:
 ;;   -l scripts/tool-nudge-regression.el
@@ -90,25 +91,50 @@
     (tn--run (list tn--fail tn--fail tn--fail '(:text "TN-DONE"))
       (should-not (tn--first-with "tool calls failed")))))
 
-;;;; 9d ---------------------------------------------------------------------------
+;;;; 9d, as slice 11a set it: 15 calls before the limit --------------------
+;; Rewritten in slice 11a: the reminder came at 70% of the limit (7 of 10);
+;; it now comes when 15 calls are left (`superchat-tool-budget-reminder-left').
 
-(defconst tn--left "3 tool calls left in this execution. Finish, or stop and report what is done and what is not.")
+(defconst tn--left "15 tool calls left in this execution. Finish, or stop and report what is done and what is not.")
 
-(ert-deftest tool-nudge/at-seventy-percent-the-calls-left-are-named ()
-  (let ((superchat-agent-max-tool-calls 10))
-    (tn--run (append (make-list 7 tn--read) '((:text "TN-DONE")))
-      ;; Seven calls are 70% of ten: the eighth request says three are left.
-      (should (equal 7 (tn--first-with tn--left))))))
+(ert-deftest tool-nudge/fifteen-before-the-limit-the-calls-left-are-named ()
+  (let ((superchat-agent-max-tool-calls 20))
+    (tn--run (append (make-list 5 tn--read) '((:text "TN-DONE")))
+      ;; Five calls of twenty: fifteen are left, the sixth request says so.
+      (should (equal 5 (tn--first-with tn--left))))))
 
 (ert-deftest tool-nudge/the-calls-left-are-named-once ()
-  (let ((superchat-agent-max-tool-calls 10))
+  (let ((superchat-agent-max-tool-calls 20))
     (tn--run (append (make-list 9 tn--read) '((:text "TN-DONE")))
       (should (= 1 (tn--count "tool calls left in this execution"
                              (car (last (tn--prompts)))))))))
 
-(ert-deftest tool-nudge/under-seventy-percent-nothing-is-said ()
+(ert-deftest tool-nudge/more-than-fifteen-left-nothing-is-said ()
   "Guard."
-  (let ((superchat-agent-max-tool-calls 10))
+  (let ((superchat-agent-max-tool-calls 20))
+    (tn--run (append (make-list 4 tn--read) '((:text "TN-DONE")))
+      (should-not (tn--first-with "tool calls left")))))
+
+;;;; 11a: the limit is 120 ------------------------------------------------------
+
+(ert-deftest tool-nudge/the-limit-is-120 ()
+  (should (= 120 (eval (car (get 'superchat-agent-max-tool-calls 'standard-value)) t))))
+
+(ert-deftest tool-nudge/with-120-the-reminder-is-at-105 ()
+  (let ((superchat-runtime--runs (make-hash-table :test #'equal)))
+    (puthash "run-tn" (list :run-id "run-tn" :status 'running-model
+                            :tool-calls '(:used 104 :limit 120))
+             superchat-runtime--runs)
+    (should-not (superchat-runtime--tool-nudges "run-tn"))
+    (puthash "run-tn" (list :run-id "run-tn" :status 'running-model
+                            :tool-calls '(:used 105 :limit 120))
+             superchat-runtime--runs)
+    (should (equal (list tn--left) (superchat-runtime--tool-nudges "run-tn")))))
+
+(ert-deftest tool-nudge/the-reminder-can-be-turned-off ()
+  (should (boundp 'superchat-tool-budget-reminder-left))
+  (let ((superchat-tool-budget-reminder-left nil)
+        (superchat-agent-max-tool-calls 20))
     (tn--run (append (make-list 6 tn--read) '((:text "TN-DONE")))
       (should-not (tn--first-with "tool calls left")))))
 

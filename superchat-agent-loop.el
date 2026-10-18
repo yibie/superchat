@@ -52,9 +52,10 @@
   "Agent loop settings for Superchat."
   :group 'superchat)
 
-(defcustom superchat-agent-max-tool-calls 50
+(defcustom superchat-agent-max-tool-calls 120
   "Maximum number of tool calls a single agent turn may execute.
-This is a safety guard against runaway agents."
+This is a safety guard against runaway agents.  120 since slice 11a
+\(the user's ruling of 2026-10-20; it was 50)."
   :type 'integer
   :group 'superchat-agent)
 

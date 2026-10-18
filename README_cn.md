@@ -483,7 +483,7 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 一轮指一次调用了一个或多个工具的模型响应。默认不限轮数：任务一直调用工具，直到模型给出答复、你用 `C-c C-k` 停下，或到了 Run 总期限（[决定](docs/decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md)）。设了上限时，达到该轮数，交互式 Emacs 询问是否再给同样多轮；拒绝或使用 batch 模式时，会撤掉工具并请求最终答复，`stop` 则立即结束。聊天中保留独立的预算提示，重新打开 Session 后也可见。将配置任务视为完成前，应核对答复中的已完成、未完成和未验证部分。可通过 `superchat-llm-max-tool-rounds` 和 `superchat-llm-round-limit-action` 调整行为，累计 hard 上限仍然有效。
 
-这个 hard 上限是 `superchat-agent-max-tool-calls`，每次执行 50 次工具调用。执行进行中，状态行显示 `tools N/50`。用到 70%（50 次里的第 35 次）时，模型会被告知一次还剩几次。超过上限的调用被拒绝，执行结束时会说明：聊天里、`M-x superchat-pending` 和通知列表里写 `Cut off after 50 tool calls`，结束的事实里带 `:tool-budget (:action cut-off :limit 50 :used 50)`。连续 `superchat-tool-failure-brake` 次（默认 3，设 nil 关掉）工具调用失败后，模型会被告知一次换个做法；中间有一次成功就重新计数，你或权限档位拒绝的调用不算失败。`edit_buffer` 报错（找不到文字、匹配不止一处）和 `eval_elisp` 报错一样算一次失败的调用。
+这个 hard 上限是 `superchat-agent-max-tool-calls`，每次执行 120 次工具调用。执行进行中，状态行显示 `tools N/120`。还剩 15 次时（120 次里的第 105 次之后；`superchat-tool-budget-reminder-left`，设 nil 关掉），模型会被告知一次。超过上限的调用被拒绝，执行结束时会说明：聊天里、`M-x superchat-pending` 和通知列表里写 `Cut off after 120 tool calls`，结束的事实里带 `:tool-budget (:action cut-off :limit 120 :used 120)`。连续 `superchat-tool-failure-brake` 次（默认 3，设 nil 关掉）工具调用失败后，模型会被告知一次换个做法；中间有一次成功就重新计数，你或权限档位拒绝的调用不算失败。`edit_buffer` 报错（找不到文字、匹配不止一处）和 `eval_elisp` 报错一样算一次失败的调用。
 
 **记忆不能持久化**
 

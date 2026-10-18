@@ -103,9 +103,13 @@ failure.  Nil turns it off (slice 9c, after the user's two Runs of
   :type '(choice (const :tag "Off" nil) natnum)
   :group 'superchat)
 
-(defconst superchat-tool-budget-reminder-share 0.7
-  "Share of the tool-call limit after which the model is told what is left.
-The limit is an execution's; it is told once per execution (slice 9d).")
+(defcustom superchat-tool-budget-reminder-left 15
+  "How many tool calls before the limit the model is told what is left.
+With `superchat-agent-max-tool-calls' at 120, the reminder comes after the
+105th call; once per execution (slice 9d; a share of 70% until slice 11a).
+Nil turns it off."
+  :type '(choice (const :tag "Off" nil) natnum)
+  :group 'superchat)
 
 (defcustom superchat-runtime-default-deadline 1800
   "Default wall-clock deadline for a Runtime Run, in seconds.
@@ -4873,7 +4877,8 @@ the entry."
               nudges))
       (when (and (integerp used) (integerp limit) (> limit 0)
                  (< used limit)
-                 (>= used (ceiling (* superchat-tool-budget-reminder-share limit)))
+                 (natnump superchat-tool-budget-reminder-left)
+                 (>= used (max 1 (- limit superchat-tool-budget-reminder-left)))
                  (not (memq 'budget given)))
         (push 'budget given)
         (push (format "%d tool calls left in this execution. Finish, or stop and report what is done and what is not."
