@@ -3438,7 +3438,13 @@ requests until it receives text, bounded by
                    (t
                     (let ((continue t))
                       (cl-incf tool-rounds)
-                      (when (and (numberp tool-round-limit)
+                      ;; A tool-loop hook ended the execution (slice 11b).
+                      (when-let* (((functionp runtime-observer))
+                                  (reason (funcall runtime-observer 'tools-stopped nil)))
+                        (setq continue nil)
+                        (funcall finalize (format "[%s]" reason) 'failed))
+                      (when (and continue
+                                 (numberp tool-round-limit)
                                  (>= tool-rounds tool-round-limit))
                         (pcase (if (functionp round-limit-function)
                                    (funcall round-limit-function)

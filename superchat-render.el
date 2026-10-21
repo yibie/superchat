@@ -1563,9 +1563,14 @@ This text belongs to the View, never to the model's response body."
   (let ((rounds (plist-get budget :rounds))
         (limit (plist-get budget :limit))
         (action (plist-get budget :action)))
-    (if (superchat-tool-cut-off-limit budget)
+    (cond
+     ((superchat-tool-stop-reason budget)
+      (format "%s; unfinished or unverified work may remain."
+              (superchat-tool-stop-reason budget)))
+     ((superchat-tool-cut-off-limit budget)
         (format "%s; the calls after that were refused, so unfinished or unverified work may remain."
-                (superchat-tool-cut-off-text limit))
+                (superchat-tool-cut-off-text limit)))
+     (t
     (when (and (integerp rounds) (integerp limit)
                (> limit 0) (>= rounds limit)
                (member action '(finalize stop "finalize" "stop")))
@@ -1574,7 +1579,7 @@ This text belongs to the View, never to the model's response body."
        rounds limit
        (if (member action '(stop "stop"))
            "Execution stopped without requesting a final answer."
-         "A final answer was requested; unfinished or unverified work may remain."))))))
+         "A final answer was requested; unfinished or unverified work may remain.")))))))
 
 
 (declare-function superchat-tape-replay-events "superchat-tape" (session-id &optional since-id limit))

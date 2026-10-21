@@ -437,6 +437,89 @@ OUTCOME is `succeeded' or `failed'; Runtime counts failures in a row
     (funcall #'superchat-runtime-note-tool-outcome
              (plist-get context :run-id) outcome)))
 
+;;;; Two hard hooks in the tool loop (slice 11b) ----------------------------
+
+(defcustom superchat-tool-loop-hooks '(superchat-tool-failure-brake-hook)
+  "Functions asked about every tool call, before its body and after its result.
+Each is called with PHASE, `before' or `after', and CALL, a plist with
+:tool-name, :args, :run-id, :session-id and :execution-id, and in the
+`after' phase :result (the text the model would be given) and :failed (t
+for a `tool.failed' call).  It answers:
+  nil            -- let it be;
+  a string       -- give the model this text instead.  Before the body,
+                    the body does not run; after it, the original stays in
+                    `tool.completed' (or `tool.failed') and the rewrite is
+                    recorded as `tool.rewritten';
+  (:stop REASON) -- end this execution.  Before the body, the body does not
+                    run and the call is recorded as `stopped'.  The Run ends
+                    before its next request, with REASON on its ending facts,
+                    under the answer and on the pending list (the shape of
+                    a cut-off, slice 9b).
+The first function that does not answer nil decides.  One that signals, or
+answers something else, is recorded as a fault and counts as nil.  The
+default is the failure brake (slice 11c) alone; nil turns the hooks off."
+  :type '(repeat function)
+  :group 'superchat)
+
+(defun superchat-tool-execution--loop-hooks
+    (phase tool-name args context execution-id &optional result failed)
+  "Ask `superchat-tool-loop-hooks' about a call in PHASE.
+Return nil, (:rewrite TEXT) or (:stop REASON)."
+  (when superchat-tool-loop-hooks
+    (let ((call (list :tool-name tool-name
+                      :args (superchat-tool-execution--snapshot-value args)
+                      :run-id (plist-get context :run-id)
+                      :session-id (plist-get context :session-id)
+                      :execution-id execution-id
+                      :result result
+                      :failed (and failed t)))
+          outcome)
+      (dolist (hook superchat-tool-loop-hooks)
+        (unless outcome
+          (let ((answer (condition-case err
+                            (funcall hook phase (copy-sequence call))
+                          (error
+                           (superchat-event-record-fault
+                            'tool-loop-hook execution-id hook err)
+                           nil))))
+            (cond
+             ((null answer))
+             ((stringp answer) (setq outcome (list :rewrite answer)))
+             ((and (eq (car-safe answer) :stop) (stringp (cadr answer)))
+              (setq outcome (list :stop (cadr answer))))
+             (t (superchat-event-record-fault
+                 'tool-loop-hook execution-id hook
+                 (list 'unknown-answer answer)))))))
+      outcome)))
+
+(defun superchat-tool-execution--record-rewrite
+    (tool-name context execution-id phase hook-text)
+  "Record that a tool-loop hook gave the model HOOK-TEXT for the call in PHASE."
+  (superchat-tool-execution--append-event
+   "tool.rewritten" tool-name context
+   (append (list :execution-id execution-id :phase (symbol-name phase))
+           (superchat-tool-execution--material :result-text hook-text))))
+
+(defun superchat-tool-execution--stop-run (context reason)
+  "Ask Runtime to end CONTEXT's execution before its next request, for REASON."
+  (when (and (fboundp 'superchat-runtime-stop-tools)
+             (stringp (plist-get context :run-id)))
+    (funcall #'superchat-runtime-stop-tools (plist-get context :run-id) reason)))
+
+(defun superchat-tool-execution--after-hooks
+    (tool-name args context execution-id result failed)
+  "Return RESULT as the tool-loop hooks leave it, after a call ended.
+A rewrite is recorded; a stop is passed to Runtime."
+  (pcase (superchat-tool-execution--loop-hooks
+          'after tool-name args context execution-id result failed)
+    (`(:rewrite ,text)
+     (superchat-tool-execution--record-rewrite tool-name context execution-id 'after text)
+     text)
+    (`(:stop ,reason)
+     (superchat-tool-execution--stop-run context reason)
+     result)
+    (_ result)))
+
 (defvar superchat-tool-execution--inner-refusal nil
   "While a synchronous tool body runs: a cell (REASON) for a call it makes.
 When a call made from inside that body is refused at the liveness gate --
@@ -457,6 +540,13 @@ outside a tool body.")
 
 (define-error 'superchat-tool-execution-body-failure
   "The tool reported that it failed")
+
+(defun superchat-tool-stop-reason (budget)
+  "Why a recorded tool BUDGET stopped the execution, or nil.
+A tool-loop hook that ends an execution writes (:action stopped :reason R)."
+  (and (member (plist-get budget :action) '(stopped "stopped"))
+       (stringp (plist-get budget :reason))
+       (plist-get budget :reason)))
 
 (defun superchat-tool-cut-off-text (limit)
   "How an execution cut off by the tool-call LIMIT is named to the user."
@@ -662,6 +752,9 @@ success."
                   tool-name args
                   (superchat-tool-execution--snapshot-value result)
                   (and (listp context) (plist-get context :run-id)))
+               ;; Slice 11b: after `tool.completed' holds the original.
+               (setq result (superchat-tool-execution--after-hooks
+                             tool-name args context execution-id result nil))
                (superchat-tool-execution--require-current-evidence-origin context)
                'complete)
            (error (cons 'failed err))
@@ -715,7 +808,11 @@ success."
               "result-processing" nil nil t))
             (error (cons 'failed audit-err)))))
     (if (eq audit 'complete)
-        (superchat-tool-execution--deliver async callback result)
+        (superchat-tool-execution--deliver
+         async callback
+         ;; Slice 11b: after `tool.failed' holds the original.
+         (superchat-tool-execution--after-hooks
+          tool-name args context execution-id result t))
       (let* ((audit-err (cdr audit))
              (failure
               (if (plist-get context :evidence-contract)
@@ -1111,12 +1208,27 @@ REFUSE, when supplied, delivers a preexecution liveness refusal."
                       (signal (car audit-condition) (cdr audit-condition))))
                 (if refuse (funcall refuse result)
                   (superchat-tool-execution--deliver async callback result)))))
-        (if async
-            (superchat-tool-execution--invoke-async
-             tool-name original-fn args context execution-id
-             callback)
-          (superchat-tool-execution--invoke-sync
-           tool-name original-fn args context execution-id )))))))
+        (pcase (superchat-tool-execution--loop-hooks
+                'before tool-name args context execution-id)
+          ;; Slice 11b: a hook answered instead of the body.
+          (`(:rewrite ,text)
+           (superchat-tool-execution--record-rewrite
+            tool-name context execution-id 'before text)
+           (superchat-tool-execution--finish-success
+            tool-name args text context execution-id async callback))
+          (`(:stop ,reason)
+           (let ((text (format "[Tool call stopped: %s]" reason)))
+             (superchat-tool-execution--record-failure
+              tool-name context execution-id "stopped" text)
+             (superchat-tool-execution--stop-run context reason)
+             (superchat-tool-execution--deliver async callback text)))
+          (_
+           (if async
+               (superchat-tool-execution--invoke-async
+                tool-name original-fn args context execution-id
+                callback)
+             (superchat-tool-execution--invoke-sync
+              tool-name original-fn args context execution-id )))))))))
 
 ;;;###autoload
 (cl-defun superchat-tool-execute

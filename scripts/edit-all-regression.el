@@ -244,9 +244,14 @@ the text the model receives is unchanged."
             (ea--call '(old_string . "a2") '(new_string . "x"))
             (ea--call '(old_string . "a3") '(new_string . "x"))
             '(:text "EA-DONE"))
-    (let ((view (smoke--open-chat)))
-      (ef--run view "edit")
-      (should (string-match-p "The last 3 tool calls failed" (ea--last-prompt))))))
+    ;; Rewritten in slice 11c: three edit errors used to bring 9c's sentence
+    ;; ("The last 3 tool calls failed") into the next request; they now stop
+    ;; the execution.
+    (let* ((view (smoke--open-chat))
+           (run (ef--run view "edit")))
+      (should (= 3 (length smoke--requests)))
+      (should (equal "Stopped after 3 failed calls in a row"
+                     (plist-get (plist-get (superchat-runtime-status run) :tool-budget) :reason))))))
 
 (ert-deftest edit-all/a-denied-edit-and-a-no-change-are-not-failures ()
   "Guard: a permission refusal stays denied; an identical replacement is not an error."

@@ -506,6 +506,14 @@ Slices 9b–9e (`reports/guidance-2026-10-11/SLICE-9.md`). 9b: the per-execution
 
 Slice 11a (`reports/guidance-2026-10-11/SLICE-11.md`), the user's ruling of 2026-10-20: `superchat-agent-max-tool-calls` 50 → 120; the reminder of what is left at 15 calls before the limit (`superchat-tool-budget-reminder-left`, nil off) instead of 70%. Three tests of `scripts/tool-nudge-regression.el` were rewritten to the new rule.
 
+### Tool calls — two hard hooks; three failures in a row stop (`implemented` 2026-10-20, scripted evidence only)
+
+Slices 11b and 11c (`reports/guidance-2026-10-11/SLICE-11.md`). `superchat-tool-loop-hooks` before the body and after the result: let it be, rewrite (recorded as `tool.rewritten`, the original kept), or stop the execution with a visible ending, as a cut-off ends it. The failure brake is the default hook and replaces 9c's sentence. Tests: `scripts/tool-hooks-regression.el`; six 9c-era tests rewritten (five in tool-nudge, one in edit-all).
+
+### Open observation: a rewrite is seen by the model only in that execution (2026-10-20, recorded, not ruled)
+
+A tool-loop hook's rewrite (slice 11b) is what the model is given in the execution where it happened. The Tape keeps the original in `tool.completed` and the rewrite in `tool.rewritten`, and the history later requests are rebuilt from shows the original. No default hook rewrites today (the failure brake only stops). Before any hook rewrites by default, decide which of the two later requests should carry.
+
 ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
 
 Source: `reports/architecture-map-2026-10-13/CONTRADICTIONS.md`. Each is a path read in the source; none was made to happen, and the user has not ruled whether any is to be repaired.

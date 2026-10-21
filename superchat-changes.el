@@ -828,7 +828,8 @@ off."
                         json_extract(meta, '$.payload.status'),
                         created_at,
                         json_extract(meta, '$.payload.\"tool-budget\".action'),
-                        json_extract(meta, '$.payload.\"tool-budget\".limit')
+                        json_extract(meta, '$.payload.\"tool-budget\".limit'),
+                        json_extract(meta, '$.payload.\"tool-budget\".reason')
                  FROM tape
                  WHERE id > ?
                    AND json_extract(meta, '$.event_type') IN
@@ -842,7 +843,7 @@ off."
          order last unsettled notices)
     (dolist (row rows)
       (cl-destructuring-bind (id session type run actor abandoned ended created
-                                 budget-action budget-limit)
+                                 budget-action budget-limit budget-reason)
           row
         (setq last id)
         (pcase type
@@ -864,7 +865,7 @@ off."
                        :time created)
                       runs)
              (superchat-changes--note-calls-cut-off
-              run runs budget-action budget-limit)))
+              run runs budget-action budget-limit budget-reason)))
           ("run.seen" (puthash run t seen))
           ;; It says how the Run ended itself: the Run's own rows may lie
           ;; below the bound, which a Run the user started does not hold.
@@ -877,7 +878,7 @@ off."
                                 :time created)
                       runs))
            (superchat-changes--note-calls-cut-off
-            run runs budget-action budget-limit)))))
+            run runs budget-action budget-limit budget-reason)))))
     (dolist (run (nreverse order))
       (let* ((entry (gethash run runs))
              (session (plist-get entry :session))
@@ -908,6 +909,7 @@ off."
                                   "started by you")
                           :status status
                           :calls-cut-off (plist-get entry :calls-cut-off)
+                          :calls-stopped (plist-get entry :calls-stopped)
                           :unsaved (gethash run superchat-changes--unsaved-at-end 0)
                           :time (superchat-changes--row-time
                                  (plist-get entry :time)))
@@ -918,20 +920,26 @@ off."
          superchat-changes--unseen-checkpoint 1 settled)))
     notices))
 
-(defun superchat-changes--note-calls-cut-off (run runs action limit)
+(defun superchat-changes--note-calls-cut-off (run runs action limit &optional reason)
   "Mark RUN in RUNS as cut off by the tool-call LIMIT when ACTION says so.
-ACTION and LIMIT are the `:tool-budget' of the fact that ended RUN, read
-from the Tape (slice 9b)."
-  (when-let* ((entry (gethash run runs))
-              (limit (superchat-tool-cut-off-limit
-                      (list :action action :limit limit))))
-    (puthash run (plist-put entry :calls-cut-off limit) runs)))
+ACTION, LIMIT and REASON are the `:tool-budget' of the fact that ended RUN,
+read from the Tape (slice 9b); a tool-loop hook's stop (slice 11b) is kept
+as its REASON."
+  (when-let* ((entry (gethash run runs)))
+    (let ((budget (list :action action :limit limit :reason reason)))
+      (cond
+       ((superchat-tool-stop-reason budget)
+        (puthash run (plist-put entry :calls-stopped (superchat-tool-stop-reason budget)) runs))
+       ((superchat-tool-cut-off-limit budget)
+        (puthash run (plist-put entry :calls-cut-off (superchat-tool-cut-off-limit budget))
+                 runs))))))
 
 (defun superchat-changes--notice-ending (notice)
   "How NOTICE's execution ended, in the words the lists show."
-  (if-let* ((limit (plist-get notice :calls-cut-off)))
-      (superchat-tool-cut-off-text limit)
-    (format "%s" (plist-get notice :status))))
+  (cond ((plist-get notice :calls-stopped))
+        ((plist-get notice :calls-cut-off)
+         (superchat-tool-cut-off-text (plist-get notice :calls-cut-off)))
+        (t (format "%s" (plist-get notice :status)))))
 
 (defun superchat-changes-notices-reload ()
   "Make the notices what the Tape says now, and show that."

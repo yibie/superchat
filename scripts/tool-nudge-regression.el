@@ -3,11 +3,11 @@
 ;;; Commentary:
 ;; Slices 9c and 9d (reports/guidance-2026-10-11/SLICE-9.md).
 ;;
-;; 9c: after `superchat-tool-failure-brake' tool calls in a row failed
-;; (default 3), the next request carries one sentence telling the model to
-;; change approach.  Once per execution; a call that succeeds starts the
-;; count again; a call the permission level or the user refused is not a
-;; failure.
+;; 9c, made hard in slice 11c: after `superchat-tool-failure-brake' tool
+;; calls in a row failed (default 3) the execution stops, through the
+;; tool-loop hook `superchat-tool-failure-brake-hook'.  A call that succeeds
+;; starts the count again; a call the permission level or the user refused is
+;; not a failure.
 ;;
 ;; 9d: when 15 calls of `superchat-agent-max-tool-calls' are left (slice
 ;; 11a; it was 70%), the next request says so.  Once per execution.
@@ -24,8 +24,7 @@
                         (file-name-directory (or load-file-name buffer-file-name)))
       nil t)
 
-(defconst tn--brake
-  "The last 3 tool calls failed. Change approach: test on a small sample, write the code to a scratch buffer first, or ask the user.")
+(defvar superchat-tool-loop-hooks)
 
 (defun tn--call (expression)
   (list :tool-uses (list (list "eval_elisp" (cons 'expression expression)))))
@@ -57,39 +56,71 @@
        (ef--run view "go")
        ,@body)))
 
-;;;; 9c ---------------------------------------------------------------------------
+;;;; 11c: three failed calls in a row stop the execution ---------------------
+;; Rewritten in slice 11c: these five tests asserted 9c's soft sentence ("The
+;; last 3 tool calls failed. Change approach ...") in the next request.  The
+;; sentence is gone; the execution now stops after the third failure.
 
-(ert-deftest tool-nudge/three-failures-in-a-row-are-named ()
-  (tn--run (list tn--fail tn--fail tn--fail '(:text "TN-DONE"))
-    ;; Requests 1-3 come before the third failure; the fourth follows it.
-    (should (equal 3 (tn--first-with tn--brake)))))
+(defconst tn--stopped "Stopped after 3 failed calls in a row")
 
-(ert-deftest tool-nudge/it-is-said-once-per-execution ()
-  (tn--run (list tn--fail tn--fail tn--fail tn--fail tn--fail tn--fail '(:text "TN-DONE"))
-    ;; Counted by what every repetition would share, whatever its number.
-    (should (= 1 (tn--count "tool calls failed. Change approach"
-                            (car (last (tn--prompts))))))))
+(defun tn--calls (view)
+  "How many tool calls VIEW's conversation asked for."
+  (cl-count "tool.requested"
+            (superchat-tape-replay-events (buffer-local-value 'superchat--session-id view))
+            :key (lambda (event) (plist-get event :type)) :test #'equal))
+
+(defmacro tn--run-1 (script &rest body)
+  "Like `tn--run', with VIEW and RUN bound."
+  (declare (indent 1) (debug t))
+  `(ef--fixture ,script
+     (let* ((view (smoke--open-chat))
+            (run (ef--run view "go")))
+       ,@body)))
+
+(ert-deftest tool-nudge/three-failures-in-a-row-stop-the-execution ()
+  (tn--run-1 (list tn--fail tn--fail tn--fail tn--fail '(:text "TN-NEVER"))
+    ;; No fourth call, and no request after the third failure.
+    (should (= 3 (tn--calls view)))
+    (should (= 3 (length smoke--requests)))
+    (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))
+    (should (string-match-p tn--stopped (with-current-buffer view (buffer-string))))
+    (should (equal tn--stopped
+                   (plist-get (plist-get (superchat-runtime-status run) :tool-budget) :reason)))))
+
+(ert-deftest tool-nudge/the-soft-sentence-is-gone ()
+  (tn--run (list tn--fail tn--fail tn--fail '(:text "TN-NEVER"))
+    (should-not (tn--first-with "Change approach"))))
 
 (ert-deftest tool-nudge/a-success-starts-the-count-again ()
-  (tn--run (list tn--fail tn--fail tn--ok tn--fail tn--fail '(:text "TN-DONE"))
-    (should-not (tn--first-with tn--brake)))
-  (tn--run (list tn--fail tn--fail tn--ok tn--fail tn--fail tn--fail '(:text "TN-DONE"))
-    (should (equal 6 (tn--first-with tn--brake)))))
+  (tn--run-1 (list tn--fail tn--fail tn--ok tn--fail tn--fail '(:text "TN-DONE"))
+    (should (= 5 (tn--calls view)))
+    (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))
+  (tn--run-1 (list tn--fail tn--fail tn--ok tn--fail tn--fail tn--fail tn--fail '(:text "TN-NEVER"))
+    (should (= 6 (tn--calls view)))
+    (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))))
 
 (ert-deftest tool-nudge/refused-calls-are-not-failures ()
   "Guard: a call the permission level refuses is a decision, not a failure."
   (let ((superchat-sandbox-default-mode 'read-only))
-    (ef--fixture (list tn--ok tn--ok tn--ok '(:text "TN-DONE"))
-      (let ((superchat-sandbox-default-mode 'read-only)
-            (view (smoke--open-chat)))
-        (ef--run view "go")
+    (ef--fixture (list tn--ok tn--ok tn--ok tn--ok '(:text "TN-DONE"))
+      (let* ((superchat-sandbox-default-mode 'read-only)
+             (view (smoke--open-chat))
+             (run (ef--run view "go")))
         (should (string-match-p "permission level" (car (last (tn--prompts)))))
-        (should-not (tn--first-with "tool calls failed"))))))
+        (should (= 4 (tn--calls view)))
+        (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))))))
 
 (ert-deftest tool-nudge/the-brake-can-be-turned-off ()
   (let ((superchat-tool-failure-brake nil))
-    (tn--run (list tn--fail tn--fail tn--fail '(:text "TN-DONE"))
-      (should-not (tn--first-with "tool calls failed")))))
+    (tn--run-1 (list tn--fail tn--fail tn--fail tn--fail '(:text "TN-DONE"))
+      (should (= 4 (tn--calls view)))
+      (should (eq 'completed (plist-get (superchat-runtime-status run) :status))))))
+
+(ert-deftest tool-nudge/no-hooks-no-brake ()
+  "The brake is a tool-loop hook: with none, nothing stops."
+  (let ((superchat-tool-loop-hooks nil))
+    (tn--run-1 (list tn--fail tn--fail tn--fail tn--fail '(:text "TN-DONE"))
+      (should (= 4 (tn--calls view))))))
 
 ;;;; 9d, as slice 11a set it: 15 calls before the limit --------------------
 ;; Rewritten in slice 11a: the reminder came at 70% of the limit (7 of 10);

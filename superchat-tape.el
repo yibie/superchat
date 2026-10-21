@@ -126,6 +126,8 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "triage.scope-granted" "rule.approved" "rule.removed"
              "queue.queued" "queue.dispatched" "queue.dropped"
              "admission.dropped" "edit.applied" "turn.superseded"
+             ;; A tool-loop hook gave the model other text (slice 11b).
+             "tool.rewritten"
              "workspace.artifact.added" "workspace.artifact.changed"
              "workspace.artifact.removed"
              ;; Timers (M11 slice 4): a timer is these facts.

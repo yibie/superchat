@@ -94,12 +94,12 @@ still crossing the single Render region seam.")
   "States after which a Run ignores further transport callbacks.")
 
 (defcustom superchat-tool-failure-brake 3
-  "After this many failed tool calls in a row, the model is told to change.
-It is told to change approach: the next request of the execution carries
-one sentence saying so, once per execution.  A call that succeeds starts
-the count again; a call the permission level or the user refused is not a
-failure.  Nil turns it off (slice 9c, after the user's two Runs of
-2026-10-18 that repeated failing `eval_elisp' probes)."
+  "After this many failed tool calls in a row, the execution stops.
+The stop is made by `superchat-tool-failure-brake-hook' in
+`superchat-tool-loop-hooks' (slice 11c; until then, 9c's sentence asking the
+model to change approach).  A call that succeeds starts the count again; a
+call the permission level or the user refused is not a failure.  Nil turns
+it off."
   :type '(choice (const :tag "Off" nil) natnum)
   :group 'superchat)
 
@@ -3770,6 +3770,8 @@ Absent options preserve legacy behavior; result delivery retains three args."
                       (superchat-runtime--turn-stopping run-id))
                      ('tool-nudges
                       (superchat-runtime--tool-nudges run-id))
+                     ('tools-stopped
+                      (superchat-runtime-tools-stopped run-id))
                      ('next-step
                       ;; The adapter is one caller of the driver-owned attempt
                       ;; boundary rather than the owner of it: a custom
@@ -4856,25 +4858,16 @@ denied or cancelled call leaves the count as it is (slice 9c)."
 
 (defun superchat-runtime--tool-nudges (run-id)
   "The sentences RUN-ID's next request is to carry about its tool calls.
-Each is said once per execution: that the last calls failed (slice 9c),
-and how many calls are left (slice 9d).  What is said is remembered on
-the entry."
+How many calls are left (slice 9d), said once per execution and remembered
+on the entry.  Failures in a row are no longer a sentence: since slice 11c
+they stop the execution (`superchat-tool-failure-brake-hook')."
   (let* ((entry (superchat-runtime--entry run-id))
          (given (plist-get entry :tool-nudges-given))
-         (streak (or (plist-get entry :tool-failure-streak) 0))
          (calls (plist-get entry :tool-calls))
          (used (plist-get calls :used))
          (limit (plist-get calls :limit))
          nudges)
     (when entry
-      (when (and (natnump superchat-tool-failure-brake)
-                 (> superchat-tool-failure-brake 0)
-                 (>= streak superchat-tool-failure-brake)
-                 (not (memq 'failures given)))
-        (push 'failures given)
-        (push (format "The last %d tool calls failed. Change approach: test on a small sample, write the code to a scratch buffer first, or ask the user."
-                      streak)
-              nudges))
       (when (and (integerp used) (integerp limit) (> limit 0)
                  (< used limit)
                  (natnump superchat-tool-budget-reminder-left)
@@ -4887,6 +4880,38 @@ the entry."
       (when nudges
         (superchat-runtime--update run-id :tool-nudges-given given)))
     (nreverse nudges)))
+
+(defun superchat-runtime-stop-tools (run-id reason)
+  "End RUN-ID's execution before its next request, for REASON (slice 11b).
+Its `:tool-budget' becomes (:action stopped :reason REASON) unless the
+execution already has a budget decision, so the ending facts, the chat and
+the pending list say why; `superchat-runtime-tools-stopped' answers REASON
+from now on, and calls still to come in this round are refused."
+  (let ((entry (and (stringp run-id) (superchat-runtime--entry run-id))))
+    (when (and entry (not (superchat-runtime--terminal-p (plist-get entry :status)))
+               (not (plist-get entry :tools-stopped)))
+      (superchat-runtime--update run-id :tools-stopped reason)
+      (unless (plist-get entry :tool-budget)
+        (superchat-runtime--update
+         run-id :tool-budget (list :action 'stopped :reason reason))))))
+
+(defun superchat-runtime-tools-stopped (run-id)
+  "Why a tool-loop hook stopped RUN-ID's execution, or nil."
+  (plist-get (and (stringp run-id) (superchat-runtime--entry run-id)) :tools-stopped))
+
+(defun superchat-tool-failure-brake-hook (phase call)
+  "Stop the execution after `superchat-tool-failure-brake' failed calls in a row.
+A tool-loop hook (slice 11c, in place of 9c's sentence): it counts the
+`tool.failed' calls Runtime counts, so a refused or cancelled call does not
+count and a success starts again."
+  (when (and (eq phase 'after)
+             (plist-get call :failed)
+             (natnump superchat-tool-failure-brake)
+             (> superchat-tool-failure-brake 0))
+    (let ((streak (plist-get (superchat-runtime--entry (plist-get call :run-id))
+                             :tool-failure-streak)))
+      (when (and (integerp streak) (>= streak superchat-tool-failure-brake))
+        (list :stop (format "Stopped after %d failed calls in a row" streak))))))
 
 (defun superchat-runtime-pending-follow-ups (session-id)
   "Return the number of follow-ups still queued for SESSION-ID."

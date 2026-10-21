@@ -424,6 +424,11 @@ a call's arguments by name."
                   (superchat-runtime-note-tool-call
                    (plist-get context :run-id) (min (car counter) limit) limit))
                  (context
+                  (if-let* ((stopped (superchat-runtime-tools-stopped
+                                      (plist-get context :run-id))))
+                      (plist-put context :block (format "Tool calls stopped: %s" stopped))
+                    context))
+                 (context
                   (if (> (car counter) limit)
                       (progn
                         (superchat-runtime-note-tool-cut-off
@@ -509,6 +514,11 @@ a call's arguments by name."
                (_counted
                 (superchat-runtime-note-tool-call
                  (plist-get context :run-id) (min (car counter) limit) limit))
+               (context
+                (if-let* ((stopped (superchat-runtime-tools-stopped
+                                    (plist-get context :run-id))))
+                    (plist-put context :block (format "Tool calls stopped: %s" stopped))
+                  context))
                (context
                 (if (> (car counter) limit)
                     (progn

@@ -2,6 +2,20 @@
 
 All notable changes to superchat.
 
+## Unreleased — the tool loop gets two hard hooks; failures in a row stop
+
+- New option `superchat-tool-loop-hooks`: functions asked about every tool
+  call before its body and after its result.  Each lets it be, gives the
+  model other text (the original stays in `tool.completed`, the rewrite is
+  the new fact `tool.rewritten`), or stops the execution.  A stop ends the
+  Run before its next request, with the reason on its ending facts, under the
+  answer and on the pending row; a hook that fails is a fault and lets it be.
+  Default: the failure brake alone; nil turns the hooks off.
+- `superchat-tool-failure-brake` (default 3) now stops the execution after
+  that many failed calls in a row: `Stopped after 3 failed calls in a row`.
+  9c's sentence asking the model to change approach is gone.  A refused or
+  cancelled call does not count; a success starts the count again.
+
 ## Unreleased — 120 tool calls per execution
 
 - `superchat-agent-max-tool-calls` is 120 (it was 50), the user's ruling of

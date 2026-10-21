@@ -303,7 +303,8 @@ with their conversation closed."
              (plist-get notice :what)
              (format "%s%s"
                      (pcase (plist-get notice :status)
-                       ((guard (plist-get notice :calls-cut-off))
+                       ((guard (or (plist-get notice :calls-cut-off)
+                                   (plist-get notice :calls-stopped)))
                         (superchat-changes--notice-ending notice))
                        ('cut-off "cut off when Emacs quit")
                        ('cancelled "stopped")
