@@ -595,7 +595,9 @@ the work, and it ran in the old conversation."
          (work (llm-tool-description (cl-find "work_record" tools :key #'llm-tool-name :test #'equal))))
     (should (string-match-p "register wait_for user and end your turn" work))
     (should (string-match-p "the user's next message in this conversation clears the wait" work))
-    (should (string-match-p "use ask_user only for a question the user can answer right now" work))))
+    (should (string-match-p "use ask_user only for a question the user can answer right now" work))
+    ;; Slice 12a: work the user puts off waits for the user, said plainly.
+    (should (string-suffix-p " When the user says to do the rest later, register wait_for user with what is left in detail; Superchat will not go on by itself." work))))
 
 (provide 'work-record-regression)
 ;;; work-record-regression.el ends here

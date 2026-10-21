@@ -514,9 +514,11 @@ Slices 11b and 11c (`reports/guidance-2026-10-11/SLICE-11.md`). `superchat-tool-
 
 A tool-loop hook's rewrite (slice 11b) is what the model is given in the execution where it happened. The Tape keeps the original in `tool.completed` and the rewrite in `tool.rewritten`, and the history later requests are rebuilt from shows the original. No default hook rewrites today (the failure brake only stops). Before any hook rewrites by default, decide which of the two later requests should carry.
 
-### Open observation: "the rest next time" can only be said as a wait for the user (2026-10-20, recorded, not ruled)
+### Open observation: "the rest next time" can only be said as a wait for the user (2026-10-20, recorded; ruled 2026-10-21)
 
 With goal rounds on by default (`superchat-work-rounds-when-started`), a Work Record left `continuable` means "go on now": Superchat queues the next round itself. When the user says to do the rest later, the only way the model has to keep that is `work_record` with `wait_for user`, and that argument's description speaks only of questions the user may answer later. Found in the task-sim K2C runs (slice 11d, `reports/guidance-2026-10-11/evidence/slice-11d-k2c.md`): runs that recorded progress and stopped had already queued round 1, which would have done the deferred books at once. Any change to the wording given to the model is the user's to decide.
+
+Ruled by the user on 2026-10-21 ("按照建议"), delivered in slice 12a, the commit "Work the user puts off waits for the user": the `work_record` description ends with one sentence, "When the user says to do the rest later, register wait_for user with what is left in detail; Superchat will not go on by itself." The second half is pinned by `scripts/work-defer-regression.el`: after a wait for the user, an unrelated message leaves the record continuable with no round queued, and only `/work resume` goes on. Evidence for the wording itself is the task-sim harness, three runs per arm (K2C 2/3 without, 3/3 with; T4W 3/3), a direction rather than a measurement.
 
 ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
 

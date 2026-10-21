@@ -2,6 +2,16 @@
 
 All notable changes to superchat.
 
+## Unreleased — work the user puts off waits for the user
+
+- The `work_record` description the model is given ends with one more
+  sentence: "When the user says to do the rest later, register wait_for user
+  with what is left in detail; Superchat will not go on by itself."  Nothing
+  else in it changed.  With goal rounds on, a record left continuable is
+  taken up at once, so "the rest next time" needs this wait.  The claim in
+  the sentence's second half is pinned by `scripts/work-defer-regression.el`.
+  Evidence for the wording is three task-sim runs per arm, a direction only.
+
 ## Unreleased — the tool loop gets two hard hooks; failures in a row stop
 
 - New option `superchat-tool-loop-hooks`: functions asked about every tool
