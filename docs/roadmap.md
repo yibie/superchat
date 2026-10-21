@@ -514,6 +514,10 @@ Slices 11b and 11c (`reports/guidance-2026-10-11/SLICE-11.md`). `superchat-tool-
 
 A tool-loop hook's rewrite (slice 11b) is what the model is given in the execution where it happened. The Tape keeps the original in `tool.completed` and the rewrite in `tool.rewritten`, and the history later requests are rebuilt from shows the original. No default hook rewrites today (the failure brake only stops). Before any hook rewrites by default, decide which of the two later requests should carry.
 
+### Open observation: "the rest next time" can only be said as a wait for the user (2026-10-20, recorded, not ruled)
+
+With goal rounds on by default (`superchat-work-rounds-when-started`), a Work Record left `continuable` means "go on now": Superchat queues the next round itself. When the user says to do the rest later, the only way the model has to keep that is `work_record` with `wait_for user`, and that argument's description speaks only of questions the user may answer later. Found in the task-sim K2C runs (slice 11d, `reports/guidance-2026-10-11/evidence/slice-11d-k2c.md`): runs that recorded progress and stopped had already queued round 1, which would have done the deferred books at once. Any change to the wording given to the model is the user's to decide.
+
 ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
 
 Source: `reports/architecture-map-2026-10-13/CONTRADICTIONS.md`. Each is a path read in the source; none was made to happen, and the user has not ruled whether any is to be repaired.
