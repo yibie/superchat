@@ -107,12 +107,6 @@ its implementation with a later same-name resolver or approval preview."
        (cl-loop for (key _value) on value by #'cddr
                 always (keywordp key))))
 
-(defun superchat-tool-execution--alist-p (value)
-  "Return non-nil when VALUE looks like an alist."
-  (and (consp value)
-       (cl-every (lambda (item) (and (consp item) (not (listp (car item)))))
-                 value)))
-
 (defun superchat-tool-execution--snapshot-value (value)
   "Return a detached copy of mutable JSON-like VALUE."
   (cond

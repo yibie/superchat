@@ -218,22 +218,6 @@ Turn proceeds unchanged and later Turns start from the Anchor."
   (or superchat-handoff-char-threshold
       (floor (* 0.85 (superchat-handoff--context-budget turn)))))
 
-(defun superchat-handoff--maybe-auto-compact (turn)
-  "If the prompt is too long, start a background compaction.
-TURN proceeds unchanged; the anchor benefits later Turns.  Blocking
-here would freeze the main chat Surface on a nested Run."
-  (when (and superchat-handoff-auto-enabled
-             (boundp 'superchat--session-id)
-             superchat--session-id
-             (fboundp 'superchat-compact-session)
-             (not (bound-and-true-p superchat-compact--in-flight))
-             (> (superchat-handoff--prompt-char-count turn)
-                (superchat-handoff--char-threshold turn)))
-    (message "Prompt exceeds threshold; compacting session in the background...")
-    (let ((superchat--current-turn turn))
-      (superchat-compact-session)))
-  turn)
-
 ;; Token-aware recovery below owns automatic pre-send compaction.  Keep the
 ;; character heuristic callable for compatibility, but do not race it against
 ;; the same-Run recovery path by registering it on the pre-submit hook.
@@ -654,16 +638,6 @@ new checkpoint instead of being silently discarded on repeated compaction."
 
 (defvar-local superchat-compact--in-flight nil
   "Non-nil while an asynchronous compaction Run is pending for this buffer.")
-
-(defun superchat-compact--anchor-message (anchor-id summary source-ids)
-  "Return the in-memory typed Anchor message for SUMMARY."
-  `(:role system
-    :content ,(concat "[Session anchor]\n\n" summary)
-    :anchor t
-    :compaction-anchor t
-    :id ,anchor-id
-    :source-ids ,source-ids
-    :timestamp ,(current-time)))
 
 (defun superchat-compact--runtime-session-id (session-id)
   "Return an isolated Runtime Session ID for a compaction of SESSION-ID."

@@ -613,10 +613,6 @@ only when a person decided."
   "Return the ledger's plist for HASH, or nil."
   (cdr (assoc hash (superchat--syn-load-approvals))))
 
-(defun superchat--syn-approval-state (hash)
-  "Return `approved', `admitted', `rejected', `deleted' or nil for HASH."
-  (plist-get (superchat--syn-approval hash) :state))
-
 (defun superchat--syn-store-entries ()
   "Return the persisted tool entries, newest last."
   (superchat--syn-read-forms (superchat--syn-store-file)))

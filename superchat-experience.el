@@ -1899,58 +1899,6 @@ most one active human-promoted Candidate with matching applicability."
           :open (vconcat (nreverse open))
           :blocked (vconcat (nreverse blocked))))))
 
-(defun superchat-experience--record-review (judgment need reason)
-  "Record JUDGMENT (retain, fails-under, or revoke) for NEED.
-Writes an explicit judgment through the existing relation or disposition
-recorder."
-  (when (string-empty-p reason)
-    (error "Review reason must not be empty"))
-  (pcase judgment
-    ((or "retain" "fails-under")
-     (superchat-experience-record-relation
-      (list :session-id
-            (plist-get (plist-get need :intervention) :session-id)
-            :actor-id "user"
-            :correlation-id
-            (format "review:%s"
-                    (plist-get (plist-get need :intervention)
-                               :event-id))
-            :causation-id
-            (plist-get (plist-get need :outcome) :event-id)
-            :relation (if (equal judgment "retain")
-                          'applies-under
-                        'fails-under)
-            :from (plist-get need :candidate)
-            :to (plist-get need :context)
-            :scope (plist-get need :scope)
-            :basis (plist-get need :basis)
-            :reason reason)))
-    ("revoke"
-     (superchat-experience-record-disposition
-      (list :session-id
-            (plist-get (plist-get need :promotion) :session-id)
-            :actor-id "user" :candidate (plist-get need :candidate)
-            :scope (plist-get need :scope) :decision 'revoke
-            :prior (plist-get need :promotion)
-            :basis (plist-get need :basis) :reason reason)))
-    (_ (error "Unknown review judgment: %s" judgment))))
-
-(defun superchat-experience--review-label (need)
-  "Return a human-readable label for NEED, or nil."
-  (let* ((candidate (plist-get need :candidate))
-         (event (and candidate
-                     (car (superchat-experience--events-for-reference
-                           candidate))))
-         (statement (and event
-                         (plist-get (plist-get event :payload)
-                                    :statement))))
-    (and (stringp statement)
-         (let ((text (string-trim (replace-regexp-in-string
-                                   "[\n\r]+" " " statement))))
-           (if (> (length text) 60)
-               (concat (substring text 0 57) "...")
-             text)))))
-
 ;;; Structural eye: a compression-based applicability ranker.
 ;; Read-only.  It never gates behavior; the reviewer sees the hint and
 ;; decides.  Based on the compression-prediction equivalence
@@ -2077,28 +2025,6 @@ Run id, so the Run id is resolved from the intervention event itself."
     (when hint
       (plist-put hint :predicted
                  (if (> (plist-get hint :margin) 0) 'recovered 'failed)))))
-
-(defun superchat-experience--structural-hint-text (need)
-  "Human-readable form of the structural hint for NEED, or nil."
-  (let ((hint (superchat-experience--structural-hint need)))
-    (when hint
-      (format
-       (concat "Structural hint: behavior %s (margin %+d bytes; "
-               "%d success / %d failure runs)")
-       (if (eq (plist-get hint :predicted) 'recovered)
-           "matches successful recovery patterns"
-         "deviates from successful recovery patterns")
-       (plist-get hint :margin)
-       (plist-get hint :successes)
-       (plist-get hint :failures)))))
-
-(defun superchat-experience--structural-hint-label (need)
-  "Compact structural-hint suffix for NEED labels, or the empty string."
-  (let ((hint (and (executable-find "gzip")
-                   (superchat-experience--structural-hint need))))
-    (if hint
-        (format " [%+d]" (plist-get hint :margin))
-      "")))
 
 (defvar superchat-experience-monitor-recent-limit 10
   "Recent Runs to show per-Run margins for in the structural monitor.")
@@ -2276,19 +2202,6 @@ STATUS is the public status plist the `run-completed' Event carries.  A no-op wh
         (superchat-experience--record-structure-verdict
          (plist-get status :run-id) status)
       (error nil))))
-
-(defun superchat-experience--sort-needs (needs)
-  "Sort NEEDS by structural margin: hinted needs first, margin descending.
-Needs without a computable margin keep their relative order at the end."
-  (sort (copy-sequence needs)
-        (lambda (a b)
-          (let ((ha (superchat-experience--structural-hint a))
-                (hb (superchat-experience--structural-hint b)))
-            (cond ((and ha hb)
-                   (> (plist-get ha :margin) (plist-get hb :margin)))
-                  (ha t)
-                  (hb nil)
-                  (t nil))))))
 
 ;; The `experience' plugin (superchat-default-plugins.el) registers the
 ;; run-completed observer and provides the `recovery' Service.

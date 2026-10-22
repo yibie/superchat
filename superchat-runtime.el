@@ -539,11 +539,6 @@ EVENT is a persisted `run.started' envelope, not a live registry entry."
         (setq entry (plist-put entry key (plist-get event key)))))
     entry))
 
-(defun superchat-runtime--reconciliation-terminal-p (event)
-  "Return non-nil when EVENT is a durable Run terminal event."
-  (member (plist-get event :type)
-          '("run.completed" "run.failed" "run.cancelled")))
-
 (defun superchat-runtime--reconciliation-abandoned-p (event)
   "Return non-nil when EVENT is an explicit abandoned Run seal."
   (let* ((payload (plist-get event :payload))

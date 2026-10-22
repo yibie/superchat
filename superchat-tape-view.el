@@ -888,13 +888,6 @@ without its partner or stored text yields no entry."
              (superchat-view--continuity-role (plist-get item :kind))
              (plist-get item :content)))))
 
-(defun superchat-view--continuity-recall-item-line (item)
-  "Render any explicitly recalled ITEM without treating it as prompt material."
-  (format "%s: %s"
-          (capitalize
-           (replace-regexp-in-string "_" " " (plist-get item :kind)))
-          (plist-get item :content)))
-
 (defun superchat-view--continuity-select-records
     (records entry-budget char-budget &optional line-function item-function)
   "Select records from RECORDS within ENTRY-BUDGET and CHAR-BUDGET.
@@ -1646,41 +1639,9 @@ assembled without its exclusions."
          :excluded-storage-ids excluded))
     (error (superchat-view--continuity-unknown-envelope session-id purpose))))
 
-(defun superchat-view--continuity-blocked-recall-envelope
-    (session-id selector reason through-storage-id tape-head omissions)
-  "Return a blocked Recall envelope with exact OMISSIONS."
-  (list :contract "context-continuity-v0"
-        :status 'blocked
-        :prompt ""
-        :scope (list :session-id session-id
-                     :purpose 'recall
-                     :through-storage-id through-storage-id
-                     :lineage (vector
-                               (list :session-id session-id
-                                     :through-storage-id through-storage-id))
-                     :selection-policy
-                     superchat-view--continuity-recall-policy)
-        :items []
-        :disclosure (list :covered [] :represented []
-                          :omitted omissions :recallable [])
-        :receipt (list :tape-head tape-head
-                       :read-status 'ok
-                       :selection-policy
-                       superchat-view--continuity-recall-policy
-                       :selection-policy-version 1)
-        :recall (list :selector selector :reason reason)))
-
 ;; ═══════════════════════════════════════════════════════════
 ;; Formatting for LLM consumption
 ;; ═══════════════════════════════════════════════════════════
-
-(defun superchat-view--format-row (row)
-  "Format a single tape ROW as a string for inclusion in prompts.
-ROW layout: (id session_id topic kind content meta created_at)."
-  (let ((kind (nth 3 row))
-        (content (nth 4 row))
-        (created (nth 6 row)))
-    (format "[%s @ %s]\n%s" kind created content)))
 
 (defun superchat-view-row-to-memory-plist (row)
   "Convert a tape ROW into the memory plist shape used by the prompt hook.

@@ -602,13 +602,6 @@ With no arguments, clear the active artifact in the current workspace."
 ;; Reading
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-artifact-board--active-p (&optional artifact-id workspace-id)
-  "Return non-nil when the selected workspace artifact is live."
-  (when-let* ((workspace (superchat-artifact-board--workspace workspace-id))
-              (artifact (superchat-artifact-board--target-artifact
-                         workspace artifact-id)))
-    (superchat-artifact-board--artifact-live-p artifact)))
-
 (defun superchat-artifact-board--require-artifact-readable
     (artifact workspace-id expected-revision)
   "Require readable content and a recorded-terminal-backed handoff for
