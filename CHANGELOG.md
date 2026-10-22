@@ -2,6 +2,29 @@
 
 All notable changes to superchat.
 
+## Unreleased — a reply cut off at the output limit runs no call
+
+- When the provider gives the stop reason `length`, none of the reply's tool
+  calls runs (`superchat-cut-off-reply-runs-nothing`, default t).  The whole
+  reply is refused before its text is added to the prompt or any call runs
+  (around `llm-provider-utils-process-result`); a reply cut off in the middle
+  of its arguments, whose JSON llm.el cannot parse, is told the same thing
+  instead of "invalid JSON".  The model is told the limit and asked to work in
+  smaller pieces; after `superchat-llm-unknown-tool-retries` such retries in a
+  row the execution stops with `Stopped: the reply was cut off at the output
+  limit N times in a row` in the chat, the pending list and the notices.  A
+  reply that was not cut off starts the count again.  Text only that was cut
+  off stays the answer, with a line under it.
+- New fact `response.cut-off` (`:stop-reason :max-tokens :tool-calls
+  :text-chars :attempt :refused`), written with the option off too.
+- Without streaming, llm.el reads the stop reason after the arguments, so a
+  parse error came without it and the Run failed with `[API error: …]` and no
+  retry (seen with DeepSeek and tools, 2026-10-21).  The stop reason is now
+  kept for the error callback.
+- Not covered: Claude's `stop_reason` and OpenAI Responses'
+  `incomplete_details` (the llm fork normalizes only the openai-compatible
+  family).
+
 ## Unreleased — work the user puts off waits for the user
 
 - The `work_record` description the model is given ends with one more

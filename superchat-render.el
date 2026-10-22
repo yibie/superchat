@@ -1584,6 +1584,23 @@ This text belongs to the View, never to the model's response body."
 
 (declare-function superchat-tape-replay-events "superchat-tape" (session-id &optional since-id limit))
 
+(defun superchat-render-run-cut-off-line (session-id run-id)
+  "A line saying RUN-ID's answer was cut off at the output limit, or nil.
+Read from its `response.cut-off' facts of a reply whose calls were not
+refused, so the person sees that the answer may be incomplete (slice 12b).
+It is shown under the answer and never sent to the model."
+  (when-let* ((fact (cl-find-if
+                     (lambda (event)
+                       (and (equal (plist-get event :run-id) run-id)
+                            (equal "response.cut-off" (plist-get event :type))
+                            (not (plist-get (plist-get event :payload) :refused))))
+                     (and (stringp session-id) (stringp run-id)
+                          (ignore-errors (superchat-tape-replay-events session-id)))
+                     :from-end t)))
+    (let ((max-tokens (plist-get (plist-get fact :payload) :max-tokens)))
+      (format "The reply was cut off at the output limit%s; the answer may be incomplete."
+              (if (integerp max-tokens) (format " (%d tokens)" max-tokens) "")))))
+
 (defun superchat-render-run-record-line (session-id run-id)
   "The product's record line for RUN-ID's tool calls, or nil when it made none.
 It says what the Run's tools changed, read from the Tape: every buffer a
@@ -1736,7 +1753,12 @@ or replaced still completes durably without ever declaring the Sink dead."
               (plist-get payload :text) (plist-get payload :tape-id)
               transcript-owner)
              (budget-notice payload)
-             (record-line run)))))
+             (record-line run)
+             (when-let* ((line (superchat-render-run-cut-off-line
+                                session-id
+                                (if (stringp run) run (plist-get run :run-id)))))
+               (superchat--response-region-insert-persistent
+                (propertize line 'face 'shadow) nil transcript-owner))))))
      :error
      (lambda (run failure)
        (when (current-p)

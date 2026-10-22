@@ -35,15 +35,25 @@
    :id (format "smoke-call-%06x" (random #x1000000)) :name (car use) :args (cdr use)))
 
 (defun smoke--deliver (provider prompt partial response error multi step)
+  ;; A chunk is text, or a plist given as the provider would (slice 12b:
+  ;; a `:stop-reason' chunk before a parse error).
   (dolist (chunk (plist-get step :chunks))
-    (when partial (funcall partial (if multi (list :text chunk) chunk))))
+    (when partial (funcall partial (cond ((consp chunk) chunk)
+                                         (multi (list :text chunk))
+                                         (t chunk)))))
   (cond
    ((plist-get step :hang) nil)
    ((plist-get step :error)
+    ;; What `superchat--llm-keep-unparsed-stop-reason' leaves when a whole
+    ;; response's arguments fail to parse (slice 12b).
+    (when (plist-get step :unparsed-stop-reason)
+      (setq superchat--llm-unparsed-stop-reason (plist-get step :unparsed-stop-reason)))
     (funcall error (car (plist-get step :error)) (cdr (plist-get step :error))))
    (t (let* ((uses (mapcar #'smoke--tool-use (plist-get step :tool-uses)))
              (result (append (when (plist-member step :text) (list :text (plist-get step :text)))
-                             (when uses (list :tool-uses uses)))))
+                             (when uses (list :tool-uses uses))
+                             (when (plist-get step :stop-reason)
+                               (list :stop-reason (plist-get step :stop-reason))))))
         (llm-provider-utils-process-result provider prompt result multi response error)))))
 
 (defun smoke--fake-network (mode provider prompt partial response error multi)

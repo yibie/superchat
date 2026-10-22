@@ -485,6 +485,8 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 
 这个 hard 上限是 `superchat-agent-max-tool-calls`，每次执行 120 次工具调用。执行进行中，状态行显示 `tools N/120`。还剩 15 次时（120 次里的第 105 次之后；`superchat-tool-budget-reminder-left`，设 nil 关掉），模型会被告知一次。超过上限的调用被拒绝，执行结束时会说明：聊天里、`M-x superchat-pending` 和通知列表里写 `Cut off after 120 tool calls`，结束的事实里带 `:tool-budget (:action cut-off :limit 120 :used 120)`。连续 `superchat-tool-failure-brake` 次（默认 3，设 nil 关掉）工具调用失败后，这次执行就停下：不再调用工具、不再发请求，聊天里、`M-x superchat-pending` 和通知列表里写 `Stopped after 3 failed calls in a row`。中间有一次成功就重新计数，你或权限档位拒绝的调用不算失败。这个刹车是 `superchat-tool-loop-hooks` 里的一个：这些函数在每次工具调用执行前、结果出来后各被问一次，可以放行、让模型看到另一段文字（原结果仍在 Tape 上，改写另记一条 `tool.rewritten`），或者让这次执行停下。设 nil 全部关掉。`edit_buffer` 报错（找不到文字、匹配不止一处）和 `eval_elisp` 报错一样算一次失败的调用。
 
+模型服务说一条回复是在输出上限处被截断的（停止原因 `length`）时，这条回复里的工具调用一个都不执行（`superchat-cut-off-reply-runs-nothing`，默认 t，设 nil 就照旧执行）。模型会收到 `Your reply was cut off at the output limit (N tokens), so none of its tool calls ran. Do the same work in smaller pieces: …`，然后重新请求；这样连续重来 `superchat-llm-unknown-tool-retries`（2）次之后，这次执行就停下，聊天里、`M-x superchat-pending` 和通知列表里写 `Stopped: the reply was cut off at the output limit 3 times in a row`。只有文字、没有调用的回复被截断时，仍然算作答案，下面加一行说明它被截断了。每次截断都在 Tape 上记一条 `response.cut-off`，开关关着也记。模型服务不给停止原因时什么都不变，不从文字长度去猜。
+
 **记忆不能持久化**
 
 检查 `superchat-data-directory` 以及 SQLite 数据库是否可写。运行 `/recall test` 验证查询是否正常。记忆自动检索仅在查询超过 8 个字符时激活（可通过 `superchat-memory-auto-recall-min-length` 配置）。

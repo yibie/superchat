@@ -1388,6 +1388,74 @@ callback to find.")
         (signal 'llm-error (list superchat--llm-input-not-alone)))))
   (funcall original provider prompt tool-uses))
 
+;;;; A reply cut off at the output limit (slice 12b) ---------------------------
+
+(defcustom superchat-cut-off-reply-runs-nothing t
+  "When non-nil, a reply cut off at the output limit runs none of its tool calls.
+The provider says so with the stop reason `length'.  Superchat then tells the
+model why and asks it to do the work in smaller pieces; after
+`superchat-llm-unknown-tool-retries' such retries in a row the execution stops
+and says why.  A reply of text only that was cut off is still the answer.
+Without a stop reason from the provider nothing changes.  nil runs the calls of
+a cut-off reply as before; the fact `response.cut-off' is written either way."
+  :type 'boolean
+  :group 'superchat)
+
+(defun superchat--llm-cut-off-feedback (max-tokens)
+  "What the model is told when its reply was cut off at MAX-TOKENS (or nil)."
+  (format "Your reply was cut off at the output limit (%s), so none of its tool calls ran. Do the same work in smaller pieces: fewer calls per reply, and split long content over several calls."
+          (if (integerp max-tokens)
+              (format "%d tokens" max-tokens)
+            "the provider's output limit")))
+
+(defvar superchat--llm-unparsed-stop-reason nil
+  "The stop reason of a whole response whose tool arguments did not parse.
+Set just before llm.el's parse error goes on to the error callback, which
+takes it and clears it.")
+
+(defvar superchat--llm-cut-off-handlers (make-hash-table :test #'eq :weakness 'key)
+  "Prompt -> the function its request asks about a reply that stopped at `length'.
+Called with the reply's partial result; non-nil means refuse the whole reply.")
+
+(defun superchat--llm-refuse-cut-off-reply
+    (original provider prompt partial-result multi-output success-callback error-callback)
+  "Call ORIGINAL unless PARTIAL-RESULT is a cut-off reply PROMPT's request refuses.
+This runs before any of the reply's text is added to PROMPT and before any of
+its calls runs, for streaming and non-streaming requests alike; a refused
+reply reaches ERROR-CALLBACK as `superchat-llm-reply-cut-off'."
+  (let ((handler (and (eq 'length (plist-get partial-result :stop-reason))
+                      (gethash prompt superchat--llm-cut-off-handlers))))
+    (if (and handler (funcall handler partial-result))
+        (funcall error-callback 'superchat-llm-reply-cut-off
+                 "The reply was cut off at the output limit")
+      (funcall original provider prompt partial-result multi-output
+               success-callback error-callback))))
+
+(defun superchat--llm-keep-unparsed-stop-reason (original provider response)
+  "Call ORIGINAL; keep RESPONSE's stop reason if its tool arguments fail.
+Without streaming the stop reason is read after the arguments, so llm.el's
+parse error would reach the request's error callback without it (seen in a
+real run, slice 12b); `superchat--llm-unparsed-stop-reason' carries it there."
+  (condition-case err
+      (funcall original provider response)
+    (llm-tool-call-error
+     (setq superchat--llm-unparsed-stop-reason
+           (and (fboundp 'llm-provider-extract-stop-reason)
+                (ignore-errors (llm-provider-extract-stop-reason provider response))))
+     (signal (car err) (cdr err)))))
+
+(with-eval-after-load 'llm-provider-utils
+  (unless (advice-member-p #'superchat--llm-keep-unparsed-stop-reason
+                           'llm-provider-utils-extract-all)
+    (advice-add 'llm-provider-utils-extract-all :around
+                #'superchat--llm-keep-unparsed-stop-reason)))
+
+(with-eval-after-load 'llm-provider-utils
+  (unless (advice-member-p #'superchat--llm-refuse-cut-off-reply
+                           'llm-provider-utils-process-result)
+    (advice-add 'llm-provider-utils-process-result :around
+                #'superchat--llm-refuse-cut-off-reply)))
+
 (with-eval-after-load 'llm-provider-utils
   (unless (advice-member-p #'superchat--llm-capture-provider-tool-uses
                            'llm-provider-populate-tool-uses)
@@ -2943,6 +3011,12 @@ requests until it receives text, bounded by
            (tool-progress-cumulative nil)
            (tool-marker-cumulative nil)
            (tool-error-retries 0)
+           ;; Replies cut off at the output limit since the last reply that
+           ;; was not (slice 12b); and the stop reason the stream gave for
+           ;; the reply now arriving, for a cut-off that fails to parse.
+           (cut-off-streak 0)
+           (stream-stop-reason nil)
+           (note-cut-off nil)
            (transient-retries 0)
            (unknown-tool-retry-limit
             (or superchat--llm-unknown-tool-retry-limit
@@ -3057,6 +3131,9 @@ requests until it receives text, bounded by
             (lambda (chunk)
               (when (funcall callback-active-p)
                 (funcall record-usage chunk))
+              (when (and (consp chunk) (funcall callback-active-p))
+                (when (plist-get chunk :stop-reason)
+                  (setq stream-stop-reason (plist-get chunk :stop-reason))))
               (when (funcall callback-active-p)
                 (let* ((text (cond
                               ((stringp chunk) chunk)
@@ -3261,6 +3338,27 @@ requests until it receives text, bounded by
           (message "⏱ TTFT [prompt-size]: %d chars + %d tools + %d history-msgs (~%d tokens)"
                    chars tools-chars history-len est-tokens)))
 
+      (setq note-cut-off
+            (lambda (calls text-chars refused)
+              (cl-incf cut-off-streak)
+              (when (functionp runtime-observer)
+                (funcall runtime-observer 'reply-cut-off
+                         (list :stop-reason "length"
+                               :max-tokens (llm-chat-prompt-max-tokens real-prompt)
+                               :tool-calls calls
+                               :text-chars text-chars
+                               :attempt cut-off-streak
+                               :refused refused)))))
+      (puthash real-prompt
+               (lambda (result)
+                 (let* ((calls (length (plist-get result :tool-uses)))
+                        (refuse (and superchat-cut-off-reply-runs-nothing
+                                     (> calls 0)
+                                     (funcall run-active-p))))
+                   (funcall note-cut-off calls
+                            (length (or (plist-get result :text) "")) refuse)
+                   refuse))
+               superchat--llm-cut-off-handlers)
       (setq error-cb
             (lambda (type &rest more)
               (let ((err (if more (car more) type)))
@@ -3273,6 +3371,20 @@ requests until it receives text, bounded by
                   (remhash real-prompt superchat--llm-input-corrections)
                   (setq type 'superchat-llm-input-not-alone
                         err reason))
+                ;; Arguments that do not parse after the stream said `length'
+                ;; were cut off (slice 12b): say that, not "invalid JSON".
+                (when superchat--llm-unparsed-stop-reason
+                  (unless stream-stop-reason
+                    (setq stream-stop-reason superchat--llm-unparsed-stop-reason))
+                  (setq superchat--llm-unparsed-stop-reason nil))
+                (when (and superchat-cut-off-reply-runs-nothing
+                           (eq stream-stop-reason 'length)
+                           (or (eq type 'error)
+                               (and (superchat--llm-tool-protocol-error-p type)
+                                    (not (eq type 'superchat-llm-input-not-alone)))))
+                  (setq stream-stop-reason nil)
+                  (funcall note-cut-off nil (length cumulative) t)
+                  (setq type 'superchat-llm-reply-cut-off))
                 (when (superchat--llm-tool-protocol-error-p type)
                   (funcall record-first-output
                            (list :kind "tool-protocol-error"
@@ -3295,6 +3407,40 @@ requests until it receives text, bounded by
                                 (format "[API context overflow: %s]" err)
                                 last-attempt-details))
                   nil)
+                 ;; A reply cut off at the output limit ran none of its calls
+                 ;; (slice 12b).  Ask for smaller pieces; after the retries
+                 ;; in a row are used up, stop and say why.
+                 ((and (eq type 'superchat-llm-reply-cut-off)
+                       (not completed)
+                       (funcall run-active-p))
+                  (if (and (<= cut-off-streak unknown-tool-retry-limit)
+                           (not final-answer-requested)
+                           (fboundp 'superchat--llm-drop-dangling-tool-use)
+                           (fboundp 'llm-chat-prompt-append-response))
+                      (progn
+                        (superchat--llm-drop-dangling-tool-use real-prompt)
+                        (llm-chat-prompt-append-response
+                         real-prompt
+                         (superchat--llm-cut-off-feedback
+                          (llm-chat-prompt-max-tokens real-prompt))
+                         'user)
+                        (setq response-parts '()
+                              cumulative ""
+                              reasoning-cumulative "")
+                        (condition-case e
+                            (funcall send-request 'tool-protocol-retry)
+                          (superchat-llm-evidence-recording-error
+                           (signal (car e) (cdr e)))
+                          (error
+                           (funcall finalize
+                                    (format "[llm-chat-streaming error: %s]"
+                                            (error-message-string e))
+                                    'failed))))
+                    (let ((reason (format "Stopped: the reply was cut off at the output limit %d times in a row"
+                                          cut-off-streak)))
+                      (when (functionp runtime-observer)
+                        (funcall runtime-observer 'stop-tools reason))
+                      (funcall finalize (format "[%s]" reason) 'failed))))
                  ;; Tool-call validation errors are model-correctable.  The
                  ;; provider has already appended an assistant tool-use
                  ;; record, so remove that dangling record, append the exact
@@ -3375,7 +3521,8 @@ requests until it receives text, bounded by
       (setq response-cb
             (lambda (response)
               (when (funcall run-active-p)
-                (setq transient-retries 0)
+                (setq transient-retries 0
+                      cut-off-streak 0)
                 (funcall record-usage response)
                 (let ((final-text
                        (cond
@@ -3643,6 +3790,8 @@ requests until it receives text, bounded by
             (lambda (attempt-reason &optional recovery-wait-p)
               (unless (funcall run-active-p)
                 (error "Runtime Run is no longer active; continuation refused"))
+              (setq stream-stop-reason nil
+                    superchat--llm-unparsed-stop-reason nil)
               (unless (superchat-llm-provider-attempt-reason-p
                        attempt-reason)
                 (error "Unknown provider attempt reason: %s" attempt-reason))

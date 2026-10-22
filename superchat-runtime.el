@@ -3772,6 +3772,27 @@ Absent options preserve legacy behavior; result delivery retains three args."
                       (superchat-runtime--tool-nudges run-id))
                      ('tools-stopped
                       (superchat-runtime-tools-stopped run-id))
+                     ;; A reply stopped at the output limit (slice 12b): one
+                     ;; fact each time, whether its calls run or not.
+                     ('reply-cut-off
+                      (when-let* ((current (superchat-runtime--entry run-id)))
+                        (superchat-runtime--append-event
+                         current "response.cut-off" value
+                         (format "Reply cut off at the output limit%s: %s"
+                                 (if (integerp (plist-get value :max-tokens))
+                                     (format " (%d tokens)" (plist-get value :max-tokens))
+                                   "")
+                                 (let ((calls (plist-get value :tool-calls)))
+                                   (cond ((not (integerp calls)) "its tool calls did not run")
+                                         ((zerop calls) "text only, kept as the answer")
+                                         ((plist-get value :refused)
+                                          (format "%d tool call%s not run" calls
+                                                  (if (= calls 1) "" "s")))
+                                         (t (format "%d tool call%s ran" calls
+                                                    (if (= calls 1) "" "s"))))))))
+                      nil)
+                     ('stop-tools
+                      (superchat-runtime-stop-tools run-id value))
                      ('next-step
                       ;; The adapter is one caller of the driver-owned attempt
                       ;; boundary rather than the owner of it: a custom
