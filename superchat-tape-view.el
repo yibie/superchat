@@ -25,12 +25,16 @@
 ;; Low-level view constructors
 ;; ═══════════════════════════════════════════════════════════
 
-(defun superchat-view-entries (session-id &optional since-id kinds limit)
+(defun superchat-view-entries (session-id &optional since-id kinds limit max-id)
   "Return tape entries for SESSION-ID.
 SINCE-ID restricts to entries with id > SINCE-ID.
 KINDS is a list of kinds to include (e.g. '(\"user\" \"anchor\")).
-LIMIT caps the result count."
+LIMIT caps the result count.
+MAX-ID restricts to entries with id <= MAX-ID; a non-integer non-nil
+MAX-ID signals, as the Lisp-side id comparison it replaces did."
+  (cl-check-type max-id (or null integer))
   (let* ((since-clause (when since-id "AND id > ?"))
+         (max-clause (when max-id "AND id <= ?"))
          (kind-clause
           (when kinds
             (format "AND kind IN (%s)"
@@ -38,14 +42,16 @@ LIMIT caps the result count."
          (limit-clause (when limit (format "LIMIT %d" limit)))
          (sql (format "SELECT id, topic, kind, content, meta, created_at
                        FROM tape
-                       WHERE session_id = ? %s %s
+                       WHERE session_id = ? %s %s %s
                        ORDER BY id ASC
                        %s"
                       (or since-clause "")
+                      (or max-clause "")
                       (or kind-clause "")
                       (or limit-clause "")))
          (params (append (list session-id)
                          (when since-id (list since-id))
+                         (when max-id (list max-id))
                          kinds)))
     (superchat-db-tape-select sql params)))
 
@@ -199,10 +205,7 @@ rebuilt View hides replaced turns."
     (error "Cyclic Superchat session lineage at %s" session-id))
   (let* ((excluded (or excluded-storage-ids
                        (superchat-view-superseded-storage-ids session-id)))
-         (rows (superchat-view-entries session-id))
-         (rows (if max-id
-                   (cl-remove-if (lambda (row) (> (nth 0 row) max-id)) rows)
-                 rows))
+         (rows (superchat-view-entries session-id nil nil nil max-id))
          (rows (if excluded
                    (cl-remove-if
                     (lambda (row) (memql (nth 0 row) excluded))
@@ -578,10 +581,7 @@ If SESSION-ID is nil, search across all sessions."
 SEEN is an internal cycle guard.  Each segment retains its six-column rows."
   (when (member session-id seen)
     (error "Cyclic Superchat session lineage at %s" session-id))
-  (let* ((rows (superchat-view-entries session-id))
-         (rows (if max-id
-                   (cl-remove-if (lambda (row) (> (nth 0 row) max-id)) rows)
-                 rows))
+  (let* ((rows (superchat-view-entries session-id nil nil nil max-id))
          (parent (superchat-view--branch-parent rows))
          (segment (list :session-id session-id
                         :through-storage-id
