@@ -323,11 +323,16 @@ ROWS are candidate plists, as `superchat-changes-candidates' returns them.")
 up by itself after a Run; nil when the user opened it.")
 (put 'superchat-changes-review--session 'permanent-local t)
 
+(defvar-local superchat-changes-review--left-unsaved nil
+  "Non-nil once a buffer on the review screen was left unsaved (n).")
+(put 'superchat-changes-review--left-unsaved 'permanent-local t)
+
 (defvar superchat-changes-review-ended-functions nil
   "Functions called when a review screen that came up after a Run ends.
-Each is called with the Session and how the user ended it: `answered' once
-every buffer on it was saved (s) or left unsaved (n), `stopped' when the user
-stopped reviewing (q).  Work records wait on this (2026-10-23).")
+Each is called with the Session and how the user ended it: `saved' once
+every buffer on it was saved (s), `answered' once each was saved or left
+unsaved (n) and one was left, `stopped' when the user stopped reviewing (q).
+Work records wait on this (2026-10-23).")
 
 (defvar-local superchat-changes-review--return-window nil
   "The window that was selected when the review screen took the cursor.")
@@ -576,7 +581,8 @@ file."
           (progn
             (setq superchat-changes-review--state (cons (car state) (1+ (cdr state))))
             (superchat-changes--review-render review))
-        (superchat-changes--review-ended review 'answered)
+        (superchat-changes--review-ended
+         review (if superchat-changes-review--left-unsaved 'answered 'saved))
         (superchat-changes--review-close review)))))
 
 (defun superchat-changes--review-close (review)
@@ -599,7 +605,10 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
          (buffer (plist-get (with-current-buffer review (superchat-changes--review-row))
                             :buffer)))
     (cond
-     ((not (buffer-live-p buffer)) (message "That buffer is gone; nothing to save"))
+     ((not (buffer-live-p buffer))
+      (with-current-buffer review
+        (setq superchat-changes-review--left-unsaved t))
+      (message "That buffer is gone; nothing to save"))
      ((not (buffer-modified-p buffer)) (message "%s has no unsaved changes" (buffer-name buffer)))
      (t (superchat-changes-save buffer)))
     (superchat-changes--review-advance review)))
@@ -607,7 +616,10 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
 (defun superchat-changes-review-next ()
   "Leave the buffer on the review screen unsaved and show the next one."
   (interactive)
-  (superchat-changes--review-advance (superchat-changes--review-buffer)))
+  (let ((review (superchat-changes--review-buffer)))
+    (with-current-buffer review
+      (setq superchat-changes-review--left-unsaved t))
+    (superchat-changes--review-advance review)))
 
 (defun superchat-changes-review-quit ()
   "Stop reviewing.  Every buffer not saved on the screen stays unsaved."

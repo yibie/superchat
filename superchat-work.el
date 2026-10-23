@@ -1450,13 +1450,27 @@ Return non-nil when it paused."
              (length rows) (if (cdr rows) "s" "")))
     t))
 
+(defun superchat-work--review-answers-wait (session id status)
+  "When the review screen comes up after STATUS, let saving answer ID's wait.
+Return non-nil when it does."
+  (when (and (fboundp 'superchat-changes-review-due)
+             (superchat-changes-review-due session (plist-get status :run-id)))
+    (puthash id (cons session 'wait) superchat-work--review-waits)
+    t))
+
 (defun superchat-work--on-review-ended (session how)
   "Once the user ended SESSION's review screen HOW, let a waiting record go on.
-`answered' goes on; `stopped' leaves the record paused."
+A record that waited for the review goes on after `saved' or `answered'; one
+that waited for the user goes on only after `saved', which answers its wait.
+`stopped' leaves either paused."
   (when-let* ((id (superchat-work-current session))
-              ((equal session (gethash id superchat-work--review-waits))))
+              (waiting (gethash id superchat-work--review-waits))
+              ((equal session (if (consp waiting) (car waiting) waiting))))
     (remhash id superchat-work--review-waits)
-    (when (and (eq how 'answered)
+    (when (and (if (consp waiting)
+                   (and (eq how 'saved)
+                        (superchat-work--answered session id))
+                 (memq how '(saved answered)))
                (not (superchat-work-continuing-p id))
                (eq 'continuable (superchat-work-status (superchat-work-get id)))
                (not (superchat-work--refusal session "Not resumed")))
@@ -1477,12 +1491,18 @@ Nothing is done unless the rounds of the conversation's current record go on."
          ;; Done, or waiting: the rounds are over.
          ((not (eq 'continuable (superchat-work-status record)))
           (superchat-work-pause id)
-          ;; Answering the wait does not open the rounds again (G14).
+          ;; Answering the wait does not open the rounds again (G14), except
+          ;; saving every buffer on the review screen this execution brought
+          ;; up: in the field test that was what the model asked (2026-10-23).
           (when (eq 'waiting-user (superchat-work-status record))
-            (superchat-work--say-paused
-             session id
-             (format "it waits for you: %s. Once answered, /work resume goes on"
-                     (or (plist-get (plist-get record :waiting) :detail) "")))))
+            (let ((detail (or (plist-get (plist-get record :waiting) :detail) "")))
+              (superchat-work--say-paused
+               session id
+               (if (superchat-work--review-answers-wait session id status)
+                   (format "it waits for you: %s. Saving every buffer on the review screen answers it; else /work resume goes on once answered"
+                           detail)
+                 (format "it waits for you: %s. Once answered, /work resume goes on"
+                         detail))))))
          ;; Stopped, failed, timed out, or ended by the tool budget: paused
          ;; until the user says to go on.  A round a tool-loop hook ended,
          ;; the failure brake's, ends only itself (G17, 2026-10-22).

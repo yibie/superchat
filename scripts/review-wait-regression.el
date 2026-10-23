@@ -99,6 +99,61 @@
         (should (= 2 (gr--count session "work.round")))
         (should (eq 'completed (superchat-work-status (superchat-work-get id))))))))
 
+;; Seen again in the field test: the round that left the edits asked the user,
+;; through the record, to save them, so the record waited for the user.  The
+;; user saved both buffers on the review screen, and still had to type
+;; `/work resume'.  Saving every buffer on that screen answers a wait the same
+;; execution set; leaving one unsaved does not.
+
+(defun rw--asking-script (buffer-name)
+  "Round 1 edits BUFFER-NAME and waits for the user; round 2 completes."
+  (list (gr--start) '(:text "The record is started.")
+        `(:tool-uses (("edit_buffer" (buffer_name . ,buffer-name)
+                       (old_string . "hello") (new_string . "RW-EDIT"))))
+        (wrec--call '(action . "wait") '(wait_for . "user")
+                    '(detail . "RW-PLEASE-SAVE"))
+        '(:text "Please save.")
+        (wrec--call '(action . "done") '(conclusion . "RW-DONE"))
+        '(:text "All ticked.")))
+
+(defmacro rw--asking (&rest body)
+  "BODY once round 1 has edited FILE and waits for the user, the screen up."
+  (declare (indent 0) (debug t))
+  `(let ((superchat-changes-review-after-run t))
+     (unwind-protect
+         (br--with #'rw--asking-script
+           (let ((id (gr--record)))
+             (accept-process-output nil 0.1)
+             ,@body))
+       (when-let* ((review (get-buffer "*superchat review*")))
+         (kill-buffer review)))))
+
+(ert-deftest review-wait/a-wait-beside-the-review-says-saving-answers-it ()
+  (rw--asking
+    (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
+    (should (buffer-live-p (get-buffer "*superchat review*")))
+    (should (string-match-p
+             (format "Superchat paused work record %s: it waits for you: RW-PLEASE-SAVE\. Saving every buffer on the review screen answers it; else /work resume goes on once answered"
+                     (regexp-quote id))
+             (br--text view)))))
+
+(ert-deftest review-wait/saving-every-buffer-answers-the-wait ()
+  (rw--asking
+    (rw--review-key #'superchat-changes-review-save)
+    (should-not (buffer-modified-p file))
+    (should (cl-some (lambda (event)
+                       (eq t (plist-get (plist-get event :payload) :answered)))
+                     (hm--events session "work.waiting")))
+    (should (= 2 (gr--count session "work.round")))
+    (should (eq 'completed (superchat-work-status (superchat-work-get id))))))
+
+(ert-deftest review-wait/leaving-a-buffer-unsaved-does-not-answer-the-wait ()
+  (rw--asking
+    (rw--review-key #'superchat-changes-review-next)
+    (should (buffer-modified-p file))
+    (should (= 1 (gr--count session "work.round")))
+    (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))))
+
 (provide 'review-wait-regression)
 
 ;;; review-wait-regression.el ends here
