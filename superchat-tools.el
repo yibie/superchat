@@ -1228,6 +1228,42 @@ Decision of 2026-09-24, \"eval_elisp never asks the user\".")
 ;; `condition-case' cannot catch (decision of 2026-10-22).  SIGINT would
 ;; kill an Emacs without a terminal, a GUI Emacs among them.
 
+;; Saving is the user's decision, and the review screen is where it is
+;; made.  A file written from an expression skips both (G28 of the field
+;; test, 2026-10-23: `with-temp-file' replaced a project file the user had
+;; not seen).  The call shadows `write-region', which `save-buffer',
+;; `write-file', `with-temp-file' and `append-to-file' all reach, and
+;; leaves the expression by `throw' on a write outside these directories.
+
+(defcustom superchat-tool-eval-writable-directories
+  (list temporary-file-directory "/tmp/")
+  "Directories an `eval_elisp' expression may write files in.
+A write anywhere else ends the call as a failure that tells the model to
+change the file's buffer and leave saving to the user.  Copies made to run
+tests on belong in these directories."
+  :type '(repeat directory)
+  :group 'superchat)
+
+(defun superchat-tools--eval-write-refusal (file)
+  "The `eval_elisp' result when its expression tried to write FILE."
+  (format (concat "Error: evaluating expression: it tried to write the file %s; "
+                  "eval_elisp does not write files: saving is the user's "
+                  "decision.  Change the file's buffer instead (edit_buffer, or "
+                  "with-current-buffer without saving) and tell the user which "
+                  "buffer to save.  A copy to run tests on may be written under "
+                  "%s.  What the expression did before that point was not undone.")
+          file
+          (mapconcat #'identity superchat-tool-eval-writable-directories " or ")))
+
+(defun superchat-tools--eval-writable-p (file)
+  "Non-nil when FILE lies in one of `superchat-tool-eval-writable-directories'."
+  (let ((target (superchat-sandbox-canonical-path file)))
+    (cl-some (lambda (dir)
+               (superchat-sandbox--under-p
+                target
+                (file-name-as-directory (superchat-sandbox-canonical-path dir))))
+             superchat-tool-eval-writable-directories)))
+
 (defcustom superchat-tool-eval-time-limit 30
   "Seconds an `eval_elisp' expression may run before it is stopped.
 At the limit the call ends as a failure that tells the model to start long
@@ -1371,12 +1407,20 @@ seconds is stopped, and so is one a person stops with C-g; either way the
 call fails with a result that says so, and the Run goes on (decision of
 2026-10-22, which replaces the Run cancellation of 2026-09-30).  The stop
 also ends a synchronous process the expression waits for.  Code that binds
-`debugger' or `signal-hook-function' itself can still run past the limit."
+`debugger' or `signal-hook-function' itself can still run past the limit.
+
+A file write outside `superchat-tool-eval-writable-directories' ends the
+expression at once as a failed call, whatever the permission level: saving
+is the user's decision, made on the review screen, not a matter of trust
+(decision of 2026-10-23, G28).  The buffer a `save-buffer' meant to save
+stays modified.  `copy-file', `rename-file' and `delete-file' are not held
+back."
   (let* ((asked (make-symbol "asked"))
          (limit superchat-tool-eval-time-limit)
          (watch (list asked (and limit (> limit 0) (+ (float-time) limit))))
          (superchat-tools--eval-watches (cons watch superchat-tools--eval-watches))
          (outer-hook signal-hook-function)
+         (original-write-region (symbol-function 'write-region))
          (leave-on-prompt
           (lambda (symbol data)
             (cond
@@ -1409,7 +1453,18 @@ also ends a synchronous process the expression waits for.  Code that binds
                                           (inhibit-quit nil)
                                           (signal-hook-function leave-on-prompt))
                                       (cl-letf (((symbol-function 'sit-for)
-                                                 #'superchat-tools--eval-sit-for))
+                                                 #'superchat-tools--eval-sit-for)
+                                                ((symbol-function 'write-region)
+                                                 (lambda (start end filename &rest more)
+                                                   (unless (superchat-tools--eval-writable-p
+                                                            filename)
+                                                     (throw asked
+                                                            (superchat-tool-execution-failed
+                                                             (superchat-tools--eval-write-refusal
+                                                              (expand-file-name filename))
+                                                             "file-write")))
+                                                   (apply original-write-region
+                                                          start end filename more))))
                                         (eval (superchat-tools--read-one-expression expression) t)))))
                         (superchat-tools--eval-value-result result))
                     (inhibited-interaction
