@@ -1420,6 +1420,18 @@ to go on is such a fact."
           (superchat--response-region-insert-transcript
            (format "\n* %s\n" text) :independent-turn))))))
 
+(defun superchat-work--say-paused (session id why)
+  "Say in SESSION and the echo area that rounds on record ID paused, for WHY."
+  (superchat-work--say session (format "Superchat paused work record %s: %s." id why))
+  (message "superchat: paused work record %s: %s" id why))
+
+(defun superchat-work--braked-p (status)
+  "Non-nil when a tool-loop hook ended the failed execution STATUS.
+The failure brake is such a hook (`superchat-runtime-stop-tools')."
+  (and (eq 'failed (plist-get status :status))
+       (equal "stopped"
+              (format "%s" (plist-get (plist-get status :tool-budget) :action)))))
+
 (defun superchat-work--drive (session status)
   "After an execution of SESSION ended with STATUS, start the next round or stop.
 Nothing is done unless the rounds of the conversation's current record go on."
@@ -1430,13 +1442,28 @@ Nothing is done unless the rounds of the conversation's current record go on."
         (cond
          ;; Done, or waiting: the rounds are over.
          ((not (eq 'continuable (superchat-work-status record)))
-          (superchat-work-pause id))
+          (superchat-work-pause id)
+          ;; Answering the wait does not open the rounds again (G14).
+          (when (eq 'waiting-user (superchat-work-status record))
+            (superchat-work--say-paused
+             session id
+             (format "it waits for you: %s. Once answered, /work resume goes on"
+                     (or (plist-get (plist-get record :waiting) :detail) "")))))
          ;; Stopped, failed, timed out, or ended by the tool budget: paused
-         ;; until the user says to go on.
-         ((or (not (eq 'completed (plist-get status :status)))
-              (equal "finalize"
-                     (format "%s" (plist-get (plist-get status :tool-budget) :action))))
-          (superchat-work-pause id))
+         ;; until the user says to go on.  A round a tool-loop hook ended,
+         ;; the failure brake's, ends only itself (G17, 2026-10-22).
+         ((and (not (superchat-work--braked-p status))
+               (or (not (eq 'completed (plist-get status :status)))
+                   (equal "finalize"
+                          (format "%s" (plist-get (plist-get status :tool-budget) :action)))))
+          (superchat-work-pause id)
+          (superchat-work--say-paused
+           session id
+           (format "its last execution %s. /work resume goes on"
+                   (pcase (plist-get status :status)
+                     ('cancelled "was stopped")
+                     ('completed "used up its tool calls")
+                     (other (format "%s" other))))))
          ;; What the user queued goes first; the rounds stay open behind it.
          ((> (superchat-runtime-pending-follow-ups session) 0) nil)
          ((>= (superchat-work-rounds id) superchat-work-round-limit)

@@ -181,3 +181,15 @@ Superchat 已经有 DeepSeek Harness（下称 DSH）目标循环需要的三样�
 `/work resume` 在到了上限时的回显里仍然出现选项的名字 `superchat-work-round-limit`，因为用户要靠它去改上限；这是名字，不是说法。
 
 证据：`scripts/work-wording-regression.el`，6 条。最先写的 5 条在 `b3391425` 上 4 条红、1 条护栏：红在表上（暂停时、接着做时）露出了 round、命令说明里有 rounds、详情里没有 `Tries: 2/256`。后补的 1 条没在旧代码上跑。变异 16 处（把每一处文字改回带轮的说法，去掉或错放 `Tries`，去掉模型提示里的轮数），第一轮发现 14 处；一处缺"两次执行之间读表"的用例，一处是断言被另一句回显满足了，改后全部被发现。`goal-rounds` 和 `round-brake` 里断言旧字样的 7 处改成了新字样。冒烟基线没有变。脚本测试之外：2026-10-12 用户在真实的 Emacs 会话里读过这些话并同意照此提交（`paused` 也照现在的样子，不写 "by you"）。那次会话里的一次 `/work`（Tape 行 4046-4163，记录 `work-20261012173355-5d5e`）：用户发起的执行结束后 Superchat 接着做了 1 次，模型调用 `work_record` 结项，之后没有再排。只有这 1 次。
+
+## 2026-10-22 补记：刹车只停这一次执行；停下时对话里说一句
+
+用户 2026-10-22 在 GUI 实测（`emacs -Q -L`，真实模型 deepseek-v4-flash，记录 `work-20261022174004-fd5b`）后选定的方向（"2"）。实测里这项工作接着做了约 4 小时，"连续 3 次调用失败就停"的刹车（slice 11c）停下过 5 次。每次被停的那次执行都以 `run.failed` 结束，于是按上面第 5 条"某次执行失败就不再接着做"，整个记录也停了，要有人敲 `/work resume` 才会继续。对话里最后只有刹车自己那一行，没说记录已经停了（实测记为 G17）。另外，记录等用户时也会停；用户回答以后，等待解除了，记录却不会自己接着做，对话里同样不提（G14）。
+
+改成：
+
+- 被工具循环钩子停下的执行（`:tool-budget` 的 `:action` 是 `stopped`，执行状态是 `failed`，默认就是失败刹车）只结束它自己。只要记录还可以继续，下一次照常排上。"连续两次没有进展就停"（`superchat-work-round-idle-limit`）和 256 次的上限照旧管着它：被刹车停下又什么都没改的执行，算没有进展的一次。
+- 其它原因停下（失败、超时、被用户停掉、工具预算收尾）仍按第 5 条暂停，对话里加一行 `Superchat paused work record ID: its last execution failed. /work resume goes on.`（被停掉时写 `was stopped`，预算收尾时写 `used up its tool calls`）。
+- 记录等用户时，对话里加一行 `Superchat paused work record ID: it waits for you: DETAIL. Once answered, /work resume goes on.`。回答以后要不要自动接着做，没有改，仍然要用户说。
+
+证据：`scripts/braked-round-regression.el`，5 条，先写，在改之前 4 条红、1 条护栏（记录做完时不说这句话）。改动加载进同一个 GUI 实例后，第 17 次执行在 22:07 被刹车停下，第 18 次自己排上并开始（Tape 第 9608–9617 行）。“已暂停”那一行还没在真实运行里出现过。
