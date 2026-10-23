@@ -135,9 +135,10 @@ most once per Run and can cost one extra request."
   "How many invalid tool calls the main loop recovers from.
 
 llm.el reports unknown tool names and malformed arguments as fatal
-`llm-tool-*' errors.  Up to this many times per response, the request is
+`llm-tool-*' errors.  Up to this many times in a row, the request is
 repaired (the dangling tool-use record dropped, a corrective message
-appended) and re-sent instead of ending the turn.  The sub-agent loop has
+appended) and re-sent instead of ending the turn; a reply that goes through
+starts the count over.  The sub-agent loop has
 the same guard (`superchat-subagent-unknown-tool-retries').  Set to 0 to
 keep the fatal behaviour."
   :type 'natnum
@@ -3521,8 +3522,11 @@ requests until it receives text, bounded by
       (setq response-cb
             (lambda (response)
               (when (funcall run-active-p)
+                ;; Slips in tool calls count in a row, as cut-offs do: a long
+                ;; Run with good calls between three slips goes on (2026-10-23).
                 (setq transient-retries 0
-                      cut-off-streak 0)
+                      cut-off-streak 0
+                      tool-error-retries 0)
                 (funcall record-usage response)
                 (let ((final-text
                        (cond
