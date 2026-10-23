@@ -339,6 +339,12 @@ Work records wait on this (2026-10-23).")
 ;; Rendering sets `diff-mode' again for each buffer; keep this across it.
 (put 'superchat-changes-review--return-window 'permanent-local t)
 
+(defvar-local superchat-changes-review--shown-tick nil
+  "`buffer-chars-modified-tick' of the shown buffer when its diff was drawn.
+s saves only a buffer still at this tick, so it never writes text the user
+has not seen (G27 of the field test, 2026-10-23).")
+(put 'superchat-changes-review--shown-tick 'permanent-local t)
+
 (defvar-local superchat-changes-review--active nil
   "Non-nil in the review buffer; enables its keys in
 `minor-mode-overriding-map-alist'.")
@@ -396,8 +402,9 @@ on disk yet is compared with the null device, so the whole text is added."
   (let ((state superchat-changes-review--state))
     (nth (cdr state) (car state))))
 
-(defun superchat-changes--review-render (review)
-  "Draw the review buffer REVIEW for the candidate it is at."
+(defun superchat-changes--review-render (review &optional notice)
+  "Draw the review buffer REVIEW for the candidate it is at.
+NOTICE, a line of text, is shown above the keys."
   (with-current-buffer review
     (let* ((state superchat-changes-review--state)
            (row (superchat-changes--review-row))
@@ -419,6 +426,9 @@ on disk yet is compared with the null device, so the whole text is added."
                     ((file-exists-p file)
                      "Unsaved.  The diff below is what saving would write to disk.\n")
                     (t "Not on disk yet.  Saving creates the file with the whole buffer.\n")))
+      (when notice (insert notice "\n"))
+      (setq superchat-changes-review--shown-tick
+            (and live (buffer-chars-modified-tick buffer)))
       (insert "s: save   n: leave unsaved, next   q: stop (the rest stay unsaved)   "
               "g: refresh   SPC/DEL: scroll   M-n/M-p: next/previous change\n\n")
       (when file
@@ -610,8 +620,16 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
         (setq superchat-changes-review--left-unsaved t))
       (message "That buffer is gone; nothing to save"))
      ((not (buffer-modified-p buffer)) (message "%s has no unsaved changes" (buffer-name buffer)))
+     ((not (eql (buffer-chars-modified-tick buffer)
+                (buffer-local-value 'superchat-changes-review--shown-tick review)))
+      ;; Saving now would write text the screen has not shown.
+      (message "%s changed after the diff was drawn; not saved" (buffer-name buffer))
+      (setq buffer nil)
+      (superchat-changes--review-render
+       review "It changed after the diff was drawn; the diff now shows what saving writes.  s saves it."))
      (t (superchat-changes-save buffer)))
-    (superchat-changes--review-advance review)))
+    (when buffer
+      (superchat-changes--review-advance review))))
 
 (defun superchat-changes-review-next ()
   "Leave the buffer on the review screen unsaved and show the next one."
