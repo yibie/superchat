@@ -24,7 +24,8 @@
 
 (defcustom superchat-tape-max-inline-bytes 16384
   "Maximum encoded payload size stored inline in a Tape event.
-Larger payloads are replaced with byte-size and SHA-256 metadata."
+Larger payloads are replaced with byte-size and SHA-256 metadata, except
+in an event that carries `:keep-payload', which is stored whole."
   :type 'natnum
   :group 'superchat-tape)
 
@@ -430,13 +431,14 @@ payload pass admission that the actual codec cannot store inline."
   "Return the byte size PAYLOAD occupies inline under the Tape codec."
   (nth 0 (superchat-tape--encoded-payload-compiled payload)))
 
-(defun superchat-tape--encoded-payload (payload)
-  "Return PAYLOAD redacted and bounded for inline persistence."
+(defun superchat-tape--encoded-payload (payload &optional keep)
+  "Return PAYLOAD redacted and bounded for inline persistence.
+With KEEP it is redacted only, whatever its size."
   (let* ((compiled (superchat-tape--encoded-payload-compiled payload))
          (size (nth 0 compiled))
          (redacted (nth 1 compiled))
          (encoded (nth 2 compiled)))
-    (if (<= size superchat-tape-max-inline-bytes)
+    (if (or keep (<= size superchat-tape-max-inline-bytes))
         redacted
       (list :omitted t
             :size size
@@ -1023,7 +1025,8 @@ remain replayable in full.  Runtime event payloads must use
   "Encode EVENT's envelope and append it to storage.
 Runtime supplies original conversation text in :summary before UI rendering.
 Intent and response material preserve that string, including an empty string.
-Other events retain the bounded human-readable summary."
+Other events retain the bounded human-readable summary.  An EVENT with
+`:keep-payload' keeps a payload over `superchat-tape-max-inline-bytes' whole."
   (let ((type (plist-get event :type))
         (session-id (plist-get event :session-id))
         (event-id (or (plist-get event :event-id)
@@ -1032,7 +1035,8 @@ Other events retain the bounded human-readable summary."
     (superchat-tape--validate-envelope-fields type session-id event-id schema)
     (let* ((payload
             (superchat-tape--encoded-payload
-             (or (plist-get event :payload) '())))
+             (or (plist-get event :payload) '())
+             (plist-get event :keep-payload)))
            (meta (list :event_type type
                        :event_id event-id
                        :schema schema
@@ -1476,6 +1480,11 @@ failed recording never breaks the request it describes."
                             system tools model)
                            (list :session-id session-id
                                  :actor-id "kernel"
+                                 ;; Written once per series, and the next
+                                 ;; request needs its digest: a header
+                                 ;; bounded away was written again at every
+                                 ;; step and rebuilt none (G16, 2026-10-23).
+                                 :keep-payload t
                                  :summary (format "request.header: %s" series-id)))))))
           (when header-id
             (superchat-tape-append-event
@@ -1639,7 +1648,7 @@ This is the check the accepted request-header decision requires; a recorded
           (list :status 'unknown
                 :reason (format "header %s does not resolve" header-id)))
          ;; A recorded header always carries its schema marker; a payload
-         ;; bounded away by `superchat-tape--bound-payload' keeps only
+         ;; bounded away by `superchat-tape--encoded-payload' keeps only
          ;; `:omitted'/`:size'/`:content_hash', so the marker separates
          ;; "recorded with no tools" from "not recorded at all".
          ((and (or (plist-get header-payload :schema)
