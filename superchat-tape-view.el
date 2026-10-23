@@ -898,7 +898,15 @@ budget is also skipped.  Ordinary records that fit by themselves but exceed
 the remaining budget terminate selection, preserving the recent-first
 boundary.  The returned boundary describes only that termination; skipped
 oversized records are returned separately.  LINE-FUNCTION renders a
-normalized item for character accounting."
+normalized item for character accounting.
+
+When that termination leaves out the user message the oldest selected
+record answers -- the newest user message older than it -- that message is
+kept after all, ahead of what was selected, and the oldest selected records
+that are not user messages go to make room (decision of 2026-10-22: a
+history of 22 probes without the question they served sent the model on
+probing).  The boundary is then no longer one cut: records between the
+question and the rest are left out too."
   (let ((render-line (or line-function
                          #'superchat-view--continuity-item-line))
         (selected nil)
@@ -937,10 +945,59 @@ normalized item for character accounting."
             (push record selected)
             (setq selected-count (1+ selected-count))
             (setq selected-chars candidate-chars))))))
+    (when (and boundary-record selected)
+      (setq selected
+            (superchat-view--continuity-keep-question
+             records selected entry-budget char-budget
+             (lambda (record)
+               (funcall render-line
+                        (if item-function
+                            (funcall item-function record)
+                          (superchat-view--continuity-raw-item record))))
+             (lambda (record)
+               (and (not (superchat-view--continuity-tool-pair-p record))
+                    (equal "user"
+                           (superchat-view--continuity-record-kind record)))))))
     (list :records selected
           :boundary-record boundary-record
           :boundary-reason boundary-reason
           :skipped-records skipped-records)))
+
+(defun superchat-view--continuity-keep-question
+    (records selected entry-budget char-budget line-of question-p)
+  "SELECTED, oldest first, with the question its oldest record answers.
+The question is the newest record of RECORDS (oldest first) older than
+SELECTED's first record for which QUESTION-P holds.  SELECTED is returned
+as it is when its first record is a question, when there is none, or when
+the question alone exceeds CHAR-BUDGET; otherwise the question goes ahead
+and SELECTED's oldest records that are not questions go until ENTRY-BUDGET
+and CHAR-BUDGET hold, counting LINE-OF's length and one separator a line."
+  (let* ((oldest (car selected))
+         (question
+          (unless (funcall question-p oldest)
+            (cl-loop with found = nil
+                     for record in records
+                     until (eq record oldest)
+                     when (funcall question-p record) do (setq found record)
+                     finally return found)))
+         (length-of (lambda (record) (length (funcall line-of record)))))
+    (if (or (null question)
+            (and char-budget (> char-budget 0)
+                 (> (funcall length-of question) char-budget)))
+        selected
+      (let* ((kept (copy-sequence selected))
+             (fits
+              (lambda ()
+                (and (or (null entry-budget) (<= (1+ (length kept)) entry-budget))
+                     (or (null char-budget) (<= char-budget 0)
+                         (<= (+ (funcall length-of question)
+                                (cl-loop for record in kept
+                                         sum (1+ (funcall length-of record))))
+                             char-budget))))))
+        (while (and (not (funcall fits))
+                    (when-let* ((drop (cl-find-if-not question-p kept)))
+                      (setq kept (delq drop kept)))))
+        (if (funcall fits) (cons question kept) selected)))))
 
 (defun superchat-view--continuity-material-record-p (record)
   "Return non-nil when continuity RECORD is prompt material."

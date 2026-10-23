@@ -272,19 +272,70 @@ arguments, and its tool message says what was kept."
 
 (ert-deftest history-messages/a-small-budget-keeps-calls-with-their-results ()
   "With a budget that leaves older items out, every earlier call in the
-request is answered by its tool message, and every tool message by its call."
-  (hm--fixture nil
-    (let ((superchat-context-max-chars 160))
-      (hm--two-turns))
-    (let* ((body (hm--body (hm--wire 3)))
+request is answered by its tool message, and every tool message by its call.
+Two reads, so the budget can leave one out after the turn's question takes
+its place (2026-10-22: kept calls keep their question)."
+  (hm--fixture (list (hm--read-round "hm-target") (hm--read-round "hm-target")
+                     '(:text "TURN-ONE-ANSWER")
+                     '(:text "TURN-TWO-ANSWER"))
+    (let ((view (smoke--open-chat)))
+      (hm--turn view "HM-FIRST look at hm-target")
+      (let ((superchat-context-max-chars 260))
+        (hm--turn view "HM-SECOND question")))
+    (let* ((body (hm--body (car hm--wires)))
            (call-ids (cl-loop for message in body
                               append (mapcar (lambda (call) (alist-get 'id call))
                                              (hm--calls message))))
            (answered (cl-loop for message in body
                               when (equal "tool" (alist-get 'role message))
                               collect (alist-get 'tool_call_id message))))
-      (should call-ids)
+      (should (= 1 (length call-ids)))
       (should (equal call-ids answered)))))
+
+(ert-deftest history-messages/kept-calls-keep-the-question-they-served ()
+  "A budget that keeps only a turn's last calls still keeps that turn's
+question, ahead of them; the calls in between go instead.  In the user's
+Session of 2026-10-22 the history kept 22 probes and dropped the question
+they answered, so after \"go on\" the model probed on and never answered."
+  (hm--fixture (list (hm--read-round "hm-target") (hm--read-round "hm-target")
+                     (hm--read-round "hm-target") (hm--read-round "hm-target")
+                     (hm--read-round "hm-target")
+                     '(:text "TURN-ONE-ANSWER")
+                     '(:text "TURN-TWO-ANSWER"))
+    (let ((view (smoke--open-chat)))
+      (hm--turn view "HM-QUESTION compare the two libraries")
+      (let ((superchat-context-max-chars 600))
+        (hm--turn view "HM-GO-ON")))
+    (let* ((wire (car hm--wires))
+           (body (hm--body wire))
+           (texts (mapcar #'hm--text body))
+           (calls (cl-loop for message in body
+                           append (mapcar (lambda (call) (alist-get 'id call))
+                                          (hm--calls message))))
+           (answered (cl-loop for message in body
+                              when (equal "tool" (alist-get 'role message))
+                              collect (alist-get 'tool_call_id message))))
+      ;; The budget did leave calls out, and kept some.
+      (should (< 0 (length calls) 5))
+      (should (equal calls answered))
+      ;; The question is there, first, and the new input is last.
+      (should (equal "user" (alist-get 'role (car body))))
+      (should (string-match-p "HM-QUESTION" (car texts)))
+      (should (string-match-p "TURN-ONE-ANSWER" (mapconcat #'identity texts "\n")))
+      (should (string-match-p "HM-GO-ON" (car (last texts)))))))
+
+(ert-deftest history-messages/a-question-already-kept-is-not-repeated ()
+  "Guard: a budget that holds the whole turn sends its question once."
+  (hm--fixture (list (hm--read-round "hm-target") (hm--read-round "hm-target")
+                     '(:text "TURN-ONE-ANSWER")
+                     '(:text "TURN-TWO-ANSWER"))
+    (let ((view (smoke--open-chat)))
+      (hm--turn view "HM-QUESTION compare the two libraries")
+      (hm--turn view "HM-GO-ON"))
+    (let ((texts (mapcar #'hm--text (hm--body (car hm--wires)))))
+      (should (= 1 (cl-count-if (lambda (text) (string-match-p "HM-QUESTION" text))
+                                texts)))
+      (should (= 2 (cl-count-if #'hm--calls (hm--body (car hm--wires))))))))
 
 (ert-deftest history-messages/adjacent-requests-keep-their-prefix ()
   "Within the second turn's Run, the second request begins with every message
