@@ -769,14 +769,12 @@ Asked of SESSION's Tape once for a Run."
   (or (gethash run superchat-changes--started-by)
       (puthash
        run
-       (let* ((json-object-type 'alist) (json-array-type 'list)
-              (json-key-type 'symbol)
-              (payload
+       (let* ((payload
                (lambda (type &optional of-run)
                  (alist-get
                   'payload
                   (ignore-errors
-                    (json-read-from-string
+                    (superchat-tape-read-json-alist
                      (or (caar
                           (superchat-db-tape-select
                            (concat
@@ -788,7 +786,8 @@ Asked of SESSION's Tape once for a Run."
                             " ORDER BY id DESC LIMIT 1")
                            (if of-run (list session type run)
                              (list session type))))
-                         "{}"))))))
+                         "{}")
+                     'list)))))
               (id (lambda (payload &rest keys)
                     (cl-some (lambda (key) (alist-get key payload)) keys)))
               (timer (or (funcall id (funcall payload "timer.started" t)

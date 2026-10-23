@@ -59,10 +59,9 @@
                   "SELECT session_id, meta FROM tape
                    WHERE kind = 'system' AND meta LIKE '%\"work.%'
                    ORDER BY id ASC"))
-      (let* ((json-object-type 'alist)
-             (json-array-type 'list)
-             (json-key-type 'symbol)
-             (meta (ignore-errors (json-read-from-string (or (nth 1 row) ""))))
+      (let* ((meta (ignore-errors
+                     (superchat-tape-read-json-alist (or (nth 1 row) "")
+                                                     'list)))
              (type (alist-get 'event_type meta)))
         (when (member type superchat-work-fact-types)
           (push (list (nth 0 row) type (alist-get 'payload meta)) out))))

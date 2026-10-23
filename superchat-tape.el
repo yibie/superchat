@@ -394,6 +394,21 @@ empty object, because the row's own kind and content still carry the event."
                         :array-type 'list
                         :null-object nil :false-object nil))))
 
+(defun superchat-tape-read-json-alist (json &optional array-type)
+  "Read JSON text into an alist with symbol keys, natively.
+
+It returns what `json-read-from-string' returns with `json-object-type'
+`alist', `json-key-type' `symbol' and `json-array-type' ARRAY-TYPE
+\(`vector' by default, or `list'): null reads as nil and false as
+`:json-false'.  The one difference is text after the value, which this
+signals on and `json-read-from-string' ignores; Tape metadata is written
+by `json-encode' and never has any.  `json.el' is pure Lisp and conses
+heavily, and every view reads the whole Tape's metadata, so on a long
+session it made each round pause for garbage collection."
+  (json-parse-string json :object-type 'alist
+                     :array-type (if (eq array-type 'list) 'list 'array)
+                     :null-object nil :false-object :json-false))
+
 (defun superchat-tape--encoded-payload-compiled (payload)
   "Return (SIZE REDACTED ENCODED) for PAYLOAD as it is encoded into Tape.
 

@@ -86,11 +86,9 @@ Nil when WORKSPACE-ID is not a non-empty string."
                        AND (meta LIKE '%workspace.bound%'
                             OR meta LIKE '%workspace.unbound%')
                      ORDER BY id ASC"))
-        (let* ((json-object-type 'alist)
-               (json-array-type 'list)
-               (json-key-type 'symbol)
-               (meta (ignore-errors
-                       (json-read-from-string (or (nth 1 row) ""))))
+        (let* ((meta (ignore-errors
+                       (superchat-tape-read-json-alist (or (nth 1 row) "")
+                                                       'list)))
                (type (superchat-view--object-get meta '(event_type event-type)))
                (payload (superchat-view--object-get meta '(payload))))
           (pcase type
@@ -142,11 +140,9 @@ SESSION-ID is not a non-empty string."
                          (and (string= (nth 1 row) "branch")
                               (string= (nth 2 row) "anchor")))
                        rows))
-              (meta (let ((json-object-type 'alist)
-                          (json-array-type 'list)
-                          (json-key-type 'symbol))
-                      (ignore-errors
-                        (json-read-from-string (or (nth 4 anchor) "{}")))))
+              (meta (ignore-errors
+                      (superchat-tape-read-json-alist (or (nth 4 anchor) "{}")
+                                                      'list)))
               (payload (or (superchat-view--object-get meta '(payload))
                            meta))
               (parent-session
@@ -162,7 +158,15 @@ Reads only this Session's System rows.  A row that is not a valid
 not a sequence of positive integer storage ids -- is skipped instead of
 failing the scan; a failed Tape read still signals."
   (let (ids)
-    (dolist (row (superchat-view-entries session-id nil '("system")))
+    ;; The LIKE only narrows the read: every `turn.superseded' fact names
+    ;; its type verbatim in META, and each row is still checked below.
+    (dolist (row (superchat-db-tape-select
+                  "SELECT id, topic, kind, content, meta, created_at
+                   FROM tape
+                   WHERE session_id = ? AND kind = 'system'
+                     AND meta LIKE '%turn.superseded%'
+                   ORDER BY id ASC"
+                  (list session-id)))
       (let* ((meta (ignore-errors
                      (json-parse-string
                       (or (nth 4 row) "")
@@ -188,11 +192,33 @@ addressable, so every lineage segment's own `turn.superseded' ids are
 unioned.  One malformed event row is skipped; a failed Tape read (or a
 cyclic lineage) signals the caller instead of reporting no exclusions."
   (let (ids)
-    (dolist (segment (superchat-view--continuity-lineage-segments session-id))
+    (dolist (lineage-session (superchat-view--lineage-session-ids session-id))
       (setq ids (append (superchat-view--superseded-ids-in-session
-                         (plist-get segment :session-id))
+                         lineage-session)
                         ids)))
     (delete-dups ids)))
+
+(defun superchat-view--lineage-session-ids (session-id &optional max-id seen)
+  "Return SESSION-ID's lineage, parent first, as Session ids.
+The same chain `superchat-view--continuity-lineage-segments' walks, read from
+each Session's branch anchor alone instead of all its rows.  MAX-ID bounds
+which anchor counts, as there; SEEN is the cycle guard."
+  (when (member session-id seen)
+    (error "Cyclic Superchat session lineage at %s" session-id))
+  (let ((parent (superchat-view--branch-parent
+                 (superchat-db-tape-select
+                  (format "SELECT id, topic, kind, content, meta, created_at
+                           FROM tape
+                           WHERE session_id = ? AND kind = 'anchor'
+                             AND topic = 'branch' %s
+                           ORDER BY id ASC
+                           LIMIT 1"
+                          (if max-id "AND id <= ?" ""))
+                  (append (list session-id) (and max-id (list max-id)))))))
+    (append (and parent
+                 (superchat-view--lineage-session-ids
+                  (car parent) (cdr parent) (cons session-id seen)))
+            (list session-id))))
 
 (cl-defun superchat-view-session-history
     (session-id &optional max-id seen &key excluded-storage-ids)
@@ -252,11 +278,8 @@ rebuilt View hides replaced turns."
 
 (defun superchat-view--session-config-apply (config row)
   "Apply Tape ROW to Session CONFIG and return CONFIG."
-  (let* ((json-object-type 'alist)
-         (json-array-type 'list)
-         (json-key-type 'symbol)
-         (meta (ignore-errors
-                 (json-read-from-string (or (nth 4 row) ""))))
+  (let* ((meta (ignore-errors
+                 (superchat-tape-read-json-alist (or (nth 4 row) "") 'list)))
          (type (superchat-view--object-get meta '(event_type event-type)))
          (payload (superchat-view--object-get meta '(payload))))
     (pcase type
@@ -310,21 +333,40 @@ rebuilt View hides replaced turns."
     config))
 
 
+(defvar superchat-db--path)
+
+(defvar superchat-view--configuration-memo (make-hash-table :test #'equal)
+  "SESSION-ID to (KEY . CONFIGURATION), KEY naming the Tape state it was read in.")
+
 (defun superchat-view-session-configuration (session-id)
-  "Replay SESSION-ID history into the latest runtime configuration plist."
-  (superchat-projection-replay
-   'session-configuration
-   (superchat-view-session-history session-id)))
+  "Replay SESSION-ID history into the latest runtime configuration plist.
+A turn reads this many times -- the sandbox on every tool call -- so the
+answer is remembered until the Tape grows.  The Tape is only appended to, so
+the database's highest row id names its state: any row added anywhere, the
+parent of a branch included, makes the next read replay afresh.  Each caller
+gets its own copy."
+  (let* ((last-id (caar (superchat-db-tape-select "SELECT MAX(id) FROM tape")))
+         ;; Read after the query, which opens the database it names.
+         (key (list superchat-db--path last-id
+                    (alist-get 'session-configuration
+                               superchat-projection--registry)))
+         (memo (gethash session-id superchat-view--configuration-memo)))
+    (copy-tree
+     (if (equal key (car memo))
+         (cdr memo)
+       (let ((config (superchat-projection-replay
+                      'session-configuration
+                      (superchat-view-session-history session-id))))
+         (puthash session-id (cons key (copy-tree config))
+                  superchat-view--configuration-memo)
+         config)))))
 
 (defun superchat-view--row-meta (row)
   "Decode metadata from a six- or five-column Tape ROW."
-  (let ((json-object-type 'alist)
-        (json-array-type 'vector)
-        (json-key-type 'symbol))
-    (condition-case nil
-        (json-read-from-string
-         (or (nth (if (= (length row) 5) 3 4) row) "{}"))
-      (error nil))))
+  (condition-case nil
+      (superchat-tape-read-json-alist
+       (or (nth (if (= (length row) 5) 3 4) row) "{}"))
+    (error nil)))
 
 (defconst superchat-view--compact-anchor-type "compact"
   "Metadata type for a Context Continuity compact Anchor.")
@@ -560,12 +602,9 @@ If SESSION-ID is nil, search across all sessions."
 
 (defun superchat-view--continuity-record-meta (record)
   "Decode RECORD's JSON metadata as an alist, or nil when malformed."
-  (let ((json-object-type 'alist)
-        (json-array-type 'vector)
-        (json-key-type 'symbol))
-    (condition-case nil
-        (json-read-from-string (or (nth 4 (cdr record)) "{}"))
-      (error nil))))
+  (condition-case nil
+      (superchat-tape-read-json-alist (or (nth 4 (cdr record)) "{}"))
+    (error nil)))
 
 (defun superchat-view--continuity-runtime-event-p (record)
   "Return non-nil when RECORD carries a Runtime event envelope."
