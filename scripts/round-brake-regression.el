@@ -24,6 +24,7 @@
       nil t)
 
 (defvar superchat-work-round-idle-limit)
+(defvar superchat-changes-review-after-run)
 
 (defun rb--waiting (id)
   "The standing wait of the record ID, as (FOR . DETAIL)."
@@ -65,7 +66,10 @@ record is completed."
   (pend--fresh
     (wrec--with nil (p)
       ;; `wrec--view' visits a.txt under P; that buffer is the one edited.
-      (let* ((view (wrec--view p)) (session (hm--session view))
+      ;; The review screen is off: where it comes up the rounds wait for the
+      ;; user (review-wait-regression.el), and this test is about the brake.
+      (let* ((superchat-changes-review-after-run nil)
+             (view (wrec--view p)) (session (hm--session view))
              (file (get-file-buffer (expand-file-name "a.txt" p))))
         (should (buffer-live-p file))
         (setq smoke--script

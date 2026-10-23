@@ -33,6 +33,7 @@
 
 (declare-function superchat-view-session-configuration "superchat-tape-view"
                   (session-id))
+(declare-function superchat-changes-review-due "superchat-changes" (session run))
 (declare-function superchat-changes-candidates "superchat-changes"
                   (session-id &optional run-id))
 (defvar superchat--tool-execution-context)
@@ -1432,6 +1433,39 @@ The failure brake is such a hook (`superchat-runtime-stop-tools')."
        (equal "stopped"
               (format "%s" (plist-get (plist-get status :tool-budget) :action)))))
 
+(defvar superchat-work--review-waits (make-hash-table :test #'equal)
+  "Records whose rounds wait for the review screen, by id, to their Session.")
+
+(defun superchat-work--review-wait (session id status)
+  "When the review screen comes up after the execution STATUS, pause ID for it.
+Return non-nil when it paused."
+  (when-let* (((fboundp 'superchat-changes-review-due))
+              (rows (superchat-changes-review-due
+                     session (plist-get status :run-id))))
+    (superchat-work-pause id)
+    (puthash id session superchat-work--review-waits)
+    (superchat-work--say-paused
+     session id
+     (format "it waits for your review of %d unsaved buffer%s. Once you have saved (s) or left unsaved (n) each, the work goes on; q leaves it paused and /work resume goes on"
+             (length rows) (if (cdr rows) "s" "")))
+    t))
+
+(defun superchat-work--on-review-ended (session how)
+  "Once the user ended SESSION's review screen HOW, let a waiting record go on.
+`answered' goes on; `stopped' leaves the record paused."
+  (when-let* ((id (superchat-work-current session))
+              ((equal session (gethash id superchat-work--review-waits))))
+    (remhash id superchat-work--review-waits)
+    (when (and (eq how 'answered)
+               (not (superchat-work-continuing-p id))
+               (eq 'continuable (superchat-work-status (superchat-work-get id)))
+               (not (superchat-work--refusal session "Not resumed")))
+      (superchat-work-continue id)
+      (superchat-work--queue-round session id))))
+
+(add-hook 'superchat-changes-review-ended-functions
+          #'superchat-work--on-review-ended)
+
 (defun superchat-work--drive (session status)
   "After an execution of SESSION ended with STATUS, start the next round or stop.
 Nothing is done unless the rounds of the conversation's current record go on."
@@ -1464,6 +1498,10 @@ Nothing is done unless the rounds of the conversation's current record go on."
                      ('cancelled "was stopped")
                      ('completed "used up its tool calls")
                      (other (format "%s" other))))))
+         ;; Where the review screen comes up, the rounds wait for the user's
+         ;; answer to it (2026-10-23): no round edits a buffer the user is
+         ;; reading the diff of.
+         ((superchat-work--review-wait session id status))
          ;; What the user queued goes first; the rounds stay open behind it.
          ((> (superchat-runtime-pending-follow-ups session) 0) nil)
          ((>= (superchat-work-rounds id) superchat-work-round-limit)

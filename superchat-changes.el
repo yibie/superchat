@@ -318,6 +318,17 @@ ROWS are candidate plists, as `superchat-changes-candidates' returns them.")
 ;; Every redraw runs `diff-mode', which would otherwise forget where it was.
 (put 'superchat-changes-review--state 'permanent-local t)
 
+(defvar-local superchat-changes-review--session nil
+  "The Session whose Run left the buffers on the review screen, when it came
+up by itself after a Run; nil when the user opened it.")
+(put 'superchat-changes-review--session 'permanent-local t)
+
+(defvar superchat-changes-review-ended-functions nil
+  "Functions called when a review screen that came up after a Run ends.
+Each is called with the Session and how the user ended it: `answered' once
+every buffer on it was saved (s) or left unsaved (n), `stopped' when the user
+stopped reviewing (q).  Work records wait on this (2026-10-23).")
+
 (defvar-local superchat-changes-review--return-window nil
   "The window that was selected when the review screen took the cursor.")
 ;; Rendering sets `diff-mode' again for each buffer; keep this across it.
@@ -519,12 +530,37 @@ holds `work.woken'."
 While the minibuffer is in use it is shown unselected and selected after.
 An execution Superchat started at a time shows no screen: the user is doing
 something else, and the echo area has already said what is unsaved."
-  (when-let* (((not (superchat-changes--unattended-run-p session run)))
-              (rows (ignore-errors (superchat-changes-candidates session run))))
-    (let ((busy (active-minibuffer-window)))
-      (when (and (superchat-changes-review rows (not busy)) busy)
+  (when-let* ((rows (superchat-changes-review-due session run)))
+    (let* ((busy (active-minibuffer-window))
+           (review (superchat-changes-review rows (not busy))))
+      (when review
+        (with-current-buffer review
+          (setq superchat-changes-review--session session)))
+      (when (and review busy)
         (add-hook 'minibuffer-exit-hook
                   #'superchat-changes--review-select-after-minibuffer)))))
+
+(defun superchat-changes-review-due (session run)
+  "The rows the review screen comes up with after RUN of SESSION ended, or nil.
+Nil when the screen does not come up by itself: it is turned off, Superchat
+started RUN at a time, or RUN left nothing unsaved in a buffer that visits a
+file."
+  (and superchat-changes-review-after-run
+       (not (superchat-changes--unattended-run-p session run))
+       (cl-remove-if-not
+        (lambda (row)
+          (let ((buffer (plist-get row :buffer)))
+            (and (buffer-live-p buffer) (buffer-file-name buffer))))
+        (ignore-errors (superchat-changes-candidates session run)))))
+
+(defun superchat-changes--review-ended (review how)
+  "Tell `superchat-changes-review-ended-functions' that REVIEW ended HOW."
+  (when-let* (((buffer-live-p review))
+              (session (buffer-local-value 'superchat-changes-review--session
+                                           review)))
+    (with-current-buffer review
+      (setq superchat-changes-review--session nil))
+    (run-hook-with-args 'superchat-changes-review-ended-functions session how)))
 
 (defun superchat-changes--review-buffer ()
   (or (and (local-variable-p 'superchat-changes-review--state)
@@ -540,6 +576,7 @@ something else, and the echo area has already said what is unsaved."
           (progn
             (setq superchat-changes-review--state (cons (car state) (1+ (cdr state))))
             (superchat-changes--review-render review))
+        (superchat-changes--review-ended review 'answered)
         (superchat-changes--review-close review)))))
 
 (defun superchat-changes--review-close (review)
@@ -575,7 +612,9 @@ Saving is the user's operation, the same `superchat-changes-save' offers."
 (defun superchat-changes-review-quit ()
   "Stop reviewing.  Every buffer not saved on the screen stays unsaved."
   (interactive)
-  (superchat-changes--review-close (superchat-changes--review-buffer)))
+  (let ((review (superchat-changes--review-buffer)))
+    (superchat-changes--review-ended review 'stopped)
+    (superchat-changes--review-close review)))
 
 (defun superchat-changes-review-refresh ()
   "Redraw the review screen from the buffer's text as it is now."
