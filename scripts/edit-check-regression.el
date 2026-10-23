@@ -169,6 +169,31 @@ is not a parenthesis; a narrowed edit is judged on the whole buffer."
             (should (equal before (ec--text lisp)))
             (should (equal "1)" (buffer-string)))))))))
 
+(ert-deftest edit-check/the-refusal-counts-the-parentheses-off ()
+  "The model of the llm-pi-ai field run rewrote its edit four times and kept
+the same surplus: the refusal names how many parentheses are off."
+  (ec--with-dir dir
+    (ec--fixture '((:text "unused"))
+      (ec--visit dir "init.el" ec--init)
+      (should (string-match-p
+               "1 closing parenthesis more than it opens"
+               (superchat-tool-edit-buffer "init.el" ec--old ec--bad)))
+      (should (string-match-p
+               "3 closing parentheses more than it opens"
+               (superchat-tool-edit-buffer "init.el" ec--old (concat ec--good ")))"))))
+      (should (string-match-p
+               "1 parenthesis it opens and never closes"
+               (superchat-tool-edit-buffer
+                "init.el" ec--old (string-remove-suffix ")" ec--good))))
+      (should (string-match-p
+               "2 parentheses it opens and never closes"
+               (superchat-tool-edit-buffer
+                "init.el" ec--old (concat "(progn " (string-remove-suffix ")" ec--good)))))
+      (ec--visit dir "str.el" "(defun a () 1)\n")
+      (should-not (string-match-p
+                   "more than it opens\\|never closes"
+                   (superchat-tool-append-to-buffer "str.el" "(defun c () \"unterminated)\n"))))))
+
 (ert-deftest edit-check/append-and-replace-are-sent-back-too ()
   (ec--with-dir dir
     (ec--fixture '((:text "unused"))

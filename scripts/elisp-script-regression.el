@@ -222,6 +222,30 @@
         (should-not (string-match-p "AFTER" result)))
       (should (equal "gamma\n" (with-current-buffer "escr-notes" (buffer-string)))))))
 
+(ert-deftest elisp-script/a-nested-failure-leaves-the-script-call-succeeded ()
+  "The chat marks a call failed by its own `tool.failed'.  A nested call's
+context is its script's, so the script's heading must not take the nested
+call's failure for its own."
+  (escr--with nil ()
+    (setq smoke--script
+          (list (escr--script-round
+                 "(out (condition-case nil (tool \"read_buffer\" :buffer \"escr-no-such-buffer\") (error \"CAUGHT\")))
+                  (out \"OK\")")
+                '(:text "done")))
+    (let ((view (smoke--open-chat)))
+      (hm--turn view "go")
+      (let ((events (escr--tool-events
+                     (buffer-local-value 'superchat--session-id view)))
+            (text (with-current-buffer view
+                    (buffer-substring-no-properties (point-min) (point-max)))))
+        ;; The nested call did fail, under the script's id.
+        (should (cl-find-if (lambda (e) (and (equal "tool.failed" (car e))
+                                             (equal "read_buffer" (nth 1 e))
+                                             (string-search "/" (nth 2 e))))
+                            events))
+        (should (string-match-p "^\\*\\*\\* ✓ elisp_script (" text))
+        (should-not (string-match-p "^\\*\\*\\* ✗ elisp_script" text))))))
+
 (ert-deftest elisp-script/what-a-script-cannot-call ()
   (escr--with nil ()
     (setq smoke--script

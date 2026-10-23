@@ -108,6 +108,47 @@ handler of the call, not the hook; that is a failed call too."
                (regexp-quote "it tried to ask the user for input")
                (ef--second-prompt))))))
 
+(ert-deftest eval-failure/the-chat-marks-a-failed-call-failed ()
+  "The chat's heading of a call follows the call's outcome, not its text:
+an `eval_elisp' error reads \"Error: ...\", and its heading showed ✓ while
+the Tape held `tool.failed' and the failure brake counted it."
+  (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(car 1)"))))
+                     '(:tool-uses (("eval_elisp" (expression . "(+ 1 2)"))))
+                     '(:text "EF-DONE"))
+    (let ((view (smoke--open-chat)))
+      (ef--run view "compute")
+      (let ((text (ef--view-text view)))
+        (should (string-match-p "^\\*\\*\\* ✗ eval_elisp (" text))
+        (should (string-match-p "^\\*\\*\\* ✓ eval_elisp (" text))
+        (should (< (string-match "^\\*\\*\\* ✗ eval_elisp" text)
+                   (string-match "^\\*\\*\\* ✓ eval_elisp" text)))))))
+
+(ert-deftest eval-failure/waiting-with-sit-for-is-a-completed-call ()
+  "`sit-for' waits by reading an event with a timeout, which
+`inhibit-interaction' stopped as if the expression had asked the user: in
+the user's Run of 2026-10-22 every probe that waited for a process failed
+that way.  A wait is not a question.  Batch Emacs's `sit-for' only sleeps,
+so the expression takes the interactive path itself."
+  (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(let ((noninteractive nil)) (list (sit-for 0.01) (sit-for 0.01 t) 'waited))"))))
+                     '(:text "EF-DONE"))
+    (let ((view (smoke--open-chat)))
+      (ef--run view "wait")
+      (should (equal '("tool.completed") (ef--types (ef--outcomes view "eval_elisp"))))
+      (should (string-match-p (regexp-quote "Result: (t t waited)")
+                              (ef--second-prompt))))))
+
+(ert-deftest eval-failure/a-wait-that-reads-input-names-the-way-to-wait ()
+  "A wait that does read input, `read-event' with a timeout, still stops,
+and the result says how to wait instead."
+  (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(read-event nil nil 0.01)"))))
+                     '(:text "EF-DONE"))
+    (let ((view (smoke--open-chat)))
+      (ef--run view "wait")
+      (should (equal '("tool.failed") (ef--types (ef--outcomes view "eval_elisp"))))
+      (should (string-match-p (regexp-quote "sleep-for") (ef--second-prompt)))
+      (should (string-match-p (regexp-quote "accept-process-output")
+                              (ef--second-prompt))))))
+
 (ert-deftest eval-failure/more-than-one-expression-is-a-failed-call ()
   (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(+ 1 2) (+ 3 4)"))))
                      '(:text "EF-DONE"))
@@ -116,6 +157,27 @@ handler of the call, not the hook; that is a failed call too."
       (should (equal '("tool.failed") (ef--types (ef--outcomes view "eval_elisp"))))
       (should (string-match-p (regexp-quote "Expected exactly one expression")
                               (ef--second-prompt))))))
+
+;; 2026-10-22 field test: the model's expression lacked one closing
+;; parenthesis.  "evaluating expression: End of file during parsing" read as
+;; if its code had hit the end of the buffer it was scanning, so it sent the
+;; same expression twice more and the failure brake ended the Run.
+(ert-deftest eval-failure/an-unreadable-expression-says-it-did-not-read ()
+  (ef--fixture (list '(:tool-uses (("eval_elisp"
+                                    (expression . "(with-current-buffer \"x\"\n  (list 1 (+ 2 3))"))))
+                     '(:text "EF-DONE"))
+    (let ((view (smoke--open-chat)))
+      (ef--run view "compute")
+      (should (equal '("tool.failed") (ef--types (ef--outcomes view "eval_elisp"))))
+      (let ((prompt (ef--second-prompt)))
+        (should (string-match-p (regexp-quote "nothing was evaluated") prompt))
+        (should (string-match-p (regexp-quote "1 parenthesis is never closed")
+                                prompt))
+        (should (string-match-p
+                 (regexp-quote "line 1, column 0: (with-current-buffer")
+                 prompt))
+        (should-not (string-match-p (regexp-quote "evaluating expression")
+                                    prompt))))))
 
 (ert-deftest eval-failure/a-value-is-still-a-completed-call ()
   "Guard: the shape of a successful result is unchanged."

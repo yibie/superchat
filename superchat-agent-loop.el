@@ -254,13 +254,14 @@ another owner's identical heading text the way a backward text search from
 
 (defun superchat--agent-render-tool-result
     (tool-name result &optional target-buffer session-id transcript-owner
-               execution-id)
+               execution-id failed)
   "Render a tool result in the chat buffer.
 
 Updates the matching pending `*** ⏳ NAME' heading (S21) in place to
-`*** ✓ NAME (D.Ds)' or `*** ✗ NAME (D.Ds)' -- a result starting with
-\"[Tool call\" (the family of markers `superchat-tool-execution'/`superchat-
-llm' use for a blocked/failed/denied/cancelled call) counts as failure --
+`*** ✓ NAME (D.Ds)' or `*** ✗ NAME (D.Ds)' -- FAILED non-nil (the call's
+`tool.failed' was recorded), or a result starting with \"[Tool call\" (the
+family of markers `superchat-tool-execution'/`superchat-llm' use for a
+blocked/failed/denied/cancelled call), counts as failure --
 and inserts the result block right after that same call's own args block,
 before whatever comes next (S21-fix-2, Spec 1): out-of-order completion of
 two overlapping calls must never land a result under the wrong heading, or
@@ -290,7 +291,7 @@ removed either way."
                (heading-marker (nth 0 pending))
                (end-marker (nth 1 pending))
                (call-time (nth 3 pending))
-               (failed-p (string-prefix-p "[Tool call" text))
+               (failed-p (or failed (string-prefix-p "[Tool call" text)))
                (duration (if (numberp call-time)
                              (max 0.0 (- (float-time) call-time))
                            0.0))
@@ -327,6 +328,25 @@ forks to Tape/rendering/provider; this wrapper-level call remains as a
 no-op safety net for results that pass through post-execution rewrite
 hooks.  Non-string values pass through untouched."
   (superchat-tool-execution--normalize-tool-result value))
+
+(defun superchat--agent-observe-failure (context on-failure)
+  "CONTEXT whose failure observer also calls ON-FAILURE for this call.
+ON-FAILURE runs, with no argument, once the call's own `tool.failed' is
+recorded, after CONTEXT's own `:failure-recorded-function'.  The chat marks
+the call failed by it: a body that reports its failure itself
+\(`superchat-tool-execution-failed') keeps its own text, which need not look
+like a failure (decision of 2026-10-22).  A call an `elisp_script' script
+makes inherits this context under the id PARENT/N
+\(`superchat-script-run'); its failure is not this call's."
+  (let ((observer (plist-get context :failure-recorded-function)))
+    (plist-put (copy-sequence context) :failure-recorded-function
+               (lambda (event)
+                 (unwind-protect
+                     (when (functionp observer) (funcall observer event))
+                   (let ((id (plist-get (plist-get event :payload) :execution-id)))
+                     (when (and (equal "tool.failed" (plist-get event :type))
+                                (not (and (stringp id) (string-search "/" id))))
+                       (funcall on-failure))))))))
 
 (defun superchat--agent-wrap-function
     (tool-name original-fn async &optional guardrails counter target-buffer
@@ -372,11 +392,11 @@ a call's arguments by name."
                tool-name args target-buffer render-session-id render-owner
                execution-id))))
          (render-result
-          (lambda (result execution-id)
+          (lambda (result execution-id failed)
             (when (funcall render-allowed-p)
               (superchat--agent-render-tool-result
                tool-name result target-buffer render-session-id render-owner
-               execution-id))))
+               execution-id failed))))
          (counter (or counter (cons superchat--agent-tool-call-count nil)))
          (max-tool-calls (and guardrails
                               (plist-get guardrails :max-tool-calls))))
@@ -409,6 +429,10 @@ a call's arguments by name."
                  (execution-id
                   (or (plist-get context :tool-call-id)
                       (superchat-runtime--new-id "tool")))
+                 (failure-recorded nil)
+                 (context
+                  (superchat--agent-observe-failure
+                   context (lambda () (setq failure-recorded t))))
                  (context
                   (if (plist-get context :evidence-contract)
                       (plist-put
@@ -445,7 +469,8 @@ a call's arguments by name."
                       (setq delivered t)
                       (when render-p
                         (condition-case render-error
-                            (funcall render-result result execution-id)
+                            (funcall render-result result execution-id
+                                     failure-recorded)
                           (error
                            (ignore-errors
                              (display-warning
@@ -500,6 +525,10 @@ a call's arguments by name."
                (execution-id
                 (or (plist-get context :tool-call-id)
                     (superchat-runtime--new-id "tool")))
+               (failure-recorded nil)
+               (context
+                (superchat--agent-observe-failure
+                 context (lambda () (setq failure-recorded t))))
                (context
                 (if (plist-get context :evidence-contract)
                     (plist-put
@@ -532,7 +561,7 @@ a call's arguments by name."
                (result
                 (superchat-tool-execute
                  tool-name original-fn args :context context)))
-            (funcall render-result result execution-id)
+            (funcall render-result result execution-id failure-recorded)
             (superchat--normalize-tool-result-text result)))))))
 
 (defun superchat--agent-wrap-tool

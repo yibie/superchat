@@ -631,6 +631,22 @@ never closed.  This is `check-parens''s own test; nothing is evaluated."
               (string-trim (buffer-substring-no-properties
                             (line-beginning-position) (line-end-position)))))))
 
+(defun superchat-tools--lisp-depth-text ()
+  "Say how many parentheses the whole current buffer leaves unmatched, or nil.
+Nil when they match or a string is left open, where a count would mislead."
+  (save-restriction
+    (widen)
+    (let* ((state (parse-partial-sexp (point-min) (point-max)))
+           (depth (nth 0 state)))
+      (cond
+       ((or (nth 3 state) (= depth 0)) nil)
+       ((< depth 0)
+        (format ". In all, the text has %d closing %s more than it opens"
+                (- depth) (if (= depth -1) "parenthesis" "parentheses")))
+       (t
+        (format ". In all, the text has %d %s it opens and never closes"
+                depth (if (= depth 1) "parenthesis" "parentheses")))))))
+
 (defun superchat-tools--checked-edit (buffer-name apply evidence)
   "Run the structured edit APPLY on BUFFER-NAME, rehearsing it on a copy first.
 APPLY is called with a buffer name, edits that buffer and returns the tool's
@@ -666,7 +682,10 @@ returns the evidence lines.  Only a buffer whose mode derives from
                     (with-current-buffer copy
                       (setq after (superchat-tools--lisp-read-problem))
                       (list :before before :after after
-                            :where (and after (superchat-tools--lisp-problem-text after)))))
+                            :where (and after
+                                        (concat
+                                         (superchat-tools--lisp-problem-text after)
+                                         (superchat-tools--lisp-depth-text))))))
                 (kill-buffer copy))))))
     (cond
      ((plist-get disk :final))
@@ -1083,6 +1102,38 @@ bounded by `superchat-tool-apropos-max-results'."
      (t
       (format "%s is not bound." variable-name)))))
 
+(define-error 'superchat-tools-unreadable-expression
+  "The eval_elisp expression does not read as Lisp")
+
+(defun superchat-tools--unreadable-text (expression err)
+  "Say why EXPRESSION, which the reader rejected with ERR, does not read.
+2026-10-22 field test: a bare \"evaluating expression: End of file during
+parsing\" read as if the model's code had hit the end of the buffer it was
+scanning, and the model sent the same expression twice more."
+  (concat
+   "Error: the expression does not read as Lisp, so nothing was evaluated: "
+   (with-temp-buffer
+     (set-syntax-table emacs-lisp-mode-syntax-table)
+     (setq-local parse-sexp-ignore-comments t)
+     (insert expression)
+     (let ((problem (superchat-tools--lisp-read-problem))
+           (state (syntax-ppss (point-max))))
+       (cond
+        ((and problem (eq 'close (cdr problem)))
+         (superchat-tools--lisp-problem-text problem))
+        ((nth 3 state)
+         (superchat-tools--lisp-problem-text (cons (nth 8 state) 'open)))
+        ((> (car state) 0)
+         (let ((outermost (car (nth 9 state))))
+           (goto-char outermost)
+           (format "%d %s never closed (the outermost at line %d, column %d: %s).  End of file here is the end of the expression's own text"
+                   (car state)
+                   (if (= 1 (car state)) "parenthesis is" "parentheses are")
+                   (line-number-at-pos) (current-column)
+                   (string-trim (buffer-substring-no-properties
+                                 (point) (line-end-position))))))
+        (t (error-message-string err)))))))
+
 (defun superchat-tools--read-one-expression (expression)
   "Read one complete Elisp EXPRESSION before calling eval on it.
 Allow trailing whitespace and line comments.  Reject extra forms or
@@ -1091,7 +1142,12 @@ Reading can construct objects and invoke their callbacks, so call this
 only after the tool pipeline has allowed the call."
   (let* ((parsed (let ((read-eval nil)
                        (read-circle nil))
-                   (read-from-string expression)))
+                   (condition-case err
+                       (read-from-string expression)
+                     ((end-of-file invalid-read-syntax)
+                      (signal 'superchat-tools-unreadable-expression
+                              (list (superchat-tools--unreadable-text
+                                     expression err)))))))
          (form (car parsed)))
     (with-temp-buffer
       (insert (substring expression (cdr parsed)))
@@ -1157,10 +1213,131 @@ task simulation: one keymap dump of 108,699 bytes ended a Run.")
           "do.  Find the value yourself instead: (commandp 'COMMAND) tells "
           "whether a command exists, key-binding in the target buffer what a key "
           "does, read_buffer or read_file what a text says.  Ask the user only "
-          "what only the user can answer, with ask_user or in your reply.  What "
-          "the expression did before that point was not undone.")
+          "what only the user can answer, with ask_user or in your reply.  A wait "
+          "that reads input, such as read-event with a timeout, stops the same "
+          "way: wait with sleep-for, or for a process with accept-process-output.  "
+          "What the expression did before that point was not undone.")
   "The `eval_elisp' result when its expression tried to interact.
 Decision of 2026-09-24, \"eval_elisp never asks the user\".")
+
+;; An expression may loop or wait for ever.  Emacs cannot stop Lisp from
+;; inside while it runs -- no timer fires -- so a process outside Emacs
+;; sends SIGUSR2 at the time limit.  With `debug-on-event' that makes Emacs
+;; call `debugger' at the next function call and signal `quit' at once; the
+;; call binds both to leave the expression by `throw', which the model's own
+;; `condition-case' cannot catch (decision of 2026-10-22).  SIGINT would
+;; kill an Emacs without a terminal, a GUI Emacs among them.
+
+(defcustom superchat-tool-eval-time-limit 30
+  "Seconds an `eval_elisp' expression may run before it is stopped.
+At the limit the call ends as a failure that tells the model to start long
+work as a process; nil lets an expression run until it returns or a C-g
+stops it.  The limit needs `sh' and `kill' to send the signal."
+  :type '(choice (const :tag "No limit" nil) number)
+  :group 'superchat)
+
+(defvar superchat-tools--eval-watches nil
+  "The `eval_elisp' calls now running, innermost first.
+Each is a list (TAG DEADLINE): DEADLINE is the `float-time' of its limit,
+or nil without one.")
+
+(defvar superchat-tools--eval-swallow-next-call nil
+  "Non-nil while an ending call spends the debugger entries its signal armed.
+SIGUSR2 also arms `debugger' for the next function call, and that entry
+for the exit of the same call; the ending call spends both while its own
+`debugger' is still bound.")
+
+(defun superchat-tools--eval-stopped-result (seconds)
+  "The `eval_elisp' result of an expression stopped after SECONDS."
+  (format (concat "Error: evaluating expression: stopped after %s seconds, the "
+                  "time limit; it was still running.  While an expression runs, "
+                  "Emacs does nothing else, so the user's Emacs was frozen that "
+                  "long.  Do not run it again as it is.  A loop that does not end "
+                  "is a bug in the expression: check its exit condition.  For "
+                  "long work -- a large search, a build, tests, a network "
+                  "request -- start a process with make-process (for Emacs "
+                  "itself, emacs -Q --batch) and read its output in a later "
+                  "call.  What the expression did before that point was not "
+                  "undone.")
+          seconds))
+
+(defconst superchat-tools--eval-quit-by-user
+  (concat "Error: evaluating expression: the user stopped it with C-g while "
+          "it ran.  Do not run it again: say what it was doing and how long it "
+          "can take, and go on without it.  What the expression did before "
+          "that point was not undone.")
+  "The `eval_elisp' result when a person's C-g stopped the expression.
+Decision of 2026-10-22: one C-g stops that call, not the Run.")
+
+(defun superchat-tools--eval-overdue-watch ()
+  "The outermost running `eval_elisp' call past its time limit, or nil."
+  (let ((now (float-time)) found)
+    (dolist (watch superchat-tools--eval-watches found)
+      (when (and (nth 1 watch) (>= now (nth 1 watch)))
+        (setq found watch)))))
+
+(defun superchat-tools--eval-stop (watch reason)
+  "Leave the `eval_elisp' call of WATCH, stopped for REASON.
+REASON is `time-limit' or `user-quit'."
+  (throw (car watch) (list :stopped reason)))
+
+(defun superchat-tools--eval-debugger (previous)
+  "A `debugger' that stops an overdue `eval_elisp' call, else calls PREVIOUS."
+  (lambda (&rest args)
+    (let ((watch (superchat-tools--eval-overdue-watch)))
+      (cond
+       (watch (superchat-tools--eval-stop watch 'time-limit))
+       ;; Entering at a call also marks its frame to enter again at its exit.
+       ((and superchat-tools--eval-swallow-next-call
+             (memq (car args) '(t lambda exit)))
+        (car (cdr args)))
+       (t (apply previous args))))))
+
+(defun superchat-tools--eval-start-watchdog (seconds)
+  "Start the process that sends SIGUSR2 to Emacs after SECONDS, or nil."
+  (when (and seconds (> seconds 0)
+             (memq system-type '(gnu gnu/linux gnu/kfreebsd darwin berkeley-unix))
+             (executable-find "sh"))
+    (make-process :name "superchat-eval-watchdog"
+                  :command (list "sh" "-c"
+                                 (format "sleep %s && kill -USR2 %d"
+                                         seconds (emacs-pid)))
+                  :connection-type 'pipe
+                  :noquery t
+                  :sentinel #'ignore)))
+
+(defun superchat-tools--eval-end-watchdog (process watch)
+  "Stop PROCESS, the watchdog of WATCH, and spend a signal it sent.
+Before its deadline the signal is not sent: deleting the shell ends it.  At
+or after, the signal may be on its way: wait for the shell to end, then let
+Emacs act on the signal while this call's `debugger' still holds, so that
+neither the debugger nor a quit reaches the user later."
+  (when process
+    (if (not (and (nth 1 watch) (>= (float-time) (- (nth 1 watch) 0.05))))
+        (delete-process process)
+      (let ((superchat-tools--eval-watches (remq watch superchat-tools--eval-watches))
+            (superchat-tools--eval-swallow-next-call t)
+            (inhibit-quit t))
+        ;; The signal's quit can come in either step; each catches it, so
+        ;; the second still runs and spends the debugger's entry.
+        (condition-case nil
+            (let ((until (+ (float-time) 1)))
+              (while (and (process-live-p process) (< (float-time) until))
+                (accept-process-output process 0.05))
+              (delete-process process))
+          (quit nil))
+        (condition-case nil
+            (progn (sleep-for 0.01) (eval '(ignore) t))
+          (quit nil))
+        (setq quit-flag nil)))))
+
+(defun superchat-tools--eval-sit-for (seconds &optional nodisp)
+  "`sit-for' inside `eval_elisp': redisplay unless NODISP, sleep SECONDS.
+No input can arrive while the expression runs, so the wait always runs to
+its end and the value is t."
+  (unless nodisp (redisplay))
+  (when (> seconds 0) (sleep-for seconds))
+  t)
 
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate one complete Elisp EXPRESSION and return its value as a string.
@@ -1182,31 +1359,80 @@ would otherwise catch it and loop for ever.  `read-key-sequence',
 `read-key' and `describe-key', which Emacs does not stop that way, can still
 reach the user, and so can what the expression leaves to a timer.  The
 approval question for the call is asked before this function runs and is
-not affected."
+not affected.
+
+`sit-for' is a wait, not a question, but it waits by reading an event with
+a timeout, which `inhibit-interaction' stops; while the expression runs it
+redisplays and sleeps instead (decision of 2026-10-22: every probe that
+waited for a process failed as if it had asked the user).
+
+An expression still running after `superchat-tool-eval-time-limit'
+seconds is stopped, and so is one a person stops with C-g; either way the
+call fails with a result that says so, and the Run goes on (decision of
+2026-10-22, which replaces the Run cancellation of 2026-09-30).  The stop
+also ends a synchronous process the expression waits for.  Code that binds
+`debugger' or `signal-hook-function' itself can still run past the limit."
   (let* ((asked (make-symbol "asked"))
+         (limit superchat-tool-eval-time-limit)
+         (watch (list asked (and limit (> limit 0) (+ (float-time) limit))))
+         (superchat-tools--eval-watches (cons watch superchat-tools--eval-watches))
          (outer-hook signal-hook-function)
          (leave-on-prompt
           (lambda (symbol data)
-            (if (eq symbol 'inhibited-interaction)
-                (throw asked (superchat-tool-execution-failed
-                              superchat-tools--eval-asked-the-user
-                              "inhibited-interaction"))
-              (when outer-hook (funcall outer-hook symbol data))))))
-    (catch asked
-      (condition-case err
-          (let ((result (let ((inhibit-interaction t)
-                              ;; Tools run from llm.el's callbacks, which
-                              ;; Emacs calls with quitting inhibited; a
-                              ;; person's C-g must still stop the model's
-                              ;; code (decision of 2026-09-30).
-                              (inhibit-quit nil)
-                              (signal-hook-function leave-on-prompt))
-                          (eval (superchat-tools--read-one-expression expression) t))))
-            (superchat-tools--eval-value-result result))
-        (inhibited-interaction
-         (superchat-tool-execution-failed superchat-tools--eval-asked-the-user
-                                          "inhibited-interaction"))
-        (error (superchat-tools--eval-error-result err))))))
+            (cond
+             ((eq symbol 'inhibited-interaction)
+              (throw asked (superchat-tool-execution-failed
+                            superchat-tools--eval-asked-the-user
+                            "inhibited-interaction")))
+             ((eq symbol 'quit)
+              (let ((overdue (superchat-tools--eval-overdue-watch)))
+                (superchat-tools--eval-stop (or overdue watch)
+                                            (if overdue 'time-limit 'user-quit))))
+             (outer-hook (funcall outer-hook symbol data)))))
+         (watchdog nil)
+         (outcome nil))
+    (let ((debug-on-event 'sigusr2)
+          ;; SIGUSR2 sets `debug-on-quit'; the binding keeps it here.
+          (debug-on-quit nil)
+          (debugger (superchat-tools--eval-debugger debugger)))
+      (unwind-protect
+          (setq outcome
+                (catch asked
+                  (setq watchdog (superchat-tools--eval-start-watchdog limit))
+                  (condition-case err
+                      (let ((result (let ((inhibit-interaction t)
+                                          ;; Tools run from llm.el's callbacks,
+                                          ;; which Emacs calls with quitting
+                                          ;; inhibited; a person's C-g must
+                                          ;; still stop the model's code
+                                          ;; (decision of 2026-09-30).
+                                          (inhibit-quit nil)
+                                          (signal-hook-function leave-on-prompt))
+                                      (cl-letf (((symbol-function 'sit-for)
+                                                 #'superchat-tools--eval-sit-for))
+                                        (eval (superchat-tools--read-one-expression expression) t)))))
+                        (superchat-tools--eval-value-result result))
+                    (inhibited-interaction
+                     (superchat-tool-execution-failed superchat-tools--eval-asked-the-user
+                                                      "inhibited-interaction"))
+                    (superchat-tools-unreadable-expression
+                     (superchat-tool-execution-failed (cadr err)
+                                                      "unreadable-expression"))
+                    ;; Code that bound `signal-hook-function' itself.
+                    (quit (list :stopped (if (superchat-tools--eval-overdue-watch)
+                                             'time-limit
+                                           'user-quit)))
+                    (error (superchat-tools--eval-error-result err)))))
+        (superchat-tools--eval-end-watchdog watchdog watch)))
+    (pcase outcome
+      (`(:stopped time-limit)
+       (superchat-tool-execution-failed (superchat-tools--eval-stopped-result limit)
+                                        "time-limit"))
+      (`(:stopped user-quit)
+       (setq quit-flag nil)
+       (superchat-tool-execution-failed superchat-tools--eval-quit-by-user
+                                        "user-quit"))
+      (_ outcome))))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.
