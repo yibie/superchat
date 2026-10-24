@@ -82,9 +82,20 @@ the minibuffer and holds Emacs until it is answered."
         (plist-get (superchat-view-session-configuration session-id)
                    :approval-policy))))
 
+(defvar superchat-approval-default-level-policy-function nil
+  "Function giving the policy a configured default permission level implies.
+Consulted by `superchat-approval-effective-policy' after a Session's
+recorded policy and before `superchat-approval-default-policy'; its result
+is validated through `superchat-approval--policy-symbol'.
+`superchat-sandbox' owns and installs it: the level alist stays defined in
+one file while this one stays below it in the require graph.")
+
 (defun superchat-approval-effective-policy (session-id)
   "Return the approval policy in force for SESSION-ID."
   (or (superchat-approval-override session-id)
+      (and superchat-approval-default-level-policy-function
+           (superchat-approval--policy-symbol
+            (funcall superchat-approval-default-level-policy-function)))
       (superchat-approval--policy-symbol superchat-approval-default-policy)
       'ask))
 
@@ -208,7 +219,8 @@ up with its Run, or never asked is not decided and nil is returned."
       (plist-put record :decision (if allow 'allow 'deny))
       t)))
 
-(declare-function superchat-permission-set "superchat-sandbox" (session-id name))
+(declare-function superchat-permission-set "superchat-sandbox"
+                  (session-id name &optional pin))
 
 (defconst superchat-approval-all-level 'auto
   "The permission level the answer \"allow all\" selects for its conversation.")
@@ -224,9 +236,11 @@ returned.  Only that conversation is switched; /permissions edit-buffers
 brings the questions back."
   (when-let* ((record (superchat-approval--record handle)))
     (unless (plist-get record :decision)
+      ;; Pinned: "allow all" is an explicit choice for this conversation and
+      ;; must not drift when `superchat-permission-default-level' changes.
       (superchat-permission-set
        (plist-get (plist-get record :request) :session-id)
-       superchat-approval-all-level)
+       superchat-approval-all-level t)
       (plist-put record :all t)
       (superchat-approval-answer handle t))))
 

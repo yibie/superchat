@@ -74,6 +74,37 @@ The name `custom' is reserved for knob values that match no entry."
   "Derived level name for knob values matching no configured level.
 It is reported, never selected.")
 
+(defcustom superchat-permission-default-level nil
+  "Level of a Session that has not recorded a selection, or nil for the knobs.
+A level name from `superchat-permission-levels' (a former name is accepted):
+its :sandbox then wins over `superchat-sandbox-default-mode' and its
+:approval over `superchat-approval-default-policy', and /permissions reports
+the matched level name.  A selection the Session recorded always wins.  nil
+keeps the two knob defaults in charge, which is the old behavior."
+  :type '(choice (const :tag "Knob defaults" nil)
+                 (const edit-buffers) (const auto)
+                 (const danger-full-access) (const read-only))
+  :set (lambda (symbol value)
+         ;; Fail at set time, not in the tool-decision path.  During early
+         ;; load the levels are not defined yet; the readers then validate.
+         (when (and value (fboundp 'superchat-permission-level))
+           (superchat-permission-level value))
+         (set-default symbol value))
+  :group 'superchat)
+
+(defun superchat-permission--default-level-plist ()
+  "Return the plist of `superchat-permission-default-level', or nil.
+nil too when the configured name matches no level, so a stale setting
+degrades to the knob defaults instead of breaking tool decisions."
+  (when superchat-permission-default-level
+    (ignore-errors (superchat-permission-level superchat-permission-default-level))))
+
+;; `superchat-approval' sits below this file in the require graph and cannot
+;; see the level alist; it consults this function instead (its defvar).
+(setq superchat-approval-default-level-policy-function
+      (lambda ()
+        (plist-get (superchat-permission--default-level-plist) :approval)))
+
 ;;;; Mode
 
 (defun superchat-sandbox--canonical-name (value)
@@ -108,6 +139,7 @@ user settings keep meaning what they meant."
 (defun superchat-sandbox-effective-mode (session-id)
   "Return the mode in force for SESSION-ID."
   (or (superchat-sandbox-override session-id)
+      (plist-get (superchat-permission--default-level-plist) :sandbox)
       (superchat-sandbox--mode-symbol superchat-sandbox-default-mode)
       'edit-buffers))
 
@@ -423,24 +455,62 @@ bundle; otherwise the first matching level in declaration order; otherwise
           (matches (caar matches))
           (t superchat-permission-custom))))
 
-(defun superchat-permission-set (session-id name)
+(defun superchat-permission-set (session-id name &optional pin)
   "Select permission level NAME for SESSION-ID; return the level name.
 Unknown names signal.  A former name selects the level it became, and the
 current name is what is recorded and returned.  The selection is recorded
 first, and only when it is not already the effective level; each knob is then
-written through its own setter only when its effective value changes."
+written through its own setter only when its effective value changes.
+With PIN non-nil the selection and both knobs are recorded unless the
+Session already recorded them, even when they equal a configured default:
+a value fixed at a Session's start must not drift when the default changes
+later."
   (let* ((symbol (superchat-sandbox--canonical-name name))
          (level (superchat-permission-level symbol)))
     (unless (and (stringp session-id) (not (string-empty-p session-id)))
       (error "Selecting a permission level requires a Session"))
-    (unless (eq symbol (superchat-permission-current session-id))
+    (unless (eq symbol
+                (if pin
+                    (let ((recorded (plist-get
+                                     (superchat-sandbox--configuration session-id)
+                                     :permission-level)))
+                      (and recorded (superchat-sandbox--canonical-name recorded)))
+                  (superchat-permission-current session-id)))
       (superchat-tape-append-event
        (list :type "permission.level" :session-id session-id :actor-id "user"
              :summary "permission.level"
              :payload (list :level (symbol-name symbol)))))
-    (superchat-sandbox-set-mode session-id (plist-get level :sandbox))
-    (superchat-approval-set-policy session-id (plist-get level :approval))
+    (superchat-sandbox-set-mode session-id (plist-get level :sandbox) pin)
+    (superchat-approval-set-policy session-id (plist-get level :approval) pin)
     symbol))
+
+(defun superchat-permission-carry-over (from-session to-session)
+  "Carry FROM-SESSION's recorded permission selection to TO-SESSION, pinned.
+TO-SESSION is left alone when it recorded any selection of its own, and
+nothing is carried when FROM-SESSION recorded none.  A recorded level
+carries as that level; recorded knobs without a level carry one by one.
+This is what keeps a selection such as `auto' (the answer \"allow all\")
+across a workspace switch, which used to drop it (G30).  Return the carried
+level name, a list of carried knob values, or nil."
+  (let ((from (superchat-sandbox--configuration from-session))
+        (to (superchat-sandbox--configuration to-session)))
+    (when (and from
+               (not (or (plist-get to :permission-level)
+                        (plist-get to :sandbox-mode)
+                        (plist-get to :approval-policy))))
+      (let ((level (plist-get from :permission-level)))
+        (if level
+            (superchat-permission-set to-session level t)
+          (let (carried)
+            (when-let* ((mode (superchat-sandbox--mode-symbol
+                               (plist-get from :sandbox-mode))))
+              (superchat-sandbox-set-mode to-session mode t)
+              (push mode carried))
+            (when-let* ((policy (superchat-approval--policy-symbol
+                                 (plist-get from :approval-policy))))
+              (superchat-approval-set-policy to-session policy t)
+              (push policy carried))
+            (nreverse carried)))))))
 
 (defun superchat-permission-describe (session-id)
   "Return one line naming SESSION-ID's level and the selectable ones."

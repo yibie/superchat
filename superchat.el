@@ -4097,11 +4097,17 @@ Shows nothing and selects no window."
              :root (plist-get workspace :root))))
     view))
 
-(defun superchat--open-workspace-conversation (workspace)
-  "Display and select the main conversation of WORKSPACE."
-  (let ((view (superchat--workspace-main-view workspace)))
-    (superchat--display-session-view
-     view (buffer-local-value 'superchat--session-id view))))
+(defun superchat--open-workspace-conversation (workspace &optional from-session)
+  "Display and select the main conversation of WORKSPACE.
+FROM-SESSION, when given, is the Session the user switched away from: its
+recorded permission selection carries to the opened conversation unless
+that conversation recorded one of its own (G30: a workspace switch used to
+drop a selected level such as `auto')."
+  (let* ((view (superchat--workspace-main-view workspace))
+         (session-id (buffer-local-value 'superchat--session-id view)))
+    (when from-session
+      (superchat-permission-carry-over from-session session-id))
+    (superchat--display-session-view view session-id)))
 
 (defun superchat-new-session ()
   "Create, display, and return a new independent Session View.
@@ -5828,8 +5834,10 @@ or assistant rows can still change it."
             :content ,(superchat--workspace-echo superchat--workspace-binding)))
          (t
           ;; S1: this conversation stays; the declared Workspace's own
-          ;; conversation opens once the command has answered.
-          (run-at-time 0 nil #'superchat--open-workspace-conversation workspace)
+          ;; conversation opens once the command has answered.  The Session
+          ;; id is captured now: the timer fires in some other buffer.
+          (run-at-time 0 nil #'superchat--open-workspace-conversation
+                       workspace superchat--session-id)
           `(:type :echo
             :content ,(format "Declared workspace %s (%s). This conversation stays where it is; opening that workspace's conversation."
                               (file-name-nondirectory
@@ -5844,8 +5852,10 @@ or assistant rows can still change it."
   (let ((value (string-trim (or args ""))))
     (condition-case err
         (progn
+          ;; Pinned: /permissions is an explicit choice for this conversation
+          ;; and must not drift when a configured default changes later.
           (let ((selected (unless (string-empty-p value)
-                            (superchat-permission-set superchat--session-id value))))
+                            (superchat-permission-set superchat--session-id value t))))
             `(:type :echo
               :content ,(if (null selected)
                             (superchat-permission-describe superchat--session-id)
