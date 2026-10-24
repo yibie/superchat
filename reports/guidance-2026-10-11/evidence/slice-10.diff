@@ -1,0 +1,882 @@
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/batch.sh harness-tools/batch.sh
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/batch.sh	2026-10-13 16:15:07
++++ harness-tools/batch.sh	2026-10-20 22:02:30
+@@ -30,4 +30,22 @@
+     tail -1 "$out/summary.tsv"
+   done
+ done
++# Slice 10b: did any tool call reach for the harness?  Reported, not blocked.
++cut -f11 "$out/summary.tsv" | tail -n +2 > "$out/runs.txt"
++python3 -I "$here/leak-scan.py" --mark --out "$out/leak-scan.tsv" $(cat "$out/runs.txt")
++# Each line gets: tainted (a leak-scan hit), and where the verdict was made.
++python3 -I - "$out/summary.tsv" <<'PY'
++import json, os, sys
++path = sys.argv[1]; lines = open(path).read().splitlines()
++out = [lines[0] + "\ttainted\tjudged"]
++for line in lines[1:]:
++    run = line.split("\t")[10]
++    try: scan = json.load(open(os.path.join(run, "evidence", "leak-scan.json")))
++    except Exception: scan = {}
++    try: d = json.load(open(os.path.join(run, "evidence", "result.json")))
++    except Exception: d = {}
++    judged = "in-sandbox" if d.get("check_in_sandbox") else ("outside" if d.get("judged") else "-")
++    out.append(line + "\t" + ("tainted" if scan.get("tainted") else "") + "\t" + judged)
++open(path, "w").write("\n".join(out) + "\n")
++PY
+ echo "done" >> "$out/progress.txt"
+Only in harness-tools: checks-goals.el
+Only in harness-tools: fingerprint.py
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/launch.sh harness-tools/launch.sh
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/launch.sh	2026-10-13 16:20:37
++++ harness-tools/launch.sh	2026-10-20 22:07:06
+@@ -24,7 +24,11 @@
+      mkdir -p "$run/code/$(dirname "$f")"; cp "$f" "$run/code/$f"; done)
+   (cd "$repo" && jj log -r @ --no-graph -T 'commit_id' > "$run/evidence/code-commit.txt")
+ fi
+-cp "$here"/*.el "$run/harness/"
++# Every harness file but the checks: the model must not be able to read them
++# (slice 10a).  checks-goals.el is copied in only after the model's Emacs ended.
++for f in "$here"/*.el; do
++  [ "$(basename "$f")" = checks-goals.el ] || cp "$f" "$run/harness/"
++done
+ cp -R "$root/skills" "$run/harness/skills"   # skills a task may install
+ emacs=/opt/homebrew/Cellar/emacs-plus@32/32.0.50/Emacs.app/Contents/MacOS/Emacs
+ # Two batches may run side by side: pick a port pair nobody is listening on.
+@@ -75,11 +79,39 @@
+   status=$?
+ fi
+ echo "emacs exit=$status" >> "$run/evidence/emacs.log"
++now() { python3 -c 'import time; print("%.3f" % time.time())'; }
++echo "model emacs ended at $(now)" >> "$run/evidence/emacs.log"
+ if [ $status = 125 ] && [ ! -f "$run/evidence/result.json" ]; then
+   printf '{"task": "%s", "harness_error": "startup stall"}\n' "$task" > "$run/evidence/result.json"
+   echo "RESULT $task pass=nil harness_error=startup-stall" > "$run/evidence/summary.txt"
+ fi
+ kill $proxy ${fake:-} 2>/dev/null
++# Nothing the model started may still run when the checks come in: every
++# process with its working directory or an open file under the run directory
++# is ended first.  (ps on this macOS does not show other processes'
++# environment, so TASK_SIM_RUN cannot be used to find them.)
++runp=$(cd "$run" && pwd -P)
++leftover=$(lsof -Fpn 2>/dev/null | awk -v r="$runp/" -v me=$$ '/^p/{pid=substr($0,2)} /^n/{ if (index(substr($0,2), r)==1 && pid != me) print pid }' | sort -u)
++if [ -n "$leftover" ]; then
++  echo "$leftover" | xargs kill -9 2>/dev/null
++  echo "ended $(echo "$leftover" | wc -l | tr -d ' ') process(es) left by the run before judging" >> "$run/evidence/emacs.log"
++fi
++# The judge (slice 10a): the checks, run after the model is gone, under the
++# same sandbox profile (the model's init.el, tests and git hooks run when a
++# check runs them), then removed from the run directory.
++if [ -f "$run/evidence/result.json" ]; then
++  # Evidence that the checks were nowhere in the run while the model ran.
++  echo "checks in the run before judging: $(find "$run" -name checks-goals.el -not -path "$run/code/*" | wc -l | tr -d ' ')" >> "$run/evidence/emacs.log"
++  mkdir -p "$run/judge"; cp "$here/checks-goals.el" "$run/judge/"
++  echo "judge copied in at $(now)" >> "$run/evidence/emacs.log"
++  "$root/sandbox/run-sandboxed.sh" "$run" $port -- "$emacs" -Q --batch -l "$run/judge/checks-goals.el" \
++    > "$run/evidence/judge.log" 2>&1
++  echo "judge exit=$?" >> "$run/evidence/emacs.log"
++  rm -rf "$run/judge"
++  echo "judge removed at $(now); left: $(find "$run" -name checks-goals.el -not -path "$run/code/*" | wc -l | tr -d ' ')" >> "$run/evidence/emacs.log"
++fi
++# What the run was given: the tools, system text and rules of request 1 (10c).
++python3 -I "$here/fingerprint.py" "$run" >> "$run/evidence/emacs.log" 2>&1
+ requests=$(grep -c '"status"' "$run/evidence/http/index.jsonl" 2>/dev/null || echo 0)
+ echo "run: $run"
+ echo "summary: task=$task mode=$mode requests=$requests $(cat "$run/evidence/summary.txt" 2>/dev/null || echo 'RESULT missing')"
+Only in harness-tools: leak-scan.py
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/run-task.el harness-tools/run-task.el
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/run-task.el	2026-10-13 16:21:13
++++ harness-tools/run-task.el	2026-10-20 21:55:25
+@@ -164,6 +164,112 @@
+           (push (file-relative-name file ts-home) saved))))
+     saved))
+ 
++;;;; What the judge needs, written to evidence/gather/ (slice 10a) -----------
++;; The verdict is no longer computed here for the tasks whose check moved to
++;; checks-goals.el, which is never in this run directory while the model runs.
++;; What a check reads that exists only in this Emacs is written down instead,
++;; the same way for every task, so the list of what is kept does not say what
++;; any one task looks at.  A task adds values (never checks) with
++;; `:gather-setup' (variables set by :setup, written right after it) and
++;; `:gather' (functions called at the end).
++
++(defun ts-gather-print (value)
++  "VALUE printed so that `read' gives it back; an unreadable part is a string."
++  (let ((print-length nil) (print-level nil) (print-circle nil) (print-escape-newlines nil))
++    (cond ((or (stringp value) (numberp value) (symbolp value)) value)
++          ((consp value)
++           (if (proper-list-p value)
++               (mapcar #'ts-gather-print value)
++             (cons (ts-gather-print (car value)) (ts-gather-print (cdr value)))))
++          ((vectorp value) (vconcat (mapcar #'ts-gather-print value)))
++          (t (format "%S" value)))))
++
++(defun ts-gather-write (name object)
++  "Write OBJECT to evidence/gather/NAME.eld, readable by `read'."
++  (let ((dir (expand-file-name "gather/" ts-evidence)))
++    (make-directory dir t)
++    (with-temp-file (expand-file-name (concat name ".eld") dir)
++      (let ((print-length nil) (print-level nil) (print-circle nil))
++        (prin1 (ts-gather-print object) (current-buffer))))))
++
++(defun ts-gather-setup ()
++  "Write the values the task names in `:gather-setup', right after :setup."
++  (ts-gather-write "setup"
++                   (mapcar (lambda (entry) (cons (car entry) (symbol-value (cdr entry))))
++                           (ts-task-get :gather-setup))))
++
++(defun ts-gather-timer (timer)
++  "TIMER as (DUE-SECONDS IDLE FUNCTION-AND-ARGS ARGS), printed and bounded."
++  (let ((print-level 8) (print-length 200) (print-circle t))
++    (list (float-time (timer--time timer))
++          (and (timer--idle-delay timer) t)
++          (format "%S" (list (timer--function timer) (timer--args timer)))
++          (format "%S" (timer--args timer)))))
++
++(defun ts-gather-workspaces ()
++  "Every Workspace of a directory under the home, and the Personal one.
++Each: (:directory :id :root :sessions :records :events), the records as
++data with their status and rendering, the events those sessions hold of the
++Work Record and timer kinds (type and payload)."
++  (let ((dirs (cons ts-home
++                    (cl-remove-if-not #'file-directory-p
++                                      (directory-files ts-home t "\\`[^.]"))))
++        seen out)
++    (when (fboundp 'superchat-workspace-personal)
++      (when-let* ((root (plist-get (ignore-errors (superchat-workspace-personal)) :root)))
++        (push root dirs)))
++    (dolist (dir dirs)
++      (let* ((ws (ignore-errors (superchat-workspace-of-directory (file-name-as-directory dir))))
++             (id (plist-get ws :id)))
++        (when (and id (not (member id seen)))
++          (push id seen)
++          (let ((sessions (ignore-errors (superchat-view-workspace-session-ids id))))
++            (push (list :directory (file-name-as-directory (file-relative-name dir ts-home))
++                        :id id
++                        :root (plist-get ws :root)
++                        :sessions sessions
++                        :records
++                        (mapcar (lambda (record)
++                                  (list :record record
++                                        :status (ignore-errors (superchat-work-status record))
++                                        :render (ignore-errors (superchat-work-render record))))
++                                (ignore-errors (superchat-work-records id)))
++                        :events
++                        (cl-loop for session in sessions
++                                 append (cl-loop for event in (ignore-errors
++                                                               (superchat-tape-replay-events session))
++                                                 when (string-match-p "\\`\\(work\\|timer\\)\\."
++                                                                      (or (plist-get event :type) ""))
++                                                 collect (list :session session
++                                                               :type (plist-get event :type)
++                                                               :payload (plist-get event :payload)))))
++                  out)))))
++    (nreverse out)))
++
++(defun ts-gather ()
++  "Write what the judge reads that only this Emacs knows: evidence/gather/state.eld.
++Called after the person's save and the answer, just before a check would run."
++  (ts-gather-write
++   "state"
++   (list :buffers
++         (cl-loop for buffer in (buffer-list)
++                  for file = (buffer-file-name buffer)
++                  when (and file (string-prefix-p (file-truename ts-home) (file-truename file)))
++                  collect (list (file-relative-name (file-truename file) (file-truename ts-home))
++                                (buffer-modified-p buffer)
++                                (with-current-buffer buffer
++                                  (save-restriction
++                                    (widen)
++                                    (buffer-substring-no-properties (point-min) (point-max))))))
++         :custom-enabled-themes custom-enabled-themes
++         :emacs-timers (mapcar #'ts-gather-timer (append timer-list timer-idle-list))
++         :superchat-timers (and (fboundp 'superchat-timer-list) (ignore-errors (superchat-timer-list)))
++         :personal-workspace (and (fboundp 'superchat-workspace-personal)
++                                  (plist-get (ignore-errors (superchat-workspace-personal)) :id))
++         :workspaces (ignore-errors (ts-gather-workspaces))
++         :values (mapcar (lambda (entry) (cons (car entry) (funcall (cdr entry))))
++                         (ts-task-get :gather)))))
++
+ ;;;; Several steps in one Emacs (a task with :steps) -------------------------
+ ;; A step is (SOURCE-FUNCTION PROMPT): the prompt is typed into the chat called
+ ;; from that source buffer.  Each step's answer, Run, Session, Workspace binding
+@@ -270,7 +376,9 @@
+   (condition-case err
+       (progn
+         (setq phase "fixture") (ts-mark "fixture")
+-        (unless ts-phase2 (funcall (ts-task-get :setup)))
++        (unless ts-phase2
++          (funcall (ts-task-get :setup))
++          (ts-gather-setup))
+         (setq phase "configure") (ts-mark "configure")
+         (setq superchat-data-directory (expand-file-name "sc/" ts-home))
+         (require 'superchat)
+@@ -433,10 +541,16 @@
+         (when (ts-task-get :save-after)
+           (setq saved (ts-save-edited-fixture-buffers))
+           (push (cons "saved_as_the_person" (vconcat saved)) result))
+-        (setq phase "check") (ts-mark "check")
+-        (setq verdict (funcall (ts-task-get :check) answer))
+-        (push (cons "pass" (if (plist-get verdict :pass) t :json-false)) result)
+-        (push (cons "checks" (plist-get verdict :details)) result))
++        (setq phase "gather") (ts-mark "gather")
++        (ts-gather)
++        ;; A task whose check has not moved to checks-goals.el is still judged
++        ;; here, where the model could have read the check (slice 10a).
++        (when (ts-task-get :check)
++          (setq phase "check") (ts-mark "check")
++          (setq verdict (funcall (ts-task-get :check) answer))
++          (push (cons "check_in_sandbox" t) result)
++          (push (cons "pass" (if (plist-get verdict :pass) t :json-false)) result)
++          (push (cons "checks" (plist-get verdict :details)) result)))
+     (error
+      (push (cons "harness_error" (format "%s: %s" phase (error-message-string err))) result)))
+   (push (cons "approvals_refused" (vconcat (nreverse ts-approvals))) result)
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/surface-batch.sh harness-tools/surface-batch.sh
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/surface-batch.sh	2026-10-13 16:22:35
++++ harness-tools/surface-batch.sh	2026-10-20 22:02:30
+@@ -24,5 +24,10 @@
+     for s in D13 L4 L4find; do one "$s" "$t" "$n"; done
+   done
+ done
++# Slice 10b: did any tool call reach for the harness?  Reported, not blocked.
++python3 -I "$here/leak-scan.py" --mark --out "$out/leak-scan.tsv" $(cat "$out/runs.txt")
+ python3 "$here/surface-report.py" $(cat "$out/runs.txt") > "$out/summary.tsv"
++# Tables by fingerprint, with the clean numbers apart from tainted runs and
++# runs judged in the sandbox, and the baseline's divergence (10c, 10d).
++python3 "$here/surface-report.py" --tables $(cat "$out/runs.txt") > "$out/summary.md"
+ echo "done: $out/summary.tsv"
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/surface-report.py harness-tools/surface-report.py
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/surface-report.py	2026-10-13 16:18:09
++++ harness-tools/surface-report.py	2026-10-20 22:21:05
+@@ -1,11 +1,35 @@
+ #!/usr/bin/env python3
+-"""surface-report.py RUNDIR... -> one TSV row per run, from evidence files only.
+-Columns: run, task, trial, surface, pass, status, seconds, requests, tool_calls,
+-failed_calls, not_provided, enable_calls, enabled, req1_tools, req1_tools_bytes, tools_per_request
++"""surface-report.py [--tables [--mix-fingerprints]] RUNDIR... -- from evidence files only.
++
++Default: one TSV row per run.  Columns: run, task, trial, surface, pass,
++status, seconds, requests, tool_calls, failed_calls, not_provided,
++enable_calls, enabled, req1_tools, req1_tools_bytes, tools_per_request,
++harness_error, fingerprint, tainted, judged, judge_agrees.
++
++--tables: markdown.  (1) Clean runs -- judged after the run by
++checks-goals.el and without a leak-scan hit -- per task and surface, one
++count per fingerprint (slice 10c: runs given different tools, system text or
++rules are not counted together unless --mix-fingerprints).  (2) Runs whose
++verdict was made inside the sandbox (check_in_sandbox, or older runs without
++a "judged" field), apart, so they are not taken for clean numbers.  (3)
++Tainted runs.  (4) The baseline (D13): passes per task across trials, a
++task passing 1 of 3 or 2 of 3 marked 分叉 (slice 10d).
+ """
+ import json, os, sys, re
++from collections import defaultdict, OrderedDict
++TABLES = "--tables" in sys.argv
++MIX = "--mix-fingerprints" in sys.argv
++sys.argv = [x for x in sys.argv if x not in ("--tables", "--mix-fingerprints")]
+ def names(req):
+     return [t.get("function", {}).get("name") or t.get("name") for t in req.get("tools") or []]
++sys.dont_write_bytecode = True  # leave no __pycache__ in the harness
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++from fingerprint import fingerprints  # a run from before slice 10c: computed, not written
++def fingerprint_of(run, d):
++    return d.get("fingerprint") or fingerprints(run)["fingerprint"]
++def tainted_of(run):
++    try: return "tainted" if json.load(open(os.path.join(run, "evidence", "leak-scan.json"))).get("tainted") else ""
++    except Exception: return ""
+ rows = []
+ for run in sys.argv[1:]:
+     ev = os.path.join(run, "evidence")
+@@ -32,6 +56,52 @@
+     rows.append([base, task, trial or "", surface, d.get("pass"), d.get("status"), round(d.get("seconds", 0) or 0, 1),
+                  len(per), len(calls), failed, notprov, len(enable), enabled,
+                  ",".join(x for x in req1 if x), req1_bytes,
+-                 " | ".join(",".join(x for x in p if x) for p in per), d.get("harness_error", "")])
+-print("\t".join("run task trial surface pass status seconds requests tool_calls failed_calls not_provided enable_calls enabled req1_tools req1_tools_bytes tools_per_request harness_error".split()))
+-for r in rows: print("\t".join(str(x) for x in r))
++                 " | ".join(",".join(x for x in p if x) for p in per), d.get("harness_error", ""),
++                 fingerprint_of(run, d), tainted_of(run),
++                 "in-sandbox" if d.get("check_in_sandbox") or not d.get("judged") else "outside",
++                 d.get("judge_agrees", "")])
++COLUMNS = "run task trial surface pass status seconds requests tool_calls failed_calls not_provided enable_calls enabled req1_tools req1_tools_bytes tools_per_request harness_error fingerprint tainted judged judge_agrees".split()
++if not TABLES:
++    print("\t".join(COLUMNS))
++    for r in rows: print("\t".join(str(x) for x in r))
++    sys.exit(0)
++
++R = [dict(zip(COLUMNS, r)) for r in rows]
++SURFACES = ["D13", "L4", "L4find"]
++tasks = list(OrderedDict.fromkeys(r["task"] for r in R))
++def passed(r): return r["pass"] is True or r["pass"] == "True"
++def cell(rs):
++    if not rs: return "—"
++    groups = OrderedDict()
++    for r in rs: groups.setdefault("mixed" if MIX else r["fingerprint"], []).append(r)
++    parts = [f"{sum(passed(r) for r in g)}/{len(g)}" + ("" if MIX or len(groups) == 1 else f" ({fp[:6]})")
++             for fp, g in groups.items()]
++    return "; ".join(parts) + (" · 指纹不同，未合并" if len(groups) > 1 else "")
++def table(title, rs):
++    print(f"## {title}\n")
++    if not rs: print("（无）\n"); return
++    cells = defaultdict(list)
++    for r in rs: cells[(r["task"], r["surface"])].append(r)
++    print("| 任务 | " + " | ".join(SURFACES) + " |"); print("|---|" + "---|" * len(SURFACES))
++    for t in tasks:
++        if any(cells[(t, s)] for s in SURFACES):
++            print(f"| {t} | " + " | ".join(cell(cells[(t, s)]) for s in SURFACES) + " |")
++    print()
++clean = [r for r in R if r["judged"] == "outside" and not r["tainted"]]
++sandbox = [r for r in R if r["judged"] != "outside" and not r["tainted"]]
++table("干净的运行（判定在运行之后、无泄漏命中）", clean)
++table("判定在沙箱内做的运行（不算干净数字）", sandbox)
++print("## 有泄漏命中的运行\n")
++tainted = [r for r in R if r["tainted"]]
++print("\n".join(f"- {r['run']}" for r in tainted) if tainted else "（无）")
++print()
++print("## 基线（D13）跨 trial 的通过数\n")
++print("| 任务 | 指纹 | 通过 | 判定 | 分叉 |"); print("|---|---|---|---|---|")
++for t in tasks:
++    rs = [r for r in R if r["task"] == t and r["surface"] == "D13" and not r["tainted"]]
++    groups = OrderedDict()
++    for r in rs: groups.setdefault("mixed" if MIX else r["fingerprint"], []).append(r)
++    for fp, g in groups.items():
++        p, n = sum(passed(r) for r in g), len(g)
++        where = ",".join(sorted(set(r["judged"] for r in g)))
++        print(f"| {t} | {fp[:12]} | {p}/{n} | {where} | {'分叉' if 0 < p < n else ''} |")
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/tasks-goals.el harness-tools/tasks-goals.el
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/tasks-goals.el	2026-10-13 16:15:07
++++ harness-tools/tasks-goals.el	2026-10-20 22:18:51
+@@ -77,14 +77,7 @@
+                   (ts-write-file "proj/strutil.el" ts-c1-code)
+                   (ts-write-file "proj/strutil-test.el" ts-c1-tests))
+         :source ,(lambda () (find-file-noselect (ts-file "proj/strutil.el")))
+-        :prompt "strutil-test.el 里有测试没通过，帮我把这个文件里的 bug 修好。不要改测试文件。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((run (ts-ert-file "proj/strutil-test.el")))
+-             (ts-verdict
+-              "all-tests-pass-after-saving" (eql 0 (car run))
+-              "test-file-unchanged" (equal (ts-live-text (ts-file "proj/strutil-test.el")) ts-c1-tests)
+-              "info:ert-tail" (let ((o (cdr run))) (substring o (max 0 (- (length o) 400))))))))
++        :prompt "strutil-test.el 里有测试没通过，帮我把这个文件里的 bug 修好。不要改测试文件。")
+       ts-tasks)
+ 
+ ;;;; C2: add a function and its tests (the chat) -------------------------------
+@@ -110,19 +103,7 @@
+                   (ts-write-file "calc/mycalc.el" ts-c2-code)
+                   (ts-write-file "calc/mycalc-test.el" ts-c2-tests))
+         :source ,(lambda () (find-file-noselect (ts-file "calc/mycalc.el")))
+-        :prompt "给 ~/calc/mycalc.el 加一个函数 mycalc-pow：算 a 的 b 次方（b 是非负整数）。再在 ~/calc/mycalc-test.el 里给它补上测试。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((value (cdr (ts-batch (format "(progn (add-to-list 'load-path %S) (require 'mycalc) (princ (format \"RESULT=%%S\" (list (mycalc-pow 2 10) (mycalc-pow 7 0) (mycalc-pow -3 3)))))"
+-                                                (ts-file "calc/")))))
+-                  (tests (or (ts-live-text (ts-file "calc/mycalc-test.el")) ""))
+-                  (run (ts-ert-file "calc/mycalc-test.el")))
+-             (ts-verdict
+-              "mycalc-pow-is-right" (string-match-p "RESULT=(1024 1 -27)" value)
+-              "a-test-for-mycalc-pow" (string-match-p "(ert-deftest[^\n]*\n?[^\n]*mycalc-pow" tests)
+-              "old-tests-kept" (and (string-match-p "mycalc-test-add" tests) (string-match-p "mycalc-test-mul" tests))
+-              "test-file-passes" (eql 0 (car run))
+-              "info:pow-result" (substring value 0 (min 200 (length value)))))))
++        :prompt "给 ~/calc/mycalc.el 加一个函数 mycalc-pow：算 a 的 b 次方（b 是非负整数）。再在 ~/calc/mycalc-test.el 里给它补上测试。")
+       ts-tasks)
+ 
+ ;;;; A1: org agenda ---------------------------------------------------------------
+@@ -147,18 +128,10 @@
+                   (ts-write-file "org/gtd.org" ts-a1-original)
+                   (ts-write-file "notes/scratch.org" "* Scratch\n"))
+         :configure ,(lambda () (require 'org-agenda) (setq org-agenda-files (list (ts-file "org/gtd.org"))))
++        ;; Values for the judge outside the run (slice 10a): saved right after :setup.
++        :gather-setup (("a1-original" . ts-a1-original))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "我接下来 7 天里有哪些到期或者已经安排好的事？"
+-        :check
+-        ,(lambda (answer)
+-           (ts-verdict
+-            "lists-交房租" (string-match-p "交房租" answer)
+-            "lists-提交季度报告" (string-match-p "季度报告" answer)
+-            "lists-预约体检" (string-match-p "体检" answer)
+-            "info:mentions-续签护照-(20-days)" (and (string-match-p "护照" answer) t)
+-            "info:mentions-付水电费-(done)" (and (string-match-p "水电" answer) t)
+-            "info:mentions-买生日礼物-(no-date)" (and (string-match-p "生日礼物" answer) t)
+-            "gtd-unchanged" (equal (ts-live-text (ts-file "org/gtd.org")) ts-a1-original))))
++        :prompt "我接下来 7 天里有哪些到期或者已经安排好的事？")
+       ts-tasks)
+ 
+ ;;;; A2: rename files ---------------------------------------------------------------
+@@ -170,14 +143,7 @@
+                     (ts-write-file (concat "photos/" name) name))
+                   (ts-write-file "notes/scratch.org" "* Scratch\n"))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "把 ~/photos 里所有 .JPG 后缀改成小写的 .jpg，其它文件别动。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((names (sort (directory-files (ts-file "photos/") nil "\\`[^.]") #'string<)))
+-             (ts-verdict
+-              "renamed-exactly" (equal names '("IMG_0001.jpg" "IMG_0002.jpg" "IMG_0003.jpg" "notes.TXT"))
+-              "contents-kept" (equal (ts-live-text (ts-file "photos/IMG_0001.jpg")) "IMG_0001.JPG")
+-              "info:names" (vconcat names)))))
++        :prompt "把 ~/photos 里所有 .JPG 后缀改成小写的 .jpg，其它文件别动。")
+       ts-tasks)
+ 
+ ;;;; A3: commit with git -----------------------------------------------------------
+@@ -207,17 +173,7 @@
+                   (ts-write-file "repo/todo.txt" "- 买牛奶\n- 给猫打疫苗\n")
+                   (ts-write-file "notes/scratch.org" "* Scratch\n"))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "~/repo 里有没提交的改动。看看改了什么，写一句合适的提交说明，然后提交。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((count (cdr (ts-git "rev-list" "--count" "HEAD")))
+-                 (status (cdr (ts-git "status" "--porcelain")))
+-                 (shown (cdr (ts-git "show" "--stat" "--format=%s" "HEAD"))))
+-             (ts-verdict
+-              "one-new-commit" (equal count "2")
+-              "working-tree-clean" (equal status "")
+-              "commit-has-todo.txt" (string-match-p "todo.txt" shown)
+-              "info:message" (car (split-string shown "\n"))))))
++        :prompt "~/repo 里有没提交的改动。看看改了什么，写一句合适的提交说明，然后提交。")
+       ts-tasks)
+ 
+ ;;;; E1: theme now and after a restart ------------------------------------------------
+@@ -230,14 +186,7 @@
+                   (ts-write-file "notes/scratch.org" "* Scratch\n"))
+         :configure ts-load-minimal-init
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "把主题换成 modus-vivendi，以后启动 Emacs 也要是这个主题。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((after (ts-restart-eval "custom-enabled-themes")))
+-             (ts-verdict
+-              "theme-on-now" (memq 'modus-vivendi custom-enabled-themes)
+-              "theme-on-after-restart" (and after (string-match-p "modus-vivendi" after))
+-              "info:after-restart" (or after "none")))))
++        :prompt "把主题换成 modus-vivendi，以后启动 Emacs 也要是这个主题。")
+       ts-tasks)
+ 
+ ;;;; E2: line numbers in code buffers only --------------------------------------------
+@@ -254,17 +203,10 @@
+                   (ts-write-file ".emacs.d/init.el" ts-minimal-init)
+                   (ts-write-file "notes/scratch.org" "* Scratch\n"))
+         :configure ts-load-minimal-init
++        ;; The probe's value in the live Emacs, for the judge (slice 10a).
++        :gather (("e2-probe" . ,(lambda () (eval (car (read-from-string ts-e2-probe)) t))))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "我想只在写代码的 buffer 里显示行号（比如 elisp、python），org 和普通文本里不要。现在就生效，以后启动也要这样。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((now (eval (car (read-from-string ts-e2-probe)) t))
+-                 (after (ts-restart-eval ts-e2-probe)))
+-             (ts-verdict
+-              "now-code-yes-org-no-text-no" (equal now '(t nil nil))
+-              "after-restart-the-same" (equal after "(t nil nil)")
+-              "info:now" (format "%S" now)
+-              "info:after" (or after "none")))))
++        :prompt "我想只在写代码的 buffer 里显示行号（比如 elisp、python），org 和普通文本里不要。现在就生效，以后启动也要这样。")
+       ts-tasks)
+ 
+ ;;;; P1: a stated preference survives a restart ---------------------------------------
+@@ -277,22 +219,7 @@
+         :prompt "记住：我写的日记，标题一律用英文，正文用中文。"
+         ;; Emacs is quit after the first Run and started again; the second
+         ;; prompt goes to a new chat in the new Emacs.
+-        :restart-prompt "在 ~/notes/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((text (or (ts-live-text (ts-file "notes/scratch.org")) ""))
+-                  (headings (let (hs (start 0))
+-                              (while (string-match "^\\* \\(.*\\)$" text start)
+-                                (push (match-string 1 text) hs) (setq start (match-end 0)))
+-                              (nreverse hs)))
+-                  (new (car (last headings))))
+-             (ts-verdict
+-              "a-new-heading" (and new (not (equal new "Scratch")))
+-              "title-in-english" (and new (not (equal new "Scratch"))
+-                                      (string-match-p "\\`[[:ascii:]]+\\'" new)
+-                                      (string-match-p "[A-Za-z]" new))
+-              "body-in-chinese" (string-match-p "银杏" text)
+-              "info:title" (or new "none")))))
++        :restart-prompt "在 ~/notes/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。")
+       ts-tasks)
+ 
+ ;;;; P2: meeting notes to todos ------------------------------------------------------
+@@ -330,21 +257,7 @@
+                   (ts-write-file "notes/meeting.org" (ts-p2-meeting))
+                   (ts-write-file "org/gtd.org" ts-p2-gtd))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/meeting.org")))
+-        :prompt "我是小陈。把这份会议记录里分给我的事加到 ~/org/gtd.org 的收件箱下面，每件做成一个 TODO，带上截止日期。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((entries (ts-p2-inbox-entries (or (ts-live-text (ts-file "org/gtd.org")) "")))
+-                  (find (lambda (word) (cl-find-if (lambda (e) (string-match-p word (car e))) entries)))
+-                  (budget (funcall find "预算")) (plan (funcall find "方案")))
+-             (ts-verdict
+-              "budget-todo-with-deadline" (and budget (equal (nth 1 budget) "TODO")
+-                                               (equal (nth 2 budget) (format-time-string "%Y-%m-%d" (ts-day 3))))
+-              "plan-todo-with-deadline" (and plan (equal (nth 1 plan) "TODO")
+-                                             (equal (nth 2 plan) (format-time-string "%Y-%m-%d" (ts-day 9))))
+-              "no-one-else's-tasks" (not (or (funcall find "场地") (funcall find "供应商")))
+-              "old-item-kept" (funcall find "买牛奶")
+-              "project-section-kept" (string-match-p "写季度总结" (or (ts-live-text (ts-file "org/gtd.org")) ""))
+-              "info:inbox" (format "%S" entries)))))
++        :prompt "我是小陈。把这份会议记录里分给我的事加到 ~/org/gtd.org 的收件箱下面，每件做成一个 TODO，带上截止日期。")
+       ts-tasks)
+ 
+ ;;;; P3: a reminder ---------------------------------------------------------------------
+@@ -354,25 +267,9 @@
+ (push `("P3"
+         :entry chat
+         :setup ,(lambda () (setq ts-p3-start (float-time)) (ts-write-file "notes/scratch.org" "* Scratch\n"))
++        :gather-setup (("p3-start" . ts-p3-start))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "20 分钟后提醒我给妈妈打电话。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((print-level 8) (print-length 200) (print-circle t)
+-                  (hits (cl-remove-if-not
+-                        (lambda (timer)
+-                          (string-match-p "妈妈" (format "%S" (list (timer--function timer) (timer--args timer)))))
+-                        (append timer-list timer-idle-list))))
+-             (ts-verdict
+-              "a-timer-for-the-call" (and hits t)
+-              "fires-in-about-20-minutes"
+-              (cl-some (lambda (timer)
+-                         (let ((due (- (float-time (timer--time timer)) ts-p3-start)))
+-                           (<= (* 18 60) due (* 23 60))))
+-                       hits)
+-              "info:timers" (format "%S" (mapcar (lambda (timer) (list (- (float-time (timer--time timer)) ts-p3-start)
+-                                                                       (timer--function timer) (timer--args timer)))
+-                                                 hits))))))
++        :prompt "20 分钟后提醒我给妈妈打电话。")
+       ts-tasks)
+ 
+ 
+@@ -391,8 +288,7 @@
+                                          (superchat--cmd-remember
+                                           nil "我写的日记，标题一律用英文，正文用中文。" nil nil nil)))))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt ,(plist-get (cdr (assoc "P1" ts-tasks)) :restart-prompt)
+-        :check ,(plist-get (cdr (assoc "P1" ts-tasks)) :check))
++        :prompt ,(plist-get (cdr (assoc "P1" ts-tasks)) :restart-prompt))
+       ts-tasks)
+ ;;;; W2P: two projects, back and forth (M11 slice 1) ---------------------------
+ ;; Contract W2 and S2: called from a file, the chat is the conversation of that
+@@ -422,33 +318,7 @@
+                 (,(lambda () (find-file-noselect (ts-file "alpha/a.org")))
+                  "这段对话的暗号是什么？只回答暗号本身。")
+                 (,(lambda () (find-file-noselect (ts-file "beta/b.org")))
+-                 "这段对话的暗号是什么？只回答暗号本身。"))
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((a1 (nth 0 ts-step-results)) (b1 (nth 1 ts-step-results))
+-                  (a2 (nth 2 ts-step-results)) (b2 (nth 3 ts-step-results))
+-                  (a2-requests (ts-step-requests-text a2))
+-                  (b2-requests (ts-step-requests-text b2)))
+-             (ts-verdict
+-              "four-steps-ran" (= 4 (length ts-step-results))
+-              "alpha-and-beta-are-different-conversations"
+-              (not (equal (ts-step-get a1 "session") (ts-step-get b1 "session")))
+-              "alpha-continues-its-conversation"
+-              (equal (ts-step-get a1 "session") (ts-step-get a2 "session"))
+-              "beta-continues-its-conversation"
+-              (equal (ts-step-get b1 "session") (ts-step-get b2 "session"))
+-              "different-workspaces"
+-              (and (not (string-empty-p (ts-step-get a1 "workspace")))
+-                   (not (string-empty-p (ts-step-get b1 "workspace")))
+-                   (not (equal (ts-step-get a1 "workspace") (ts-step-get b1 "workspace"))))
+-              "alpha-request-has-its-own-history" (and (string-match-p "蓝鲸-42" a2-requests) t)
+-              "alpha-request-has-none-of-beta" (not (string-match-p "红狐" a2-requests))
+-              "beta-request-has-its-own-history" (and (string-match-p "红狐-17" b2-requests) t)
+-              "beta-request-has-none-of-alpha" (not (string-match-p "蓝鲸" b2-requests))
+-              "alpha-answers-its-code" (and (string-match-p "蓝鲸-42" (ts-step-get a2 "answer")) t)
+-              "beta-answers-its-code" (and (string-match-p "红狐-17" (ts-step-get b2 "answer")) t)
+-              "info:workspaces" (format "%s / %s" (ts-step-get a1 "workspace") (ts-step-get b1 "workspace"))
+-              "info:views" (format "%s / %s" (ts-step-get a1 "view") (ts-step-get b1 "view"))))))
++                 "这段对话的暗号是什么？只回答暗号本身。")))
+       ts-tasks)
+ 
+ ;;;; P1W, R1X: rules of a Workspace (M11 slice 2) --------------------------------
+@@ -483,28 +353,7 @@
+         :configure ,(lambda () (ts-a3-git-on-path))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+         :prompt "记住：我写的日记，标题一律用英文，正文用中文。"
+-        :restart-prompt "在 ~/notes/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((rules (ts-file-text "notes/AGENTS.md"))
+-                  (new (ts-p1w-diary-title))
+-                  (text (or (ts-live-text (ts-file "notes/scratch.org")) ""))
+-                  (diary-requests (ts-requests-matching "银杏")))
+-             (ts-verdict
+-              "rule-written-to-agents-md" (and (string-match-p ts-p1w-rule-re rules) t)
+-              "rule-in-the-later-request"
+-              (and (string-match-p "Workspace rules, from " diary-requests)
+-                   (string-match-p ts-p1w-rule-re
+-                                   (substring diary-requests
+-                                              (or (string-match "Workspace rules, from " diary-requests) 0)))
+-                   t)
+-              "a-new-heading" (and new (not (equal new "Scratch")))
+-              "title-in-english" (and new (not (equal new "Scratch"))
+-                                      (string-match-p "\\`[[:ascii:]]+\\'" new)
+-                                      (string-match-p "[A-Za-z]" new))
+-              "body-in-chinese" (and (string-match-p "银杏" text) t)
+-              "info:title" (or new "none")
+-              "info:rules" rules))))
++        :restart-prompt "在 ~/notes/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。")
+       ts-tasks)
+ 
+ (push `("R1X"
+@@ -517,19 +366,7 @@
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+         :restart-source ,(lambda () (find-file-noselect (ts-file "other/scratch.org")))
+         :prompt "记住：我写的日记，标题一律用西班牙语，正文用中文。"
+-        :restart-prompt "在 ~/other/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((rules (ts-file-text "notes/AGENTS.md"))
+-                  (text (or (ts-live-text (ts-file "other/scratch.org")) ""))
+-                  (diary-requests (ts-requests-matching "银杏")))
+-             (ts-verdict
+-              "rule-written-in-the-first-workspace" (and (string-match-p "西班牙" rules) t)
+-              "no-rules-file-in-the-other" (not (file-exists-p (ts-file "other/AGENTS.md")))
+-              "the-other-workspace-made-requests" (not (string-empty-p diary-requests))
+-              "its-requests-have-none-of-the-rule" (not (string-match-p "西班牙\\|Spanish" diary-requests))
+-              "diary-added-there" (and (string-match-p "银杏" text) t)
+-              "info:rules" rules))))
++        :restart-prompt "在 ~/other/scratch.org 末尾加一篇今天的日记，作为一个新的一级标题，内容是：下午去公园散步，看到很多银杏叶。标题你来起。")
+       ts-tasks)
+ 
+ ;;;; W11A: the agenda belongs to the Personal Workspace (M11 slice 3) -------------
+@@ -553,29 +390,7 @@
+                     (get-buffer "*Org Agenda*"))
+                  "我接下来 7 天里有哪些到期或者已经安排好的事？")
+                 (,(lambda () (find-file-noselect (ts-file "alpha/a.org")))
+-                 "用一句话说说这个文件里写了什么。"))
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((a (nth 0 ts-step-results)) (b (nth 1 ts-step-results))
+-                  (a-requests (ts-step-requests-text a))
+-                  (b-requests (ts-step-requests-text b))
+-                  (personal (plist-get (superchat-workspace-personal) :id)))
+-             (ts-verdict
+-              "two-steps-ran" (= 2 (length ts-step-results))
+-              "agenda-is-in-the-personal-workspace"
+-              (and personal (string-match-p (regexp-quote personal) (ts-step-get a "workspace")) t)
+-              "project-is-another-workspace"
+-              (not (equal (ts-step-get a "workspace") (ts-step-get b "workspace")))
+-              "agenda-request-carries-the-personal-rules"
+-              (and (string-match-p "Workspace rules, from [^\n]*personal/AGENTS\\.md" a-requests)
+-                   (string-match-p "小管家" a-requests) t)
+-              "answer-follows-the-rule" (and (string-match-p "小管家" (ts-step-get a "answer")) t)
+-              "lists-交房租" (and (string-match-p "交房租" (ts-step-get a "answer")) t)
+-              "lists-季度报告" (and (string-match-p "季度报告" (ts-step-get a "answer")) t)
+-              "project-request-has-none-of-the-personal-rules"
+-              (not (string-match-p "小管家" b-requests))
+-              "project-answer-is-not-signed" (not (string-match-p "小管家" (ts-step-get b "answer")))
+-              "info:workspaces" (format "%s / %s" (ts-step-get a "workspace") (ts-step-get b "workspace"))))))
++                 "用一句话说说这个文件里写了什么。")))
+       ts-tasks)
+ 
+ ;;;; P3T, T1R: Superchat's own timers (M11 slice 4) ----------------------------------
+@@ -593,30 +408,10 @@
+         :setup ,(lambda ()
+                   (setq ts-p3-start (float-time))
+                   (ts-w2p-project "notes" "scratch.org" "* Scratch\n"))
++        :gather-setup (("p3-start" . ts-p3-start))
+         :configure ,(lambda () (ts-a3-git-on-path))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/scratch.org")))
+-        :prompt "20 分钟后提醒我给妈妈打电话。"
+-        :check
+-        ,(lambda (_answer)
+-           (let ((hits (ts-timers-matching "妈妈")))
+-             (ts-verdict
+-              "a-superchat-timer-for-the-call" (and hits t)
+-              "it-is-a-reminder" (cl-some (lambda (timer) (eq 'reminder (plist-get timer :kind))) hits)
+-              "fires-in-about-20-minutes"
+-              (cl-some (lambda (timer)
+-                         (<= (* 18 60) (- (plist-get timer :next-due) ts-p3-start) (* 23 60)))
+-                       hits)
+-              "in-the-notes-workspace"
+-              (cl-some (lambda (timer)
+-                         (equal (plist-get timer :workspace-root)
+-                                (file-name-as-directory (file-truename (ts-file "notes/")))))
+-                       hits)
+-              "no-bare-emacs-timer"
+-              (not (cl-some (lambda (timer)
+-                              (let ((print-level 8) (print-length 200))
+-                                (string-match-p "妈妈" (format "%S" (timer--args timer)))))
+-                            (append timer-list timer-idle-list)))
+-              "info:timers" (format "%S" hits)))))
++        :prompt "20 分钟后提醒我给妈妈打电话。")
+       ts-tasks)
+ 
+ (push `("T1R"
+@@ -634,22 +429,7 @@
+              (superchat-timer-disarm-all)
+              (ts-mark (format "waiting %.0fs with Emacs about to close" (- due (float-time))))
+              (when (> due 0) (sleep-for (max 0 (+ 65 (- due (float-time))))))))
+-        :restart-prompt "刚才错过了什么提醒吗？只回答一句话。"
+-        :check
+-        ,(lambda (answer)
+-           (let* ((sessions (superchat-view-workspace-session-ids
+-                             (plist-get (superchat-workspace-of-directory (ts-file "notes/")) :id)))
+-                  (fired (cl-loop for session in sessions
+-                                  append (cl-remove-if-not
+-                                          (lambda (event) (equal "timer.fired" (plist-get event :type)))
+-                                          (superchat-tape-replay-events session))))
+-                  (payloads (mapcar (lambda (event) (plist-get event :payload)) fired)))
+-             (ts-verdict
+-              "the-reminder-fired-once" (= 1 (length fired))
+-              "it-was-about-water" (cl-some (lambda (p) (string-match-p "水" (or (plist-get p :text) ""))) payloads)
+-              "it-said-it-was-late" (cl-some (lambda (p) (eq t (plist-get p :late))) payloads)
+-              "nothing-left-pending" (null (ts-timers-matching "水"))
+-              "info:answer" answer))))
++        :restart-prompt "刚才错过了什么提醒吗？只回答一句话。")
+       ts-tasks)
+ 
+ ;;;; K2C: a piece of work taken up again in another conversation (M11 slice 7) -----
+@@ -687,30 +467,7 @@
+         :configure ,(lambda () (ts-a3-git-on-path) (require 'org))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/reading.org")))
+         :prompt "帮我整理 ~/notes/reading.org：给每一本书加一个 STATUS 属性，值是 读完、在读 或 想读，按书下面那行字判断。今天只做前三本，剩下的下次再做——把这件事的进度记下来，下次接着做。"
+-        :restart-prompt "继续上次整理书单的那件事，把剩下的做完。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((ws (plist-get (superchat-workspace-of-directory (ts-file "notes/")) :id))
+-                  (records (superchat-work-records ws))
+-                  (record (car records))
+-                  (statuses (ts-k2c-statuses))
+-                  (want '(("三体" . "读完") ("百年孤独" . "在读") ("人类简史" . "想读")
+-                          ("活着" . "读完") ("小王子" . "在读") ("沉默的大多数" . "想读")))
+-                  (phase2-first (ts-requests-matching "继续上次整理书单")))
+-             (ts-verdict
+-              "one-record-in-the-workspace" (= 1 (length records))
+-              "it-was-carried-into-the-new-conversation"
+-              (and record (string-match-p (regexp-quote (plist-get record :id)) phase2-first) t)
+-              "two-conversations" (and record
+-                                       (let ((sessions (superchat-view-workspace-session-ids ws)))
+-                                         (>= (length sessions) 2)))
+-              "first-execution-left-it-continuable"
+-              (and record (equal "continuable" (car (plist-get record :outcomes))))
+-              "completed-at-the-end" (and record (eq 'completed (superchat-work-status record)))
+-              "all-six-marked-right" (equal want statuses)
+-              "info:record" (if record (superchat-work-render record) "none")
+-              "info:outcomes" (format "%S" (and record (plist-get record :outcomes)))
+-              "info:statuses" (format "%S" statuses)))))
++        :restart-prompt "继续上次整理书单的那件事，把剩下的做完。")
+       ts-tasks)
+ 
+ ;;;; T4W, DLG: waits and delegation under a Work Record (M11 slice 8) ----------------
+@@ -740,29 +497,7 @@
+                             (and record (plist-get record :woken)
+                                  (null (superchat-runtime-active-runs)))))
+                         240)
+-           (ts-wait-for (lambda () (null (superchat-runtime-active-runs))) 120))
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((record (ts-t4w-record))
+-                  (text (or (ts-live-text (ts-file "notes/log.org")) ""))
+-                  (ws (plist-get (superchat-workspace-of-directory (ts-file "notes/")) :id))
+-                  (sessions (superchat-view-workspace-session-ids ws))
+-                  (reported (cl-loop for s in sessions
+-                                     append (cl-remove-if-not
+-                                             (lambda (e) (equal "work.reported" (plist-get e :type)))
+-                                             (superchat-tape-replay-events s)))))
+-             (ts-verdict
+-              "a-record" (and record t)
+-              "it-waited-for-a-time" (and record (plist-get record :woken) t)
+-              "it-woke-in-a-new-conversation" (>= (length sessions) 2)
+-              "first-line" (and (string-match-p "- 开始检查" text) t)
+-              "second-line-after-the-first"
+-              (and (string-match-p "- 开始检查\\(.\\|\n\\)*- 检查完毕" text) t)
+-              "completed" (and record (eq 'completed (superchat-work-status record)))
+-              "the-main-conversation-was-told" (= 1 (length reported))
+-              "info:record" (if record (superchat-work-render record) "none")
+-              "info:outcomes" (format "%S" (and record (plist-get record :outcomes)))
+-              "info:text" text))))
++           (ts-wait-for (lambda () (null (superchat-runtime-active-runs))) 120)))
+       ts-tasks)
+ 
+ (push `("DLG"
+@@ -776,18 +511,7 @@
+                             (append superchat-llm-tool-names '("delegate_to_subagent"))
+                             superchat-llm-tools-list nil))
+         :source ,(lambda () (find-file-noselect (ts-file "notes/ideas.org")))
+-        :prompt "用工作记录跟踪这件事：派一个 researcher 子代理去数一下 ~/notes/ideas.org 里还没完成的 TODO 有几个，然后把结果告诉我。"
+-        :check
+-        ,(lambda (answer)
+-           (let* ((record (car (superchat-work-records
+-                                (plist-get (superchat-workspace-of-directory (ts-file "notes/")) :id))))
+-                  (tasks (and record (plist-get record :tasks))))
+-             (ts-verdict
+-              "a-record" (and record t)
+-              "the-task-is-on-the-record" (and tasks t)
+-              "it-came-back-completed" (and tasks (equal "completed" (plist-get (car tasks) :status)))
+-              "the-answer-says-three" (and (string-match-p "3\\|三" answer) t)
+-              "info:record" (if record (superchat-work-render record) "none")))))
++        :prompt "用工作记录跟踪这件事：派一个 researcher 子代理去数一下 ~/notes/ideas.org 里还没完成的 TODO 有几个，然后把结果告诉我。")
+       ts-tasks)
+ 
+ ;;;; W9U: a question the user answers later (M11 slice 9) ---------------------------
+@@ -809,27 +533,7 @@
+         :steps ((,(lambda () (find-file-noselect (ts-file "notes/plan.org")))
+                  "把 ~/notes/plan.org 里的三个方案整理成一张 org 表格（方案、费用、时间），放在文件末尾。整理完你需要问我选哪个——我晚点再回答，先把这件事用工作记录记下来，等我的答复。")
+                 (,(lambda () (find-file-noselect (ts-file "notes/plan.org")))
+-                 "选 B。在表格下面加一行“决定：B”，这件事就完成了。"))
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((ws (plist-get (superchat-workspace-of-directory (ts-file "notes/")) :id))
+-                  (record (car (superchat-work-records ws)))
+-                  (waits (ts-w9u-payloads "work.waiting"))
+-                  (text (or (ts-live-text (ts-file "notes/plan.org")) "")))
+-             (ts-verdict
+-              "two-steps-ran" (= 2 (length ts-step-results))
+-              "one-conversation" (equal (ts-step-get (nth 0 ts-step-results) "session")
+-                                        (ts-step-get (nth 1 ts-step-results) "session"))
+-              "a-record" (and record t)
+-              "it-registered-a-wait-for-the-user"
+-              (and (cl-some (lambda (p) (equal "user" (plist-get p :for))) waits) t)
+-              "the-product-ended-the-wait-when-the-user-spoke"
+-              (and (cl-some (lambda (p) (eq t (plist-get p :answered))) waits) t)
+-              "a-table" (and (string-match-p "^|.*B" text) t)
+-              "the-decision-is-written" (and (string-match-p "决定[:：] *B" text) t)
+-              "completed" (and record (eq 'completed (superchat-work-status record)))
+-              "info:record" (if record (superchat-work-render record) "none")
+-              "info:outcomes" (format "%S" (and record (plist-get record :outcomes)))))))
++                 "选 B。在表格下面加一行“决定：B”，这件事就完成了。")))
+       ts-tasks)
+ 
+ (provide 'tasks-goals)
+diff -ru /Users/chenyibin/.cache/sc-slice10/harness-tools.before/tasks.el harness-tools/tasks.el
+--- /Users/chenyibin/.cache/sc-slice10/harness-tools.before/tasks.el	2026-10-13 16:15:07
++++ harness-tools/tasks.el	2026-10-20 22:18:51
+@@ -103,26 +103,9 @@
+         :setup ,(lambda ()
+                   (setq ts-t1-original (ts-diary-text))
+                   (ts-write-file ts-diary ts-t1-original))
++        :gather-setup (("t1-original" . ts-t1-original))
+         :source ,(lambda () (find-file-noselect (ts-file ts-diary)))
+-        :prompt "把最近七天日记里提到读书的内容汇总成一个列表，加到今天的日记里。"
+-        :check
+-        ,(lambda (_answer)
+-           (let* ((now (ts-live-text (ts-file ts-diary)))
+-                  (split (ts-today-subtree now))
+-                  (orig (ts-today-subtree ts-t1-original))
+-                  (today (nth 1 split)))
+-             (ts-verdict
+-              "today-lists-置身事内" (string-match-p "置身事内" today)
+-              "today-lists-长安的荔枝" (string-match-p "长安的荔枝" today)
+-              "leaves-out-反脆弱-(nine-days-ago)" (not (string-match-p "反脆弱" today))
+-              "leaves-out-书桌-(not-reading)" (not (string-match-p "书桌" today))
+-              "keeps-today's-entry" (string-match-p "今天天气很好" today)
+-              "is-a-list" (>= (with-temp-buffer
+-                                (insert today)
+-                                (how-many "^[ \t]*\\([-+]\\|[0-9]+[.)]\\) " (point-min) (point-max)))
+-                              2)
+-              "rest-of-the-diary-unchanged" (and (equal (nth 0 split) (nth 0 orig))
+-                                                 (equal (nth 2 split) (nth 2 orig)))))))
++        :prompt "把最近七天日记里提到读书的内容汇总成一个列表，加到今天的日记里。")
+       ts-tasks)
+ 
+ ;;;; T3: elfeed ---------------------------------------------------------------------

@@ -1,0 +1,192 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 03:00:26-0700, selector ‘"^r3-annotation/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Test r3-annotation/inspected-annotate-has-sink-but-no-row-contract backtrace:
+  ert-fail(((should-not (string-match-p "1| alpha one" (m5rc--body inspector))) :form (string-match-p "1| alpha one" "The text to annotate, m5rc-source.el, with
+  (if (not (unwind-protect (setq value-1941 (apply fn-1939 args-1940)) (setq form-description-1943 (nconc (list '(should-not ...)) (list :form (cons fn-1939 arg
+  (let (form-description-1943) (if (not (unwind-protect (setq value-1941 (apply fn-1939 args-1940)) (setq form-description-1943 (nconc (list '...) (list :form (
+  (let ((value-1941 'ert-form-evaluation-aborted-1942)) (let (form-description-1943) (if (not (unwind-protect (setq value-1941 (apply fn-1939 args-1940)) (setq 
+  (let* ((fn-1939 #'string-match-p) (args-1940 (condition-case err (list "1| alpha one" (m5rc--body inspector)) (error (progn (setq fn-1939 #'signal) (list (car
+  (let* ((source (m5rc--source annc--text)) (superchat-automated-input nil) (inspector (m5rc--inspect source "Mark the issue >annotate"))) (let* ((fn-1939 #'str
+  (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (superchat-automated-input nil) (inspe
+  (unwind-protect (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (superchat-automated-i
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons (m5rc--snapshot-prompt prompt) m5rc--requests)) (funcall
+  (unwind-protect (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons ... m5rc--requests)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-runtime-submit))) (superchat-context-register 'm5rc-system-note #'m
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-func
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (progn (let* ((fn-1934 #'getenv) (args-1935 (condition-case err (list "SMOKE_REAL") (error (progn (setq fn-1934 ...) (list ... ...)))))) (let ((value-1936 'er
+  #f(lambda () [t] (progn (let* ((fn-1934 #'getenv) (args-1935 (condition-case err ... ...))) (let ((value-1936 ...)) (let (form-description-1938) (if ... ...))
+  #f(compiled-function () #<bytecode -0x82ebe650ef364e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x82ebe650ef364e>) (t) #f(compiled-function (err) #<bytecode 0xf8c871cca7e3de6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29b42adc2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-annotation/inspected-annotate-has-sink-but-no-row-contract :documentation nil :body #f(lambda () ... ... nil) :most-recent-r
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-annotation/" :tests ... :test-map #<hash-table eql 4/4 0x1a90feb6af ...> :test-results ... :test-start-time
+  ert-run-tests("^r3-annotation/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x125731bd81472cb7>) nil)
+  ert-run-tests-batch("^r3-annotation/")
+  ert-run-tests-batch-and-exit("^r3-annotation/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el" "/Use
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-annotation/inspected-annotate-has-sink-but-no-row-contract condition:
+    (ert-test-failed
+     ((should-not
+       (string-match-p #1="1| alpha one" (m5rc--body inspector)))
+      :form
+      (string-match-p #1#
+		      "The text to annotate, m5rc-source.el, with line numbers:\n<<<TEXT>>>\n1| alpha one\n2| beta two\n3| gamma three\n<<<END TEXT>>>\n\nReply with rows of the form LINE | QUOTE | REMARK only.\n\n[Emacs origin]\nBuffer: m5rc-source.el\nMajor mode: emacs-lisp-mode\nPoint in that buffer: 32\n\n[Emacs windows]\nWindows of the current tab (1), from the top left:\n- *scratch*, 80 columns wide at column 0, line 0, selected\n\nMark the issue")
+      :value 68))
+   FAILED  1/4  r3-annotation/inspected-annotate-has-sink-but-no-row-contract (0.686508 sec) at reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el:37
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Test r3-annotation/quote-search-is-case-folded backtrace:
+  ert-fail(((should (equal '((1 "TARGET" "LOWERCASE-REMARK")) (ann--placed buffer))) :form (equal ((1 "TARGET" "LOWERCASE-REMARK")) nil) :value nil :explanation
+  (if (unwind-protect (setq value-1891 (apply fn-1889 args-1890)) (setq form-description-1893 (nconc (list '(should (equal ... ...))) (list :form (cons fn-1889 
+  (let (form-description-1893) (if (unwind-protect (setq value-1891 (apply fn-1889 args-1890)) (setq form-description-1893 (nconc (list '(should ...)) (list :fo
+  (let ((value-1891 'ert-form-evaluation-aborted-1892)) (let (form-description-1893) (if (unwind-protect (setq value-1891 (apply fn-1889 args-1890)) (setq form-
+  (let* ((fn-1889 #'equal) (args-1890 (condition-case err (list '((1 "TARGET" "LOWERCASE-REMARK")) (ann--placed buffer)) (error (progn (setq fn-1889 #'signal) (
+  (let* ((buffer (ann--file p "TARGET\n")) (before (save-current-buffer (set-buffer buffer) (buffer-string))) (tick (save-current-buffer (set-buffer buffer) (bu
+  (progn (fset 'smoke--fake-network vnew) (let* ((buffer (ann--file p "TARGET\n")) (before (save-current-buffer (set-buffer buffer) (buffer-string))) (tick (sav
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((buffer (ann--file p "TARGET\n")) (before (save-current-buffer (set-buffer buffer) (buffer-stri
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq wrules--roots (lis
+  #f(lambda () [t] (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq w
+  #f(compiled-function () #<bytecode -0x82ebe650ef364e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x82ebe650ef364e>) (t) #f(compiled-function (err) #<bytecode 0xf8c871cca7e3de6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29b42adc2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-annotation/quote-search-is-case-folded :documentation nil :body #f(lambda () ... ... nil) :most-recent-result #s(ert-test-fa
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-annotation/" :tests ... :test-map #<hash-table eql 4/4 0x1a90feb6af ...> :test-results ... :test-start-time
+  ert-run-tests("^r3-annotation/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x125731bd81472cb7>) nil)
+  ert-run-tests-batch("^r3-annotation/")
+  ert-run-tests-batch-and-exit("^r3-annotation/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el" "/Use
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-annotation/quote-search-is-case-folded condition:
+    (ert-test-failed
+     ((should
+       (equal '#1=((1 "TARGET" "LOWERCASE-REMARK")) (ann--placed buffer)))
+      :form (equal #1# nil) :value nil :explanation
+      (different-types #1# nil)))
+   FAILED  2/4  r3-annotation/quote-search-is-case-folded (0.050716 sec) at reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el:5
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+Test r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives backtrace:
+  cdr(#<hash-table equal 1/6 0x1a90ff6ecd ...>)
+  apply(cdr #<hash-table equal 1/6 0x1a90ff6ecd ...>)
+  (setq value-1916 (apply fn-1914 args-1915))
+  (unwind-protect (setq value-1916 (apply fn-1914 args-1915)) (setq form-description-1918 (nconc (list '(should (cdr (buffer-local-value ... view)))) (list :for
+  (if (unwind-protect (setq value-1916 (apply fn-1914 args-1915)) (setq form-description-1918 (nconc (list '(should (cdr ...))) (list :form (cons fn-1914 args-1
+  (let (form-description-1918) (if (unwind-protect (setq value-1916 (apply fn-1914 args-1915)) (setq form-description-1918 (nconc (list '(should ...)) (list :fo
+  (let ((value-1916 'ert-form-evaluation-aborted-1917)) (let (form-description-1918) (if (unwind-protect (setq value-1916 (apply fn-1914 args-1915)) (setq form-
+  (let* ((fn-1914 #'cdr) (args-1915 (condition-case err (list (buffer-local-value 'superchat--annotated-buffers view)) (error (progn (setq fn-1914 #'signal) (li
+  (let* ((source (m5rc--source annc--text)) (view (m5rc--open source)) (session (buffer-local-value 'superchat--session-id view)) (superchat-automated-input nil
+  (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (view (m5rc--open source)) (session (b
+  (unwind-protect (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (view (m5rc--open sour
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons (m5rc--snapshot-prompt prompt) m5rc--requests)) (funcall
+  (unwind-protect (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons ... m5rc--requests)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-runtime-submit))) (superchat-context-register 'm5rc-system-note #'m
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-func
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (progn (let* ((fn-1904 #'getenv) (args-1905 (condition-case err (list "SMOKE_REAL") (error (progn (setq fn-1904 ...) (list ... ...)))))) (let ((value-1906 'er
+  #f(lambda () [t] (progn (let* ((fn-1904 #'getenv) (args-1905 (condition-case err ... ...))) (let ((value-1906 ...)) (let (form-description-1908) (if ... ...))
+  #f(compiled-function () #<bytecode -0x82ebe650ef364e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x82ebe650ef364e>) (t) #f(compiled-function (err) #<bytecode 0xf8c871cca7e3de6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29b42adc2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives :documentation nil :body #f(lambda () ... ... nil) :most-rec
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-annotation/" :tests ... :test-map #<hash-table eql 4/4 0x1a90feb6af ...> :test-results ... :test-start-time
+  ert-run-tests("^r3-annotation/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x125731bd81472cb7>) nil)
+  ert-run-tests-batch("^r3-annotation/")
+  ert-run-tests-batch-and-exit("^r3-annotation/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el" "/Use
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives condition:
+    (wrong-type-argument listp
+			 #s(hash-table test equal data
+				       ("20261011-030027-9531"
+					("m5rc-source.el"))))
+   FAILED  3/4  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives (0.043123 sec) at reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el:17
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-030028-126107-704c completed (session 20261011-030028-5f0d)
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-030028-298317-44a1 completed (session 20261011-030028-5f0d)
+Test r3-annotation/two-pending-command-answers-accumulate backtrace:
+  ert-fail(((should (= 2 (length (ann--placed buffer)))) :form (= 2 1) :value nil))
+  (if (unwind-protect (setq value-1976 (apply fn-1974 args-1975)) (setq form-description-1978 (nconc (list '(should (= 2 ...))) (list :form (cons fn-1974 args-1
+  (let (form-description-1978) (if (unwind-protect (setq value-1976 (apply fn-1974 args-1975)) (setq form-description-1978 (nconc (list '(should ...)) (list :fo
+  (let ((value-1976 'ert-form-evaluation-aborted-1977)) (let (form-description-1978) (if (unwind-protect (setq value-1976 (apply fn-1974 args-1975)) (setq form-
+  (let* ((fn-1974 #'=) (args-1975 (condition-case err (list 2 (length (ann--placed buffer))) (error (progn (setq fn-1974 #'signal) (list (car err) (cdr err)))))
+  (let ((buffer (ann--file p))) (save-current-buffer (set-buffer buffer) (superchat-annotate "first") (superchat-annotate "second")) (let* ((fn-1969 #'smoke--wa
+  (progn (fset 'smoke--fake-network vnew) (let ((buffer (ann--file p))) (save-current-buffer (set-buffer buffer) (superchat-annotate "first") (superchat-annotat
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let ((buffer (ann--file p))) (save-current-buffer (set-buffer buffer) (superchat-annotate "first") (s
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq wrules--roots (lis
+  #f(lambda () [t] (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq w
+  #f(compiled-function () #<bytecode -0x82ebe650ef364e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x82ebe650ef364e>) (t) #f(compiled-function (err) #<bytecode 0xf8c871cca7e3de6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29b42adc2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-annotation/two-pending-command-answers-accumulate :documentation nil :body #f(lambda () ... ... nil) :most-recent-result #s(
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-annotation/" :tests ... :test-map #<hash-table eql 4/4 0x1a90feb6af ...> :test-results ... :test-start-time
+  ert-run-tests("^r3-annotation/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x125731bd81472cb7>) nil)
+  ert-run-tests-batch("^r3-annotation/")
+  ert-run-tests-batch-and-exit("^r3-annotation/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el" "/Use
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-annotation/two-pending-command-answers-accumulate condition:
+    (ert-test-failed
+     ((should (= 2 (length (ann--placed buffer)))) :form (= 2 1) :value
+      nil))
+   FAILED  4/4  r3-annotation/two-pending-command-answers-accumulate (0.260524 sec) at reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el:53
+
+Ran 4 tests, 0 results as expected, 4 unexpected (2026-10-11 03:00:28-0700, 1.448289 sec)
+
+4 unexpected results:
+   FAILED  r3-annotation/inspected-annotate-has-sink-but-no-row-contract
+   FAILED  r3-annotation/quote-search-is-case-folded
+   FAILED  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives
+   FAILED  r3-annotation/two-pending-command-answers-accumulate
+

@@ -1,0 +1,234 @@
+[
+  {
+    "name": "kernel",
+    "returncode": 0,
+    "seconds": 0.24,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "-L",
+      ".",
+      "-l",
+      "scripts/kernel-check.el"
+    ]
+  },
+  {
+    "name": "smoke",
+    "returncode": 0,
+    "seconds": 4.74,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/smoke.el"
+    ]
+  },
+  {
+    "name": "m3",
+    "returncode": 0,
+    "seconds": 21.08,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/m3-regression.el",
+      "-f",
+      "ert-run-tests-batch-and-exit"
+    ]
+  },
+  {
+    "name": "workspace-scope",
+    "returncode": 0,
+    "seconds": 1.51,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/workspace-scope-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^workspace-scope/\")"
+    ]
+  },
+  {
+    "name": "work-wake-fault",
+    "returncode": 0,
+    "seconds": 2.96,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/work-wake-fault-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^work-wake-fault/\")"
+    ]
+  },
+  {
+    "name": "timer-start-fault",
+    "returncode": 0,
+    "seconds": 1.62,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/timer-start-fault-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^timer-fault/\")"
+    ]
+  },
+  {
+    "name": "entry-rules",
+    "returncode": 1,
+    "seconds": 1.77,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/entry-rules-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^entry-rules/\")"
+    ]
+  },
+  {
+    "name": "beside-user",
+    "returncode": 0,
+    "seconds": 3.12,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/beside-user-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^beside-user/\")"
+    ]
+  },
+  {
+    "name": "input-syntax",
+    "returncode": 0,
+    "seconds": 1.36,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/input-syntax-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^input-syntax/\")"
+    ]
+  },
+  {
+    "name": "skill-once",
+    "returncode": 0,
+    "seconds": 1.77,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/skill-once-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^skill-once/\")"
+    ]
+  },
+  {
+    "name": "skill-context",
+    "returncode": 0,
+    "seconds": 1.52,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/skill-context-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^skill-context/\")"
+    ]
+  },
+  {
+    "name": "unattended-notice",
+    "returncode": 0,
+    "seconds": 1.85,
+    "command": [
+      "emacs",
+      "-Q",
+      "--batch",
+      "--eval",
+      "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+      "-L",
+      ".",
+      "-L",
+      "plugins/superchat-cowork-telega",
+      "-l",
+      "scripts/unattended-notice-regression.el",
+      "--eval",
+      "(ert-run-tests-batch-and-exit \"^unattended-notice/\")"
+    ]
+  }
+]

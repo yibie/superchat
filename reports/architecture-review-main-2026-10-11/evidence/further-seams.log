@@ -1,0 +1,315 @@
+   650	
+   651	(defun superchat-timer-tool-create (text kind &optional in-minutes at repeat)
+   652	  "The `timer_create' tool: set a timer in the asking conversation.
+   653	A timer is a promise that something happens at its time.  While the
+   654	`timers' row is not mounted nothing would fire it, so it is refused
+   655	rather than written and never acted on."
+   656	  (condition-case err
+   657	      (let* ((now (progn
+   658	                    (unless (superchat-timer--active-p)
+   659	                      (error "%s, so no timer was set and nothing will happen at that time; tell the user"
+   660	                             superchat-timer--off))
+   661	                    (superchat-timer--now)))
+   662	             (kind (pcase kind
+   663	                     ((or "task" 'task) 'task)
+   664	                     ((or "reminder" 'reminder 'nil "") 'reminder)
+   665	                     (_ (error "kind must be reminder or task"))))
+   666	             (due (cond
+   667	                   ((and (stringp at) (not (string-empty-p at)))
+   668	                    (superchat-timer-parse-time at))
+   669	                   ((numberp in-minutes) (+ now (* 60 in-minutes)))
+   670	                   ((and (stringp in-minutes) (string-match-p "\\`[0-9.]+\\'" in-minutes))
+   671	                    (+ now (* 60 (string-to-number in-minutes))))
+   672	                   (t (error "Give in_minutes or at"))))
+   673	             (period (cond
+   674	                      ((or (null repeat) (member repeat '("" "none"))) nil)
+   675	                      ((cdr (assoc repeat superchat-timer-repeats)))
+   676	                      (t (error "repeat must be hourly, daily, weekly or none")))))
+   677	        (when (and (< due now) (null period))
+   678	          (error "That time has passed: %s" (superchat-timer-format-time due)))
+   679	        ;; "Take this work up again at that time" is a wait on its Work
+   680	        ;; Record, not a timer (contract T4): in the real task T4W the model
+   681	        ;; set a task timer for it, which ran in the old conversation.
+   682	        (when (and (eq kind 'task)
+   683	                   (fboundp 'superchat-work-current)
+   684	                   (superchat-work-current (superchat-timer--tool-session)))
+   685	          (error "This conversation has a current work record; to take that work up again later, use work_record with action wait, wait_for time and in_minutes or at -- it continues in a new conversation with the record.  A task timer is for a new, separate job"))
+   686	        (let ((timer (superchat-timer-create (superchat-timer--tool-session)
+   687	                                             kind text due period)))
+   688	          (format "Timer %s set: %s at %s%s (now %s).%s"
+   689	                  (plist-get timer :id)
+   690	                  (if (eq kind 'task) "the task will run" "the user will be reminded")
+   691	                  (superchat-timer-format-time due)
+   692	                  (if period (format ", then %s" (superchat-timer--repeat-name period)) "")
+   693	                  (superchat-timer-format-time now)
+   694	                  (if (plist-get timer :workspace-root)
+   695	                      ""
+   696	                    "  This conversation belongs to no workspace: the timer fires in it."))))
+   697	    (error (format "Error: %s" (error-message-string err)))))
+   698	
+   699	(defun superchat-timer-tool-list ()
+   700	  "The `timer_list' tool: the pending timers, then those fired in the last day.
+   701	Only those of the asking conversation's Workspace; of that conversation
+   702	alone when it belongs to none."
+   703	  (let* ((session (superchat-timer--tool-session))
+   704	         (mine (lambda (timer) (superchat-timer--within-p session timer)))
+   705	         (timers (cl-remove-if-not mine (superchat-timer-list)))
+   706	         (fired (cl-remove-if-not
+   707	                 mine (superchat-timer-fired-since (- (superchat-timer--now) 86400)))))
+   708	    (concat
+   709	     (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+   710	     (if (superchat-timer--active-p)
+   711	         ""
+   712	       (format "%s: nothing below fires until they are turned on again.\n"
+   713	               superchat-timer--off))
+   714	     (if (null timers)
+   715	         "No pending timers."
+   716	       (concat
+   717	        "Pending:\n"
+   718	        (mapconcat (lambda (timer)
+   719	                   (format "%s  %s  %s%s  %s"
+   720	                           (plist-get timer :id)
+   721	                           (superchat-timer-format-time (plist-get timer :next-due))
+   722	                           (plist-get timer :kind)
+   723	                           (if (plist-get timer :repeat)
+   724	                               (format " (%s)" (superchat-timer--repeat-name
+   725	                                                (plist-get timer :repeat)))
+   726	                             "")
+   727	                           (plist-get timer :text)))
+   728	                 timers "\n")))
+   729	     (if (null fired)
+   730	         "\nNone fired in the last 24 hours."
+   731	       (concat
+   732	        "\nFired in the last 24 hours:\n"
+   733	        (mapconcat (lambda (timer)
+   734	                     (format "%s  %s%s  %s"
+   735	                             (superchat-timer-format-time (plist-get timer :due))
+   736	                             (plist-get timer :kind)
+   737	                             (if (plist-get timer :late)
+   738	                                 " (Emacs was not running then; shown when it started)"
+   739	                               "")
+   740	                             (plist-get timer :text)))
+   741	                   fired "\n"))))))
+   742	
+   743	(defun superchat-timer-tool-cancel (id)
+   744	  "The `timer_cancel' tool: cancel the pending timer ID.
+   745	A timer of another Workspace is refused, pending or fired and not yet
+  1375	table: a user prompt template remains the intentional graceful fallback."
+  1376	  (superchat--with-chat-execution-scope
+  1377	    (let* ((scope (superchat-execution-scope-resolve nil))
+  1378	           ;; Do not take a UI helper dependency here: this public dispatcher
+  1379	           ;; crosses the Kernel Service seam directly and treats provider
+  1380	           ;; absence as an ordinary route to the user-template fallback.
+  1381	           (provider (superchat-service-get scope 'commands))
+  1382	           (handler (and provider
+  1383	                         (superchat-service-call scope 'commands 'lookup command))))
+  1384	      (or
+  1385	       ;; A handler may intentionally return nil, preserving the original
+  1386	       ;; `or'-default contract.  Only after it declined do we load a same-name
+  1387	       ;; prompt file and ask the independent template fallback to handle it.
+  1388	       (and handler (funcall handler command args input lang nil))
+  1389	       (progn
+  1390	         (superchat--ensure-command-loaded command)
+  1391	         (superchat--handle-default-command command args input lang))))))
+  1392	
+  1393	(defun superchat--handle-default-command (command args input lang)
+  1394	  "Handle COMMAND with ARGS, INPUT, and LANG that wasn't covered by hooks.
+  1395	This is the catch-all fallback after the hook chain."
+  1396	  (cond
+  1397	   ;; User-defined commands (loaded from prompt files)
+  1398	   ((gethash command superchat--user-commands)
+  1399	    (let ((item (gethash command superchat--user-commands)))
+  1400	      (if (and args (> (length args) 0))
+  1401	          (progn
+  1402	            (setq superchat--current-command command)
+  1403	            `(:type :llm-query-and-mode-switch :args ,args :template ,item :lang ,lang))
+  1404	        (progn
+  1405	          (setq superchat--current-command command)
+  1406	          `(:type :echo :content ,(format "Switched to command mode: `/%s'." command))))))
+  1407	   ;; Unknown command
+  1408	   (t
+  1409	    `(:type :echo :content ,(format "Unknown command: `/%s'." command)))))
+  1410	
+  1411	;;;###autoload
+  1412	(defvar superchat-automated-input nil
+  1413	  "Non-nil while a message the user did not type is being sent.
+  1414	A timer's task and a woken Work Record send their own text through
+  1415	`superchat-send-input'; they bind this so the message is not taken for
+  1416	the user speaking.")
+  1417	
+  1418	(defvar superchat-user-input-functions nil
+  1419	  "Functions called when the user sends a plain message in a conversation.
+  1420	Each is called with the Session id and the text, before the message is
+  1421	dispatched.  Not run for a command, nor while `superchat-automated-input'
+  1422	is non-nil.  An error in one does not stop the message.")
+  1423	
+  1424	(defun superchat-send-input ()
+  1425	  "Send the visible draft, or queue it while ordinary chat is active."
+  1426	  (interactive)
+  1427	  (superchat-plugin-require-active-row 'chat)
+  1428	  (let* ((view (current-buffer))
+  1429	         (session superchat--session-id)
+  1430	         (superchat-buffer-name (buffer-name view))
+  1431	         ;; Keep the existing borrowed-input marker contract.  Render owns
+  1432	         ;; header validity/association; the dispatcher reads its projection.
+  1433	         (prompt (and (markerp superchat--prompt-start)
+  1434	                      (eq (marker-buffer superchat--prompt-start) view)
+  1435	                      (marker-position superchat--prompt-start)
+  1436	                      superchat--prompt-start))
+  1437	         (input (and prompt
+  1438	                     (string-trim
+  1439	                      (superchat--strip-leading-user-label
+  1440	                       (buffer-substring-no-properties prompt (point-max)))))))
+  1441	    (when (and input (not (string-empty-p input)))
+  1442	      (let* ((parsed (superchat--with-chat-execution-scope
+  1443	                       (superchat-core--parse-input
+  1444	                        (superchat-turn-new input session))))
+  1445	             (command (superchat-turn-command parsed))
+  1446	             ;; Same match rule as before: the plain-input (no command, no
+  1447	             ;; skill) gate against an active Run in this Session/View.
+  1448	             (active-status
+  1449	              (and (bound-and-true-p superchat-mode)
+  1450	                   (null command) (null (superchat-turn-skill parsed))
+  1451	                   (cl-find-if
+  1452	                    (lambda (status)
+  1453	                      (and (equal session (plist-get status :session-id))
+  1454	                           ;; S10: the chat envelope now sets the contract
+  1455	                           ;; §2.1 producer surface `chat' explicitly, so a
+  1456	                           ;; chat Run's public status carries `:surface
+  1457	                           ;; 'chat', not the pre-S10 implicit default
+  1458	                           ;; `'superchat' (`superchat-runtime--surface').
+  1459	                           ;; `superchat' is kept for any caller still on
+  1460	                           ;; the legacy default.
+  1461	                           (memq (plist-get status :surface) '(chat superchat))
+  1462	                           ;; The current projection also covers synchronous
+  1463	                           ;; UI reentry before submit returns its tracking
+  1464	                           ;; handle.
+  1465	                           (or (equal (plist-get status :run-id)
+  1466	                                      (bound-and-true-p superchat--active-run-id))
+  1467	                               (equal (plist-get status :transcript-owner)
+  1468	                                      superchat--response-region-current-owner))
+  1469	                           (not (eq (plist-get status :topology) 'workflow))))
+  1470	                    (plist-get (superchat-runtime-status-projection) :active-runs))))
+  1471	             (queue-p (and active-status t)))
+  1472	        (when (and (null command) (not superchat-automated-input))
+  1473	          (dolist (fn superchat-user-input-functions)
+  1474	            (ignore-errors (funcall fn session input))))
+  1475	        (cond
+  1476	         ;; This command owns its confirmation and exact View transaction.
+  1477	         ;; Dispatch it before any prompt, recall, timing or text mutation.
+  1478	         ((equal command "clear")
+  1479	          (superchat--dispatch-result
+  1480	           (superchat--handle-command command (superchat-turn-command-args parsed)
+  1481	                                      (superchat-turn-clean-input parsed)
+  1482	                                      superchat-lang (superchat-turn-target-model parsed))
+  1483	           superchat-lang (superchat-turn-target-model parsed)))
+  1484	         (queue-p
+  1485	          ;; The recalled-memory payload `superchat--build-chat-request'
+  1486	          ;; would otherwise consume unconditionally must survive a
+  1487	          ;; rejected enqueue exactly as captured -- restored below, never
+  1488	          ;; touched at all on success (S05b-fix-2 item 1).
+  1489	          (let ((superchat-execution-scope
+  1490	                 ;; A queue transaction captures one Scope before any parse/
+  1491	                 ;; `pre' contribution can reenter and activate a different
+  1492	                 ;; Preset.  The built Envelope and FIFO item must remain one
+  1493	                 ;; request under that old Scope; retirement then rejects it
+  1494	                 ;; rather than silently retargeting it to the replacement.
+  1495	                 (superchat--chat-execution-scope nil view)))
+  1496	            (let* ((recalled-memories superchat--pending-recalled-memories)
+  1497	                   ;; The queued item is the same Envelope an immediate send
+  1498	                   ;; would submit; Runtime's `dispatch-next' hands it to the
+  1499	                   ;; driver Service (one prompt path, step 3).
+  1500	                   (request
+  1501	                    (condition-case nil
+  1502	                        (superchat--chat-envelope
+  1503	                         (superchat--build-chat-request input))
+  1504	                      ;; A normal producer pre hook may activate a replacement
+  1505	                      ;; Preset.  Its old Turn cannot join this FIFO under the
+  1506	                      ;; replacement Scope, but this is a rejected enqueue,
+  1507	                      ;; not an error which escapes after the user pressed send.
+  1508	                      (superchat-preset-request-scope-retired
+  1509	                       :scope-retired)))
+  1510	                   (enqueue-result
+  1511	                    (unless (eq request :scope-retired)
+  1512	                      (superchat-runtime-enqueue-follow-up session request))))
+  1513	              (if (stringp enqueue-result)
+  1514	                  (progn
+  1515	                    (let ((inhibit-read-only t))
+  1516	                      (put-text-property prompt (point-max) 'read-only t)
+  1517	                      (put-text-property prompt (point-max) 'superchat-role 'user))
+  1518	                    (superchat--response-region-consume-prompt)
+  1519	                    (overlay-put (make-overlay (point-max) (point-max))
+  1520	                                 'after-string
+  1521	                                 (propertize " ⏳ queued" 'face 'superchat-status-muted-face))
+  1522	                    (superchat--response-region-ensure-view-prompt)
+  1523	                    (message "Queued (%d pending); it will be sent when the current response finishes."
+  1524	                             (superchat-runtime-pending-follow-ups session)))
+  1525	                ;; Rejected (Tape append failed or the captured Scope was
+  1526	                ;; retired): the original prompt text and marker are untouched
+  1527	                ;; above -- nothing was locked, consumed, or marked queued --
+  1528	                ;; so simply restore the recalled-memory payload and report
+  1529	                ;; the failure; the draft is still there.
+  1530	                (setq superchat--pending-recalled-memories recalled-memories)
+superchat-subagent.el:899:          :work-record (and (fboundp 'superchat-work-current)
+superchat-subagent.el:901:                            (superchat-work-current
+superchat-subagent.el:1091:(declare-function superchat-work-current "superchat-work" (session-id))
+superchat-tools.el:1504:    "timer_create" "timer_list" "timer_cancel" "work_record")
+superchat-tools.el:2018:          "work_record"
+superchat-tools.el:2048:          :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"; to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
+superchat-tools.el:2177:   :description "Ask the user for required information and wait for their answer, when the user can answer right now. If the answer can wait and there is a current work record, register the wait there (work_record, action wait, wait_for user) and end your turn instead. Answering does not authorize other tools."
+superchat-tools.el:2259:    "timer_create" "timer_list" "timer_cancel" "elisp_script" "work_record"
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (smoke--send view "ANNC_PLAIN_NEXT")
+      (should-not (annc--earlier-p (m5rc--settle 2))))))
+
+(ert-deftest annotate-chat/another-conversation-in-the-same-view-is-not-told ()
+  (m5rc--fixture `((:text ,annc--answer))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      (let ((session (buffer-local-value 'superchat--session-id view))
+            (context (list :chat-buffer view)))
+        ;; The conversation that annotated is told; any other Session shown
+        ;; in the same View is not.
+        (should (superchat-prompt-collector--annotate
+                 (list :surface 'chat :session-id session :context context) nil nil))
+        (should-not (superchat-prompt-collector--annotate
+                     (list :surface 'chat :session-id "annc-other-session"
+                           :context context)
+                     nil nil))))))
+
+(ert-deftest annotate-chat/the-request-can-be-rebuilt-from-the-record ()
+  (m5rc--fixture `((:text ,annc--answer))
+    (let* ((source (m5rc--source annc--text))
+           (view (m5rc--open source))
+           (superchat-automated-input nil))
+      (smoke--send view "ANNC_MARK_THEM >annotate")
+      (m5rc--settle 1)
+      ;; The same verdict the smoke reads for an ordinary message.
+      (should (equal '(reproduced . 0)
+                     (smoke--case-reconstruction
+                      (buffer-local-value 'superchat--session-id view)))))))
+
+(defun superchat-preset-apply (preset turn)
+  "Apply PRESET to TURN, mutating turn slots.
+Sets :preset, :target-model, :tools, and runs the :pre hook.
+Returns the modified TURN.
+
+Model precedence: an explicit per-turn @model (already parsed into
+TURN by the core pipeline) wins over the preset's model — the preset
+only fills the slot when it is still empty.
+
+For agent and plan presets, the skill body is the persona: it is
+prepended to TURN's system-prompt so it reaches the LLM as system
+context on every turn, not only on explicit skill invocation.
+Prompt-type presets keep their body out of the system prompt — for
+them the body is a prompt template handled by the skills layer."
+  (when preset
+    (setf (superchat-turn-preset turn) preset)
+    (when (and (superchat-preset-model preset)
+               (null (superchat-turn-target-model turn)))
+      (setf (superchat-turn-target-model turn)
+1824:   (superchat-preset-plugins preset)))

@@ -1,0 +1,105 @@
+{
+  "review_date": "2026-10-10",
+  "worktree": "/Users/chenyibin/Documents/emacs/package/superchat-m11-w1",
+  "jj_working_commit": "de7a2011",
+  "product_parent_commit": "92a03554",
+  "sources": {
+    "superchat-agent-loop.el": "33637dc8418304c898dd1bdf2e02829bfee74c5f3048fdb7d9765e7f69a890a1",
+    "superchat-agents-panel.el": "b0b4034b8cd9f44b1334e4ec5e196de81d14ba3aadc89baa073dc09daa3bbed0",
+    "superchat-approval.el": "bfebf775cb1bfb373f02a8b52981a5d6a12754b462f7ad838a10162d3fdf0900",
+    "superchat-artifact-board.el": "559f303063c95643dc16aa60b25c20c0c5622e8931972f443aa3df51d377a78d",
+    "superchat-change-set.el": "e884d790cfb5169abf8bf773947359734184fdfc510a940855a9084ba6f50be6",
+    "superchat-changes.el": "9cfa8a8f9ee294d533da7353dc85c66993829d5fd78b3410b17762df9b3641a6",
+    "superchat-compact.el": "63be560895b1ee8ec361b77bb823472de826429fade6f359ca9a49e398012a78",
+    "superchat-core.el": "4b167dbff21d3cad211157f51bc5fb4ebb045820ece9603d9581ba876a370b98",
+    "superchat-db.el": "1ffdc2bd9f9ea73b6f7463906efe8363a11f5b672aeedbc2eade3fbb7e4305f2",
+    "superchat-default-plugins.el": "41f6a17827d9ca12a95d43886163a8392cf9e651a609892812a54a2e0779708f",
+    "superchat-dispatcher.el": "2ce5dced4df084827ae026993bb4972300d6fe76f86e19e1606c98799f73e747",
+    "superchat-editor-workspace.el": "367823172a98014ca0873822541e1d514402a46f219e0328e4eec995e5a2b64a",
+    "superchat-emacsclient.el": "30a629ac8b5426832417dd832d40b3917a014fcfa8ad00d5055114ef25ea1409",
+    "superchat-event.el": "22503815c87ec02b257491940041939d82ea3bc628f3572d094ffa6881c2a101",
+    "superchat-executor.el": "3e0abefcb352111d094dc0d45534782944e3950b91afa9c48e6d3b69935640af",
+    "superchat-experience.el": "f50155ea3c433d733544f1dca24169990abaf5f3a553765b4c8f4a4b4af702c6",
+    "superchat-genui.el": "13b1ddea56695e2d801ff702e3ebcdce16f2b314799f1576f22e77214e4e9c3f",
+    "superchat-inline-act.el": "f02fff92d9e35020618ea2f0d072ff31f6faf6683cc05486d2128f76d5c1a88d",
+    "superchat-inline.el": "a4c4158e33d2ae50a61cfb5bd255355a3a2246d0fe51cff447b96e3c97f7c0d8",
+    "superchat-invariant.el": "60bc2c44112b7e77f74ec5808034c30d88721ae6db3a93672eb391b2231016fc",
+    "superchat-llm.el": "6ba12d3a52122bbd93da797766e2087d84d3178965801c31e6ee5ce67c3e446d",
+    "superchat-magit.el": "1846d39695303682a90715c3eff460a19ac8a8cc04fc212758f08890f0de124f",
+    "superchat-mcp.el": "feb27c058c3ae29c2eedf52469d177ca17811d503e109764bdaf0a20e4f121df",
+    "superchat-memory.el": "53404fdb06e88b9fb9f70727648803a85e40f938373f323a373556afb03296a5",
+    "superchat-models.el": "47e7b972d0f0b45c69382847f1aa9846a5d22661187552f8960e2e08e91789d5",
+    "superchat-parser.el": "8a2935030d09c3df282effa2419ca840e6bcd1e3c39831b57b874522b35cc3ea",
+    "superchat-pipeline.el": "bc9a283ee9941282d261a43d2fa471e67021bb43232a49cdfb2fbba62493edb2",
+    "superchat-pkg.el": "a53c72202df27040fccc9747181a99b039873447edd556827f344b433c2ab63c",
+    "superchat-plan.el": "fe6fdb7696934e1c5cccf03af51b8cadbc0eba33c365de8de9c779b2135b42f0",
+    "superchat-plugin.el": "7e3c59240117813600221c09fe25d320bbe02b62bef8589abc3189f9f1322949",
+    "superchat-preset.el": "96fc807f56db79816c2a154e45801a8de55eecdd095cd6be8c58c51265fee6ab",
+    "superchat-projection.el": "03a3c764f412cb71153afd989e2b6647e0fd544a401ba8e025afb4224cb4121a",
+    "superchat-prompt-hooks.el": "da6de6a4f58fc84830a431c3bfe907b5fb872d034e21c1dc95c2698e0a86480e",
+    "superchat-prompt.el": "8373c3b6560f20bb4155ed08bffcf0e9b51d3339e4bd4ffc9bcfb9d0b8cafe0b",
+    "superchat-reference.el": "ea26b787dfa97b5bc034e43d6d5ac8ffbc54ba5552b90bdd3fda6fd405f8efa1",
+    "superchat-render.el": "f6b2889ae8bc1d53cc34a447f5db5f3e996ce2efb051012e26b698c89fe3df1c",
+    "superchat-rewrite.el": "6e1933a60fd9f3ac509d8d9e3fa7779355d6f1006f3e677850c054ee142e30f6",
+    "superchat-runtime.el": "35847a94d6571c9b836f0485db93c7e094c42666a57cbf6a13c135486cf3152c",
+    "superchat-sandbox.el": "1ec51ae6fa9012340b550f21dadb65176c932ba06654844fef58e01df2491191",
+    "superchat-save.el": "610b499affc9e5cf5e544ccbe353d4ff1d17904a659828770931e84a08fd21f5",
+    "superchat-script.el": "3a69b7388e81d042a88e387ac6c6a4cc8b26b4fcc28c486d5cbf3f1828d7de97",
+    "superchat-select-tools.el": "e0bd390df97be7f86b7a1bec6d389717ffdccc2006e6772b42f8ad8823ef8669",
+    "superchat-service.el": "dc7bd915085e48b55a95bbd586caf6c9cb3eff9aa59473a4c2180d406072ebb0",
+    "superchat-sink.el": "ad356dc1fbfc58f9c11d67d8e4928ac892434e17ee34c293c3c5e4f5800b4fce",
+    "superchat-skills.el": "17a368cce06da994d69fa3052adae8f6ed3cae112e41c555aeeca466f541af10",
+    "superchat-subagent.el": "ca31ca5c5007cbd68903f34ebaf079fc251d01f4ad121754ad7008702f8f5e32",
+    "superchat-synthesis.el": "cec033b245889217e54d364cf3f151d27ade10369c2a97a176698c6c000e0ce6",
+    "superchat-tape-browser.el": "71a905487a324859bf29b4fd9bf055eb14145f6ac870a653def0bd748afe7b24",
+    "superchat-tape-view.el": "0cd78edba65e39b0299ab8af902c10f09176aefde35ec7353d0ea36859d8cacc",
+    "superchat-tape.el": "b29e4a5212973e9338bb412b9bed473de200fe465aebf7c5f0fbbf06e736f315",
+    "superchat-timer.el": "3d7d47401076403a4f3d41eb05b62783957c320a83a23166b0cc96a712f6b73e",
+    "superchat-tool-execution.el": "8920707eaa06a3c0d25dc69ffff2824961d61e517d45dca77c4b8ed92a77a1cf",
+    "superchat-tools.el": "4b0db11b10f54e790a86ce479971da80407d4205e5bfbf9c33c68ec45487f548",
+    "superchat-transport-llm.el": "3c85638e0dde2d18975d8f708be7061f47bbc266f04ec93a238c5ea2dd463405",
+    "superchat-transport-mock.el": "2c365154e5834e64587f83dff28b96c57cd1974c182965c8208e2db7e101fc14",
+    "superchat-widgets.el": "291a128fa42b9b2b4f7dc17da9768cf7c2854effb6c8da0e6ff8367c1c3f3a28",
+    "superchat-work.el": "45665d677e130d26f1d337135f971b50f309abf1e453e6e0c0dec178efda65a3",
+    "superchat-workflow.el": "10d283f61c97e67d233f0e9985d35cfb82086d68b37ce4aed851712cb37c403e",
+    "superchat-workspace.el": "f1d292f381c3c62fe4a941a004f4c38efad61ea3e93ddb399ba6264786af8943",
+    "superchat.el": "0311f204685c5d3b30d3478991873d0dcac565f7d18d7f866cd16512d13d1042"
+  },
+  "top_level_elisp_lines": 52188,
+  "top_level_elisp_files": 60,
+  "largest_modules": [
+    [
+      "superchat.el",
+      5826
+    ],
+    [
+      "superchat-runtime.el",
+      5119
+    ],
+    [
+      "superchat-llm.el",
+      4467
+    ],
+    [
+      "superchat-tools.el",
+      2429
+    ],
+    [
+      "superchat-experience.el",
+      2298
+    ],
+    [
+      "superchat-render.el",
+      1764
+    ],
+    [
+      "superchat-tape-view.el",
+      1750
+    ],
+    [
+      "superchat-dispatcher.el",
+      1706
+    ]
+  ],
+  "note": "Line counts include comments and blank lines. Not a complexity or quality score."
+}

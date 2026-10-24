@@ -1,0 +1,55 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 13 tests (2026-10-10 08:24:12-0700, selector ‘"^entry-rules/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: workspace rules are not in this request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-r3ABDN/AGENTS.md is not readable
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/13  entry-rules/a-chat-request-says-the-rules-could-not-be-read (0.432381 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-232460-b9f5 completed (session 20261010-082413-7d57)
+   passed   2/13  entry-rules/a-rewrite-carries-the-rules-once-before-its-own-text (0.029261 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-263034-30ad completed (session 20261010-082413-3161)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+   passed   3/13  entry-rules/a-rewrite-gets-the-rules-of-its-own-workspace (0.056276 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-317239-407c completed (session 20261010-082413-309c)
+   passed   4/13  entry-rules/a-rewrite-outside-any-workspace-is-as-it-was (0.028718 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-347183-ee57 completed (session 20261010-082413-2ac1)
+   passed   5/13  entry-rules/a-rewrite-says-which-rules-apply-to-it (0.030400 sec)
+superchat: workspace rules are not in this request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-p8szoV/AGENTS.md is not readable
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-377537-54e8 completed (session 20261010-082413-5fab)
+   passed   6/13  entry-rules/a-rewrite-tells-the-user-not-the-model (0.029166 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-406600-ffeb completed (session 20261010-082413-09fa)
+   passed   7/13  entry-rules/a-rewrite-without-rules-is-as-it-was (0.030572 sec)
+superchat: workspace rules are not in this sub-agent’s request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-zArLrs/AGENTS.md is not readable
+   passed   8/13  entry-rules/a-sub-agent-without-readable-rules-is-said-to-the-user (0.000655 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   9/13  entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules (0.035535 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082413-479888-6026 completed (session 20261010-082413-a1d9)
+superchat: run run-20261010-082413-507266-f0ac completed (session 20261010-082413-a1d9)
+   passed  10/13  entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown (0.078974 sec)
+   passed  11/13  entry-rules/compaction-and-skill-matching-carry-none (0.029487 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/13  entry-rules/every-workflow-step-carries-the-rules-once (0.071808 sec)
+   passed  13/13  entry-rules/the-problem-of-a-rules-file-is-told-apart (0.000896 sec)
+
+Ran 13 tests, 13 results as expected, 0 unexpected (2026-10-10 08:24:13-0700, 0.854495 sec)
+

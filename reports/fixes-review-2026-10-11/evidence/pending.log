@@ -1,0 +1,34 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 12 tests (2026-10-11 02:59:33-0700, selector ‘"^pending/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-fable-review/ws-work-gHdhcj/a.txt
+   passed   1/12  pending/a-buffer-a-tool-edited-is-listed-while-unsaved (0.666386 sec)
+   passed   2/12  pending/a-completed-record-is-not-listed (0.008085 sec)
+   passed   3/12  pending/a-record-waiting-for-a-time-then-due-and-not-taken-up (0.008514 sec)
+   passed   4/12  pending/a-record-waiting-for-the-user-says-what-it-asks (0.008421 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/12  pending/a-running-execution-says-who-started-it (0.451156 sec)
+superchat: scheduled task timer-20261011025934-a51c was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/12  pending/a-task-sent-while-another-execution-began-is-unsure (0.052574 sec)
+superchat: scheduled task timer-20261011025934-058c was not started: TSF injected: send fails
+   passed   7/12  pending/a-task-that-may-have-started-says-so (0.010339 sec)
+superchat: scheduled task timer-20261011025934-675d was not started: TSF injected: send fails
+   passed   8/12  pending/a-timer-to-come-and-a-task-that-did-not-start (0.009647 sec)
+   passed   9/12  pending/reading-the-list-writes-nothing (0.015094 sec)
+   passed  10/12  pending/the-kinds-come-in-the-order-that-needs-the-user-first (0.009614 sec)
+   passed  11/12  pending/the-list-shows-a-row-for-each-item-and-leads-to-it (0.007785 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/12  pending/work-superchat-did-by-itself-is-listed-until-looked-at (0.085660 sec)
+
+Ran 12 tests, 12 results as expected, 0 unexpected (2026-10-11 02:59:34-0700, 1.333780 sec)
+

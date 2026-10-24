@@ -1,0 +1,26 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 00:16:22-0700, selector ‘"^r3-domain/"’)
+GUARD: cached callable bodies refuse time wait and timer creation after unmount; no work or timer created.
+
+   passed  1/4  r3-domain/cached-tool-bodies-refuse-when-capability-is-off (0.589300 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-01 OBSERVED: tool read refused; B's ordinary request still receives A's goal; B's user input clears A's user wait; B's completed Run appends an outcome to A.
+
+   passed  2/4  r3-domain/legacy-focus-leaks-through-collector-and-clears-wait (0.052200 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-02 OBSERVED: work.outcome append raised once after terminal; run.completed=1; outcomes=0; fault ring unchanged; arm-all does not recover the outcome.
+
+   passed  3/4  r3-domain/post-terminal-work-write-failure-is-silent (0.044830 sec)
+superchat: scheduled task timer-20261011001622-c795 was not started: R3 unavailable
+superchat: scheduled task timer-20261011001622-c795 was not started: R3 unavailable
+R3-03 OBSERVED: retry-limit=0; ordinary rescan stays at 1 attempt; unmount/remount in same Emacs at same virtual time causes 2 attempts.
+
+   passed  4/4  r3-domain/remount-resets-retry-budget-and-wait (0.024102 sec)
+
+Ran 4 tests, 4 results as expected, 0 unexpected (2026-10-11 00:16:22-0700, 0.710755 sec)
+

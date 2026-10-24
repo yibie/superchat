@@ -1,0 +1,40 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 03:19:31-0700, selector ‘"^p3/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+P3 FOLD COST (ms, median of 5; live tree after 437ca4e8; isolated SQLite; the turn is one sample)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+baseline (3 real turns) | rows=36 | replay 1.0 | unattended-run-p 1.0 | work-request-text 1.6 | work-records 0.1 | timer-list 0.1 | changes-candidates 2.3 | session-history 0.3 | pending-items 0.4 | pending-render 0.4 | settle-missing 3.0 | one turn 103
+appended to 1000 rows in 0.17 s
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+~1000 rows | rows=1001 | replay 14.9 | unattended-run-p 15.6 | work-request-text 25.5 | work-records 3.0 | timer-list 0.3 | changes-candidates 31.0 | session-history 3.5 | pending-items 3.7 | pending-render 3.8 | settle-missing 764.5 | one turn 1605
+appended to 5000 rows in 0.65 s
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+turn probe turn ~5000 rows: the send signalled before any Run started: (superchat-prompt-invalid :field :refit-result :value "[Context v0 | raw 20261011-031931-bf91#7, 20261011-031931-bf91#13, 20261011-031931-bf91#18, 20261011-0319
+~5000 rows | rows=5002 | replay 74.2 | unattended-run-p 101.2 | work-request-text 212.6 | work-records 17.4 | timer-list 1.3 | changes-candidates 180.5 | session-history 18.6 | pending-items 21.1 | pending-render 20.9 | settle-missing 18053.2 | one turn 2314
+appended to 20000 rows in 2.41 s
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+turn probe turn ~20000 rows: the send signalled before any Run started: (superchat-prompt-invalid :field :refit-result :value "[Context v0 | raw 20261011-031931-bf91#9235, 20261011-031931-bf91#9240, 20261011-031931-bf91#9245, 202610
+~20000 rows | rows=20002 | replay 328.7 | unattended-run-p 331.2 | work-request-text 1080.1 | work-records 237.0 | timer-list 5.1 | changes-candidates 704.9 | session-history 109.3 | pending-items 250.2 | pending-render 251.4 | settle-missing 282395.1 | one turn 9447
+
+   passed  1/1  p3/fold-cost-as-the-tape-grows (339.611675 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-11 03:25:10-0700, 339.611759 sec)
+

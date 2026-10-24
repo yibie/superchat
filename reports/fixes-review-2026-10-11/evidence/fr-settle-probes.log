@@ -1,0 +1,93 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-11 03:08:53-0700, selector ‘"^fr-settle/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-SETTLE MOVED-ON: old record outcomes=nil faults=nil said=nil
+
+   passed  1/5  fr-settle/a-record-the-conversation-moved-on-from-stays-without-outcome-and-without-fault (0.554468 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-030854-488378-4ff6 completed (session 20261011-030854-e3e5)
+FR-SETTLE GUARD: outcomes=("continuable") reported=((:work-id "work-20261011030854-1d16" :run-id "run-20261011-030854-488378-4ff6" :conversation "20261011-030854-e3e5"))
+
+   passed  2/5  fr-settle/guard-a-woken-run-ended-untold-is-settled-once-and-reported-once (0.059740 sec)
+FR-SETTLE BACKFILL: 300 ended Runs under the focus without an outcome => settle-missing wrote 300 outcomes in 4293 ms; the record now has 300 outcomes and 301 execution lines for the user; the record text a request carries went from 108 to 108 characters
+
+   passed  3/5  fr-settle/mount-writes-every-outcome-the-focused-record-lacks (6.503344 sec)
+File a.txt changed on disk.  Reread from disk? (yes or no) Test fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record backtrace:
+  yes-or-no-p("File a.txt changed on disk.  Reread from disk? ")
+  find-file-noselect("/Users/chenyibin/.cache/sc-fable-review/ws-work-8RBPzx/a.txt")
+  (let ((file (expand-file-name (or name "a.txt") root))) (let ((temp-file file) (temp-buffer (generate-new-buffer " *temp file*" t))) (unwind-protect (prog1 (s
+  wrec--file("/Users/chenyibin/.cache/sc-fable-review/ws-work-8RBPzx/")
+  (set-buffer (wrec--file root))
+  (save-current-buffer (set-buffer (wrec--file root)) (superchat))
+  wrec--view("/Users/chenyibin/.cache/sc-fable-review/ws-work-8RBPzx/")
+  (hm--session (wrec--view root))
+  (let* ((main (hm--session (wrec--view root))) (id (superchat-work-start main goal))) (superchat-work-wait main id "time" nil (+ wrec--now 60)) (superchat-work
+  wwf--due-record("/Users/chenyibin/.cache/sc-fable-review/ws-work-8RBPzx/" "FR-MAIN-LATER")
+  (let* ((view (wrec--view p)) (pair (wwf--due-record p "FR-MAIN-LATER")) (id (cdr pair))) (superchat-work-wake-due) (wrec--settled) (hm--turn view "an unrelate
+  (progn (let* ((view (wrec--view p)) (pair (wwf--due-record p "FR-MAIN-LATER")) (id (cdr pair))) (superchat-work-wake-due) (wrec--settled) (hm--turn view "an u
+  (unwind-protect (progn (let* ((view (wrec--view p)) (pair (wwf--due-record p "FR-MAIN-LATER")) (id (cdr pair))) (superchat-work-wake-due) (wrec--settled) (hm-
+  (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let* ((view (wrec--view p)) (pair (wwf--due-record p "FR-MAIN-LATER")) (
+  (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let* ((view (wrec--view p)) (pair (wwf--due
+  (progn (fset 'smoke--fake-network vnew) (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-pro
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (u
+  #f(lambda () [t] (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--r
+  #f(compiled-function () #<bytecode -0x64114aba67faa12>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x64114aba67faa12>) (t) #f(compiled-function (err) #<bytecode -0x4acecf128da021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2afaa6f92c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record :documentation "Not new: the main conversatio
+  ert-run-or-rerun-test(#s(ert--stats :selector "^fr-settle/" :tests ... :test-map #<hash-table eql 5/5 0x1924dd4d51 ...> :test-results ... :test-start-times ..
+  ert-run-tests("^fr-settle/" #f(compiled-function (event-type &rest event-args) #<bytecode -0x10670e51a881f0b3>) nil)
+  ert-run-tests-batch("^fr-settle/")
+  ert-run-tests-batch-and-exit("^fr-settle/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-settle-probes.el" "/Users/chenyibin/
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record condition:
+    (end-of-file "Error reading from stdin")
+   FAILED  4/5  fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record (7.690814 sec) at reports/fixes-review-2026-10-11/evidence/fr-settle-probes.el:126
+FR-SETTLE COST (live tree; isolated SQLite; one sample each)
+runs ended under the record | settle-missing(session) ms | Tape SELECTs in it | hm--turn wall ms | Tape SELECTs in the turn | work rows on the Tape
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+0 | 1 | 5 | 52 | 71 | 3
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+50 | 101 | 56 | 337 | 124 | 54
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+200 | 907 | 207 | 1668 | 277 | 205
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+1000 | 22637 | 1008 | 27716 | 1080 | 1006
+
+   passed  5/5  fr-settle/run-end-cost-grows-with-the-runs-ended-under-the-record (54.129382 sec)
+
+Ran 5 tests, 4 results as expected, 1 unexpected (2026-10-11 03:10:03-0700, 69.088623 sec)
+
+1 unexpected results:
+   FAILED  fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record
+

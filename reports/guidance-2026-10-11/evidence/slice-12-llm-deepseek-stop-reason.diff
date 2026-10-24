@@ -1,0 +1,44 @@
+diff --git a/llm-deepseek.el b/llm-deepseek.el
+index 41db8fd..437220a 100644
+--- a/llm-deepseek.el
++++ b/llm-deepseek.el
+@@ -67,10 +67,15 @@ RESPONSE can be nil if the response is complete."
+            (content (llm-provider-utils-json-val
+                      (assoc-default 'content delta)))
+            (reasoning (llm-provider-utils-json-val
+-                       (assoc-default 'reasoning_content delta))))
++                       (assoc-default 'reasoning_content delta)))
++           (stop-reason (when (> (length choices) 0)
++                          (llm-openai--normalize-stop-reason
++                           (llm-provider-utils-json-val
++                            (assoc-default 'finish_reason (aref choices 0)))))))
+       (append (when content (list :text content))
+               (when tool-calls `(:tool-uses-raw ,tool-calls))
+               (when reasoning (list :reasoning reasoning))
++              (when stop-reason (list :stop-reason stop-reason))
+               (when (and usage (not (eq usage :null)))
+                 (list :input-tokens (assoc-default 'prompt_tokens usage)
+                       :output-tokens (assoc-default 'completion_tokens usage)))))))
+--- /Users/chenyibin/.cache/sc-tools/llm-test.el.before-12b	2026-10-21 19:42:11
++++ llm-test.el	2026-10-21 19:42:11
+@@ -423,6 +423,20 @@
+             '((:reasoning "Think")
+               (:text "Answer")
+               (:stop-reason length))))))
++
++(ert-deftest llm-test-deepseek-streaming-stop-reason ()
++  (require 'llm-deepseek)
++  (should-not (plist-member
++               (llm-deepseek--get-partial-chat-response
++                (json-parse-string
++                 "{\"choices\":[{\"delta\":{\"content\":\"A\"},\"finish_reason\":null}]}"
++                 :object-type 'alist))
++               :stop-reason))
++  (should (equal '(:stop-reason length)
++                 (llm-deepseek--get-partial-chat-response
++                  (json-parse-string
++                   "{\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}"
++                   :object-type 'alist)))))
+ 
+ (ert-deftest llm-test-termination-normalization ()
+   (let ((provider (make-llm-openai-compatible :chat-model "model"))

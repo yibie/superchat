@@ -1,0 +1,36 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-10 08:21:28-0700, selector ‘"^skill-context/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  1/5  skill-context/a-plain-message-says-where-the-user-is (0.625228 sec)
+🎯 Using skill: skc-prompt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  2/5  skill-context/a-prompt-skill-message-says-where-the-user-is (0.044811 sec)
+🎯 Using skill: skc-prompt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  3/5  skill-context/a-skill-message-carries-the-selected-text (0.044912 sec)
+Warning (superchat): Deprecated agent preset without profile-id: skc-agent
+🎯 Using skill: skc-agent
+Warning (superchat): Agent Profile skc-agent has no explicit capability; using its name for compatibility
+🎯 Active preset: skc-agent (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile skc-agent has no explicit capability; using skc-agent for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  4/5  skill-context/an-agent-skill-at-the-start-says-where-the-user-is (0.046770 sec)
+Warning (superchat): Deprecated agent preset without profile-id: skc-agent
+🎯 Using skill: skc-agent
+🎯 skc-agent: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile skc-agent has no explicit capability; using chat for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  5/5  skill-context/an-agent-skill-in-the-middle-says-where-the-user-is (0.043952 sec)
+
+Ran 5 tests, 5 results as expected, 0 unexpected (2026-10-10 08:21:29-0700, 0.805988 sec)
+

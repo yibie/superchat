@@ -1,0 +1,24 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 00:16:07-0700, selector ‘"^r3-open/"’)
+Warning (superchat): Deprecated agent preset without profile-id: r3-plugin-skill
+🎯 Using skill: r3-plugin-skill
+🎯 r3-plugin-skill: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile r3-plugin-skill has no explicit capability; using chat for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat): Deprecated agent preset without profile-id: r3-plugin-skill
+🎯 Using skill: r3-plugin-skill
+Warning (superchat): Agent Profile r3-plugin-skill has no explicit capability; using its name for compatibility
+🎯 Active preset: r3-plugin-skill (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile r3-plugin-skill has no explicit capability; using r3-plugin-skill for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+OPEN-A OBSERVED: body skill applies persona but mount-count=0 and capability absent; head skill mount-count=1 and same capability reaches provider. Accepted limitation, not a new regression.
+
+Superchat session cached for next startup.
+   passed  1/1  r3-open/one-message-skill-does-not-mount-declared-plugin (0.664447 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-11 00:16:07-0700, 0.664663 sec)
+

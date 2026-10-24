@@ -1,0 +1,99 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 27 tests (2026-10-11 02:59:35-0700, selector ‘"^annotate/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/27  annotate/a-line-number-off-by-up-to-two-is-put-right-by-the-quote (0.605548 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   2/27  annotate/a-long-remark-is-wrapped-within-the-width (0.035418 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/27  annotate/a-quote-cut-short-with-dots-is-found-by-what-is-left (0.035370 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   4/27  annotate/a-quote-in-other-capitals-is-not-the-text (0.032184 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/27  annotate/a-quote-in-the-same-capitals-is-found (0.033587 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/27  annotate/a-quote-not-found-near-the-line-is-placed-nowhere (0.032957 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/27  annotate/a-quote-written-in-quotation-marks-is-still-found (0.033886 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/27  annotate/a-remark-is-hung-on-its-quote-on-the-stated-line (0.031697 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   9/27  annotate/a-remark-is-never-placed-outside-the-region (0.039072 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/27  annotate/a-remark-is-shown-as-a-block-under-its-line (0.045826 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/27  annotate/an-answer-with-no-rows-is-said-to-give-nothing (0.043895 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/27  annotate/an-empty-answer-is-said-to-be-empty (0.037418 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/27  annotate/asking-again-replaces-the-remarks-of-those-lines (0.075618 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-025936-587692-0153 completed (session 20261011-025936-f7a3)
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-025936-757718-2a33 completed (session 20261011-025936-f7a3)
+   passed  14/27  annotate/asking-twice-before-the-first-answer-leaves-the-second (0.209992 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  15/27  annotate/dots-that-are-in-the-text-are-part-of-the-quote (0.034519 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  16/27  annotate/line-numbers-count-from-the-start-of-the-region (0.063186 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  17/27  annotate/next-and-previous-go-round (0.033121 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  18/27  annotate/remarks-of-one-line-are-stacked-in-text-order (0.072771 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  19/27  annotate/removing-one-remark-of-a-line-keeps-the-other (0.045329 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  20/27  annotate/rows-not-in-the-asked-form-are-counted-not-dropped (0.041792 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  21/27  annotate/the-block-is-indented-like-its-line (0.040679 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  22/27  annotate/the-end-of-line-style-keeps-the-remark-on-the-line (0.039375 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  23/27  annotate/the-request-asks-for-rows-and-shows-numbered-lines (0.039710 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  24/27  annotate/the-request-carries-the-workspace-rules-and-its-own-note (0.040831 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  25/27  annotate/the-request-offers-the-model-no-tools (0.041419 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  26/27  annotate/the-text-is-never-changed (0.035057 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  27/27  annotate/without-rules-the-request-has-no-note-about-them (0.040729 sec)
+
+Ran 27 tests, 27 results as expected, 0 unexpected (2026-10-11 02:59:37-0700, 1.862839 sec)
+

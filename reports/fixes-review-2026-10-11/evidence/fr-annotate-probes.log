@@ -1,0 +1,56 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 6 tests (2026-10-11 03:10:07-0700, selector ‘"^fr-annotate/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-031008-038504-884e completed (session 20261011-031007-7edc)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+superchat: 2 remarks placed in m5rc-source.el
+FR-ANNOTATE NOTE: region command placed CMD-REMARK on line 2; whole-buffer >annotate arrived; remarks now ((2 "REMARK-B") (3 "REMARK-G"))
+
+Superchat session cached for next startup.
+   passed  1/6  fr-annotate/a-whole-buffer-answer-replaces-a-regions-remarks (0.634816 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-ANNOTATE NOTE: remarks after an empty second answer: nil; said: ("superchat: 1 remark placed" "superchat: run run-20261011-031008-131308-1bd9 completed (session 20261011-031008-a3d2)" #1="FOLDED" #1# #1# "superchat: the model gave no remarks: its answer was empty" "superchat: run run-20261011-031008-307180-8422 completed (session 20261011-031008-a3d2)" #1# #1# #1#)
+
+   passed  2/6  fr-annotate/an-empty-second-answer-removes-the-first-and-places-nothing (0.221186 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-ANNOTATE OBSERVED: after superchat-annotate-clear, remarks=0, next request's system still says: "Earlier in this conversation the user sent a message ending in `>annotate'.  Its answer, rows of a line number, a quote and a remark, was hung by Superchat on the user's buffer (m5rc-source.el) as remarks beside the text; the text itself was not changed.  That request is finished.  Do not write those remarks into the buffer and do not repeat them, unless the user asks for that now."
+
+Superchat session cached for next startup.
+   passed  3/6  fr-annotate/clearing-the-remarks-does-not-clear-what-the-model-is-told (0.091995 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  4/6  fr-annotate/guard-the-ellipsis-path-is-exact-too (0.033163 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  5/6  fr-annotate/killing-the-source-does-not-clear-what-the-model-is-told (0.118000 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-ANNOTATE NOTE: inspector send after killing the target => (error "superchat: nothing to annotate: this conversation was not called from a buffer; name one after >annotate"); provider requests=0; inspector live=t
+
+   passed  6/6  fr-annotate/the-inspector-send-after-the-target-was-killed (0.218333 sec)
+
+Ran 6 tests, 6 results as expected, 0 unexpected (2026-10-11 03:10:08-0700, 1.317832 sec)
+

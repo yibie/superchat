@@ -1,0 +1,81 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 24 tests (2026-10-11 00:13:00-0700, selector ‘"^annotate/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/24  annotate/a-line-number-off-by-up-to-two-is-put-right-by-the-quote (0.959232 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   2/24  annotate/a-long-remark-is-wrapped-within-the-width (0.043141 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/24  annotate/a-quote-cut-short-with-dots-is-found-by-what-is-left (0.039813 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   4/24  annotate/a-quote-not-found-near-the-line-is-placed-nowhere (0.037445 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/24  annotate/a-quote-written-in-quotation-marks-is-still-found (0.042809 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/24  annotate/a-remark-is-hung-on-its-quote-on-the-stated-line (0.040053 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/24  annotate/a-remark-is-never-placed-outside-the-region (0.040298 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/24  annotate/a-remark-is-shown-as-a-block-under-its-line (0.041179 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   9/24  annotate/an-answer-with-no-rows-is-said-to-give-nothing (0.042593 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/24  annotate/an-empty-answer-is-said-to-be-empty (0.040760 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/24  annotate/asking-again-replaces-the-remarks-of-those-lines (0.077966 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/24  annotate/dots-that-are-in-the-text-are-part-of-the-quote (0.038123 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/24  annotate/line-numbers-count-from-the-start-of-the-region (0.041057 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  14/24  annotate/next-and-previous-go-round (0.043010 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  15/24  annotate/remarks-of-one-line-are-stacked-in-text-order (0.076028 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  16/24  annotate/removing-one-remark-of-a-line-keeps-the-other (0.088792 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  17/24  annotate/rows-not-in-the-asked-form-are-counted-not-dropped (0.039349 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  18/24  annotate/the-block-is-indented-like-its-line (0.039263 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  19/24  annotate/the-end-of-line-style-keeps-the-remark-on-the-line (0.039889 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  20/24  annotate/the-request-asks-for-rows-and-shows-numbered-lines (0.038474 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  21/24  annotate/the-request-carries-the-workspace-rules-and-its-own-note (0.037125 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  22/24  annotate/the-request-offers-the-model-no-tools (0.038727 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  23/24  annotate/the-text-is-never-changed (0.032052 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  24/24  annotate/without-rules-the-request-has-no-note-about-them (0.031405 sec)
+
+Ran 24 tests, 24 results as expected, 0 unexpected (2026-10-11 00:13:02-0700, 1.992340 sec)
+

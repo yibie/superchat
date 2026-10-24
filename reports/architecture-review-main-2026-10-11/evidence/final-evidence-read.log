@@ -1,0 +1,279 @@
+
+---domain-probes-final---
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 00:16:22-0700, selector ‘"^r3-domain/"’)
+GUARD: cached callable bodies refuse time wait and timer creation after unmount; no work or timer created.
+
+   passed  1/4  r3-domain/cached-tool-bodies-refuse-when-capability-is-off (0.589300 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-01 OBSERVED: tool read refused; B's ordinary request still receives A's goal; B's user input clears A's user wait; B's completed Run appends an outcome to A.
+
+   passed  2/4  r3-domain/legacy-focus-leaks-through-collector-and-clears-wait (0.052200 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-02 OBSERVED: work.outcome append raised once after terminal; run.completed=1; outcomes=0; fault ring unchanged; arm-all does not recover the outcome.
+
+   passed  3/4  r3-domain/post-terminal-work-write-failure-is-silent (0.044830 sec)
+superchat: scheduled task timer-20261011001622-c795 was not started: R3 unavailable
+superchat: scheduled task timer-20261011001622-c795 was not started: R3 unavailable
+R3-03 OBSERVED: retry-limit=0; ordinary rescan stays at 1 attempt; unmount/remount in same Emacs at same virtual time causes 2 attempts.
+
+   passed  4/4  r3-domain/remount-resets-retry-budget-and-wait (0.024102 sec)
+
+Ran 4 tests, 4 results as expected, 0 unexpected (2026-10-11 00:16:22-0700, 0.710755 sec)
+
+
+---annotation-probes-02---
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 00:15:30-0700, selector ‘"^r3-annotation/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: the model gave no remarks in the asked form (1 rows not understood; M-x superchat-annotate-list) in m5rc-source.el
+superchat: run run-20261011-001530-714566-0b8b completed (session 20261011-001530-dcd1)
+R3-06 OBSERVED: actual act inspector send has no tools, no LINE | QUOTE | REMARK, no numbered target; annotation sink still parses prose as 1 unparsed line.
+
+   passed  1/4  r3-annotation/inspected-annotate-has-sink-but-no-row-contract (0.615070 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-04 OBSERVED: model quotes lowercase target, source contains only uppercase TARGET; annotation placed, source text/tick unchanged.
+
+   passed  2/4  r3-annotation/quote-search-is-case-folded (0.028399 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001530-815376-b2bc completed (session 20261011-001530-6395)
+R3-05 OBSERVED: same Session, same Emacs, source still has 2 remarks; close/reopen only the View => history keeps >annotate but next provider system loses the hung/completed note.
+
+   passed  3/4  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives (0.075846 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001530-853700-2d2f completed (session 20261011-001530-c7c4)
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001531-026362-6d3c completed (session 20261011-001530-c7c4)
+FOLDED
+FOLDED
+FOLDED
+R3-07 OBSERVED: second command while first pending => 2 overlapping remarks retained; latest report says placed=1; queued Runtime not a second execution engine.
+
+   passed  4/4  r3-annotation/two-pending-command-answers-accumulate (0.217513 sec)
+
+Ran 4 tests, 4 results as expected, 0 unexpected (2026-10-11 00:15:31-0700, 0.937152 sec)
+
+
+---open-items-probes---
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 00:16:07-0700, selector ‘"^r3-open/"’)
+Warning (superchat): Deprecated agent preset without profile-id: r3-plugin-skill
+🎯 Using skill: r3-plugin-skill
+🎯 r3-plugin-skill: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile r3-plugin-skill has no explicit capability; using chat for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat): Deprecated agent preset without profile-id: r3-plugin-skill
+🎯 Using skill: r3-plugin-skill
+Warning (superchat): Agent Profile r3-plugin-skill has no explicit capability; using its name for compatibility
+🎯 Active preset: r3-plugin-skill (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile r3-plugin-skill has no explicit capability; using r3-plugin-skill for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+OPEN-A OBSERVED: body skill applies persona but mount-count=0 and capability absent; head skill mount-count=1 and same capability reaches provider. Accepted limitation, not a new regression.
+
+Superchat session cached for next startup.
+   passed  1/1  r3-open/one-message-skill-does-not-mount-declared-plugin (0.664447 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-11 00:16:07-0700, 0.664663 sec)
+
+
+---boundary-probes---
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 00:17:33-0700, selector ‘"^r3-boundary/"’)
+superchat: scheduled task timer-20261011001733-06be was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: Scheduled task (due 2027-01-15 00:01): R3-DUE-UNSTARTED -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again.
+OPEN-C OBSERVED: due-unstarted task absent from work/notice lists; timer_list shows only fired text without id/start-state. Actual unconfirmed transition changes neither tool list nor notices (conversation receives explanation). This proves a fragmented view, not a contracted unified-screen defect.
+
+   passed  1/2  r3-boundary/no-common-view-for-due-and-unconfirmed-tasks (0.629301 sec)
+superchat: scheduled task timer-20261011001733-a9ad was not started: R3 start unavailable
+superchat: scheduled task timer-20261011001733-a9ad was not started: R3 start unavailable
+R3-03 WAIT: retry-limit=2, wait=300s; ordinary scan waits, remount sends again at virtual elapsed=0s.
+
+   passed  2/2  r3-boundary/remount-also-skips-failure-wait (0.025864 sec)
+
+Ran 2 tests, 2 results as expected, 0 unexpected (2026-10-11 00:17:33-0700, 0.655409 sec)
+
+
+---composition-probes---
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 3 tests (2026-10-11 00:18:43-0700, selector ‘"^r3-composition/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-08 N2 OBSERVED: dispose only second changes installation; global changes remains active but late-start hook gone; synchronous real task terminal=1 started=1 notices=0.
+
+   passed  1/3  r3-composition/disposing-second-changes-mount-removes-global-late-hook (0.608906 sec)
+R3-08 TIMING OBSERVED: dispose second timing installations; both global rows still active, pending reminder+work.waiting retained, both armed maps empty; active-row gates still answer true.
+
+   passed  2/3  r3-composition/disposing-second-timing-mounts-disarms-global-promises (0.043464 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+GUARD: nested elisp_script calls reach the object scope refusal; neither private goal nor reminder reaches B and timer is not cancelled.
+
+   passed  3/3  r3-composition/script-tool-cannot-bypass-object-checks (0.090027 sec)
+
+Ran 3 tests, 3 results as expected, 0 unexpected (2026-10-11 00:18:44-0700, 0.742710 sec)
+
+;;; composition-probes.el --- Round 3 exact installation resource checks -*- lexical-binding: t; -*-
+(load (expand-file-name "scripts/unattended-notice-regression.el" default-directory) nil t)
+
+(ert-deftest r3-composition/disposing-second-changes-mount-removes-global-late-hook ()
+  (let ((scope (superchat-scope-create "r3-second-changes" superchat-scope-global)))
+    (unwind-protect
+        (progn
+          (should (superchat-plugin-row-active-p 'changes))
+          (should (memq #'superchat-changes--note-started-late superchat-timer-started-functions))
+          (superchat-plugin-mount 'changes nil scope)
+          (should (eq 'active (superchat-plugin-state 'changes scope)))
+          (superchat-scope-dispose scope)
+          (should (eq 'active (superchat-plugin-state 'changes superchat-scope-global)))
+          (should-not (memq #'superchat-changes--note-started-late superchat-timer-started-functions))
+          (un--fresh
+            (un--with-task-answered-at-once '((:text "SYNC")) (session _fired)
+              (should (= 1 (length (hm--events session "run.completed"))))
+              (should (= 1 (length (hm--events session "timer.started"))))
+              (should-not superchat-changes--notices)
+              (princ "R3-08 N2 OBSERVED: dispose only second changes installation; global changes remains active but late-start hook gone; synchronous real task terminal=1 started=1 notices=0.\n"))))
+      (ignore-errors (superchat-scope-dispose scope))
+      ;; Restore with the real plugin lifecycle, not with a product patch.
+      (superchat-plugin-unmount 'changes superchat-scope-global)
+      (superchat-plugin-mount 'changes))))
+
+(ert-deftest r3-composition/disposing-second-timing-mounts-disarms-global-promises ()
+  (wrec--with nil (p)
+    (let* ((session (hm--session (wrec--view p)))
+           (id (superchat-work-start session "R3-PROMISED-WORK"))
+           (due (+ (float-time) 3600))
+           (timer (superchat-timer-create session 'reminder "R3-PROMISED-REMINDER" due))
+           (scope (superchat-scope-create "r3-second-timing" superchat-scope-global)))
+      (unwind-protect
+          (progn
+            (superchat-work-wait session id "time" "continue" due)
+            (should (gethash id superchat-work--armed))
+            (should (gethash (plist-get timer :id) superchat-timer--armed))
+            (superchat-plugin-mount 'timers nil scope)
+            (superchat-plugin-mount 'work-records nil scope)
+            ;; Dispatch the zero-delay installation setup callbacks.
+            (sleep-for 0.03)
+            (superchat-scope-dispose scope)
+            (should (eq 'active (superchat-plugin-state 'timers superchat-scope-global)))
+            (should (eq 'active (superchat-plugin-state 'work-records superchat-scope-global)))
+            (should (superchat-timer--active-p))
+            (should (superchat-work--wake-active-p))
+            (should-not (gethash id superchat-work--armed))
+            (should-not (gethash (plist-get timer :id) superchat-timer--armed))
+            (should (plist-get (superchat-work-get id) :waiting))
+            (should (= 1 (length (superchat-timer-list))))
+            (princ "R3-08 TIMING OBSERVED: dispose second timing installations; both global rows still active, pending reminder+work.waiting retained, both armed maps empty; active-row gates still answer true.\n"))
+        (ignore-errors (superchat-scope-dispose scope))
+        (superchat-plugin-unmount 'work-records superchat-scope-global)
+        (superchat-plugin-mount 'work-records)
+        (superchat-work-disarm-all)
+        (superchat-timer-disarm-all)))))
+
+(ert-deftest r3-composition/script-tool-cannot-bypass-object-checks ()
+  (wrec--with nil (p q)
+    (let* ((session (hm--session (wrec--view p)))
+           (id (superchat-work-start session "R3-SCRIPT-PRIVATE-GOAL"))
+           (timer (superchat-timer-create session 'reminder "R3-SCRIPT-PRIVATE-TIMER" (+ (float-time) 3600)))
+           (tid (plist-get timer :id))
+           (b (wrec--view q)))
+      (setq smoke--script
+            (list `(:tool-uses (("elisp_script"
+                                (code . ,(format "(out (tool \"work_record\" :action \"read\" :id %S)) (out (tool \"timer_cancel\" :id %S))" id tid)))))
+                  '(:text "DONE")))
+      (let ((superchat-llm-tool-names (append superchat-llm-tool-names '("elisp_script"))))
+        (hm--turn b "Use the script tool to call the supplied operations"))
+      (should (string-match-p "another workspace" (prin1-to-string hm--wires)))
+      (should-not (string-match-p "R3-SCRIPT-PRIVATE-GOAL" (prin1-to-string hm--wires)))
+      (should-not (string-match-p "R3-SCRIPT-PRIVATE-TIMER" (prin1-to-string hm--wires)))
+      (should (cl-find tid (superchat-timer-list) :key (lambda (r) (plist-get r :id)) :test #'equal))
+      (princ "GUARD: nested elisp_script calls reach the object scope refusal; neither private goal nor reminder reaches B and timer is not cancelled.\n"))))
+
+(ert-run-tests-batch-and-exit "^r3-composition/")
+;;; boundary-probes.el --- Round 3 retry and visibility boundary checks -*- lexical-binding: t; -*-
+(load (expand-file-name "scripts/timer-start-fault-regression.el" default-directory) nil t)
+
+(ert-deftest r3-boundary/remount-also-skips-failure-wait ()
+  (wtimer--with nil (p)
+    (let* ((session (cdr (tsf--task p "R3-WAIT")))
+           (superchat-timer-retry-limit 2)
+           (clock wtimer--now) (tries 0))
+      (unwind-protect
+          (cl-letf (((symbol-function 'superchat-send-input)
+                     (lambda () (cl-incf tries) (error "R3 start unavailable"))))
+            (superchat-timer-catch-up)
+            (should (= tries 1))
+            (superchat-timer-retry-tasks)
+            (should (= tries 1))
+            (superchat-plugin-unmount 'timers)
+            (superchat-plugin-mount 'timers)
+            (should (smoke--wait (lambda () (= tries 2)) 2))
+            (should (= clock wtimer--now))
+            (should (= 2 (tsf--count session "timer.sending")))
+            (princ "R3-03 WAIT: retry-limit=2, wait=300s; ordinary scan waits, remount sends again at virtual elapsed=0s.\n"))
+        (unless (superchat-plugin-row-active-p 'timers) (superchat-plugin-mount 'timers))))))
+
+(ert-deftest r3-boundary/no-common-view-for-due-and-unconfirmed-tasks ()
+  (wtimer--with nil (p)
+    (let* ((pair (tsf--task p "R3-DUE-UNSTARTED"))
+           (view (car pair)) (session (cdr pair))
+           (superchat-changes--notices nil)
+           (superchat--tool-execution-context (list :session-id session)))
+      (tsf--send-failing (superchat-timer-catch-up))
+      (let* ((task (car (superchat-timer-unstarted-tasks)))
+             (id (plist-get task :id))
+             (text (superchat-timer-tool-list)))
+        (should task)
+        (should (string-match-p "No pending timers" text))
+        (should (string-match-p "R3-DUE-UNSTARTED" text))
+        (should-not (string-match-p (regexp-quote id) text))
+        (should-not (superchat-work--list-entries))
+        (should-not (superchat-changes--notices-entries))
+        ;; An unrelated real Run after sending triggers the actual ambiguous
+        ;; classification; do not manually manufacture timer.unconfirmed.
+        (setq smoke--script '((:text "Unrelated answer")))
+        (hm--turn view "Another question, unrelated to the timer")
+        (superchat-timer-retry-tasks)
+        (should (= 1 (tsf--count session "timer.unconfirmed")))
+        (should-not (superchat-timer-unstarted-tasks))
+        (should (equal text (superchat-timer-tool-list)))
+        (should-not (superchat-changes--notices-entries))
+        (princ "OPEN-C OBSERVED: due-unstarted task absent from work/notice lists; timer_list shows only fired text without id/start-state. Actual unconfirmed transition changes neither tool list nor notices (conversation receives explanation). This proves a fragmented view, not a contracted unified-screen defect.\n")))))
+
+(ert-run-tests-batch-and-exit "^r3-boundary/")

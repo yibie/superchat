@@ -1,0 +1,70 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-11 00:13:09-0700, selector ‘"^skill-once/"’)
+🎯 Using skill: sko-plan
+🎯 Active preset: sko-plan (plan)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  1/5  skill-once/a-plan-skill-in-the-middle-still-switches-the-conversation (0.855569 sec)
+Warning (superchat): Deprecated agent preset without profile-id: sko-agent
+🎯 Using skill: sko-agent
+Warning (superchat): Agent Profile sko-agent has no explicit capability; using its name for compatibility
+🎯 Active preset: sko-agent (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-agent has no explicit capability; using sko-agent for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-agent has no explicit capability; using sko-agent for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  2/5  skill-once/an-agent-skill-at-the-start-still-switches-the-conversation (0.092678 sec)
+Warning (superchat): Deprecated agent preset without profile-id: sko-agent
+🎯 Using skill: sko-agent
+🎯 sko-agent: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-agent has no explicit capability; using chat for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  3/5  skill-once/an-agent-skill-in-the-middle-shapes-that-message-only (0.094744 sec)
+Warning (superchat): Deprecated agent preset without profile-id: sko-cap
+🎯 Using skill: sko-cap
+🎯 sko-cap: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  4/5  skill-once/an-agent-skill-with-its-own-capability-also-runs-once (0.092705 sec)
+Warning (superchat): Deprecated agent preset without profile-id: sko-home
+🎯 Using skill: sko-home
+Warning (superchat): Agent Profile sko-home has no explicit capability; using its name for compatibility
+🎯 Active preset: sko-home (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-home has no explicit capability; using sko-home for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat): Deprecated agent preset without profile-id: sko-guest
+🎯 Using skill: sko-guest
+🎯 sko-guest: this message only
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-guest has no explicit capability; using sko-home for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile sko-home has no explicit capability; using sko-home for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  5/5  skill-once/inside-another-mode-the-one-message-skill-replaces-it-once (0.173356 sec)
+
+Ran 5 tests, 5 results as expected, 0 unexpected (2026-10-11 00:13:10-0700, 1.309550 sec)
+

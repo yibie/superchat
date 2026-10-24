@@ -1,0 +1,44 @@
+{
+  "interactions": [
+    {
+      "wakeVisible": true,
+      "normalHidden": true
+    },
+    {
+      "cancelVisible": true,
+      "wakeHidden": true
+    },
+    {
+      "node": "Work / Timer：持久意图的生产者，不是第二个 Runtime"
+    },
+    {
+      "evidenceOpen": true
+    }
+  ],
+  "layouts": [
+    {
+      "width": 1440,
+      "scrollWidth": 1425,
+      "overflow": false,
+      "invalidControls": []
+    },
+    {
+      "width": 768,
+      "scrollWidth": 753,
+      "overflow": false,
+      "invalidControls": []
+    },
+    {
+      "width": 375,
+      "scrollWidth": 360,
+      "overflow": false,
+      "invalidControls": []
+    },
+    {
+      "width": 320,
+      "scrollWidth": 305,
+      "overflow": false,
+      "invalidControls": []
+    }
+  ]
+}

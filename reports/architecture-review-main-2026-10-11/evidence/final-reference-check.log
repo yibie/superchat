@@ -1,0 +1,316 @@
+    35	                  (session-id))
+    36	(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
+    37	                  (session-id role &optional create))
+    38	(declare-function superchat--render-session-view "superchat" (session-id))
+    39	(declare-function superchat--insert-persistent-system-message "superchat-render"
+    40	                  (text))
+    41	(declare-function superchat-send-input "superchat-dispatcher" ())
+    42	(declare-function superchat-runtime-active-runs "superchat-runtime" ())
+    43	(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+    44	(declare-function superchat-tape-replay-events "superchat-tape"
+    45	                  (session-id &optional since-id limit))
+    46	(defvar superchat-buffer-name)
+    47	(defvar superchat-automated-input)
+    48	(defvar superchat--active-run-id)
+    49	(defvar superchat--tool-execution-context)
+    50	(defvar superchat--session-id)
+    51	
+    52	(defgroup superchat-timer nil
+    53	  "Timers and reminders."
+    54	  :group 'superchat)
+    55	
+    56	(defcustom superchat-timer-notify-function #'superchat-timer-notify
+    57	  "Function that tells the user a timer came due.
+    58	It is called with one argument, the fired timer plist (`:text', `:kind',
+    59	`:due', `:late').  The default shows the text in the echo area and rings
+    60	the bell."
+    61	  :type 'function
+    62	  :group 'superchat-timer)
+    63	
+    64	(defvar superchat-timer-now-function #'float-time
+    65	  "Function returning the current time in seconds since the epoch.
+    66	Tests replace it to move time.")
+    67	
+    68	(defconst superchat-timer-repeats
+   398	                           (setq superchat-timer--retry-timer nil
+   399	                                 superchat-timer--retry-at nil)
+   400	                           (superchat-timer-retry-tasks)))))))
+   401	
+   402	(defun superchat-timer--try-task (session-id timer-id occurrence text)
+   403	  "Start the task and return its Run id, or nil when no execution began.
+   404	A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
+   405	without limit; a failed start after `superchat-timer-retry-seconds', at most
+   406	`superchat-timer-retry-limit' times in one Emacs.
+   407	
+   408	Both are checked here, before the start is tried, not only when the next
+   409	try is scheduled: the one Emacs timer that retries serves every unstarted
+   410	task, so a task out of tries, or one that failed a moment ago, is reached
+   411	again whenever another task keeps that timer going."
+   412	  (let* ((key (cons timer-id occurrence))
+   413	         (failed (gethash key superchat-timer--retries 0))
+   414	         (wait (- (gethash key superchat-timer--not-before 0)
+   415	                  (superchat-timer--now))))
+   416	    (cond
+   417	     ;; Out of tries in this Emacs: it stays on record as not started.
+   418	     ((> failed superchat-timer-retry-limit) nil)
+   419	     ;; It failed a moment ago: its own wait is not over.
+   420	     ((> wait 0) (superchat-timer--retry-later wait) nil)
+   421	     (t
+   422	      (let ((run (condition-case err
+   423	                     (superchat-timer--start-task session-id timer-id occurrence text)
+   424	                   (error (message "superchat: scheduled task %s was not started: %s"
+   425	                                   timer-id (error-message-string err))
+   426	                          nil))))
+   427	        (cond ((stringp run)
+   428	               (remhash key superchat-timer--retries)
+   429	               (remhash key superchat-timer--not-before)
+   430	               run)
+   431	              ((eq run 'busy)
+   432	               (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+   433	               nil)
+   434	              (t (let ((failed (1+ failed)))
+   435	                   (puthash key failed superchat-timer--retries)
+   436	                   (when (<= failed superchat-timer-retry-limit)
+   437	                     (puthash key (+ (superchat-timer--now)
+   438	                                     superchat-timer-retry-seconds)
+   439	                              superchat-timer--not-before)
+   440	                     (superchat-timer--retry-later superchat-timer-retry-seconds)))
+   441	                 nil)))))))
+   442	
+   592	(defun superchat-timer-catch-up ()
+   593	  "Fire, once each, the timers that came due while nothing was armed.
+   594	A repeating timer fires only its most recent missed occurrence.  Return
+   595	the fired plists."
+   596	  (clrhash superchat-timer--retries)
+   597	  (clrhash superchat-timer--not-before)
+   598	  ;; First the tasks an earlier Emacs fired and never started.
+   599	  (superchat-timer-retry-tasks)
+   600	  (let ((now (superchat-timer--now)) fired)
+   601	    (dolist (timer (superchat-timer-list))
+   602	      (when-let* ((occurrence (superchat-timer--latest-occurrence timer now)))
+   603	        (push (superchat-timer-fire timer occurrence) fired)))
+   604	    (nreverse fired)))
+   605	
+   606	(defun superchat-timer-arm-all ()
+   607	  "Catch up on missed timers, then arm every pending one."
+   608	  (superchat-timer-disarm-all)
+   609	  (superchat-timer-catch-up)
+   610	  (dolist (timer (superchat-timer-list))
+   140	            (push (list :line (string-to-number line)
+   141	                        :quote (string-trim quote "[\"“”`]+" "[\"“”`]+")
+   142	                        :remark (string-trim remark))
+   143	                  rows)))
+   144	         (t (push row unparsed)))))
+   145	    (cons (nreverse rows) (nreverse unparsed))))
+   146	
+   147	(defun superchat-annotate--line-count (beg end)
+   148	  "Return how many lines BEG..END holds, as `superchat-annotate--numbered' counts.
+   149	BEG is at the start of a line; END is on the last one, wherever in it."
+   150	  (1+ (- (line-number-at-pos end) (line-number-at-pos beg))))
+   151	
+   152	(defun superchat-annotate--quote-on-line (quote)
+   153	  "Return (BEG . END) of QUOTE on the current line, or nil."
+   154	  (save-excursion
+   155	    (let ((eol (line-end-position)))
+   156	      (beginning-of-line)
+   157	      (when (search-forward quote eol t)
+   158	        (cons (match-beginning 0) (match-end 0))))))
+   159	
+   160	(defun superchat-annotate--without-ellipsis (quote)
+   161	  "Return QUOTE without the dots a model puts where it cut the quote short.
+   162	\"some text...\" and \"…some text\" give \"some text\"."
+   163	  (string-trim quote "\\(?:\\.\\.\\.+\\|…\\|[ \t]\\)+" "\\(?:\\.\\.\\.+\\|…\\|[ \t]\\)+"))
+   164	
+   165	(defun superchat-annotate--locate-exactly (beg end line quote)
+   166	  "Return (QBEG . QEND) of QUOTE near LINE of BEG..END, or nil.
+   167	The stated line is tried first, then the lines one away, then two away, up
+   168	to `superchat-annotate--near-lines'; a line outside BEG..END is never tried."
+   169	  (unless (string-empty-p quote)
+   170	    (save-excursion
+   171	      (let ((last-line (superchat-annotate--line-count beg end))
+   172	            found)
+   173	        (dolist (offset (cons 0 (cl-loop for d from 1 to superchat-annotate--near-lines
+   174	                                         append (list d (- d)))))
+   175	          (let ((n (+ line offset)))
+   176	            ;; BEG..END are whole lines, so a line 1..LAST-LINE is inside them.
+   177	            (when (and (not found) (>= n 1) (<= n last-line))
+   178	              (goto-char beg)
+   179	              (forward-line (1- n))
+   180	              (setq found (superchat-annotate--quote-on-line quote)))))
+   181	        found))))
+   182	
+   183	(defun superchat-annotate--locate (beg end line quote)
+   184	  "Return (QBEG . QEND) of QUOTE for a remark about LINE of BEG..END, or nil.
+   185	LINE counts from 1 at BEG.  QUOTE is looked for as written; when it is not
+   186	found and it starts or ends with the dots of a quote cut short, what is
+   187	left of it is looked for.  Either way the text found is in the buffer."
+   188	  (or (superchat-annotate--locate-exactly beg end line quote)
+   189	      (let ((cut (superchat-annotate--without-ellipsis quote)))
+   190	        (unless (equal cut quote)
+   191	          (superchat-annotate--locate-exactly beg end line cut)))))
+   192	
+   193	;;;; Overlays ---------------------------------------------------------------------
+   194	
+   195	(defvar superchat-annotate--overlay-keymap
+   196	  (let ((map (make-sparse-keymap)))
+   180	                         :warning)
+   181	        nil)))))
+   182	
+   183	(defun superchat-preset-apply (preset turn)
+   184	  "Apply PRESET to TURN, mutating turn slots.
+   185	Sets :preset, :target-model, :tools, and runs the :pre hook.
+   186	Returns the modified TURN.
+   187	
+   188	Model precedence: an explicit per-turn @model (already parsed into
+   189	TURN by the core pipeline) wins over the preset's model — the preset
+   190	only fills the slot when it is still empty.
+   191	
+   192	For agent and plan presets, the skill body is the persona: it is
+   193	prepended to TURN's system-prompt so it reaches the LLM as system
+   194	context on every turn, not only on explicit skill invocation.
+   195	Prompt-type presets keep their body out of the system prompt — for
+   196	them the body is a prompt template handled by the skills layer."
+   197	  (when preset
+   198	    (setf (superchat-turn-preset turn) preset)
+   199	    (when (and (superchat-preset-model preset)
+   200	               (null (superchat-turn-target-model turn)))
+   201	      (setf (superchat-turn-target-model turn)
+   202	            (superchat-preset-model preset)))
+   203	    (let ((tools (superchat-preset-tools preset)))
+   204	      (when tools
+   205	        ;; emit_plan is a plan-preset invariant: a stale or custom
+   206	        ;; planning skill can declare a narrower surface, but without
+   207	        ;; emit_plan the model cannot propose a reviewable plan at all.
+   208	        ;; report_plan_progress is the twin execute-phase invariant:
+   209	        ;; the plan prompt instructs the model to call it while the
+   210	        ;; plan is active, so a tool-profiled request must carry it.
+   211	        ;; Both live at this turn-shaping seam, not in the collector.
+   212	        (let ((result
+   213	               (if (superchat-preset-plan-p preset)
+   214	                   (if (eq tools 'none)
+   215	                       (list "emit_plan")
+   216	                     (append tools (unless (member "emit_plan" tools)
+   217	                                     (list "emit_plan"))))
+   218	                 tools)))
+   219	          (setf (superchat-turn-tools turn)
+   220	                (if (and (not (eq result 'none))
+   221	                         (superchat-preset--active-plan-p)
+   222	                         (not (member "report_plan_progress" result)))
+   223	                    (append result (list "report_plan_progress"))
+   224	                  result)))))
+   225	    (when (memq (superchat-preset-type preset) '(agent plan))
+   226	      (let ((body (string-trim (or (superchat-preset-skill-body preset) ""))))
+   227	        (unless (string-empty-p body)
+   228	          (let ((existing (or (superchat-turn-system-prompt turn) "")))
+   229	            (setf (superchat-turn-system-prompt turn)
+   230	                  (if (string-empty-p existing)
+   231	                      body
+   232	                    (concat body "\n\n" existing)))))))
+   233	    (superchat-preset-run-pre preset))
+   234	  turn)
+   235	
+   236	;; ═══════════════════════════════════════════════════════════
+   237	;; Frontmatter parser (shared by skill loaders)
+   238	;; ═══════════════════════════════════════════════════════════
+   239	
+   240	(defconst superchat-preset-frontmatter-field-order
+   241	  '("name" "description" "version" "type" "profile_id" "capability" "tools"
+   242	    "plugins" "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
+ M .claude/settings.local.json
+ A docs/reports/2026-10-07-hands-on-checklist.md
+ A reports/architecture-review-2026-10-10/build-report.py
+ A reports/architecture-review-2026-10-10/html-qa.json
+ A reports/architecture-review-2026-10-10/kernel.log
+ A reports/architecture-review-2026-10-10/m3.log
+ A reports/architecture-review-2026-10-10/permissions.log
+ A reports/architecture-review-2026-10-10/probes.el
+ A reports/architecture-review-2026-10-10/probes.log
+ A reports/architecture-review-2026-10-10/report.template.html
+ A reports/architecture-review-2026-10-10/smoke.log
+ A reports/architecture-review-2026-10-10/source-manifest.json
+ A reports/architecture-review-2026-10-10/superchat-architecture-review.html
+ A reports/architecture-review-2026-10-10/timer.log
+ A reports/architecture-review-2026-10-10/work-record.log
+ A reports/architecture-review-main-2026-10-10/evidence/baseline-probes.el
+ A reports/architecture-review-main-2026-10-10/evidence/baseline-probes.log
+ A reports/architecture-review-main-2026-10-10/evidence/beside-user.log
+ A reports/architecture-review-main-2026-10-10/evidence/build-report.py
+ A reports/architecture-review-main-2026-10-10/evidence/checks.json
+ A reports/architecture-review-main-2026-10-10/evidence/delta-probes.el
+ A reports/architecture-review-main-2026-10-10/evidence/delta-probes.log
+ A reports/architecture-review-main-2026-10-10/evidence/entry-rules-isolated.log
+ A reports/architecture-review-main-2026-10-10/evidence/entry-rules.log
+ A reports/architecture-review-main-2026-10-10/evidence/html-browser-qa.json
+ A reports/architecture-review-main-2026-10-10/evidence/html-static-qa.json
+ A reports/architecture-review-main-2026-10-10/evidence/input-syntax.log
+ A reports/architecture-review-main-2026-10-10/evidence/kernel.log
+ A reports/architecture-review-main-2026-10-10/evidence/m3.log
+ A reports/architecture-review-main-2026-10-10/evidence/main-initial-hashes.json
+ A reports/architecture-review-main-2026-10-10/evidence/notice-probe.el
+ A reports/architecture-review-main-2026-10-10/evidence/notice-probe.log
+ A reports/architecture-review-main-2026-10-10/evidence/review-manifest.json
+ A reports/architecture-review-main-2026-10-10/evidence/run-checks.py
+ A reports/architecture-review-main-2026-10-10/evidence/skill-context.log
+ A reports/architecture-review-main-2026-10-10/evidence/skill-once.log
+ A reports/architecture-review-main-2026-10-10/evidence/smoke.log
+ A reports/architecture-review-main-2026-10-10/evidence/snapshot-check.json
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-changes.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-core.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-dispatcher.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-llm.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-models.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-prompt-hooks.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-runtime.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-subagent.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-tape.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-timer.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-tool-execution.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-tools.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-work.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat-workspace.diff
+ A reports/architecture-review-main-2026-10-10/evidence/superchat.diff
+ A reports/architecture-review-main-2026-10-10/evidence/timer-start-fault.log
+ A reports/architecture-review-main-2026-10-10/evidence/unattended-notice.log
+ A reports/architecture-review-main-2026-10-10/evidence/work-wake-fault.log
+ A reports/architecture-review-main-2026-10-10/evidence/workspace-scope.log
+ A reports/architecture-review-main-2026-10-10/index.html
+?? reports/architecture-review-main-2026-10-11/
+docs/decisions/accepted/2026-10-10-remarks-hung-on-the-text.md
+docs/decisions/accepted/2026-10-10-a-notice-for-work-nobody-watched.md
+docs/decisions/accepted/2026-10-10-work-records-and-timers-belong-to-a-workspace.md
+docs/decisions/accepted/2026-10-10-the-work-record-tool-keeps-or-refuses.md
+docs/decisions/accepted/2026-10-10-the-timer-tool-sets-or-refuses.md
+docs/decisions/accepted/2026-10-10-an-agent-skill-for-one-message.md
+docs/decisions/accepted/2026-10-10-triggers-anywhere-in-the-message.md
+docs/decisions/accepted/2026-10-10-a-skill-message-says-where-the-user-is.md
+docs/decisions/accepted/2026-10-10-annotations-asked-for-in-a-conversation.md
+Superchat · 主目录增量架构审阅
+superchat
+.
+MAIN · ARCHITECTURE REVIEW
+01
+核心判断
+02
+架构变化
+03
+缺口复核
+04
+两个新反例
+05
+重评 10 月 4 日报告
+06
+建议顺序
+07
+测试与证据
+审阅对象是
+superchat 主目录
+，不是旧 worktree。
+源码只读 · 隔离测试
+含未提交通知实现
+2026-10-10 · PDT
+本报告是审阅意见，不替代
+docs/roadmap.md
+，也不授权修改产品。
+Incremental Review / 2026.10.10
+打印 / 保存 PDF
+主干更稳了。

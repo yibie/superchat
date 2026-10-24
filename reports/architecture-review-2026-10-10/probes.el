@@ -1,0 +1,95 @@
+;;; probes.el --- Read-only architecture audit reproductions -*- lexical-binding: t; -*-
+
+;; These tests assert OBSERVED CURRENT BEHAVIOR, including gaps, not desired
+;; product behavior. They use isolated test data and scripted model responses.
+;; They do not modify the protected M3 regression set or any production file.
+(load (expand-file-name "scripts/work-record-regression.el" default-directory) nil t)
+
+(ert-deftest arch-probe/cross-workspace-record-through-real-tool-loop ()
+  (wrec--with nil (p q)
+    (let* ((a (wrec--view p))
+           (sa (hm--session a))
+           (id (superchat-work-start sa "A-PRIVATE-GOAL"))
+           (b (wrec--view q))
+           (sb (hm--session b)))
+      (should-not (equal (superchat-work--workspace sa) (superchat-work--workspace sb)))
+      (setq smoke--script
+            (list (wrec--call '(action . "read") (cons 'id id))
+                  (wrec--call '(action . "update") (cons 'id id)
+                              '(progress . "WRITTEN-FROM-B"))
+                  (wrec--call '(action . "done") (cons 'id id)
+                              '(conclusion . "COMPLETED-FROM-B"))
+                  '(:text "probe finished")))
+      (hm--turn b "Audit fixture: use the supplied record id")
+      (should (string-match-p "A-PRIVATE-GOAL" (prin1-to-string hm--wires)))
+      (should (equal "WRITTEN-FROM-B" (plist-get (superchat-work-get id) :progress)))
+      (should (equal "COMPLETED-FROM-B" (plist-get (superchat-work-get id) :conclusion)))
+      (princ "OBSERVED: B read, updated and completed A's supplied record id through the normal tool loop.\n"))))
+
+(ert-deftest arch-probe/cross-workspace-timer-through-real-tool-loop ()
+  (wrec--with nil (p q)
+    (let* ((a (wrec--view p))
+           (timer (superchat-timer-create (hm--session a) 'reminder
+                                         "A-PRIVATE-REMINDER" (+ (float-time) 3600)))
+           (id (plist-get timer :id))
+           (b (wrec--view q)))
+      (setq smoke--script
+            (list '(:tool-uses (("timer_list")))
+                  `(:tool-uses (("timer_cancel" (id . ,id))))
+                  '(:text "probe finished")))
+      (hm--turn b "Audit fixture: list then cancel the supplied timer")
+      (should (string-match-p "A-PRIVATE-REMINDER" (prin1-to-string hm--wires)))
+      (should-not (cl-find id (superchat-timer-list) :key (lambda (r) (plist-get r :id)) :test #'equal))
+      (princ "OBSERVED: B listed and cancelled A's timer through the normal tool loop.\n"))))
+
+(ert-deftest arch-probe/wake-submission-error-consumes-wait ()
+  (wrec--with nil (p)
+    (let* ((view (wrec--view p))
+           (id (superchat-work-start (hm--session view) "Resume this work"))
+           (due (+ (float-time) 3600)))
+      (superchat-work-wait (hm--session view) id "time" "later" due)
+      (cl-letf (((symbol-function 'superchat-send-input)
+                 (lambda (&rest _) (error "AUDIT injected pre-submission failure"))))
+        (should-error (superchat-work-wake (superchat-work-get id))))
+      (let ((record (superchat-work-get id)))
+        (should (member due (plist-get record :woken)))
+        (should-not (plist-get record :waiting))
+        (should-not (superchat-work--due-p record)))
+      (should-not (superchat-runtime-active-runs))
+      (princ "OBSERVED: injected failure before submission leaves woken recorded, wait cleared, no active Run, and no due record.\n"))))
+
+(ert-deftest arch-probe/unmounted-work-row-still-creates-unscheduled-wait ()
+  (wrec--with nil (p)
+    (let ((view (wrec--view p)))
+      (unwind-protect
+          (progn
+            (superchat-plugin-unmount 'work-records)
+            (should-not (superchat-plugin-row-active-p 'work-records))
+            (should (superchat-tools-builtin-descriptor-p "work_record"))
+            (setq smoke--script
+                  (list (wrec--call '(action . "start") '(goal . "Row is off"))
+                        (wrec--call '(action . "wait") '(wait_for . "time") '(in_minutes . 60))
+                        '(:text "probe finished")))
+            (hm--turn view "Audit fixture: register a future wait")
+            (let* ((id (superchat-work-current (hm--session view)))
+                   (record (superchat-work-get id)))
+              (should id)
+              (should (equal "time" (plist-get (plist-get record :waiting) :for)))
+              (should-not (gethash id superchat-work--armed)))
+            (princ "OBSERVED: unmounted work-records still exposes a working tool that creates an unarmed time wait.\n"))
+        (superchat-plugin-mount 'work-records)))))
+
+(ert-deftest arch-probe/start-ignores-extra-progress-and-wait ()
+  (wrec--with nil (p)
+    (let* ((view (wrec--view p))
+           (session (hm--session view))
+           (superchat--tool-execution-context (list :session-id session)))
+      (superchat-work-tool "start" nil "Goal" "Already done" nil "Continue here"
+                           "time" "Later" nil nil 60 nil)
+      (let ((record (superchat-work-get (superchat-work-current session))))
+        (should-not (plist-get record :progress))
+        (should-not (plist-get record :resume))
+        (should-not (plist-get record :waiting)))
+      (princ "OBSERVED: start accepts the argument list but omits progress, resume and wait.\n"))))
+
+(ert-run-tests-batch-and-exit "^arch-probe/")

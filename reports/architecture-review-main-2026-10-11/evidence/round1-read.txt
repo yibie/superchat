@@ -1,0 +1,1664 @@
+Superchat｜架构深度审阅 · 2026-10-10
+跳到报告正文
+superchat
+ARCHITECTURE REVIEW
+2026.10.10
+PRODUCT · 92a03554
+WORKTREE · m11-w1
+01
+核心判断
+02
+系统地图
+03
+身份与生命周期
+04
+执行与故障路径
+05
+信任与数据边界
+06
+五个已复现缺口
+07
+设计取舍
+08
+改进顺序
+09
+验证与限制
+10
+源码证据
+打印 / 存为 PDF
+不是重写提案。
+保留正确的权威边界，
+补齐跨模块的产品契约。
+Independent architecture review / Emacs-native agent runtime
+执行主干已经成形。
+长期工作层，还没有闭环。
+Superchat 更准确的架构定位是：
+一个嵌入 Emacs 的模块化单体，以插件组织能力、以 Runtime 统一执行、以 Tape 保留事实。
+它还不是一个具备端到端恢复保证的持久任务引擎，也不是进程级沙箱。
+审阅日期：2026-10-10
+产品提交：
+92a03554
+工作副本：
+de7a2011
+（审阅前无改动）
+范围很重要：
+本报告分析的是指定的
+superchat-m11-w1
+worktree，产品内容停在 2026-10-03 的 M11 slice 9；不代表其他分支或主仓库在 10 月 10 日的最新状态。本次只新增报告、隔离探针与验证日志，没有修改产品代码、既有测试或用户配置。
+01 / THESIS
+不该推倒重来，但需要把边界落到操作入口。
+真正的问题不是“模块太多”或者“提示词太长”，而是已有的架构原则在不同层的落实程度不一致：执行内核严密，后加的工作状态与调度层相对薄弱。
+KEEP / 保留
+单一执行权威
+Run 的接受、取消、终结归 Runtime；模型工具经过一个执行入口；结果交给原先接受的 Sink。这些是异步系统的核心资产。
+CLOSE / 补齐
+对象范围与生命周期
+Workspace 的请求过滤没有自动变成对象读写约束；功能插件撤销也没有覆盖它的全部工具和 collector。
+PROVE / 验证
+持久意图到执行的交接
+工作等待已落盘，不等于后续 Run 已被接受。先写“已唤醒”、再提交的顺序存在实际失败窗口。
+本次比前一轮更进一步：
+不只提出风险。我用临时数据库和脚本模型复现了跨 Workspace 读写、唤醒提交失败、插件半启用以及字段丢弃。既有回归仍全部得到预期结果——说明缺的是边界测试，而不是所有主干逻辑都失效。
+源码事实
+当前源码直接支持
+已复现
+本次隔离探针实测
+推断
+机制可推导，未单独实测
+建议
+尚未批准或实施
+02 / SYSTEM MAP
+一个宿主进程，四类不同职责。
+这是责任图，不是文件依赖图。上方 Kernel 决定能力如何组合；中间决定一次请求如何执行；下方记录事实并更新读模型。点击节点查看它拥有和不拥有的东西。
+组合层 · Scope / Service / Event / Invariant
+Service 提供者是全局的；Scope 控制注册可见性和撤销，不是 Session，也不是权限沙箱。
+01 · 入口与归属
+Producers
+Chat · Inline · Workflow
+02 · 请求编排
+Envelope / Driver
+准入 · 工具 · 上下文
+03 · 执行权威
+Runtime
+Run · 队列 · 取消 · 终态
+04 · 模型适配
+llm.el Adapter
+请求 · 工具循环 · 重试
+返回路径：模型流与终态 → Runtime → 接受时的 exact Sink。工具结果回到模型循环；它不是第二个 Run。
+输出与编辑资源
+Sink / Buffer Set
+投递目标 ≠ buffer 关闭权
+长期工作的发起者
+Work / Timer
+到点后重新走统一入口
+模型发出 tool call 后
+唯一工具管线 → Emacs / 外部 Effect
+监听器 → 固定 Permission level → Approval → 执行与记录
+Tape → View / Projection
+Runtime、工具及领域模块追加事实；SQLite 是存储，不负责决定业务含义。
+Runtime：只保留一个执行生命周期
+拥有 Run 接受、Step 推进、终结、排队与取消。借用 Scope 和 buffer；不因 UI 切换而重新选择结果接收者。它不负责裁定“用户的工作是否真的交付完成”。
+superchat-runtime.el · superchat-pipeline.el · superchat-sink.el
+请求准备
+Service lookup
+组合契约
+“可组合单体”，不是“每个框都是可独立卸载的插件”。
+superchat.el
+仍集中加载大量产品模块；Runtime 仍有对具体实现及适配器回调的依赖。插件层很好地控制注册、替换和可见性，但还没有让所有功能变成独立装卸的部署单元。这在单个 Emacs 包里不必然是坏事：
+不应该为了纯插件架构把每个函数都变成 Service。
+静态规模：顶层
+superchat*.el
+共 60 个文件、52,188 行（含注释与空行）。UI 5,826 行、Runtime 5,119 行、LLM 适配 4,467 行。数字只说明责任集中在哪里，不是重写或拆分的依据。
+源码指纹与计数
+03 / OWNERSHIP & LIFETIMES
+复杂度主要来自六种生命周期，而不是六种“Agent”。
+这些概念应当保持区分。把它们合并看似简单，通常只会把清理、恢复和授权的错误藏到另一个地方。
+对象
+拥有的权威 / 生命周期
+不能推出什么
+Workspace
+工作地点、规则、Session 和 Work Record 的归属。跨对话持续存在。
+目录归属不等于文件访问沙箱，也不自动限制按 id 的对象访问。
+Session
+一段逻辑对话、持久身份、权限配置。可包含多次 Turn 和 Run。
+不是一件工作，不是当前 buffer，不是一个 Scope。
+Work Record
+跨多次执行的目标、进展、等待和结论；通过 Tape 重建。
+被标完成不等于交付经验证；可继续不意味着自动续跑。
+Turn / Run
+接受的请求及其具体执行。Runtime 是终态的唯一权威。
+Run completed 不等于 Work completed；取消不证明外部 Effect 已停止。
+Preset Scope
+一次 View 激活的注册集合；进程内存在，退休后撤销。
+同名 Preset 不共享同一个 Scope；Run 借用它，不拥有它。
+Session Buffer Set
+确切活 buffer 对象上的 ownership 标记决定关闭权。
+打开了某个文件或显示在某个 tab，并不取得其关闭权。
+值得保留的分离
+Preset owner 先要求 Runtime 退休其执行，再撤销注册；Session Buffer Set 决定哪些 buffer 可关闭。执行、注册和资源的权威没有混在一个 cleanup 函数里。
+生命周期契约
+buffer ownership
+仍要补齐的连接
+“这条记录属于哪个 Workspace”已经存下，但读写记录时没有据此校验；“这个功能已卸载”已经知道，但它的工具仍可能被提供。问题出在对象之间的交接，而非词汇缺失。
+Artifact Board 另有用途：持久、带 revision 的交付物登记与传递，不是上述文件 Workspace，也不是活 buffer 清单。旧
+workspace_*
+工具名仍可能让模型混淆这两种对象；改名应按已接受的迁移范围推进，不能改写历史 Tape。
+04 / EXECUTION & FAILURE
+正常路径统一了；失败路径的严谨程度仍不对称。
+一次普通请求
+执行中取消
+到点唤醒失败
+一次普通请求
+Producer
+确定 Session、来源和 Sink；以 Envelope 提交。来源 Workspace 路由在入口发生，不由 Runtime 猜测。
+Driver → Runtime
+验证 Envelope，先询问准入：处理、排队、steer 或拒绝。不是每次提交都会创建 Run。
+Driver
+选择工具，收集有预算的 context fragments，组合 system 与 messages；prepared 路径承担自己的准备责任。
+Runtime / Transport
+接受执行、捕获 Scope 与 exact Sink；适配器构造 provider 请求，驱动工具循环。
+Tool execution
+固定权限阶段不可被监听器绕过；必要时批准；记录请求、进入与结算事实，再向模型交回结果。
+Runtime / UI
+封存 Run / Turn，向原 Sink 投递；下游读模型与审阅屏响应终态，不成为第二个终态权威。
+评价：
+统一的是接受和执行契约；不意味着每个 producer 的历史、规则、预算和工作上下文完全相同。
+源码
+执行中取消
+取消到达
+Runtime 停止后续执行资格；不能靠切换 provider 或 Scope 把旧 Run 带回活动状态。
+检查开放义务
+仍有进入但未结算的 Effect，或未决定的 Approval？有则终态可能是 audit-incomplete，而非伪装成已安全取消。
+封存与 quiesce
+记录终态、释放执行关联并停止延续。Sink 消失也不把结果改投当前选中 buffer。
+迟到事实
+真实迟到的结算可以补记一次，但不能改变 Run 终态、再次投递终态或重新调用模型。
+重启
+会话 reopen 为确认中断的执行补 abandoned 等事实；不是从旧 provider attempt 的位置继续运行。
+评价：
+这部分复杂度有实际作用，应通过回归保护，而不是为缩短 Runtime 删除。
+生命周期契约
+·
+重启修复
+到点唤醒失败（本次故障注入）
+到期记录
+新建该 Workspace 的对话，选定要继续的 Work Record。
+Tape 写入
+依次写 work.woken、清除 work.waiting、写 work.focused。
+故障窗口
+本次在 superchat-send-input 处注入错误，阻止提交。此时尚没有对应的活动 Run。
+重新读 Tape
+记录保留“已唤醒”，waiting 已清空；due-p 返回 nil，不再作为到期等待被扫描。
+实际后果
+工作记录还在，但这次自动唤醒机会已被消费。没有证明任务启动成功，也没有待启动状态供调度器重试。
+已复现
+这是进程内提交错误注入，不是真正断电测试；同一写入顺序暴露的崩溃窗口仍需独立验证。
+分析与修复方向
+05 / TRUST & DATA
+必须区分三种“边界”。
+注册边界
+Scope：
+谁能看到某个工具、监听器或命令；卸载时撤销哪些注册。
+它约束正常组合路径，不约束任意 Lisp 的全局修改。Service provider 仍是全局的。
+领域范围
+Workspace：
+哪些规则、会话、工作记录属于这个工作的地方。
+请求阶段的过滤已存在；按 id 的工作读写和 timer API 没有全面守住这个范围。
+执行权限
+Permission level：
+这个工具调用是允许、询问还是拒绝。
+eval_elisp 是完整 Emacs 控制。批准后在宿主执行，不等于有 OS 隔离或可回滚事务。
+一次调用经过权限管线，不等于它操作了正确对象。
+当前
+work_record
+属于内置工具；管线允许调用后，业务函数仍应校验“调用 Session 与目标记录是否同 Workspace”。这个校验目前缺失。相反，编辑 Workspace 外的普通文件是 W9 接受的行为，不能把它误判成同一种缺陷。
+Tape 是事实源，不是整个 Emacs 世界的快照。
+状态
+实际来源
+恢复能力的界线
+对话、Run、工具事实
+Tape → SQLite
+可以查证、选择和重建已保存证据；不能据此撤销外部副作用。
+模型历史与压缩
+Tape View、Anchor、存储引用
+改变选择，不改写过去；缺失引用应呈现 unknown，不凭空补出材料。
+待保存清单
+Tape 的编辑 Run ∩ 活 buffer 标记 ∩ modified 状态
+不是纯 Tape Projection；杀掉或重新打开 buffer 会改变当前结果。
+规则
+Workspace 磁盘上的 AGENTS.md / 后备文件
+未保存的规则 buffer 不自动成为新请求规则；用户保存是生效边界。
+排队与回调
+Runtime 进程内 FIFO、闭包、借用 Scope
+排队事实可持久化，不代表队列闭包可跨重启恢复。
+工作等待 / 提醒
+Tape fold + 进程内 Emacs timers
+可重新上弦；触发事实到新 Run 的接受仍需可靠交接。
+权限阶段
+eval_elisp
+待保存清单
+已有增量 Projection
+推断
+完整 Lisp 与 UI 同处 Emacs 宿主，意味着工具执行的可用性与响应性也是共同风险。Run deadline 不能被宣传成对任意同步代码的独立进程级硬抢占。本次没有执行卡死或资源耗尽探针。
+06 / REPRODUCED GAPS
+五个缺口，指向三个共同根因。
+共同根因：① 范围校验停在上下文准备，而未落到业务操作；② 注册 ownership 与功能 ownership 不一致；③ 把“事实已记下”误当成“后续执行已接管”。以下五项均在隔离数据上复现，不是从旧报告直接抄来的判断。
+01
+知道记录 id，就能跨 Workspace 读、更新、完成它。
+优先：高
+正常工具链已复现
+观察与机制
+在 A 建记录；在 B 的脚本模型回合里，传入 A 的 id 调用
+read → update → done
+。模型的下一次请求看到了 A 的目标，A 的进度与结论被 B 改写。
+superchat-work--require
+只检查记录存在且未完成；
+read
+直接全局按 id 获取。
+这是当前 API 范围缺口，不需要绕过权限管线。
+建议修复位置
+在模型操作入口，把调用 Session 的 Workspace 与目标记录的 Workspace 一起校验；将用户明确的全局管理操作与模型操作分开。不能只在列表或 prompt 里过滤。
+本次探针主动提供目标 id，未证明模型在正常任务中会自动发现该 id。此风险是单用户应用内的数据与工作范围，不是互联网多租户攻击结论。
+证据与回归要求
+探针：
+arch-probe/cross-workspace-record-through-real-tool-loop
+。应增加跨域 read/update/wait/done/follows、临时会话、错误 id 与同域正常路径的回归；不要把 id 当作授权凭据。
+记录 API
+工具入口
+探针代码
+02
+在 B 可以看到并取消 A 的提醒。
+优先：高
+正常工具链已复现
+观察与机制
+A 创建未来提醒；B 调用
+timer_list
+，provider 后续请求中出现 A 的提醒文字；随后 B 的
+timer_cancel
+成功取消该提醒。
+模型接口复用了全局定时器读取与取消，没有按工具调用 Session 缩小范围。这比“上下文里多带几行”更先需要解决。
+建议修复位置
+模型的 list/cancel 必须有明确的 Workspace 范围。给用户的全局“稍后”总表则可以跨域，并显示归属。
+全局管理能力和模型默认能力不必相同。
+已有
+sql
+工具也无 Workspace 参数（源码事实，本次未单独执行 SQL 跨域探针），应纳入同一次操作入口清查。
+证据与回归要求
+探针：
+arch-probe/cross-workspace-timer-through-real-tool-loop
+。验证 pending、fired、cancel 和临时会话；只过滤 list 但不校验 cancel 仍然不完整。
+timer API
+SQL 入口
+探针日志
+03
+“已唤醒”先落盘，提交失败后不再是到期等待。
+优先：高
+提交错误注入已复现
+观察与机制
+在
+superchat-send-input
+注入错误，前面的三个工作事件已经落盘。重新读取后，记录有
+woken
+，无
+waiting
+，没有活动 Run，
+due-p
+为 nil。
+它防止了一次等待重复触发，却没有保证一次等待最终被 Runtime 接受。
+记录先行解决防重的一边，但牺牲了失败可恢复性。
+建议修复位置
+为一次等待到一次执行建立稳定关联；区分待提交、已接受和执行结果。对“确认未接受”重试，对“未知是否接受”先核对，不能盲目补跑外部副作用。
+复用 Runtime 的唯一接受权，不另建执行引擎。对 timer task 的先 fired 后启动路径做同类故障测试；本次没有把该路径算成已复现。
+证据与回归要求
+探针：
+arch-probe/wake-submission-error-consumes-wait
+。还需覆盖：接受后回执丢失、排队、transport 缺席、重启、重复扫描、记录存储 unknown。当前结论不等于“所有唤醒都会丢”。
+写入与提交顺序
+错误注入
+04
+卸载 work-records，工具仍能创建永不上弦的等待。
+优先：高
+卸载后工具链已复现
+观察与机制
+卸载该 row 后，
+work_record
+descriptor 仍可选。真实工具链仍成功 start、wait，但
+superchat-work--armed
+没有该记录。
+工具由通用内置工具注册；上下文 collector 属于
+chat-collectors
+；调度与终态观察者属于
+work-records
+。撤销的是一部分能力，不是完整功能。
+建议修复位置
+让功能拥有其工具、collector 与 observer 的 Scope-accounted 注册；或将未满足依赖表现为明确的不可用状态。选择最小闭环，不强制一个功能只能一个文件。
+保留持久历史可读，不应因卸载功能删除 Tape。timers 的类似归属也应检查，而不是只修一个工具名。
+证据与回归要求
+探针：
+arch-probe/unmounted-work-row-still-creates-unscheduled-wait
+。同时验证 materialized 旧 descriptor、重新挂载、已有等待恢复、在途 Run 语义；不得破坏 exact Sink 与已接受 Run 的契约。
+row-owned 工具清单
+功能插件
+collector 的归属
+05
+工具接受了字段，但 action 分支悄悄丢掉。
+优先：中
+工具函数已复现
+观察与机制
+start
+同时给 goal、progress、resume、time wait，工具返回创建成功；落盘的只有目标，没有进展、续接说明和等待。
+这是“一个宽参数表 + 分支各自消费参数”造成的语义缝隙。强模型也会误用，小模型只是更早暴露它。
+建议修复位置
+明确允许的复合操作，先验证整个命令，再写入；冲突字段清楚拒绝。可以支持 start + progress + wait，但不应“任何 action 收下任何字段”或用 conclusion 暗中推断完成。
+输出结构化的 applied / ignored-or-rejected 结果；目标是减少隐式规程，不是为了短说明隐藏错误。
+证据与回归要求
+探针：
+arch-probe/start-ignores-extra-progress-and-wait
+（直接工具函数，不算完整 provider 回合）。验证无效时间时是否部分建档、done 与 wait 冲突、字段归一化、重复命令。
+action 分支
+观察结果
+07 / ARCHITECTURAL TRADE-OFFS
+简化应该减少隐式状态，不是削弱证据和权限。
+组合：闭合功能，不追求纯化
+建议
+只在可选能力、替换点和独立生命周期上使用 Service / Event。纯转换函数继续直接调用。先修“关掉一行仍留下半个功能”，再考虑模块内部拆分。
+不做：
+按文件行数重构、每个 helper 都服务化、重新引入空的 Run Scope。
+持久化：已有基础，不需新数据库
+源码事实
+现有 Projection 已支持 version、checkpoint 和同事务 catch-up。Work / Timer 却仍自己全量 fold。先复用一次请求的读取快照，量出瓶颈再考虑增量化。
+不做：
+没有基准就引入第二套存储，或把可变 Projection 当新事实源。
+Projection
+全量读取
+上下文：统一必要约束，不统一全文
+源码事实
+规则 collector 只处理 chat / inline-ask / inline-act；subagent 单独拼规则和记录快照；workflow 走 prepared 路径。共享 Runtime 不自动保证相同约束。
+建议
+为每个 producer 明确规则、身份、权限、历史与预算的责任；在实际 provider 请求上验证。不要强塞完整聊天历史到 rewrite 或 compaction。
+入口限制
+子代理补充路径
+模型接口：先降决策成本，再降字节
+建议
+统一参数名、返回当前状态、提供合法复合命令、消除必败工具。Qwen 基线是接口压力测试，不是预先删到九个工具的理由。
+不做：
+自动补括号再 eval、静态脚本检查器直接变成免审批权威、read 偷偷切换当前记录、依据“碰巧存在当前记录”自动转换业务意图。
+不是所有写 Tape 的路径，都有同样的可靠性保证。
+源码事实
+Runtime 的必需记录失败可以影响终态可信度；但 Work Record 的
+turn-completed
+observer 是终态之后的领域补记，其 facts、outcome 与结果回报路径使用
+ignore-errors
+。因此，“Run 已可靠结束”不能推出“工作记录的后续摘要也已可靠保存”。
+查看这条链
+建议
+把后续补记失败变成可见、可重试的领域义务，以 Run / Work Record 身份幂等补齐。不要为补写工作摘要而重新打开已终结的 Run，也不要把所有观察者都改成终态前的强依赖。本次没有对这组写入做存储失败注入，它是源码可见的保证差异，不是第六项已复现缺陷。
+日常 Emacs 体验，是架构的一部分。
+Buffer-first 利用了 Emacs 最独特的能力：模型与用户操作同一个活对象，用户可以检查和保存。但这也意味着多个 Session / Run 可能接触同一用户 buffer。Session 内排队不能证明跨 Session 的目标协调已经解决；本次没有做多 Run 争用实验，不能宣称存在或不存在覆盖缺陷。
+下一步应测用户同时编辑、后台到期任务、外部磁盘变更、切换 View、长时间未答审批。
+先定义冲突时的行为，再决定是否需要锁或版本前置条件。
+不预先造一套资源调度器。
+自动任务与前台审阅目前没有完整分工。
+终态 observer 会调度审阅屏，显示路径会选择窗口；本次只读了这条链，没有在 GUI 中复现焦点抢占。建议为自动启动保留明确来源，决定通知、展示与选中策略。改变默认审阅行为需用户确认，不能算纯重构。
+源码
+两份旧分析需要校正的地方
+前一轮的唤醒风险已经收紧为具体复现：
+不是泛泛担心重启，而是提交失败后等待被消费。
+范围问题比 SQL 更广：
+默认提供的 Work Record 与 timer 操作也需检查，因此不能只撤 SQL 就宣布 Workspace 边界完成。
+“临时对话不保存”过于笼统：
+接受契约 W10 允许历史列表翻看临时对话；关键限制是不把它带入别的对话、没有目录规则，而不是一概没有持久记录。
+文档已经漂移：
+CONTEXT 的 Session 段还保留“不按项目选择”的旧描述；当前入口代码按 Workspace 路由。architecture 的 receipt 说明和 roadmap 的 slice 状态也滞后。以源码、现行决定和测试相互校准，不把任何一份索引文档视作自动正确。
+当前路由
+实际请求重建
+Workspace 契约
+08 / RECOMMENDED SEQUENCE
+不另开宏大里程碑，按五个可验收切片推进。
+以下全部是建议，不是用户已批准的生产改动。它们应归并进现有 roadmap，而不是让本报告变成第二个工作队列。
+SLICE 01
+范围闭合
+让领域对象自己守住访问范围
+Work Record 与 timer 的模型操作校验 Workspace；用户全局管理另有入口；SQL 与 prepared producer 同步清查。先写失败测试，再修入口。
+退出条件
+A 不能被 B 的模型读取、修改或取消；同域继续工作、委派及临时会话不退化。跨 Workspace 文件编辑仍保留 W9 语义。
+SLICE 02
+组合闭合
+功能卸载后不留下半启用承诺
+工具、collector、调度和 observer 的 ownership 对齐。持久历史保留；重挂载恢复按明确契约进行。
+退出条件
+卸载后不再创建无法调度的等待；旧工具引用失效；重挂载不重复计时；在途 Run 按已有生命周期结束。
+SLICE 03
+交接闭合
+把一次等待关联到一次被接受的执行
+明确持久唤醒意图、Runtime 接受凭据与结果。先测试错误和 unknown，再决定最小数据结构；不增加第二个执行所有者。
+退出条件
+提交失败可见且可恢复；接受后回执丢失不重复启动；真正重启与迟到结果通过故障测试。不承诺外部副作用恰好一次。
+SLICE 04
+交互闭合
+给人一张“稍后”表，给模型明确命令
+统一待办查看与取消入口；可读唤醒结果与对话链接；合法复合 work 命令；没有对象与参数错误分开。焦点策略单独确认。
+退出条件
+用户能看到挂着什么、在哪里、怎样停止；工具无静默字段丢失；自动行为不意外夺取编辑控制。
+SLICE 05
+测量优化
+用本地模型和默认配置验证简化
+先固定版本建立 Qwen 基线；分别比较说明长度、工具面和上下文。运行默认权限与正常审阅屏；测量读取开销再优化 Projection。
+退出条件
+指标包括正确交付、错对象率、审批负担、请求数与耗时。五次试跑只作筛查，不声称通过率“不下降”。
+贯穿工作：
+每片同步修正它触及的契约和架构索引；保留先验安全约束、Tape 来源关系、唯一 Runtime 与 exact Sink。不要先删 outcome、审批或工具以换取表面精简。
+09 / EVIDENCE & LIMITS
+验证是分层证据，不是一个“全绿”标签。
+本次检查
+结果
+它证明 / 不证明什么
+Kernel check
+0 fails
+日志
+组合基本机制通过检查；不证明每个功能都正确登记全部贡献。
+Canonical smoke
+26 个基线匹配
+日志
+脚本 transport 下现有产品主路径与基线一致；不是真实模型能力测试。
+M3 regression set
+139 项：137 预期，2 跳过
+0 unexpected ·
+日志
+跳过两个 live-provider 测试。受保护的测试文件没有修改。
+Permission regression
+62 / 62 预期
+日志
+所选 m6-permissions 集通过；没有在用户 GUI 中逐次回答真实批准问题。
+Work Record regression
+25 / 25 预期
+日志
+现有工作记录测试通过，但没有阻止本次新增探针复现缺口。
+Timer regression
+17 / 17 预期
+日志
+离线提醒、持久化与补发覆盖；不等于真实重启事故的全部组合已测。
+本次架构探针
+5 / 5 复现观察
+代码
+·
+日志
+断言的是缺口仍存在，不是正确行为。不要把“探针通过”计入产品健康分。
+环境：GNU Emacs 32.0.50；预备 ELPA 中 llm 0.32.1；batch 模式关闭 native subr trampolines。脚本模型、不访问真实 provider；测试夹具使用临时 HOME / 数据目录，smoke 基础夹具关闭 Run 默认期限并提供测试批准回调，不代表真实用户审批体验。
+报告页面检查：内部锚点和本地文件链接无缺失；节点选择、路径切换、证据展开正常；320 / 375 / 768 / 1440 宽度无页面横向溢出或越界按钮。
+DOM 与交互检查结果
+。浏览器截图接口超时，未完成截图视觉验收。
+本次没有验证
+真实 Qwen / DeepSeek 的任务成功率、时延和缓存。
+用户日常配置、GUI 焦点、后台改动与批准负担。
+真正进程崩溃、断电、并发进程操作同一数据库。
+全部可选插件、所有 producer 组合和第三方集成。
+大 Tape 的性能、全量 byte-compilation、硬卡死工具。
+读源码能支持的结论
+本报告审阅执行主线、组合接口、权限与存储、工作与定时、上下文和资源 ownership 的关键路径，不宣称对 52,188 行产品代码做了逐行审计。所有性能方向都是待测建议；旧报告中的 163 次运行和模型统计没有在本次重新汇总。
+完整源码指纹保存于
+source-manifest.json
+。本报告与探针是审阅产物，不是正式产品测试集或批准过的改进规格。
+10 / SOURCE NOTES
+从结论回到源码。
+片段在生成报告时从指定 worktree 提取，行号与上面的产品快照对应。证据已嵌入本文件，离线打开也能查看；旁边源文件链接和日志链接只在保留报告目录结构时可用。
+组合不是进程隔离
+docs/design/plugin-architecture.md:17–49
+17  A Scope is a process-local registration context. Contributions are visible to it and its descendants, not to siblings or ancestors. Nearest-layer definitions shadow inherited names; duplicate identifiers in one layer are rejected. Registrations made through a plugin's effect Scope land in its mount layer, while cleanup remains owned by that exact installation.
+  18  
+  19  Scope disposal withdraws registrations, disposes children before parent effects and unlinks the Scope. Explicit unregister and disposal consume the same one-shot cleanup. Empty layers and consumed cleanup effects do not accumulate through repeated mount/unmount cycles.
+  20  
+  21  The registering interface determines the default target:
+  22  
+  23  - Tool and command registrations use explicit `:scope`, then the applying plugin's effect Scope, then the execution Scope, then global.
+  24  - Event listeners take an explicit Scope through `superchat-on`.
+  25  - Surface names are package-wide Envelope vocabulary. A plugin-added Surface has Scope-accounted cleanup, but the Surface list is not a Preset-shadowed registry.
+  26  
+  27  Arbitrary Elisp global mutation, timers or external effects are not automatically reversed. Register cleanup through the supplied Scope; the contribute-only-through-Scope Invariant is advisory, not an Elisp sandbox.
+  28  
+  29  ## Services and execution lookup
+  30  
+  31  A Service declares required methods and has one active global provider. `superchat-service-provide` validates the method table. Preset Scopes cannot provide a shadow Service: provider replacement affects dependents globally.
+  32  
+  33  `superchat-service-call SCOPE NAME METHOD ...` selects the caller's execution context, not a private provider. A nil Scope inherits the current execution Scope and otherwise uses global. Explicit `superchat-scope-global` chooses global. `superchat-service-get` is lookup-only: pass the Scope explicitly when inspecting one; nil there retains its global lookup meaning.
+  34  
+  35  Runtime notifications, provider attempts, asynchronous tool callbacks, terminal Sink delivery and FIFO dispatch restore the accepted execution Scope. Runtime holds this reference privately while needed and releases it at quiesce; it is not serialized into Envelope, Tape or public status. Services remain global even when their methods execute for a child Scope.
+  36  
+  37  ## Scoped tools, commands and permission listeners
+  38  
+  39  Tools and commands are read through the caller's visible Scope layers. A tool's materialized callable retains the exact installation identity it was materialized from. Revocation invalidates an old descriptor rather than letting it run a replacement's implementation. `superchat-register-tool NAME &key function description args async surfaces scope` declares nothing about what the tool does; there is no effect resolver, approval preview or policy registry any more.
+  40  
+  41  Whether a call may run is decided at execution, not inferred from a cached model-facing tool list. The Session's permission level is applied as a fixed stage after the `tools/pre-execute` waterfall, whose listeners are collected through the caller's Scope ancestry, and the stronger answer stands: `deny` over `ask` over `allow`. A listener can therefore tighten a call and never loosen it; one that answers without delegating ends the waterfall but cannot skip the level stage. An `ask` goes to the `approval/request` waterfall, which ends in the human answerer. A plugin that needs rules for one request registers both on a child Scope it creates for that request and disposes with its Run. See [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md).
+  42  
+  43  Commands preserve user-file template fallback when a handler declines or the command provider is absent. Intentional same-layer tool or command replacement requires explicit unregister followed by registration. MCP refresh validates replacement data before changing its own installation; unchanged discovery preserves the existing installation.
+  44  
+  45  ## Preset composition and lifetime
+  46  
+  47  Preset data carries a native `:plugins` composition with unique names and proper keyword configuration plists. Markdown frontmatter supports an inline list such as `plugins: [foo, "bar"]`, including `[]`. Map, nested and multiline forms are rejected; they are not silently accepted as full YAML configuration support.
+  48  
+  49  Each Chat View activation creates an exact `preset/<name>` Scope directly under global. Two Views choosing the same name receive different Scope objects. Preset data contains no Scope. Runtime creates no automatic `run/<id>` Scope, and Session identity is not a Scope level.
+打开仓库源文件 ↗
+统一入口与请求准备
+superchat-pipeline.el:509–585
+509    "Validate ENVELOPE, prepare input with core defaults, and submit to
+ 510  Runtime as a legacy request carrying ENVELOPE's exact Sink (contract §4).
+ 511  Returns the Runtime handle plus `:request-id' on the `process' path, or
+ 512  `(:status ACTION :reason R :request-id ID …)' without calling Runtime when
+ 513  `admit' resolves to `queue', `steer' or `drop'."
+ 514    ;; A caller Scope is borrowed for this execution only.  It is not added to
+ 515    ;; the Envelope (which is durable/public-facing request data), and it is
+ 516    ;; captured privately by Runtime when a Run is accepted.
+ 517    (let ((superchat-execution-scope (superchat-execution-scope-resolve nil)))
+ 518      (superchat-pipeline--assert-execution-scope-active)
+ 519      (cl-block superchat-pipeline-submit
+ 520        (let* ((submitted-envelope envelope)
+ 521             (envelope (superchat-pipeline-validate-envelope envelope))
+ 522             (request-id (plist-get envelope :request-id))
+ 523             (explicit-session-id (plist-get envelope :session-id))
+ 524             (surface (plist-get envelope :surface))
+ 525             (sink (plist-get envelope :sink))
+ 526             ;; Contract §2.2: an explicit `:session-id' is never retargeted.
+ 527             ;; Session identity is Runtime-owned, so the pipeline resolves it
+ 528             ;; directly; the old session-resolution extension had no
+ 529             ;; contributor.
+ 530             (session-id
+ 531              (or explicit-session-id
+ 532                  (format "ephemeral-%s" request-id)))
+ 533             (admission
+ 534              (let ((superchat-runtime--dispatching-envelope
+ 535                     (and (eq submitted-envelope superchat-runtime--dispatching-envelope)
+ 536                          envelope)))
+ 537                (superchat-runtime-admit-envelope session-id envelope))))
+ 538        (unless (eq (plist-get admission :status) 'process)
+ 539          (cl-return-from superchat-pipeline-submit
+ 540            (append admission (list :request-id request-id))))
+ 541        (let* (;; State assembly is driver work: the old state-loading extension
+ 542               ;; had no contributor, so the core defaults are merged directly
+ 543               ;; rather than through an extension point with one branch.
+ 544               (state (superchat-pipeline--merge-state envelope))
+ 545               ;; The one production decision point (contract §4.2; S09-fix-1
+ 546               ;; deletes this file's own `superchat-pipeline--select-tools'
+ 547               ;; -- a second, differently-worded decider with stale fixed
+ 548               ;; baselines that could turn an envelope result into an
+ 549               ;; explicit `:tools' bypassing S09's decision).
+ 550               ;; The *whole* decision (names, reason, and any dropped names
+ 551               ;; the call already recorded as faults) is kept, not just its
+ 552               ;; names: threading only names to Runtime's `:tools' would make
+ 553               ;; the later LLM call re-decide from them and misreport a
+ 554               ;; `stage'/`baseline' pipeline decision as `explicit'
+ 555               ;; (S09-fix-2 item 2).
+ 556               (tool-decision (superchat-select-tools-decision envelope state))
+ 557               (tools (plist-get tool-decision :names))
+ 558               ;; The inspector uses the same base-fragment composition.
+ 559               ;; Collected content replaces the base body; collected system
+ 560               ;; instructions join the original, unassembled system prompt.
+ 561               (collected
+ 562                (superchat-pipeline--collect-context envelope state tools))
+ 563               (fragments
+ 564                (superchat-pipeline--context-fragments envelope collected))
+ 565               ;; Prompt assembly is core: the old prompt-assembly extension
+ 566               ;; had exactly one contributor, the `prompt-assembler' default
+ 567               ;; plugin's core assembler, so it is called directly.
+ 568               (prompt
+ 569                (superchat-prompt-assemble
+ 570                 fragments
+ 571                 ;; A producer that prepared its whole prompt (subagent,
+ 572                 ;; workflow, skills-match, compaction -- whose input is by
+ 573                 ;; design a large slice of the window) already sized it;
+ 574                 ;; re-budgeting would reject exactly the prompts compaction
+ 575                 ;; exists for (review finding F1).
+ 576                 (if (plist-get (plist-get envelope :context) :prepared-prompt)
+ 577                     most-positive-fixnum
+ 578                   (superchat-pipeline--budget (plist-get envelope :target-model))))))
+ 579            ;; Keep the ordered system contributions, with their pure
+ 580            ;; tool-dependent renderers, for later request rewrites.  Static
+ 581            ;; contributions travel too: a rewrite refreshes a dynamic entry in
+ 582            ;; place instead of searching the joined text for it, so a static
+ 583            ;; entry with the same text is never touched.  Collectors themselves
+ 584            ;; are never rerun by the waterfall.  Without any renderer there is
+ 585            ;; nothing to refresh, and the request carries no guidance state.
+打开仓库源文件 ↗
+全局 Service，调用者 Scope
+superchat-service.el:32–80
+32  
+  33  (defun superchat-service-provide (scope name table)
+  34    "Provide Service NAME with TABLE (alist METHOD -> FUNCTION) through SCOPE.
+  35  Missing required methods are a mount-time error.  Only the global layer may
+  36  hold providers: a plugin mounted in a Preset Scope may not shadow one.
+  37  Dependents are notified (unwound / re-applied) at once and again on undo."
+  38    (let ((required (plist-get (superchat-service-definition name) :methods))
+  39          (owner (or (superchat-scope-layer-owner scope) scope)))
+  40      (unless (eq owner superchat-scope-global)
+  41        (error "superchat-service: %s must be provided from the global Scope, not %s"
+  42               name (superchat-scope-name owner)))
+  43      (dolist (method required)
+  44        (unless (functionp (cdr (assq method table)))
+  45          (error "superchat-service: provider of %s lacks method %s" name method)))
+  46      (let* ((withdraw (superchat-scope-register
+  47                        scope 'service name
+  48                        (list :table table :id (gensym (format "%s-" name)))))
+  49             (undo (superchat-scope-effect
+  50                    scope (lambda () (funcall withdraw) (superchat-plugin-notify)))))
+  51        ;; Only the combined, self-removing undo remains Scope-registered.
+  52        ;; It invokes the detached registration undo before notifying dependents.
+  53        (setf (superchat-scope-effects scope)
+  54              (delq withdraw (superchat-scope-effects scope)))
+  55        (superchat-plugin-notify)
+  56        undo)))
+  57  
+  58  (defun superchat-service-get (scope name)
+  59    "The provider plist of Service NAME visible from SCOPE, or nil."
+  60    (superchat-scope-lookup (or scope superchat-scope-global) 'service name))
+  61  
+  62  (defun superchat-service-call (scope name method &rest args)
+  63    "Call METHOD of Service NAME with ARGS; error when no provider is active.
+  64  
+  65  SCOPE is the caller's execution Scope, never the provider's Scope: providers
+  66  remain global-only.  A nil SCOPE inherits an enclosing execution Scope; nil
+  67  outside an execution means global.  Pass `superchat-scope-global' explicitly
+  68  to reset a nested call to global."
+  69    (let* ((execution-scope (superchat-execution-scope-resolve scope))
+  70           (provider (superchat-service-get execution-scope name)))
+  71      (unless provider
+  72        (error "superchat-service: no provider for %s" name))
+  73      (let ((fn (cdr (assq method (plist-get provider :table)))))
+  74        (unless fn
+  75          (error "superchat-service: provider of %s has no method %s" name method))
+  76        ;; The provider is still selected from its global registration.  This
+  77        ;; binding carries only the consumer's execution context to nested
+  78        ;; driver/Event work; it never changes provider ownership.
+  79        (let ((superchat-execution-scope execution-scope))
+  80          (apply fn args)))))
+打开仓库源文件 ↗
+重启修复不是执行恢复
+superchat-runtime.el:537–568
+537  (defun superchat-runtime-reconcile-session (session-id)
+ 538    "Seal open persisted Runs in SESSION-ID as `abandoned'.
+ 539  
+ 540  This is restart reconciliation, not execution recovery: it never recreates a
+ 541  prompt or provider request.  Tape is the only source of truth; the
+ 542  process-local Run registry is intentionally ignored.  Return the number
+ 543  of Run/Turn pairs written.  An outer read or append failure emits a warning but
+ 544  is contained so opening a Session View remains usable."
+ 545    (condition-case err
+ 546        (let ((trace (superchat-tape-replay-events session-id))
+ 547              (seen-runs nil)
+ 548              (sealed 0))
+ 549          (dolist (started
+ 550                   (cl-remove-if-not
+ 551                    (lambda (event)
+ 552                      (equal "run.started" (plist-get event :type)))
+ 553                    trace)
+ 554                   sealed)
+ 555            (let ((run-id (plist-get started :run-id)))
+ 556              (when (and (stringp run-id)
+ 557                         (not (string-empty-p run-id))
+ 558                         (not (member run-id seen-runs)))
+ 559                (push run-id seen-runs)
+ 560                (condition-case nil
+ 561                    (let* ((run-events
+ 562                            (cl-remove-if-not
+ 563                             (lambda (event)
+ 564                               (equal run-id (plist-get event :run-id)))
+ 565                             trace))
+ 566                           (turn-id (plist-get started :turn-id))
+ 567                           (run-state
+ 568                            (superchat-tape--run-terminal-state
+打开仓库源文件 ↗
+固定权限阶段与只可收紧的监听器
+superchat-sandbox.el:255–363
+255  ;;;; The fixed level stage
+ 256  
+ 257  (defconst superchat-sandbox-full-control-tools
+ 258    '("eval_elisp" "shell-command" "eshell-command" "bash" "define_tool")
+ 259    "Built-in tools with full control of Emacs.
+ 260  Lisp can change any state and start any process, and a shell can write
+ 261  anywhere, so these are never treated as confined by a workspace.")
+ 262  
+ 263  (defconst superchat-sandbox-persisting-tools '("save_buffer")
+ 264    "Built-in tools that write a user's buffer to disk.
+ 265  Persisting is not a default mutation capability: such a tool exists only where
+ 266  a Preset or Request offers it, and it is asked about on every call under every
+ 267  mode that allows it at all -- `danger-full-access' included.")
+ 268  
+ 269  (defvar superchat-mcp-trusted-servers)
+ 270  (defvar superchat-tools--builtin-tool-names)
+ 271  (declare-function superchat--syn-tool-p "superchat-synthesis" (name))
+ 272  (declare-function superchat-mcp-tool-p "superchat-mcp" (name))
+ 273  (declare-function superchat-mcp-tool-server "superchat-mcp" (name))
+ 274  
+ 275  (defun superchat-sandbox-tool-class (tool-name)
+ 276    "Return TOOL-NAME's class for the level stage.
+ 277  `full-control' for the tools in `superchat-sandbox-full-control-tools' and
+ 278  every agent-written tool; `trusted' for an MCP tool of a server the user
+ 279  listed in `superchat-mcp-trusted-servers'; `outside' for any other MCP or
+ 280  third-party registered tool; `builtin' for everything else Superchat ships."
+ 281    (cond
+ 282     ((or (member tool-name superchat-sandbox-full-control-tools)
+ 283          (and (fboundp 'superchat--syn-tool-p) (superchat--syn-tool-p tool-name)))
+ 284      'full-control)
+ 285     ;; Trust is for the exact server a tool was registered for.  The name
+ 286     ;; alone cannot say: "mcp:notes:foreign:touch" belongs to the server
+ 287     ;; "notes:foreign", not to a trusted "notes".
+ 288     ((and (fboundp 'superchat-mcp-tool-p) (superchat-mcp-tool-p tool-name))
+ 289      (let ((server (superchat-mcp-tool-server tool-name)))
+ 290        (if (and (stringp server)
+ 291                 (member server (bound-and-true-p superchat-mcp-trusted-servers)))
+ 292            'trusted
+ 293          'outside)))
+ 294     ((or (equal tool-name "ask_user")
+ 295          (not (boundp 'superchat-tools--builtin-tool-names))
+ 296          (member tool-name superchat-tools--builtin-tool-names))
+ 297      'builtin)
+ 298     (t 'outside)))
+ 299  
+ 300  (defun superchat-sandbox--level-rule (tool-name mode)
+ 301    "Return (DECISION . REASON) the level stage gives TOOL-NAME under MODE."
+ 302    (if (member tool-name superchat-sandbox-persisting-tools)
+ 303        ;; "Ask" is the approval seam, so under the policy `never' -- the default
+ 304        ;; of `danger-full-access' -- the question cannot be put and the call is
+ 305        ;; refused there.  No second approval system exists for this tool.
+ 306        (if (eq mode 'read-only)
+ 307            (cons 'deny (format "%s writes a buffer to disk, which read-only mode does not grant; use /permissions to change the level"
+ 308                                tool-name))
+ 309          (cons 'ask (format "%s writes a buffer to disk; saving is normally the user's" tool-name)))
+ 310      (pcase (superchat-sandbox-tool-class tool-name)
+ 311        ('builtin '(allow))
+ 312        ((and class (or 'full-control 'outside 'trusted))
+ 313         (pcase mode
+ 314           ('danger-full-access '(allow))
+ 315           ('read-only
+ 316            (cons 'deny
+ 317                  (if (eq class 'full-control)
+ 318                      (format "%s is full Emacs control, which read-only mode does not grant; use /permissions to change the level"
+ 319                              tool-name)
+ 320                    (format "%s runs outside Superchat, which read-only mode does not grant; use /permissions to change the level"
+ 321                            tool-name))))
+ 322           (_ (if (eq class 'trusted)
+ 323                  '(allow)
+ 324                (cons 'ask
+ 325                      (if (eq class 'full-control)
+ 326                          (format "%s has full control of Emacs" tool-name)
+ 327                        (format "%s runs outside Superchat" tool-name))))))))))
+ 328  
+ 329  (defconst superchat-sandbox--decision-rank '((deny . 2) (ask . 1) (allow . 0))
+ 330    "Strength of the three tool decisions; the stronger one stands.")
+ 331  
+ 332  (defun superchat-permission-level-decision (tool-name args context &optional scope)
+ 333    "Return (:decision DECISION :reason REASON) for one tool call.
+ 334  DECISION is `allow', `ask' or `deny'.  CONTEXT is the executor's context; its
+ 335  `:session-id' selects the Session's sandbox mode.  The `tools/pre-execute'
+ 336  waterfall in SCOPE runs first -- a listener answers by returning the call
+ 337  with `:kind' set to `allow', `deny' or `ask' and an optional `:reason' -- and
+ 338  the level rule is then applied as a fixed
+ 339  stage: the stronger of the two stands, `deny' over `ask' over `allow'.  A
+ 340  listener that answers `allow' without delegating ends the waterfall only, so
+ 341  it cannot skip the level rule; a listener's refusal or fault is a denial."
+ 342    (let* ((session-id (plist-get context :session-id))
+ 343           (call (list :tool-name tool-name
+ 344                       :args (superchat-approval-snapshot-value args)
+ 345                       :session-id session-id
+ 346                       :run-id (plist-get context :run-id)
+ 347                       :kind 'allow))
+ 348           (answer (superchat-emit scope 'tools/pre-execute call))
+ 349           (listener
+ 350            (cond
+ 351             ((superchat-waterfall-refused-p answer)
+ 352              (cons 'deny (format "%s" (superchat-waterfall-refusal-reason answer))))
+ 353             ((and (listp answer)
+ 354                   (assq (plist-get answer :kind) superchat-sandbox--decision-rank))
+ 355              (cons (plist-get answer :kind) (plist-get answer :reason)))
+ 356             (t (cons 'deny "a tools/pre-execute listener returned no decision"))))
+ 357           (rule (superchat-sandbox--level-rule
+ 358                  tool-name (superchat-sandbox-effective-mode session-id)))
+ 359           (winner (if (> (alist-get (car listener) superchat-sandbox--decision-rank)
+ 360                          (alist-get (car rule) superchat-sandbox--decision-rank))
+ 361                       listener
+ 362                     rule)))
+ 363      (list :decision (car winner) :reason (cdr winner))))
+打开仓库源文件 ↗
+完整 Elisp 在宿主进程执行
+superchat-tools.el:918–956
+918  (defun superchat-tool-eval-elisp (expression)
+ 919    "Evaluate one complete Elisp EXPRESSION and return its value as a string.
+ 920  Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
+ 921  an error does not roll back effects of reading or evaluating the expression.
+ 922  The returned value is not verification of the user's requested outcome.
+ 923  The expression has full access to the Emacs process, so no attempt is made
+ 924  to classify it: the permission level treats every `eval_elisp' call as full
+ 925  Emacs control -- asked about per call under `edit-buffers', refused under
+ 926  `read-only', free under `danger-full-access'.
+ 927  
+ 928  The expression never asks the user anything: it runs with
+ 929  `inhibit-interaction', so a minibuffer prompt or a `read-char' or
+ 930  `read-event' stops it, and the model is told to find the value itself or to
+ 931  ask with `ask_user' (decision of 2026-09-24).  The stop leaves the whole
+ 932  expression at once, through `signal-hook-function', because code that asks
+ 933  inside `condition-case' and retries -- Emacs 30's `read-multiple-choice' --
+ 934  would otherwise catch it and loop for ever.  `read-key-sequence', which
+ 935  Emacs does not stop that way, is outside this.  The approval question for
+ 936  the call is asked before this function runs and is not affected."
+ 937    (let* ((asked (make-symbol "asked"))
+ 938           (outer-hook signal-hook-function)
+ 939           (leave-on-prompt
+ 940            (lambda (symbol data)
+ 941              (if (eq symbol 'inhibited-interaction)
+ 942                  (throw asked superchat-tools--eval-asked-the-user)
+ 943                (when outer-hook (funcall outer-hook symbol data))))))
+ 944      (catch asked
+ 945        (condition-case err
+ 946            (let ((result (let ((inhibit-interaction t)
+ 947                                ;; Tools run from llm.el's callbacks, which
+ 948                                ;; Emacs calls with quitting inhibited; a
+ 949                                ;; person's C-g must still stop the model's
+ 950                                ;; code (decision of 2026-09-30).
+ 951                                (inhibit-quit nil)
+ 952                                (signal-hook-function leave-on-prompt))
+ 953                            (eval (superchat-tools--read-one-expression expression) t))))
+ 954              (superchat-tools--eval-value-result result))
+ 955          (inhibited-interaction superchat-tools--eval-asked-the-user)
+ 956          (error (superchat-tools--eval-error-result err))))))
+打开仓库源文件 ↗
+确切 buffer 对象的 ownership
+superchat-editor-workspace.el:119–156
+119  no parallel buffer ledger is maintained."
+ 120    (superchat-editor-workspace--check-session-id session-id)
+ 121    (let (owned)
+ 122      (dolist (buffer (buffer-list) (nreverse owned))
+ 123        (when (superchat-editor-workspace--owned-by-session-p buffer session-id)
+ 124          (push buffer owned)))))
+ 125  
+ 126  (defun superchat-editor-workspace-owner-session (buffer)
+ 127    "Return BUFFER's valid owning Session ID, or nil when it is unowned.
+ 128  
+ 129  BUFFER must be an exact live buffer object.  Malformed ownership signals an
+ 130  error rather than being mistaken for an ordinary borrowed buffer.  The
+ 131  private marker representation does not escape this authority boundary."
+ 132    (let* ((classification
+ 133            (superchat-editor-workspace--classify-buffer buffer))
+ 134           (state (plist-get classification :state)))
+ 135      (pcase state
+ 136        ('owned (plist-get classification :session-id))
+ 137        ('unowned nil)
+ 138        ('malformed
+ 139         (error "EditorWorkspace buffer has malformed local ownership metadata")))))
+ 140  
+ 141  (defun superchat-editor-workspace-validate-buffer (buffer session-id)
+ 142    "Validate BUFFER ownership for SESSION-ID and return the exact BUFFER.
+ 143  
+ 144  An ordinary unowned live buffer is valid borrowed input.  When BUFFER is
+ 145  owned, its owner returned by `superchat-editor-workspace-owner-session' must
+ 146  exactly match SESSION-ID.  This function neither creates a buffer nor submits
+ 147  a Runtime Request."
+ 148    (superchat-editor-workspace--check-session-id session-id)
+ 149    (let ((owner (superchat-editor-workspace-owner-session buffer)))
+ 150      (when (and owner (not (equal owner session-id)))
+ 151        (error "EditorWorkspace buffer belongs to Session %s, not %s"
+ 152               owner session-id)))
+ 153    buffer)
+ 154  
+ 155  (defun superchat-editor-workspace--role-buffer (session-id role)
+ 156    "Return SESSION-ID's live owned buffer for ROLE, or nil."
+打开仓库源文件 ↗
+Projection 与 checkpoint 同事务
+superchat-projection.el:72–110
+72  (defun superchat-projection-catch-up (name &optional scope)
+  73    "Apply unseen events to materialized projection NAME in SCOPE.
+  74  Each event application and checkpoint update share one transaction.
+  75  Return the last applied event id."
+  76    (let* ((descriptor (superchat-projection--descriptor name))
+  77           (version (plist-get descriptor :version))
+  78           (select (or (plist-get descriptor :select)
+  79                       (error "Projection %s is not materialized" name)))
+  80           (checkpoint (superchat-db-projection-checkpoint name scope)))
+  81      (if (and checkpoint (/= (car checkpoint) version))
+  82          (superchat-projection-rebuild name scope)
+  83        (let ((last-id (or (cadr checkpoint) 0)))
+  84          ;; ponytail: One transaction per event favors crash-safe checkpoints
+  85          ;; over replay throughput; batch only after measured rebuild latency.
+  86          (dolist (event (funcall select last-id scope) last-id)
+  87            (let ((storage-id (car event)))
+  88              (unless (and (integerp storage-id) (> storage-id last-id))
+  89                (error "Projection %s received an invalid storage cursor: %S"
+  90                       name storage-id))
+  91              (superchat-db-call-with-transaction
+  92               (lambda ()
+  93                 (funcall (plist-get descriptor :apply) nil event)
+  94                 (superchat-db-projection-set-checkpoint
+  95                  name version storage-id scope)))
+  96              (setq last-id storage-id)))))))
+  97  
+  98  (defun superchat-projection-rebuild (name &optional scope)
+  99    "Reset materialized projection NAME in SCOPE and replay its Tape events."
+ 100    (let* ((descriptor (superchat-projection--descriptor name))
+ 101           (reset (or (plist-get descriptor :reset)
+ 102                      (error "Projection %s cannot be rebuilt" name))))
+ 103      (superchat-db-call-with-transaction
+ 104       (lambda ()
+ 105         (funcall reset scope)
+ 106         (superchat-db-projection-reset-checkpoint name scope)))
+ 107      (superchat-projection-catch-up name scope)))
+ 108  
+ 109  (provide 'superchat-projection)
+ 110
+打开仓库源文件 ↗
+请求证据实际重建
+superchat-invariant.el:98–123
+98  (superchat-invariant-define 'prompt-reconstructable
+  99    :seam 'driver
+ 100    :doc "A provider request is reconstructable from the Tape.
+ 101  The recorded `request.header' supplies the system text and tool schemas and the
+ 102  `request.message-list' supplies the message composition as storage references.
+ 103  The check rebuilds the request from those rows and fails when the receipt, the
+ 104  header reference, or a named storage id does not resolve; a recorded receipt
+ 105  alone is not evidence that the request can be rebuilt."
+ 106    :check
+ 107    (lambda (record)
+ 108      (cond
+ 109       ((null record) "request evidence could not be appended")
+ 110       ((not (listp record)) "request evidence record is not a plist")
+ 111       (t
+ 112        (let* ((session-id (plist-get record :session-id))
+ 113               (request-id (plist-get record :request-id))
+ 114               (rebuilt (and (fboundp 'superchat-tape-request-evidence)
+ 115                             (superchat-tape-request-evidence session-id request-id)))
+ 116               (status (plist-get rebuilt :status)))
+ 117          (unless (eq status 'reproduced)
+ 118            (list :request-id request-id
+ 119                  :reason (or (plist-get rebuilt :reason) "no reconstruction")
+ 120                  :status status)))))))
+ 121  
+ 122  (superchat-invariant-define 'exact-sink
+ 123    :seam 'terminal-delivery
+打开仓库源文件 ↗
+按 Workspace 筛选回忆 Session
+superchat-tape-view.el:115–131
+115  (defun superchat-view-recall-session-ids (session-id)
+ 116    "Return the Sessions a search made from SESSION-ID may look in.
+ 117  For a Session bound to a Workspace with a root, those are the Sessions bound
+ 118  to that Workspace, SESSION-ID among them: recall is shared inside a Workspace
+ 119  and never crosses to another (contract R5).  Any other Session -- a temporary
+ 120  conversation, or one from before Workspaces -- gets only itself.  Nil when
+ 121  SESSION-ID is not a non-empty string."
+ 122    (when (and (stringp session-id) (not (string-empty-p session-id)))
+ 123      (let* ((config (superchat-view-session-configuration session-id))
+ 124             (workspace-id (plist-get config :workspace-id))
+ 125             (root (plist-get config :workspace-root)))
+ 126        (if (and (stringp workspace-id) (stringp root) (not (string-empty-p root)))
+ 127            (cl-adjoin session-id
+ 128                       (superchat-view-workspace-session-ids workspace-id)
+ 129                       :test #'equal)
+ 130          (list session-id)))))
+ 131
+打开仓库源文件 ↗
+规则 collector 的入口限制
+superchat-prompt-hooks.el:517–542
+517  (defun superchat-prompt-collector--workspace-rules (env _state _tools)
+ 518    "Return the rules of the Workspace ENV's Session is bound to, as system text.
+ 519  The root comes from the Session's own Tape (`workspace.bound'), so the rules
+ 520  follow the conversation, not the buffer that happens to be current.  Chat,
+ 521  inline-ask and inline-act only, like the other system blocks.  After the
+ 522  rules comes what to do when the user says to remember something
+ 523  \(`superchat-workspace-remember-note'); a Session with no Workspace root (a
+ 524  temporary conversation) gets only that note, which says nothing is kept."
+ 525    (let* ((session-id (plist-get env :session-id))
+ 526           (surface-p (memq (plist-get env :surface) '(chat inline-ask inline-act)))
+ 527           (root (and surface-p
+ 528                      (stringp session-id)
+ 529                      (plist-get (superchat-view-session-configuration session-id)
+ 530                                 :workspace-root)))
+ 531           (rules (and (stringp root)
+ 532                       (fboundp 'superchat-workspace-rules-text)
+ 533                       (superchat-workspace-rules-text root)))
+ 534           (note (and surface-p
+ 535                      (stringp session-id)
+ 536                      (fboundp 'superchat-workspace-remember-note)
+ 537                      (superchat-workspace-remember-note root)))
+ 538           (text (and note (if rules (concat rules "\n\n" note) note))))
+ 539      (when text
+ 540        (list (superchat-prompt-fragment
+ 541               :owner 'core :id "workspace-rules" :slot 'system :text text
+ 542               :priority 2 :budget-class 'hard)))))
+打开仓库源文件 ↗
+子代理单独携带规则与工作快照
+superchat-subagent.el:1069–1109
+1069  (defun superchat--subagent-system-with-rules (system root)
+1070    "Return SYSTEM followed by the rules of the Workspace rooted at ROOT.
+1071  A sub-agent works in its parent's Workspace and carries the same rules
+1072  \(contract R3).  It gets the rules only, not the note about remembering:
+1073  writing rules is the main agent's.  SYSTEM unchanged when ROOT is nil or
+1074  has no rules file."
+1075    (let ((rules (and (stringp root)
+1076                      (fboundp 'superchat-workspace-rules-text)
+1077                      (superchat-workspace-rules-text root))))
+1078      (cond
+1079       ((null rules) system)
+1080       ((and (stringp system) (not (string-empty-p system)))
+1081        (concat system "\n\n" rules))
+1082       (t rules))))
+1083  
+1084  (declare-function superchat-work-current "superchat-work" (session-id))
+1085  (declare-function superchat-work-get "superchat-work" (id))
+1086  (declare-function superchat-work-render "superchat-work" (record))
+1087  (declare-function superchat-work-record-task "superchat-work"
+1088                    (session-id id task status report conversation))
+1089  
+1090  (defconst superchat-subagent-work-record-preamble
+1091    "This task is part of a work record the main agent keeps. Below is a \
+1092  snapshot of it, for context; you cannot change it. Report what you did; the \
+1093  main agent records it."
+1094    "What a sub-agent is told before the snapshot of its Work Record (K14).")
+1095  
+1096  (defun superchat--subagent-system-with-record (system record-id)
+1097    "Return SYSTEM followed by a snapshot of the Work Record RECORD-ID.
+1098  SYSTEM unchanged when RECORD-ID is nil or names no record."
+1099    (let ((record (and record-id (fboundp 'superchat-work-get)
+1100                       (superchat-work-get record-id))))
+1101      (if (null record)
+1102          system
+1103        (concat (if (and (stringp system) (not (string-empty-p system)))
+1104                    (concat system "\n\n")
+1105                  "")
+1106                superchat-subagent-work-record-preamble "\n\n"
+1107                (superchat-work-render record)))))
+1108  
+1109  (defun superchat--subagent-runtime-envelope
+打开仓库源文件 ↗
+按 id 读写记录，没有 Session 所属检查
+superchat-work.el:191–283
+191  (defun superchat-work--workspace (session-id)
+ 192    "(ID . ROOT) of the Workspace SESSION-ID is bound to, or nil without a root."
+ 193    (when (fboundp 'superchat-view-session-configuration)
+ 194      (let* ((config (superchat-view-session-configuration session-id))
+ 195             (id (plist-get config :workspace-id))
+ 196             (root (plist-get config :workspace-root)))
+ 197        (and (stringp id) (stringp root) (not (string-empty-p root)) (cons id root)))))
+ 198  
+ 199  (defun superchat-work--require (id)
+ 200    "The open record ID, or signal why it cannot be written to."
+ 201    (let ((record (superchat-work-get id)))
+ 202      (cond ((null record) (error "No work record %s" id))
+ 203            ((plist-get record :conclusion)
+ 204             (error "Work record %s is completed; start a new one that follows it" id))
+ 205            (t record))))
+ 206  
+ 207  (defun superchat-work-start (session-id goal &optional follows)
+ 208    "Start a Work Record for GOAL in SESSION-ID and make it current; return its id.
+ 209  FOLLOWS is the id of a completed record this one continues (K11).  Signals
+ 210  when SESSION-ID belongs to no Workspace with a root (W10)."
+ 211    (unless (and (stringp goal) (not (string-empty-p (string-trim goal))))
+ 212      (error "A work record needs a goal: what is to be delivered"))
+ 213    (let ((workspace (superchat-work--workspace session-id)))
+ 214      (unless workspace
+ 215        (error "This conversation belongs to no workspace, so nothing is kept; the user can make a directory a workspace with /workspace DIRECTORY"))
+ 216      (when (and follows (not (superchat-work-get follows)))
+ 217        (error "No work record %s to follow" follows))
+ 218      (let ((id (format "work-%s-%04x" (format-time-string "%Y%m%d%H%M%S")
+ 219                        (random #x10000))))
+ 220        (superchat-work--append session-id "work.created"
+ 221                                (format "Work record started: %s" goal)
+ 222                                (list :work-id id :goal goal :follows follows
+ 223                                      :workspace-id (car workspace)
+ 224                                      :workspace-root (cdr workspace)
+ 225                                      :run-id (superchat-work--run-id)))
+ 226        (superchat-work--append session-id "work.focused"
+ 227                                (format "Current work record: %s" id)
+ 228                                (list :work-id id))
+ 229        id)))
+ 230  
+ 231  (defun superchat-work-update (session-id id &optional progress blocked resume)
+ 232    "Record PROGRESS, BLOCKED and RESUME on the open record ID from SESSION-ID.
+ 233  They answer how far it got, why the next step cannot be taken yet, and where
+ 234  to pick it up; nil leaves a field as it was.  Makes ID current here."
+ 235    (superchat-work--require id)
+ 236    (unless (or progress blocked resume)
+ 237      (error "Say how far it got, why the next step waits, or where to pick it up"))
+ 238    (superchat-work--append session-id "work.updated"
+ 239                            (format "Work record updated: %s" id)
+ 240                            (list :work-id id :progress progress :blocked blocked
+ 241                                  :resume resume :run-id (superchat-work--run-id)))
+ 242    (unless (equal id (superchat-work-current session-id))
+ 243      (superchat-work--append session-id "work.focused"
+ 244                              (format "Current work record: %s" id)
+ 245                              (list :work-id id)))
+ 246    id)
+ 247  
+ 248  (defun superchat-work-wait (session-id id for &optional detail until)
+ 249    "Register that the open record ID waits FOR (user, agent, time), with DETAIL.
+ 250  For a time, UNTIL is when, in seconds since the epoch; the record is then
+ 251  taken up again in a new conversation (`superchat-work-wake').  A nil FOR
+ 252  clears the wait."
+ 253    (superchat-work--require id)
+ 254    (when (and for (not (member for superchat-work-wait-kinds)))
+ 255      (error "A record waits for one of: %s" (string-join superchat-work-wait-kinds ", ")))
+ 256    (when (and (equal for "time") (not (numberp until)))
+ 257      (error "A wait for a time needs the time: in_minutes or at"))
+ 258    (superchat-work--append session-id "work.waiting"
+ 259                            (cond ((equal for "time")
+ 260                                   (format "Work record %s waits until %s" id
+ 261                                           (format-time-string "%Y-%m-%d %H:%M" (seconds-to-time until))))
+ 262                                  (for (format "Work record %s waits for %s" id for))
+ 263                                  (t (format "Work record %s no longer waits" id)))
+ 264                            (list :work-id id :for for :detail detail
+ 265                                  :until (and (equal for "time") (float until))
+ 266                                  :run-id (superchat-work--run-id)))
+ 267    (when (and (equal for "time") (superchat-work--wake-active-p))
+ 268      (superchat-work--arm id until))
+ 269    id)
+ 270  
+ 271  (defun superchat-work-complete (session-id id conclusion &optional by)
+ 272    "Complete the open record ID with CONCLUSION; BY is `user' or `model' (default)."
+ 273    (superchat-work--require id)
+ 274    (unless (and (stringp conclusion) (not (string-empty-p (string-trim conclusion))))
+ 275      (error "Completing a work record needs a conclusion: what was delivered"))
+ 276    (superchat-work--append session-id "work.completed"
+ 277                            (format "Work record completed: %s" id)
+ 278                            (list :work-id id :conclusion conclusion
+ 279                                  :by (symbol-name (or by 'model))
+ 280                                  :run-id (superchat-work--run-id)))
+ 281    id)
+ 282  
+ 283  ;;;; Text -----------------------------------------------------------------------
+打开仓库源文件 ↗
+action 分支与静默丢弃字段
+superchat-work.el:461–513
+461  (defun superchat-work-tool (action &optional id goal progress blocked resume
+ 462                                     wait_for detail conclusion follows
+ 463                                     in_minutes at)
+ 464    "The `work_record' tool: ACTION is start, update, wait, done or read."
+ 465    (condition-case err
+ 466        (let* ((session (superchat-work--tool-session))
+ 467               (id (if (and (stringp id) (not (string-empty-p id)))
+ 468                       id
+ 469                     (superchat-work-current session))))
+ 470          (pcase action
+ 471            ("start"
+ 472             (let ((new (superchat-work-start session goal follows)))
+ 473               (format "Started %s; it is this conversation's current work record."
+ 474                       new)))
+ 475            ("update"
+ 476             (unless id (error "No current work record; start one or give its id"))
+ 477             (when (or progress blocked resume)
+ 478               (superchat-work-update session id progress blocked resume))
+ 479             ;; A wait given with an update is registered too, never dropped: in
+ 480             ;; the real task T4W the model put wait_for and in_minutes on an
+ 481             ;; update and believed the wait was registered.
+ 482             (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+ 483               (superchat-work-wait
+ 484                session id wait_for detail
+ 485                (cond ((and (stringp at) (not (string-empty-p at)))
+ 486                       (superchat-timer-parse-time at))
+ 487                      ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+ 488             (unless (or progress blocked resume
+ 489                         (and (stringp wait_for) (not (string-empty-p wait_for))))
+ 490               (error "Say how far it got, why the next step waits, or where to pick it up"))
+ 491             (superchat-work-render (superchat-work-get id)))
+ 492            ("wait"
+ 493             (unless id (error "No current work record; start one or give its id"))
+ 494             (superchat-work-wait
+ 495              session id (and (stringp wait_for) (not (string-empty-p wait_for)) wait_for)
+ 496              detail
+ 497              (cond ((and (stringp at) (not (string-empty-p at)))
+ 498                     (superchat-timer-parse-time at))
+ 499                    ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes)))))
+ 500             (superchat-work-render (superchat-work-get id)))
+ 501            ("done"
+ 502             (unless id (error "No current work record; give its id"))
+ 503             (superchat-work-complete session id conclusion)
+ 504             (format "Completed %s." id))
+ 505            ("read"
+ 506             (unless id (error "Give the id of a work record"))
+ 507             (superchat-work-render (or (superchat-work-get id)
+ 508                                        (error "No work record %s" id))))
+ 509            (_ (error "action must be start, update, wait, done or read"))))
+ 510      (error (format "Error: %s" (error-message-string err)))))
+ 511  
+ 512  ;;;; For the user (K11) ---------------------------------------------------------------
+ 513
+打开仓库源文件 ↗
+面向模型的全局定时器查询与取消
+superchat-timer.el:451–491
+451  (defun superchat-timer-tool-list ()
+ 452    "The `timer_list' tool: the pending timers, then those fired in the last day."
+ 453    (let ((timers (superchat-timer-list))
+ 454          (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+ 455      (concat
+ 456       (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+ 457       (if (null timers)
+ 458           "No pending timers."
+ 459         (concat
+ 460          "Pending:\n"
+ 461          (mapconcat (lambda (timer)
+ 462                     (format "%s  %s  %s%s  %s"
+ 463                             (plist-get timer :id)
+ 464                             (superchat-timer-format-time (plist-get timer :next-due))
+ 465                             (plist-get timer :kind)
+ 466                             (if (plist-get timer :repeat)
+ 467                                 (format " (%s)" (superchat-timer--repeat-name
+ 468                                                  (plist-get timer :repeat)))
+ 469                               "")
+ 470                             (plist-get timer :text)))
+ 471                   timers "\n")))
+ 472       (if (null fired)
+ 473           "\nNone fired in the last 24 hours."
+ 474         (concat
+ 475          "\nFired in the last 24 hours:\n"
+ 476          (mapconcat (lambda (timer)
+ 477                       (format "%s  %s%s  %s"
+ 478                               (superchat-timer-format-time (plist-get timer :due))
+ 479                               (plist-get timer :kind)
+ 480                               (if (plist-get timer :late)
+ 481                                   " (Emacs was not running then; shown when it started)"
+ 482                                 "")
+ 483                               (plist-get timer :text)))
+ 484                     fired "\n"))))))
+ 485  
+ 486  (defun superchat-timer-tool-cancel (id)
+ 487    "The `timer_cancel' tool: cancel the pending timer ID."
+ 488    (if (superchat-timer-cancel id)
+ 489        (format "Timer %s cancelled." id)
+ 490      (format "Error: no pending timer %s." id)))
+ 491
+打开仓库源文件 ↗
+持久标记先于请求提交
+superchat-work.el:624–687
+624  (defun superchat-work--due-p (record)
+ 625    "Non-nil when RECORD waits for a time that has not woken it yet."
+ 626    (let* ((waiting (plist-get record :waiting))
+ 627           (until (plist-get waiting :until)))
+ 628      (and (equal "time" (plist-get waiting :for))
+ 629           (numberp until)
+ 630           (not (plist-get record :conclusion))
+ 631           (not (member until (plist-get record :woken))))))
+ 632  
+ 633  (defun superchat-work--disarm (id)
+ 634    (when-let* ((timer (gethash id superchat-work--armed)))
+ 635      (cancel-timer timer)
+ 636      (remhash id superchat-work--armed)))
+ 637  
+ 638  (defun superchat-work-disarm-all ()
+ 639    "Cancel every Emacs timer set to wake a record."
+ 640    (maphash (lambda (_id timer) (cancel-timer timer)) superchat-work--armed)
+ 641    (clrhash superchat-work--armed))
+ 642  
+ 643  (defun superchat-work--arm (id until)
+ 644    (superchat-work--disarm id)
+ 645    (puthash id (run-at-time (max 0 (- until (superchat-work--now))) nil
+ 646                             #'superchat-work--wake-if-due id)
+ 647             superchat-work--armed))
+ 648  
+ 649  (defun superchat-work--wake-if-due (id)
+ 650    (remhash id superchat-work--armed)
+ 651    (let ((record (superchat-work-get id)))
+ 652      (when (and record (superchat-work--due-p record)
+ 653                 (<= (plist-get (plist-get record :waiting) :until) (superchat-work--now)))
+ 654        (superchat-work-wake record))))
+ 655  
+ 656  (defun superchat-work-wake (record)
+ 657    "Take RECORD up again in a new conversation of its Workspace; return the View.
+ 658  Records `work.woken' first, so one wait wakes once; clears the wait; makes
+ 659  RECORD the new conversation's current record; sends the wake message.  When
+ 660  that execution ends, a line is left in the Workspace's main conversation."
+ 661    (let* ((id (plist-get record :id))
+ 662           (until (plist-get (plist-get record :waiting) :until))
+ 663           (workspace (list :id (plist-get record :workspace-id)
+ 664                            :root (plist-get record :workspace-root)))
+ 665           (main (or (car (superchat-view-workspace-session-ids (plist-get workspace :id)))
+ 666                     (plist-get record :session-id)))
+ 667           (view (superchat-workspace-new-conversation workspace))
+ 668           (session (buffer-local-value 'superchat--session-id view)))
+ 669      (superchat-work--append session "work.woken"
+ 670                              (format "Work record %s woken" id)
+ 671                              (list :work-id id :until until))
+ 672      (superchat-work--append session "work.waiting"
+ 673                              (format "Work record %s no longer waits" id)
+ 674                              (list :work-id id :for nil))
+ 675      (superchat-work--append session "work.focused"
+ 676                              (format "Current work record: %s" id)
+ 677                              (list :work-id id))
+ 678      (with-current-buffer view
+ 679        (let ((inhibit-read-only t))
+ 680          (goto-char (point-max))
+ 681          (insert (format superchat-work-wake-prompt id)))
+ 682        ;; The product speaks here, not the user.
+ 683        (let ((superchat-automated-input t))
+ 684          (superchat-send-input))
+ 685        (when superchat--active-run-id
+ 686          (puthash superchat--active-run-id (cons id main) superchat-work--woken-runs)))
+ 687      view))
+打开仓库源文件 ↗
+Work Record 的观察者与调度生命周期
+superchat-work.el:765–820
+765  (defun superchat-work--on-turn-completed (_run status)
+ 766    "At the end of an execution, attach its facts and its outcome to the record.
+ 767  The record is the conversation's current one, or one this execution completed."
+ 768    (when (and (listp status)
+ 769               (fboundp 'superchat-runtime--terminal-p)
+ 770               (superchat-runtime--terminal-p (plist-get status :status)))
+ 771      (let* ((session (plist-get status :session-id))
+ 772             (run (plist-get status :run-id))
+ 773             (ids (delete-dups
+ 774                   (delq nil
+ 775                         (cons (superchat-work-current session)
+ 776                               (mapcar (lambda (row)
+ 777                                         (cl-destructuring-bind (s type payload) row
+ 778                                           (and (equal s session)
+ 779                                                (equal type "work.completed")
+ 780                                                (equal run (superchat-work--get payload 'run_id 'run-id))
+ 781                                                (superchat-work--get payload 'work_id 'work-id))))
+ 782                                       (superchat-work--rows)))))))
+ 783        (dolist (id ids)
+ 784          (ignore-errors
+ 785            (let ((rows (and (fboundp 'superchat-changes-candidates)
+ 786                             (superchat-changes-candidates session run))))
+ 787              (when rows
+ 788                (superchat-work--append
+ 789                 session "work.facts" (format "Work record %s: what the execution changed" id)
+ 790                 (list :work-id id :run-id run
+ 791                       :buffers (vconcat (mapcar (lambda (r) (plist-get r :name)) rows))
+ 792                       :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))
+ 793                       ;; K13: in a jj repository, the change these edits sit in.
+ 794                       :jj-change (superchat-work-jj-change
+ 795                                   (plist-get (superchat-work-get id) :workspace-root))))))
+ 796            (let ((outcome (superchat-work-outcome id run (plist-get status :status))))
+ 797              (superchat-work--append
+ 798               session "work.outcome" (format "Work record %s: %s" id outcome)
+ 799               (list :work-id id :run-id run :outcome (symbol-name outcome))))))
+ 800        (ignore-errors (superchat-work--report-woken run status)))))
+ 801  
+ 802  (superchat-define-plugin work-records
+ 803    :doc "Work Records: at the end of every execution, the product attaches what
+ 804  it changed to the conversation's current record and decides how it stands."
+ 805    :apply
+ 806    (lambda (scope _config)
+ 807      (superchat-on scope 'turn-completed 'work-outcome
+ 808                    #'superchat-work--on-turn-completed)
+ 809      (add-hook 'superchat-user-input-functions #'superchat-work--on-user-input)
+ 810      (superchat-scope-effect
+ 811       scope (lambda ()
+ 812               (remove-hook 'superchat-user-input-functions
+ 813                            #'superchat-work--on-user-input)))
+ 814      ;; After loading finishes, so a missed wake never starts mid-`require'.
+ 815      (let ((start (run-at-time 0 nil #'superchat-work-arm-all)))
+ 816        (superchat-scope-effect scope
+ 817                                (lambda ()
+ 818                                  (cancel-timer start)
+ 819                                  (superchat-work-disarm-all))))))
+ 820
+打开仓库源文件 ↗
+内置工具按 row 撤销的覆盖范围
+superchat-tools.el:2366–2404
+2366  (defconst superchat-tools--row-owned-builtin-names
+2367    '((subagent "delegate_to_subagent" "delegate_to_subagent_parallel"
+2368                "team_task" "team_message")
+2369      (workspace "workspace_write" "workspace_publish"
+2370                 "workspace_read" "workspace_info")
+2371      (memory "memory_search"))
+2372    "Built-in tool names registered by their owning default row.
+2373  `superchat-tools--install-builtin-descriptors' skips these, and the owning
+2374  row calls `superchat-tools-install-row-builtins' in its own `:apply', so
+2375  unmounting the row withdraws exactly this group and no other row offers it.")
+2376  
+2377  (defun superchat-tools-row-builtin-owner (name)
+2378    "Return the default row owning built-in tool NAME, or nil."
+2379    (car (cl-find name superchat-tools--row-owned-builtin-names
+2380                  :key #'cdr :test #'member)))
+2381  
+2382  (defun superchat-tools-install-row-builtins (row)
+2383    "Register ROW's built-in tools as selectable descriptors of this Scope.
+2384  The registrations are withdrawn with that Scope, so unmounting ROW withdraws
+2385  exactly this group."
+2386    (let ((names (cdr (assq row superchat-tools--row-owned-builtin-names))))
+2387      (unless names
+2388        (error "superchat-tools: %s has no row-owned built-in tools" row))
+2389      (let ((scope (superchat-registration-scope-resolve nil)))
+2390        (dolist (name names)
+2391          (superchat-scope-register scope 'builtin-tool name t)))))
+2392  
+2393  (defun superchat-tools--install-builtin-descriptors ()
+2394    "Make every built-in tool a selectable descriptor of the mounting Scope.
+2395  The registrations are withdrawn with that Scope, so unmounting the plugin
+2396  that calls this leaves no built-in tool selectable.  Names owned by another
+2397  row (see `superchat-tools--row-owned-builtin-names') are that row's to
+2398  register, so this skips them."
+2399    (let ((scope (superchat-registration-scope-resolve nil)))
+2400      (dolist (name superchat-tools--builtin-tool-names)
+2401        (unless (superchat-tools-row-builtin-owner name)
+2402          (superchat-scope-register scope 'builtin-tool name t)))))
+2403  
+2404  (defun superchat-tools-builtin-descriptor-p (name &optional scope)
+打开仓库源文件 ↗
+Work Record collector 属于 chat-collectors
+superchat-prompt-hooks.el:988–1050
+988  (defun superchat-prompt-collector--work-records (env _state _tools)
+ 989    "Return the conversation's Work Records as a `context' fragment, or nothing.
+ 990  Chat, inline-ask and inline-act only.  See `superchat-work-request-text'."
+ 991    (let ((session-id (plist-get env :session-id)))
+ 992      (when-let* (((memq (plist-get env :surface) '(chat inline-ask inline-act)))
+ 993                  ((stringp session-id))
+ 994                  ((fboundp 'superchat-work-request-text))
+ 995                  (text (superchat-work-request-text session-id)))
+ 996        (list (superchat-prompt-fragment
+ 997               :owner 'chat :id "work-records" :slot 'context :text text
+ 998               :priority 0 :budget-class 'hard)))))
+ 999  
+1000  (defun superchat-prompt-collector--prepared (env _state _tools)
+1001    "Return the fragments of a producer that prepared its whole user message.
+1002  Subagent, workflow, skills-match and compaction hand the driver
+1003  `:context (:prepared-prompt TEXT :prepared-system TEXT)'; TEXT becomes the
+1004  required `content' fragment (replacing the driver's raw one) and the
+1005  system text a `system' fragment unless the Envelope already carries its
+1006  own `:system-prompt'.  This is the plugin-shaped successor of the driver's
+1007  former prepared-prompt bypass (migration step 3)."
+1008    (let* ((context (plist-get env :context))
+1009           (prompt (plist-get context :prepared-prompt))
+1010           (system (plist-get context :prepared-system))
+1011           (envelope-system (plist-get env :system-prompt)))
+1012      (when (and (stringp prompt) (not (string-empty-p prompt)))
+1013        (append
+1014         (list (superchat-prompt-fragment
+1015                :owner 'core :id "content" :slot 'template :text prompt
+1016                :priority 0 :budget-class 'hard :required t))
+1017         (when (and (stringp system) (not (string-empty-p system))
+1018                    (not (and (stringp envelope-system)
+1019                              (not (string-empty-p envelope-system)))))
+1020           (list (superchat-prompt-fragment
+1021                  :owner 'core :id "prepared-system" :slot 'system :text system
+1022                  :priority 0 :budget-class 'hard)))))))
+1023  
+1024  ;; ── Plugin: the default collectors ──
+1025  ;; Each registration is a `collect-context' Event listener, and the Event's
+1026  ;; listeners run newest-first: history, memory, context-files,
+1027  ;; file-inline, workspace-rules, system-instructions, chat-input, plan, origin, prepared.
+1028  ;; Collection order is not the assembly contract -- the fragments carry
+1029  ;; their own `:priority'/`:budget-class'/`:required', which the assembler
+1030  ;; sorts -- but it is preserved so a nearer Scope still shadows an
+1031  ;; inherited contributor first, preserving the established collection order.
+1032  
+1033  (superchat-define-plugin chat-collectors
+1034    :doc "The default collect-context contributors: chat input, system
+1035  instructions, #file and context files, the request's Emacs origin and
+1036  selection, memory, history, plan, and a producer's prepared text."
+1037    :apply
+1038    (lambda (_scope _config)
+1039      (superchat-context-register 'prepared
+1040                            #'superchat-prompt-collector--prepared :owner 'core)
+1041      (superchat-context-register 'origin
+1042                            #'superchat-prompt-collector--origin :owner 'chat)
+1043      (superchat-context-register 'plan
+1044                            #'superchat-prompt-collector--plan :owner 'chat)
+1045      (superchat-context-register 'windows
+1046                            #'superchat-prompt-collector--windows :owner 'chat)
+1047      (superchat-context-register 'work-records
+1048                            #'superchat-prompt-collector--work-records :owner 'chat)
+1049      ;; Registered at the cutover; until then the collector list is as it was.
+1050      (progn
+打开仓库源文件 ↗
+待保存候选依赖活 buffer；终态触发审阅
+superchat-changes.el:218–283
+218  (defun superchat-changes-candidates (session-id &optional run-id)
+ 219    "Return the unsaved buffers SESSION-ID's structured tool calls edited.
+ 220  Each element is (:buffer BUFFER :name NAME :file FILE :new-file BOOL
+ 221  :outside ROOT).  `:outside' is the root of SESSION-ID's Workspace when FILE
+ 222  lies outside it, else nil: such an edit is not stopped, it is pointed out
+ 223  before saving (contract W9).  With RUN-ID, only what that Run (and the Runs
+ 224  it delegated to) edited.  Derived from the Tape and the buffers' state now;
+ 225  see this file's commentary for what is not attributed."
+ 226    (let ((runs (superchat-changes--editing-runs session-id run-id))
+ 227          (root (superchat-changes--workspace-root session-id))
+ 228          rows)
+ 229      (when runs
+ 230        ;; The buffer is recognized by its own mark, never looked up by the name
+ 231        ;; or the file the Tape recorded.  Everything reported is read from the
+ 232        ;; live buffer now, so a rename or `set-visited-file-name' never makes an
+ 233        ;; old path pass for the current one.
+ 234        (dolist (buffer (buffer-list))
+ 235          (when (and (buffer-modified-p buffer)
+ 236                     (cl-intersection runs (superchat-changes--marks buffer) :test #'equal))
+ 237            (let ((visited (buffer-file-name buffer)))
+ 238              (push (list :buffer buffer :name (buffer-name buffer) :file visited
+ 239                          :new-file (and visited (not (file-exists-p visited)) t)
+ 240                          :outside (and (superchat-changes--outside-p visited root)
+ 241                                        root))
+ 242                    rows)))))
+ 243      (nreverse rows)))
+ 244  
+ 245  (defun superchat-changes--lines (rows)
+ 246    (mapconcat (lambda (row)
+ 247                 (format "- %s%s%s"
+ 248                         (plist-get row :name)
+ 249                         (cond ((plist-get row :new-file)
+ 250                                (format " -> %s (new file, nothing on disk yet)" (plist-get row :file)))
+ 251                               ((plist-get row :file) (format " -> %s" (plist-get row :file)))
+ 252                               (t " (not visiting a file)"))
+ 253                         (if (plist-get row :outside)
+ 254                             (format " [outside this workspace, %s]"
+ 255                                     (abbreviate-file-name (plist-get row :outside)))
+ 256                           "")))
+ 257               rows "\n"))
+ 258  
+ 259  (defun superchat-changes-run-summary (session-id run-id)
+ 260    "Return the Run-end text about RUN-ID's unsaved edits, or nil when none."
+ 261    (when-let* ((rows (superchat-changes-candidates session-id run-id)))
+ 262      (format "%d buffer%s edited by this Run %s unsaved -- saving is yours; /changes to review:\n%s"
+ 263              (length rows) (if (= 1 (length rows)) "" "s")
+ 264              (if (= 1 (length rows)) "is" "are")
+ 265              (superchat-changes--lines rows))))
+ 266  
+ 267  (defun superchat-changes--announce (text)
+ 268    "Tell the user TEXT.  The chat View renders the Tape and is not written to."
+ 269    (message "superchat: %s" text))
+ 270  
+ 271  (defun superchat-changes--on-turn-completed (_run status)
+ 272    "At a terminal Run, announce what it left unsaved and show the review screen.
+ 273  This runs inside the terminal emission, so the screen is shown from a timer."
+ 274    (when (and (listp status)
+ 275               (fboundp 'superchat-runtime--terminal-p)
+ 276               (superchat-runtime--terminal-p (plist-get status :status)))
+ 277      (when-let* ((session (plist-get status :session-id))
+ 278                  (run (plist-get status :run-id))
+ 279                  (text (ignore-errors (superchat-changes-run-summary session run))))
+ 280        (superchat-changes--announce text)
+ 281        (when superchat-changes-review-after-run
+ 282          (run-at-time 0 nil #'superchat-changes--review-after-run session run)))))
+ 283
+打开仓库源文件 ↗
+Work Record 全量 fold 与当前记录选择
+superchat-work.el:55–70
+55  (defun superchat-work--rows ()
+  56    "Every Work Record fact, oldest first, as (SESSION TYPE PAYLOAD)."
+  57    (let (out)
+  58      (dolist (row (superchat-db-tape-select
+  59                    "SELECT session_id, meta FROM tape
+  60                     WHERE kind = 'system' AND meta LIKE '%\"work.%'
+  61                     ORDER BY id ASC"))
+  62        (let* ((json-object-type 'alist)
+  63               (json-array-type 'list)
+  64               (json-key-type 'symbol)
+  65               (meta (ignore-errors (json-read-from-string (or (nth 1 row) ""))))
+  66               (type (alist-get 'event_type meta)))
+  67          (when (member type superchat-work-fact-types)
+  68            (push (list (nth 0 row) type (alist-get 'payload meta)) out))))
+  69      (nreverse out)))
+  70
+打开仓库源文件 ↗
+SQL 工具没有 Workspace 参数
+superchat-tools.el:1263–1283
+1263  (defun superchat-tool-sql (query)
+1264    "Execute a read-only SELECT/WITH QUERY against the superchat SQLite DB.
+1265  Returns results as a JSON string.  Mutating statements are rejected
+1266  by signaling an error."
+1267    (if (fboundp 'superchat-db-tape-select)
+1268        (superchat-tools--rows-to-json (superchat-db-tape-select query))
+1269      "Error: tape database is not available."))
+1270  
+1271  (defun superchat-tool-memory-search (query)
+1272    "Search the conversation tape for QUERY and return matches as JSON.
+1273  This is a model-initiated lookup, so -- like automatic recall, and unlike
+1274  the user's own `/recall' command -- it follows
+1275  `superchat-memory-auto-recall-cross-session': rows from the active
+1276  session (any kind) are always eligible; rows from another session are
+1277  eligible only when it belongs to the same Workspace
+1278  \(`superchat-view-recall-session-ids') and that option allows it (any row
+1279  under the default `all', an explicit `/remember' anchor under
+1280  `remembered', none under `none').
+1281  Eligibility and session priority are both enforced by the search itself,
+1282  before any row-count limit, so an eligible row is never crowded out by
+1283  ineligible or merely better-ranked ones."
+打开仓库源文件 ↗
+当前 inline Session 按来源 Workspace 解析
+superchat.el:3602–3632
+3602  (defun superchat-conversation-session-id ()
+3603    "Return the Session the chat window shows now, making the main one if needed.
+3604  That is the chat beside the code in this tab when there is one, else the main
+3605  chat View's Session, as `superchat-act' uses.
+3606  Called from a buffer inside a project it is that Workspace's main
+3607  conversation instead; as a side effect, a chat window already beside the code
+3608  in this tab that shows another conversation is switched to it (not selected),
+3609  and no window is opened when there is none.
+3610  Called from any other non-chat buffer it is the temporary conversation
+3611  (`superchat--temporary-view'; nothing is displayed)."
+3612    (if-let* ((workspace (superchat--source-workspace)))
+3613        (let* ((view (superchat--workspace-main-view workspace))
+3614               (window
+3615                (cl-find-if
+3616                 (lambda (window)
+3617                   (and (eq 'right (window-parameter window 'window-side))
+3618                        (buffer-local-value 'superchat--session-id
+3619                                            (window-buffer window))))
+3620                 (window-list nil 'no-minibuf))))
+3621          (when (and window (not (eq view (window-buffer window))))
+3622            (superchat--show-chat-view view))
+3623          (buffer-local-value 'superchat--session-id view))
+3624      (if (not (superchat--chat-view-p))
+3625          (buffer-local-value 'superchat--session-id (superchat--temporary-view))
+3626       (or (cl-some (lambda (window)
+3627                     (and (eq 'right (window-parameter window 'window-side))
+3628                          (buffer-local-value 'superchat--session-id (window-buffer window))))
+3629                   (window-list nil 'no-minibuf))
+3630          (buffer-local-value 'superchat--session-id (superchat--ensure-request-chat-buffer))))))
+3631  
+3632  (defun superchat--session-views (session-id)
+打开仓库源文件 ↗
+默认组合的实际行
+superchat-plugin.el:236–246
+236  (defcustom superchat-plugins
+ 237    '(transport-llm driver tape session-view tools tools-builtin
+ 238      tools-baseline prompt-assembler chat-collectors
+ 239      chat-commands chat-turn-recorder chat-run-notices changes chat
+ 240      editor-workspace change-set
+ 241      inline-ask inline-act inline-rewrite org-babel magit emacsclient
+ 242      memory experience plan agents-panel compact
+ 243      subagent workflow workspace workspace-resolution timers work-records)
+ 244    "The `default' profile's one row layer, mounted when Superchat loads.
+ 245  Each element is a plugin NAME or (NAME . CONFIG-PLIST).  Remove a row before
+ 246  `(require \='superchat)' to disable a built-in; `superchat-plugin-mount' and
+打开仓库源文件 ↗
+FINAL / DIRECTION
+Superchat 最值得坚持的，不是做成“什么都能挂载的 Agent 平台”，而是成为
+可信地操作当前 Emacs、记得工作进度、又不会替用户丢掉控制权的 AI 层。
+现有 Runtime、Tape 与 buffer-first 已经为此提供了合适的基础。下一步的主线是：
+把对象范围、功能生命周期和持久工作到执行的交接补完整。
+在此之后，精简提示词和优化本地模型才不会建立在不稳定的业务边界上。
+Superchat 架构深度审阅 · 2026-10-10 · 本地独立报告，无外部脚本、无遥测、无网络依赖。
+只新增审阅材料；未发布网站、未提交版本、未修改生产实现。

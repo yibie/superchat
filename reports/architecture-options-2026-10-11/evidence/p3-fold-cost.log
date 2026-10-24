@@ -1,0 +1,24 @@
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 01:03:22-0700, selector ‘"^p3/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+P3 FOLD COST (ms, median of 5; snapshot 75e83370; isolated SQLite)
+baseline (3 real turns) | rows=36 | replay 1.0 | unattended-run-p 1.0 | work-request-text 1.8 | work-records 0.1 | timer-list 0.1 | changes-candidates 2.4 | session-history 0.3
+appended to 1000 rows in 0.18 s
+~1000 rows | rows=1000 | replay 15.4 | unattended-run-p 15.9 | work-request-text 15.5 | work-records 0.3 | timer-list 0.2 | changes-candidates 118.4 | session-history 3.5
+appended to 5000 rows in 0.67 s
+~5000 rows | rows=5000 | replay 72.1 | unattended-run-p 75.9 | work-request-text 96.6 | work-records 1.0 | timer-list 0.9 | changes-candidates 2107.6 | session-history 16.8
+appended to 20000 rows in 2.68 s
+~20000 rows | rows=20000 | replay 337.2 | unattended-run-p 340.5 | work-request-text 366.0 | work-records 4.8 | timer-list 4.7 | changes-candidates 30012.3 | session-history 105.7
+
+   passed  1/1  p3/fold-cost-as-the-tape-grows (173.757245 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-11 01:06:16-0700, 173.757359 sec)
+

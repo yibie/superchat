@@ -1,0 +1,595 @@
+diff --git a/superchat-changes.el b/superchat-changes.el
+index 380176a5..d15567d4 100644
+--- a/superchat-changes.el
++++ b/superchat-changes.el
+@@ -637,14 +637,202 @@ Besides the list, it opens the review screen once the command has returned."
+                       "Buffers that visit no file are listed here only.  Saving is yours, not the model's.")
+             "No unsaved buffers edited by this Session's tools."))))
+ 
++;;;; What work Superchat started by itself has left for the user ----------------
++
++;; An execution the user did not start shows no review screen and its line in
++;; the echo area is gone with the next key.  Each one that ends leaves a
++;; notice here and a mark on the mode line that stays until the user has
++;; looked.  The list lives in this Emacs only: the buffers it points at do
++;; not outlive it either, and a Work Record keeps its executions on its own.
++
++(declare-function superchat--render-session-view "superchat" (session-id))
++(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
++                  (session-id role))
++
++(defvar superchat-changes--notices nil
++  "Notices of ended executions Superchat started by itself, newest first.
++Each is a plist: `:run' and `:session' (strings), `:what' (what started it),
++`:status' (how it ended, a symbol), `:unsaved' (how many buffers it left
++unsaved, counted when it ended) and `:time'.")
++
++(defvar superchat-changes-notice-mode-line nil
++  "The mode line's mark for `superchat-changes--notices'; nil when none.")
++;; A string with a keymap in the mode line is honoured only from a risky
++;; variable.
++(put 'superchat-changes-notice-mode-line 'risky-local-variable t)
++
++(defconst superchat-changes-notices-buffer-name "*superchat notices*")
++
++(defvar superchat-changes-notice-mode-line-map
++  (let ((map (make-sparse-keymap)))
++    (define-key map [mode-line mouse-1] #'superchat-changes-notices)
++    map)
++  "Keys of the mode line's mark.")
++
++(defun superchat-changes--notice-what (session run)
++  "Say what started RUN of SESSION, from SESSION's Tape."
++  (let (work timer)
++    (dolist (event (ignore-errors (superchat-tape-replay-events session)))
++      (let ((payload (plist-get event :payload)))
++        (pcase (plist-get event :type)
++          ("work.woken" (setq work (plist-get payload :work-id)))
++          ("timer.started"
++           (when (equal run (plist-get payload :run-id))
++             (setq timer (plist-get payload :timer-id)))))))
++    (cond (timer (format "scheduled task %s" timer))
++          (work (format "work record %s" work))
++          (t "scheduled work"))))
++
++(defun superchat-changes--notices-refresh ()
++  "Make the mode line's mark and the open notices list say what is pending."
++  (let ((count (length superchat-changes--notices)))
++    (setq superchat-changes-notice-mode-line
++          (and (> count 0)
++               (propertize
++                (format " [Superchat: %d]" count)
++                'face 'warning
++                'mouse-face 'mode-line-highlight
++                'help-echo
++                "Work Superchat did by itself has ended: mouse-1 or \
++M-x superchat-changes-notices"
++                'local-map superchat-changes-notice-mode-line-map)))
++    (unless (memq 'superchat-changes-notice-mode-line global-mode-string)
++      (setq global-mode-string
++            (append (or global-mode-string '(""))
++                    '(superchat-changes-notice-mode-line))))
++    (when-let* ((buffer (get-buffer superchat-changes-notices-buffer-name)))
++      (with-current-buffer buffer
++        (when (derived-mode-p 'superchat-changes-notices-mode)
++          (tabulated-list-print t))))
++    (force-mode-line-update t)))
++
++(defun superchat-changes--note-unattended (_run status)
++  "At the end of an execution Superchat started by itself, leave a notice.
++Every way of ending counts: one that failed is the one most easily missed."
++  (when (and (listp status)
++             (fboundp 'superchat-runtime--terminal-p)
++             (superchat-runtime--terminal-p (plist-get status :status)))
++    (when-let* ((session (plist-get status :session-id))
++                (run (plist-get status :run-id))
++                ((superchat-changes--unattended-run-p session run))
++                ((not (cl-some (lambda (notice)
++                                 (equal run (plist-get notice :run)))
++                               superchat-changes--notices))))
++      (push (list :run run :session session
++                  :what (superchat-changes--notice-what session run)
++                  :status (plist-get status :status)
++                  :unsaved (length (ignore-errors
++                                     (superchat-changes-candidates session run)))
++                  :time (current-time))
++            superchat-changes--notices)
++      (superchat-changes--notices-refresh))))
++
++(defun superchat-changes-notice-dismiss (run)
++  "Forget the notice of the execution RUN."
++  (setq superchat-changes--notices
++        (cl-remove-if (lambda (notice) (equal run (plist-get notice :run)))
++                      superchat-changes--notices))
++  (superchat-changes--notices-refresh))
++
++(defun superchat-changes--notices-entries ()
++  "Rows of the notices list, newest first."
++  (mapcar (lambda (notice)
++            (list (plist-get notice :run)
++                  (vector (format-time-string "%m-%d %H:%M" (plist-get notice :time))
++                          (plist-get notice :what)
++                          (format "%s" (plist-get notice :status))
++                          (let ((n (plist-get notice :unsaved)))
++                            (if (> n 0) (format "%d unsaved" n) ""))
++                          (plist-get notice :session))))
++          superchat-changes--notices))
++
++(defun superchat-changes-notices-open (run)
++  "Go to the conversation of the execution RUN and forget its notice."
++  (interactive (list (tabulated-list-get-id)))
++  (when-let* ((notice (cl-find run superchat-changes--notices
++                               :key (lambda (n) (plist-get n :run))
++                               :test #'equal))
++              (session (plist-get notice :session)))
++    (let ((view (or (and (fboundp 'superchat-editor-workspace-buffer)
++                         (let ((buffer (superchat-editor-workspace-buffer
++                                        session 'session-view)))
++                           (and (buffer-live-p buffer) buffer)))
++                    (superchat--render-session-view session))))
++      (superchat-changes-notice-dismiss run)
++      (pop-to-buffer view))))
++
++(defun superchat-changes-notices-dismiss (run)
++  "Forget the notice at point without going anywhere."
++  (interactive (list (tabulated-list-get-id)))
++  (when run (superchat-changes-notice-dismiss run)))
++
++(defun superchat-changes-notices-dismiss-all ()
++  "Forget every notice."
++  (interactive)
++  (setq superchat-changes--notices nil)
++  (superchat-changes--notices-refresh))
++
++(defvar superchat-changes-notices-mode-map
++  (let ((map (make-sparse-keymap)))
++    (define-key map (kbd "RET") #'superchat-changes-notices-open)
++    (define-key map (kbd "d") #'superchat-changes-notices-dismiss)
++    (define-key map (kbd "D") #'superchat-changes-notices-dismiss-all)
++    map)
++  "Keys of the notices list.")
++
++(define-derived-mode superchat-changes-notices-mode tabulated-list-mode
++  "Superchat-Notices"
++  "Executions Superchat started by itself that have ended.
++RET goes to the conversation and forgets the notice, d forgets it,
++D forgets all."
++  (setq tabulated-list-format [("Ended" 12 t) ("Started by" 40 t) ("Outcome" 12 t)
++                               ("Left" 10 t) ("Conversation" 0 t)])
++  (setq tabulated-list-entries #'superchat-changes--notices-entries)
++  (tabulated-list-init-header))
++
++;;;###autoload
++(defun superchat-changes-notices ()
++  "List the executions Superchat started by itself that have ended.
++A scheduled task or a Work Record that woke leaves one notice when its
++execution ends, however it ended; the mode line shows how many are pending."
++  (interactive)
++  (let ((buffer (get-buffer-create superchat-changes-notices-buffer-name)))
++    (with-current-buffer buffer
++      (superchat-changes-notices-mode)
++      (tabulated-list-print))
++    (pop-to-buffer buffer)
++    buffer))
++
++(defvar superchat-timer-started-functions)
++(declare-function superchat-runtime-status "superchat-runtime" (run-id))
++
++(defun superchat-changes--note-started-late (session run)
++  "Leave RUN's notice when it ended before it was on record as a task's.
++A scheduled task's `timer.started' is written after the send returns; an
++execution that ended inside that send was not yet known to be Superchat's
++own when it ended.  Called with SESSION and RUN once the fact is written."
++  (when-let* ((status (and (fboundp 'superchat-runtime-status)
++                           (superchat-runtime-status run))))
++    (superchat-changes--note-unattended
++     nil (append (list :session-id session :run-id run) status))))
++
+ (superchat-define-plugin changes
+-  :doc "The unsaved-changes outlet's Run-end notice and review screen.  The
+-/changes command is registered with the other built-in commands by
+-`chat-commands'."
++  :doc "The unsaved-changes outlet's Run-end notice and review screen, and the
++notices of work Superchat started by itself.  The /changes command is
++registered with the other built-in commands by `chat-commands'."
+   :apply
+   (lambda (scope _)
+     (superchat-on scope 'turn-completed 'changes-notice
+-                  #'superchat-changes--on-turn-completed)))
++                  #'superchat-changes--on-turn-completed)
++    (superchat-on scope 'turn-completed 'changes-unattended-notice
++                  #'superchat-changes--note-unattended)
++    (add-hook 'superchat-timer-started-functions
++              #'superchat-changes--note-started-late)
++    (superchat-scope-effect
++     scope
++     (lambda ()
++       (remove-hook 'superchat-timer-started-functions
++                    #'superchat-changes--note-started-late)))))
+ 
+ (provide 'superchat-changes)
+ 
+diff --git a/superchat-timer.el b/superchat-timer.el
+index 9e08b08d..564d42b7 100644
+--- a/superchat-timer.el
++++ b/superchat-timer.el
+@@ -81,9 +81,17 @@ Tests replace it to move time.")
+ (defvar superchat-timer--retries (make-hash-table :test #'equal)
+   "(TIMER-ID . OCCURRENCE) -> how many starts of it failed in this Emacs.")
+ 
++(defvar superchat-timer--not-before (make-hash-table :test #'equal)
++  "(TIMER-ID . OCCURRENCE) -> the time before which its start is not tried again.
++Set when a start fails, so that a retry another task caused does not bring
++this one forward.")
++
+ (defvar superchat-timer--retry-timer nil
+   "The Emacs timer that will try the unstarted tasks again, or nil.")
+ 
++(defvar superchat-timer--retry-at nil
++  "When `superchat-timer--retry-timer' is due, in seconds since the epoch.")
++
+ (defvar superchat-timer--armed (make-hash-table :test #'equal)
+   "Timer id -> the Emacs timer that will fire it.")
+ 
+@@ -203,6 +211,31 @@ Nil when none has come due."
+            (id (plist-get config :workspace-id)))
+       (and (stringp id) (cons id (plist-get config :workspace-root))))))
+ 
++(defun superchat-timer--scope-of (session-id)
++  "The id of the Workspace SESSION-ID belongs to, or nil when it has none.
++A conversation belongs to a Workspace when it is bound to one with a root."
++  (let ((workspace (and (stringp session-id)
++                        (superchat-timer--workspace-of session-id))))
++    (and (stringp (cdr workspace)) (not (string-empty-p (cdr workspace)))
++         (car workspace))))
++
++(defun superchat-timer--within-p (session-id timer)
++  "Non-nil when SESSION-ID's conversation may see and cancel TIMER.
++TIMER is a plist with :session-id, the conversation it was set in.  A
++conversation of a Workspace: TIMER is that Workspace's.  A conversation of
++no Workspace: TIMER was set in that very conversation.  A pending timer
++carries its Workspace; a fired one is its conversation's."
++  (let ((asking (superchat-timer--scope-of session-id))
++        (owner (if (plist-member timer :workspace-root)
++                   (and (stringp (plist-get timer :workspace-root))
++                        (not (string-empty-p (plist-get timer :workspace-root)))
++                        (plist-get timer :workspace-id))
++                 (superchat-timer--scope-of (plist-get timer :session-id)))))
++    (if asking
++        (equal asking owner)
++      (and (stringp session-id)
++           (equal session-id (plist-get timer :session-id))))))
++
+ (defun superchat-timer-create (session-id kind text due &optional repeat)
+   "Set a timer in SESSION-ID and return its plist.
+ KIND is `reminder' (tell the user, T2) or `task' (also start the model on
+@@ -305,10 +338,17 @@ timer set in a temporary conversation speaks in that conversation."
+                     (plist-get (superchat-runtime-status run) :session-id)))
+            (superchat-runtime-active-runs)))
+ 
++(defvar superchat-timer-started-functions nil
++  "Functions called with SESSION-ID and RUN-ID once a task's start is on record.
++`timer.started' is written after the send returns.  An execution may have
++ended by then; whoever acts on \"Superchat started this\" at the end of an
++execution learns it here.")
++
+ (defun superchat-timer--note-started (session-id timer-id occurrence run-id)
+   "Record that RUN-ID is the execution of OCCURRENCE of the task TIMER-ID."
+   (superchat-timer--fact session-id "timer.started" timer-id occurrence
+-                         (list :run-id run-id)))
++                         (list :run-id run-id))
++  (run-hook-with-args 'superchat-timer-started-functions session-id run-id))
+ 
+ (defun superchat-timer--start-task (session-id timer-id occurrence text)
+   "Start the model on TEXT in the conversation SESSION-ID; return the Run id.
+@@ -342,34 +382,63 @@ record `timer.started' with the Run that began; nil when none began."
+                 run))))))))
+ 
+ (defun superchat-timer--retry-later (seconds)
+-  "Try the unstarted tasks again in SECONDS, unless that is already set."
+-  (unless (timerp superchat-timer--retry-timer)
+-    (setq superchat-timer--retry-timer
+-          (run-at-time seconds nil
+-                       (lambda ()
+-                         (setq superchat-timer--retry-timer nil)
+-                         (superchat-timer-retry-tasks))))))
++  "Try the unstarted tasks again in SECONDS, or sooner when that is already set.
++One Emacs timer serves every unstarted task, so it is due at the soonest
++time any of them asked for."
++  (let ((at (+ (float-time) seconds)))
++    (when (or (not (timerp superchat-timer--retry-timer))
++              (not (numberp superchat-timer--retry-at))
++              (< at superchat-timer--retry-at))
++      (when (timerp superchat-timer--retry-timer)
++        (cancel-timer superchat-timer--retry-timer))
++      (setq superchat-timer--retry-at at
++            superchat-timer--retry-timer
++            (run-at-time seconds nil
++                         (lambda ()
++                           (setq superchat-timer--retry-timer nil
++                                 superchat-timer--retry-at nil)
++                           (superchat-timer-retry-tasks)))))))
+ 
+ (defun superchat-timer--try-task (session-id timer-id occurrence text)
+   "Start the task and return its Run id, or nil when no execution began.
+ A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
+ without limit; a failed start after `superchat-timer-retry-seconds', at most
+-`superchat-timer-retry-limit' times in one Emacs."
++`superchat-timer-retry-limit' times in one Emacs.
++
++Both are checked here, before the start is tried, not only when the next
++try is scheduled: the one Emacs timer that retries serves every unstarted
++task, so a task out of tries, or one that failed a moment ago, is reached
++again whenever another task keeps that timer going."
+   (let* ((key (cons timer-id occurrence))
+-         (run (condition-case err
+-                  (superchat-timer--start-task session-id timer-id occurrence text)
+-                (error (message "superchat: scheduled task %s was not started: %s"
+-                                timer-id (error-message-string err))
+-                       nil))))
+-    (cond ((stringp run) (remhash key superchat-timer--retries) run)
+-          ((eq run 'busy)
+-           (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+-           nil)
+-          (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
+-               (puthash key failed superchat-timer--retries)
+-               (when (<= failed superchat-timer-retry-limit)
+-                 (superchat-timer--retry-later superchat-timer-retry-seconds)))
+-             nil))))
++         (failed (gethash key superchat-timer--retries 0))
++         (wait (- (gethash key superchat-timer--not-before 0)
++                  (superchat-timer--now))))
++    (cond
++     ;; Out of tries in this Emacs: it stays on record as not started.
++     ((> failed superchat-timer-retry-limit) nil)
++     ;; It failed a moment ago: its own wait is not over.
++     ((> wait 0) (superchat-timer--retry-later wait) nil)
++     (t
++      (let ((run (condition-case err
++                     (superchat-timer--start-task session-id timer-id occurrence text)
++                   (error (message "superchat: scheduled task %s was not started: %s"
++                                   timer-id (error-message-string err))
++                          nil))))
++        (cond ((stringp run)
++               (remhash key superchat-timer--retries)
++               (remhash key superchat-timer--not-before)
++               run)
++              ((eq run 'busy)
++               (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
++               nil)
++              (t (let ((failed (1+ failed)))
++                   (puthash key failed superchat-timer--retries)
++                   (when (<= failed superchat-timer-retry-limit)
++                     (puthash key (+ (superchat-timer--now)
++                                     superchat-timer-retry-seconds)
++                              superchat-timer--not-before)
++                     (superchat-timer--retry-later superchat-timer-retry-seconds)))
++                 nil)))))))
+ 
+ (defun superchat-timer-unstarted-tasks ()
+   "The fired tasks with no execution on record, oldest first.
+@@ -495,7 +564,8 @@ afterwards never fires the same occurrence twice."
+   (clrhash superchat-timer--armed)
+   (when (timerp superchat-timer--retry-timer)
+     (cancel-timer superchat-timer--retry-timer))
+-  (setq superchat-timer--retry-timer nil))
++  (setq superchat-timer--retry-timer nil
++        superchat-timer--retry-at nil))
+ 
+ (defun superchat-timer--due (id)
+   "The Emacs timer for ID went off: fire what is due now, arm the rest."
+@@ -524,6 +594,7 @@ afterwards never fires the same occurrence twice."
+ A repeating timer fires only its most recent missed occurrence.  Return
+ the fired plists."
+   (clrhash superchat-timer--retries)
++  (clrhash superchat-timer--not-before)
+   ;; First the tasks an earlier Emacs fired and never started.
+   (superchat-timer-retry-tasks)
+   (let ((now (superchat-timer--now)) fired)
+@@ -573,10 +644,21 @@ Signals an error for any other shape."
+            (plist-get superchat--tool-execution-context :session-id))
+       (and (boundp 'superchat--session-id) superchat--session-id)))
+ 
++(defconst superchat-timer--off
++  "Timers are turned off in this Emacs (the timers row is not mounted)"
++  "What a timer tool says while nothing would fire a timer.")
++
+ (defun superchat-timer-tool-create (text kind &optional in-minutes at repeat)
+-  "The `timer_create' tool: set a timer in the asking conversation."
++  "The `timer_create' tool: set a timer in the asking conversation.
++A timer is a promise that something happens at its time.  While the
++`timers' row is not mounted nothing would fire it, so it is refused
++rather than written and never acted on."
+   (condition-case err
+-      (let* ((now (superchat-timer--now))
++      (let* ((now (progn
++                    (unless (superchat-timer--active-p)
++                      (error "%s, so no timer was set and nothing will happen at that time; tell the user"
++                             superchat-timer--off))
++                    (superchat-timer--now)))
+              (kind (pcase kind
+                      ((or "task" 'task) 'task)
+                      ((or "reminder" 'reminder 'nil "") 'reminder)
+@@ -615,11 +697,20 @@ Signals an error for any other shape."
+     (error (format "Error: %s" (error-message-string err)))))
+ 
+ (defun superchat-timer-tool-list ()
+-  "The `timer_list' tool: the pending timers, then those fired in the last day."
+-  (let ((timers (superchat-timer-list))
+-        (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
++  "The `timer_list' tool: the pending timers, then those fired in the last day.
++Only those of the asking conversation's Workspace; of that conversation
++alone when it belongs to none."
++  (let* ((session (superchat-timer--tool-session))
++         (mine (lambda (timer) (superchat-timer--within-p session timer)))
++         (timers (cl-remove-if-not mine (superchat-timer-list)))
++         (fired (cl-remove-if-not
++                 mine (superchat-timer-fired-since (- (superchat-timer--now) 86400)))))
+     (concat
+      (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
++     (if (superchat-timer--active-p)
++         ""
++       (format "%s: nothing below fires until they are turned on again.\n"
++               superchat-timer--off))
+      (if (null timers)
+          "No pending timers."
+        (concat
+@@ -650,10 +741,19 @@ Signals an error for any other shape."
+                    fired "\n"))))))
+ 
+ (defun superchat-timer-tool-cancel (id)
+-  "The `timer_cancel' tool: cancel the pending timer ID."
+-  (if (superchat-timer-cancel id)
+-      (format "Timer %s cancelled." id)
+-    (format "Error: no pending timer %s." id)))
++  "The `timer_cancel' tool: cancel the pending timer ID.
++A timer of another Workspace is refused, pending or fired and not yet
++started; the user's own commands cancel any."
++  (let* ((session (superchat-timer--tool-session))
++         (by-id (lambda (timer) (equal id (plist-get timer :id))))
++         (timer (or (cl-find-if by-id (superchat-timer-list))
++                    (cl-find-if by-id (superchat-timer-unstarted-tasks)))))
++    (cond ((null timer) (format "Error: no pending timer %s." id))
++          ((not (superchat-timer--within-p session timer))
++           (format "Error: timer %s belongs to another workspace; this conversation cannot cancel it."
++                   id))
++          ((superchat-timer-cancel id) (format "Timer %s cancelled." id))
++          (t (format "Error: no pending timer %s." id)))))
+ 
+ ;;;; The row ------------------------------------------------------------------------------
+ 
+diff --git a/superchat-work.el b/superchat-work.el
+index 4bc643d3..b6c98535 100644
+--- a/superchat-work.el
++++ b/superchat-work.el
+@@ -224,6 +224,27 @@ That is the record of its last `work.focused' fact, while not completed."
+            (error "Work record %s is completed; start a new one that follows it" id))
+           (t record))))
+ 
++(defun superchat-work--within-p (session-id record)
++  "Non-nil when SESSION-ID's conversation may read and change RECORD.
++A conversation of a Workspace: RECORD is that Workspace's.  A conversation
++of no Workspace: RECORD was begun in that very conversation."
++  (let ((workspace (car (superchat-work--workspace session-id))))
++    (if workspace
++        (equal workspace (plist-get record :workspace-id))
++      (and (stringp session-id)
++           (equal session-id (plist-get record :session-id))))))
++
++(defun superchat-work--for (session-id id)
++  "The Work Record ID for a tool call from SESSION-ID, or signal why not.
++This is the model's way to a record: one of another Workspace is refused,
++and the refusal says nothing of what the record holds.  The user's own
++commands and the product's own writes reach every record."
++  (let ((record (superchat-work-get id)))
++    (cond ((null record) (error "No work record %s" id))
++          ((not (superchat-work--within-p session-id record))
++           (error "Work record %s belongs to another workspace; this conversation cannot read or change it" id))
++          (t record))))
++
+ (defun superchat-work-start (session-id goal &optional follows)
+   "Start a Work Record for GOAL in SESSION-ID and make it current; return its id.
+ FOLLOWS is the id of a completed record this one continues (K11).  Signals
+@@ -265,16 +286,26 @@ to pick it up; nil leaves a field as it was.  Makes ID current here."
+                             (list :work-id id)))
+   id)
+ 
++(defun superchat-work--check-wait (for until)
++  "Signal when a wait FOR something, until UNTIL for a time, cannot be kept.
++A wait for a time is a promise that the record is taken up again then.
++While the `work-records' row is not mounted nothing would do that, so the
++wait is refused rather than written and never acted on."
++  (when (and for (not (member for superchat-work-wait-kinds)))
++    (error "A record waits for one of: %s" (string-join superchat-work-wait-kinds ", ")))
++  (when (equal for "time")
++    (unless (numberp until)
++      (error "A wait for a time needs the time: in_minutes or at"))
++    (unless (superchat-work--wake-active-p)
++      (error "Taking work up again at a time is turned off in this Emacs (the work-records row is not mounted), so this wait was not registered and nothing will happen at that time; tell the user, or register wait_for user"))))
++
+ (defun superchat-work-wait (session-id id for &optional detail until)
+   "Register that the open record ID waits FOR (user, agent, time), with DETAIL.
+ For a time, UNTIL is when, in seconds since the epoch; the record is then
+ taken up again in a new conversation (`superchat-work-wake').  A nil FOR
+ clears the wait."
+   (superchat-work--require id)
+-  (when (and for (not (member for superchat-work-wait-kinds)))
+-    (error "A record waits for one of: %s" (string-join superchat-work-wait-kinds ", ")))
+-  (when (and (equal for "time") (not (numberp until)))
+-    (error "A wait for a time needs the time: in_minutes or at"))
++  (superchat-work--check-wait for until)
+   (superchat-work--append session-id "work.waiting"
+                           (cond ((equal for "time")
+                                  (format "Work record %s waits until %s" id
+@@ -490,27 +521,56 @@ completed records by status, one line each; never another Workspace's (K8)."
+              (id (if (and (stringp id) (not (string-empty-p id)))
+                      id
+                    (superchat-work-current session))))
++        ;; The record named, and the one a new record follows, are this
++        ;; conversation's Workspace's, before anything is read or written.
++        (when (and id (member action '("update" "wait" "done" "read")))
++          (superchat-work--for session id))
++        (when (and (equal action "start")
++                   (stringp follows) (not (string-empty-p follows)))
++          (superchat-work--for session follows))
+         (pcase action
+           ("start"
+-           (let ((new (superchat-work-start session goal follows)))
+-             (format "Started %s; it is this conversation's current work record."
+-                     new)))
++           ;; What comes with a start is recorded with it, or the start is
++           ;; refused: never "Started" with part of the call dropped.
++           (when (and (stringp conclusion) (not (string-empty-p conclusion)))
++             (error "A record is not started and completed in one call; start it, and use action done with the conclusion when it is delivered"))
++           (let* ((waits (and (stringp wait_for) (not (string-empty-p wait_for))))
++                  (until (and waits
++                              (cond ((and (stringp at) (not (string-empty-p at)))
++                                     (superchat-timer-parse-time at))
++                                    ((numberp in_minutes)
++                                     (+ (superchat-work--now) (* 60 in_minutes))))))
++                  (_ (when waits (superchat-work--check-wait wait_for until)))
++                  (new (superchat-work-start session goal follows))
++                  (said (format "Started %s; it is this conversation's current work record."
++                                new)))
++             (when (or progress blocked resume)
++               (superchat-work-update session new progress blocked resume))
++             (when waits
++               (superchat-work-wait session new wait_for detail until))
++             (if (or progress blocked resume waits)
++                 (concat said "\n" (superchat-work-render (superchat-work-get new)))
++               said)))
+           ("update"
+            (unless id (error "No current work record; start one or give its id"))
+-           (when (or progress blocked resume)
+-             (superchat-work-update session id progress blocked resume))
+            ;; A wait given with an update is registered too, never dropped: in
+            ;; the real task T4W the model put wait_for and in_minutes on an
+-           ;; update and believed the wait was registered.
+-           (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+-             (superchat-work-wait
+-              session id wait_for detail
+-              (cond ((and (stringp at) (not (string-empty-p at)))
+-                     (superchat-timer-parse-time at))
+-                    ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+-           (unless (or progress blocked resume
+-                       (and (stringp wait_for) (not (string-empty-p wait_for))))
+-             (error "Say how far it got, why the next step waits, or where to pick it up"))
++           ;; update and believed the wait was registered.  It is checked
++           ;; before anything is written, so a refused wait leaves no half
++           ;; of the call behind.
++           (let* ((waits (and (stringp wait_for) (not (string-empty-p wait_for))))
++                  (until (and waits
++                              (cond ((and (stringp at) (not (string-empty-p at)))
++                                     (superchat-timer-parse-time at))
++                                    ((numberp in_minutes)
++                                     (+ (superchat-work--now) (* 60 in_minutes)))))))
++             (unless (or progress blocked resume waits)
++               (error "Say how far it got, why the next step waits, or where to pick it up"))
++             (when waits (superchat-work--check-wait wait_for until))
++             (when (or progress blocked resume)
++               (superchat-work-update session id progress blocked resume))
++             (when waits
++               (superchat-work-wait session id wait_for detail until)))
+            (superchat-work-render (superchat-work-get id)))
+           ("wait"
+            (unless id (error "No current work record; start one or give its id"))

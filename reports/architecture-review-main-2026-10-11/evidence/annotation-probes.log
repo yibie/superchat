@@ -1,0 +1,88 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 00:14:56-0700, selector ‘"^r3-annotation/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: the model gave no remarks in the asked form (1 rows not understood; M-x superchat-annotate-list) in m5rc-source.el
+superchat: run run-20261011-001457-043795-28b1 completed (session 20261011-001456-ae8d)
+R3-06 OBSERVED: actual act inspector send has no tools, no LINE | QUOTE | REMARK, no numbered target; annotation sink still parses prose as 1 unparsed line.
+
+   passed  1/4  r3-annotation/inspected-annotate-has-sink-but-no-row-contract (0.617920 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-04 OBSERVED: model quotes lowercase target, source contains only uppercase TARGET; annotation placed, source text/tick unchanged.
+
+   passed  2/4  r3-annotation/quote-search-is-case-folded (0.029210 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+Test r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives backtrace:
+  error("EditorWorkspace requires a valid default directory")
+  (if (and (stringp directory) (file-directory-p directory)) nil (error "EditorWorkspace requires a valid default directory"))
+  (let ((directory default-directory)) (if (and (stringp directory) (file-directory-p directory)) nil (error "EditorWorkspace requires a valid default directory
+  (progn (let ((directory default-directory)) (if (and (stringp directory) (file-directory-p directory)) nil (error "EditorWorkspace requires a valid default di
+  (if create (progn (let ((directory default-directory)) (if (and (stringp directory) (file-directory-p directory)) nil (error "EditorWorkspace requires a valid
+  (or (superchat-editor-workspace--role-buffer session-id role) (if create (progn (let ((directory default-directory)) (if (and (stringp directory) (file-direct
+  (let ((state (superchat-editor-workspace-state session-id))) (if (and create (member session-id superchat-editor-workspace--allocation-stack)) (progn (error "
+  superchat-editor-workspace-buffer("20261011-001457-ed26" session-view t)
+  (let* ((named (get-buffer buffer-name)) (owned-session (and named (superchat-editor-workspace-owner-session named))) (session-id (or session-id owned-session 
+  superchat--ensure-chat-view("*superchat:20261011-001457-ed26*" "20261011-001457-ed26" t)
+  (let* ((buffer-name (superchat--session-buffer-name session-id)) (buffer (superchat--ensure-chat-view buffer-name session-id t)) (rows (superchat-view-session
+  superchat--render-session-view("20261011-001457-ed26")
+  (setq view (superchat--render-session-view session))
+  (let* ((source (m5rc--source annc--text)) (view (m5rc--open source)) (session (buffer-local-value 'superchat--session-id view)) (superchat-automated-input nil
+  (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (view (m5rc--open source)) (session (b
+  (unwind-protect (progn (fset 'superchat-runtime-submit vnew) (fset 'smoke--fake-network vnew) (let* ((source (m5rc--source annc--text)) (view (m5rc--open sour
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons (m5rc--snapshot-prompt prompt) m5rc--requests)) (funcall
+  (unwind-protect (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq m5rc--requests (cons ... m5rc--requests)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-runtime-submit))) (superchat-context-register 'm5rc-system-note #'m
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-function 'superchat-
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network)) (submit (symbol-func
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (progn (let* ((fn-1809 #'getenv) (args-1810 (condition-case err (list "SMOKE_REAL") (error (progn (setq fn-1809 ...) (list ... ...)))))) (let ((value-1811 'er
+  #f(lambda () [t] (progn (let* ((fn-1809 #'getenv) (args-1810 (condition-case err ... ...))) (let ((value-1811 ...)) (let (form-description-1813) (if ... ...))
+  #f(compiled-function () #<bytecode 0x30fa95ff3adf06>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x30fa95ff3adf06>) (t) #f(compiled-function (err) #<bytecode -0x6c70166f769821a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2ab3674c6c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives :documentation nil :body #f(lambda () ... ... nil) :most-rec
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-annotation/" :tests ... :test-map #<hash-table eql 4/4 0x19f8d3cfa6 ...> :test-results ... :test-start-time
+  ert-run-tests("^r3-annotation/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x184262b6566c2cb7>) nil)
+  ert-run-tests-batch("^r3-annotation/")
+  ert-run-tests-batch-and-exit("^r3-annotation/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el" "/Use
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives condition:
+    (error "EditorWorkspace requires a valid default directory")
+   FAILED  3/4  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives (0.030280 sec) at reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el:17
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001457-226557-e1c4 completed (session 20261011-001457-f793)
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001457-390044-6329 completed (session 20261011-001457-f793)
+FOLDED
+FOLDED
+FOLDED
+R3-07 OBSERVED: second command while first pending => 2 overlapping remarks retained; latest report says placed=1; queued Runtime not a second execution engine.
+
+   passed  4/4  r3-annotation/two-pending-command-answers-accumulate (0.208961 sec)
+
+Ran 4 tests, 3 results as expected, 1 unexpected (2026-10-11 00:14:57-0700, 0.974372 sec)
+
+1 unexpected results:
+   FAILED  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives
+

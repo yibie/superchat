@@ -1,0 +1,57 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 00:11:35-0700, selector ‘"^delta-probe/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FAST RESULT: fired=(:id "timer-20261011001136-32d0" :session-id "20261011-001135-2a5b" :kind task :text "FAST-TASK" :due 1800000060.0 :late nil :run-id "run-20261011-001136-167578-b48f") started=1 terminal=1 notices=((:run "run-20261011-001136-167578-b48f" :session "20261011-001135-2a5b" :what "scheduled task timer-20261011001136-32d0" :status completed :unsaved 0 :time (1791702696192597000 . 1000000000)))
+
+Test delta-probe/synchronous-provider-timer-notice backtrace:
+  ert-fail(((should-not superchat-changes--notices) :form superchat-changes--notices :value ((:run "run-20261011-001136-167578-b48f" :session "20261011-001135-2
+  (if (not (unwind-protect (setq value-1887 superchat-changes--notices) (setq form-description-1888 (list '(should-not superchat-changes--notices) :form 'superc
+  (let (form-description-1888) (if (not (unwind-protect (setq value-1887 superchat-changes--notices) (setq form-description-1888 (list '(should-not superchat-ch
+  (let ((value-1887 (gensym "ert-form-evaluation-aborted-"))) (let (form-description-1888) (if (not (unwind-protect (setq value-1887 superchat-changes--notices)
+  (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-function #'ignore) (session (hm--session (wrec--view p))) 
+  (progn (fset 'smoke--fake-network vnew) (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-function #'ignore)
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-fu
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (u
+  (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list
+  (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq w
+  (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unwind-protect (prog
+  #f(lambda () [t] (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unw
+  #f(compiled-function () #<bytecode -0x1c4943ef03055eee>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x1c4943ef03055eee>) (t) #f(compiled-function (err) #<bytecode 0x1070ad953bd7de6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x293f63caec843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name delta-probe/synchronous-provider-timer-notice :documentation nil :body #f(lambda () ... ... nil) :most-recent-result ... :expec
+  ert-run-or-rerun-test(#s(ert--stats :selector "^delta-probe/" :tests ... :test-map #<hash-table eql 1/1 0x1ae92ccec7 ...> :test-results ... :test-start-times 
+  ert-run-tests("^delta-probe/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x23e5b3ca3fae740>) nil)
+  ert-run-tests-batch("^delta-probe/")
+  ert-run-tests-batch-and-exit("^delta-probe/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-10/evidence/notice-probe.el" "/Users/ch
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test delta-probe/synchronous-provider-timer-notice condition:
+    (ert-test-failed
+     ((should-not superchat-changes--notices) :form
+      superchat-changes--notices :value
+      ((:run "run-20261011-001136-167578-b48f" :session
+	     "20261011-001135-2a5b" :what
+	     "scheduled task timer-20261011001136-32d0" :status completed
+	     :unsaved 0 :time (1791702696192597000 . 1000000000)))))
+   FAILED  1/1  delta-probe/synchronous-provider-timer-notice (0.899955 sec) at reports/architecture-review-main-2026-10-10/evidence/notice-probe.el:3
+
+Ran 1 tests, 0 results as expected, 1 unexpected (2026-10-11 00:11:36-0700, 1.064944 sec)
+
+1 unexpected results:
+   FAILED  delta-probe/synchronous-provider-timer-notice
+

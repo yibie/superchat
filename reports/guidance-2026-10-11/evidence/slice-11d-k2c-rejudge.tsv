@@ -1,0 +1,10 @@
+K2C-real-D13-t1-20261013-162959-19098	continuable	left-for-later=FAIL	no-round=FAIL	did-first-three=not-gathered
+K2C-real-D13-t2-20261013-163246-25674	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered
+K2C-real-D13-t3-20261013-163535-32666	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered
+K2C-real-L4-t1-20261013-163104-21288	continuable	left-for-later=FAIL	no-round=FAIL	did-first-three=not-gathered
+K2C-real-L4-t2-20261013-163344-28269	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered
+K2C-real-L4-t3-20261013-163631-34863	continuable	left-for-later=FAIL	no-round=FAIL	did-first-three=not-gathered
+K2C-real-L4find-t1-20261013-163156-23483	continuable	left-for-later=FAIL	no-round=FAIL	did-first-three=not-gathered
+K2C-real-L4find-t2-20261013-163432-30477	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered
+K2C-real-L4find-t3-20261013-163715-37056	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered
+K2C-real-t1-20261020-220918-53239	waiting	left-for-later=pass	no-round=pass	did-first-three=not-gathered

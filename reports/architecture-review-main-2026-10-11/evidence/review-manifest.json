@@ -1,0 +1,948 @@
+{
+  "reviewed_commit": "75e8337004d8f13971b70712d8e288a8d7cb123c",
+  "reviewed_range": "fcccf3aa..75e83370",
+  "root": "/Users/chenyibin/Documents/emacs/package/superchat",
+  "model": "scripted only; SMOKE_REAL and SMOKE_BASELINE removed",
+  "commands": [
+    {
+      "name": "baseline-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-10/evidence/baseline-probes.el"
+      ],
+      "exit_status": 1,
+      "seconds": 5.7,
+      "log": "baseline-probes.log"
+    },
+    {
+      "name": "delta-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-10/evidence/delta-probes.el"
+      ],
+      "exit_status": 1,
+      "seconds": 1.94,
+      "log": "delta-probes.log"
+    },
+    {
+      "name": "notice-probe",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-10/evidence/notice-probe.el"
+      ],
+      "exit_status": 1,
+      "seconds": 2.06,
+      "log": "notice-probe.log"
+    },
+    {
+      "name": "domain-diff",
+      "command": [
+        "git",
+        "diff",
+        "fcccf3aa..75e83370",
+        "--",
+        "superchat-timer.el",
+        "superchat-work.el",
+        "superchat-changes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "domain-diff.log"
+    },
+    {
+      "name": "annotate-source",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-annotate.el | sed -n \"1,330p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "annotate-source.log"
+    },
+    {
+      "name": "annotate-source2",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-annotate.el | sed -n \"330,660p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "annotate-source2.log"
+    },
+    {
+      "name": "timer-source",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-timer.el | sed -n \"60,245p;300,650p;745,790p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "timer-source.log"
+    },
+    {
+      "name": "work-source",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-work.el | sed -n \"70,130p;400,620p;640,980p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "work-source.log"
+    },
+    {
+      "name": "previous-findings",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"185,430p\" reports/architecture-review-main-2026-10-11/evidence/round2-read.txt; rg -n -C 12 \"静默|封口|插件|晚|F3|F4|F5\" reports/architecture-review-main-2026-10-11/evidence/round1-read.txt | head -220; nl -ba superchat-work.el | sed -n \"975,1100p\"; nl -ba superchat-changes.el | sed -n \"775,860p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "previous-findings.log"
+    },
+    {
+      "name": "docs-read1",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"1,190p\" reports/architecture-review-main-2026-10-11/evidence/round2-read.txt; sed -n \"190,445p\" reports/architecture-review-main-2026-10-11/evidence/round1-read.txt; sed -n \"140,225p\" CONTEXT.md; cat docs/adr/0005* docs/adr/0006*"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "docs-read1.log"
+    },
+    {
+      "name": "docs-read2",
+      "command": [
+        "sh",
+        "-c",
+        "cat docs/decisions/accepted/2026-10-10-the-timer-tool-sets-or-refuses.md; sed -n \"1,55p\" docs/decisions/accepted/2026-10-10-annotations-asked-for-in-a-conversation.md; sed -n \"80,172p\" docs/roadmap.md; cat docs/protocols/request-lifecycle.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "docs-read2.log"
+    },
+    {
+      "name": "object-scope",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/object-scope-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^object-scope/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 2.55,
+      "log": "object-scope.log"
+    },
+    {
+      "name": "work-tool",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/work-tool-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^work-tool/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 2.12,
+      "log": "work-tool.log"
+    },
+    {
+      "name": "timer-tool",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/timer-tool-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^timer-tool/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 1.99,
+      "log": "timer-tool.log"
+    },
+    {
+      "name": "timer-start-fault",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/timer-start-fault-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^timer-fault/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 2.22,
+      "log": "timer-start-fault.log"
+    },
+    {
+      "name": "code-navigation",
+      "command": [
+        "sh",
+        "-c",
+        "rg -n \"^###|^##\" docs/roadmap.md; sed -n \"1,100p\" scripts/skill-once-regression.el; sed -n \"130,210p\" scripts/object-scope-regression.el; rg -n \"annotated|regener|edit-last|inspect|prepared-context\" scripts/annotate-chat-regression.el superchat-dispatcher.el; sed -n \"1,100p\" scripts/annotate-regression.el; sed -n \"1,100p\" scripts/timer-start-fault-regression.el; rg -n \"fault.*ring|fault.*log\" superchat-event.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.08,
+      "log": "code-navigation.log"
+    },
+    {
+      "name": "unattended-notice",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/unattended-notice-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^unattended-notice/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 3.01,
+      "log": "unattended-notice.log"
+    },
+    {
+      "name": "annotate",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/annotate-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^annotate/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 3.03,
+      "log": "annotate.log"
+    },
+    {
+      "name": "annotate-chat",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/annotate-chat-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^annotate-chat/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 2.85,
+      "log": "annotate-chat.log"
+    },
+    {
+      "name": "work-wake-fault",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/work-wake-fault-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^work-wake-fault/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 3.49,
+      "log": "work-wake-fault.log"
+    },
+    {
+      "name": "skill-once",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/skill-once-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^skill-once/\")"
+      ],
+      "exit_status": 0,
+      "seconds": 2.23,
+      "log": "skill-once.log"
+    },
+    {
+      "name": "kernel",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/kernel-check.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.5,
+      "log": "kernel.log"
+    },
+    {
+      "name": "smoke",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/smoke.el"
+      ],
+      "exit_status": 0,
+      "seconds": 5.82,
+      "log": "smoke.log"
+    },
+    {
+      "name": "seams-source",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-changes.el | sed -n \"460,585p\"; nl -ba superchat-dispatcher.el | sed -n \"650,765p;1120,1165p\"; rg -n \"^(\\\\(defun|\\\\(defvar).*fault|faults\" superchat-event.el; rg -n \"plugins|preset-apply\" superchat-preset.el | head -35; sed -n \"70,165p\" scripts/m5-request-context-regression.el; nl -ba superchat-work.el | sed -n \"30,70p;184,224p\"; rg -n \"bind-workspace|workspace-bind|workspace-unbind\" superchat.el superchat-workspace.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.08,
+      "log": "seams-source.log"
+    },
+    {
+      "name": "m3",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/m3-regression.el",
+        "-f",
+        "ert-run-tests-batch-and-exit"
+      ],
+      "exit_status": 0,
+      "seconds": 22.18,
+      "log": "m3.log"
+    },
+    {
+      "name": "docs-read3",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"173,299p\" docs/roadmap.md; sed -n \"100,135p\" docs/architecture.md; sed -n \"165,190p\" scripts/m5-request-context-regression.el; sed -n \"5635,5720p\" superchat.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "docs-read3.log"
+    },
+    {
+      "name": "domain-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/domain-probes.el"
+      ],
+      "exit_status": 255,
+      "seconds": 0.71,
+      "log": "domain-probes.log"
+    },
+    {
+      "name": "annotation-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el"
+      ],
+      "exit_status": 1,
+      "seconds": 1.67,
+      "log": "annotation-probes.log"
+    },
+    {
+      "name": "docs-read4",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"300,397p\" docs/roadmap.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "docs-read4.log"
+    },
+    {
+      "name": "domain-probes-02",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/domain-probes.el"
+      ],
+      "exit_status": 255,
+      "seconds": 0.73,
+      "log": "domain-probes-02.log"
+    },
+    {
+      "name": "annotation-probes-02",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/annotation-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 1.63,
+      "log": "annotation-probes-02.log"
+    },
+    {
+      "name": "domain-probes-03",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/domain-probes.el"
+      ],
+      "exit_status": 255,
+      "seconds": 0.73,
+      "log": "domain-probes-03.log"
+    },
+    {
+      "name": "open-items-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/open-items-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 1.34,
+      "log": "open-items-probes.log"
+    },
+    {
+      "name": "domain-probes-final",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/domain-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 1.43,
+      "log": "domain-probes-final.log"
+    },
+    {
+      "name": "further-seams",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-timer.el | sed -n \"650,745p\"; nl -ba superchat-dispatcher.el | sed -n \"1375,1530p\"; rg -n \"work_record|work-start|work-current|work--for|timer-cancel|timer-create\" superchat-tools.el superchat-subagent.el superchat-prompt-hooks.el | tail -35; sed -n \"335,369p\" scripts/annotate-chat-regression.el; sed -n \"183,201p\" superchat-preset.el; rg -n \"preset.*mount|preset-plugins\" superchat.el | head -20"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "further-seams.log"
+    },
+    {
+      "name": "documentation-diff",
+      "command": [
+        "git",
+        "show",
+        "498d0239",
+        "--"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "documentation-diff.log"
+    },
+    {
+      "name": "additional-docs",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"113,172p\" docs/roadmap.md; cat docs/adr/0001* docs/adr/0004*; sed -n \"54,79p\" docs/roadmap.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "additional-docs.log"
+    },
+    {
+      "name": "boundary-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/boundary-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 1.36,
+      "log": "boundary-probes.log"
+    },
+    {
+      "name": "package-load",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "--eval",
+        "(progn (require (quote superchat)) (princ (format \"Emacs=%s\\nllm=%s\\n\" emacs-version (locate-library \"llm\"))))"
+      ],
+      "exit_status": 0,
+      "seconds": 0.55,
+      "log": "package-load.log"
+    },
+    {
+      "name": "composition-seams",
+      "command": [
+        "sh",
+        "-c",
+        "rg -n \"defun superchat-plugin-(mount|unmount)|defun superchat-scope-create|defun superchat-scope-dispose\" superchat-plugin.el; sed -n \"1760,1840p\" superchat.el; rg -n \"synchronous|unmount|review\" scripts/unattended-notice-regression.el; sed -n \"190,285p\" scripts/unattended-notice-regression.el; cat docs/design/plugin-architecture.md | head -110"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "composition-seams.log"
+    },
+    {
+      "name": "composition-probes",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/architecture-review-main-2026-10-11/evidence/composition-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 1.46,
+      "log": "composition-probes.log"
+    },
+    {
+      "name": "source-identity",
+      "command": [
+        "sh",
+        "-c",
+        "git rev-parse HEAD; git diff --name-only; git diff --stat fcccf3aa..75e83370; git log --format=\"%h %s\" fcccf3aa..75e83370"
+      ],
+      "exit_status": 0,
+      "seconds": 0.07,
+      "log": "source-identity.log"
+    },
+    {
+      "name": "old-probe-verdicts",
+      "command": [
+        "sh",
+        "-c",
+        "grep -n -A 12 \"condition:\" reports/architecture-review-main-2026-10-11/evidence/baseline-probes.log; grep -n \"FAST RESULT\\|condition:\\|:form (= 1 6)\" reports/architecture-review-main-2026-10-11/evidence/{notice-probe,delta-probes}.log; cat reports/architecture-review-main-2026-10-11/evidence/unchanged.json"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "old-probe-verdicts.log"
+    },
+    {
+      "name": "changed-code",
+      "command": [
+        "git",
+        "diff",
+        "fcccf3aa..75e83370",
+        "--",
+        "superchat-core.el",
+        "superchat-dispatcher.el",
+        "superchat-prompt-hooks.el",
+        "superchat-select-tools.el",
+        "superchat-llm.el",
+        "superchat-tools.el",
+        "superchat-default-plugins.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "changed-code.log"
+    },
+    {
+      "name": "refs",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-prompt-hooks.el | sed -n \"549,600p\"; nl -ba superchat-dispatcher.el | sed -n \"593,605p;966,991p\"; rg -n \"^\\(defun superchat--dispatch-.*skill|skill-for-this-message|activate-capability\" superchat-dispatcher.el | head -15; rg -n \"^(\\\\(defun superchat-runtime.*finish|\\\\(defun superchat-runtime-submit|\\\\(defun superchat-tool-execute|\\\\(defun superchat-pipeline-submit)\" superchat-runtime.el superchat-tool-execution.el superchat-pipeline.el; nl -ba superchat-tape.el | sed -n \"1540,1550p\""
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "refs.log"
+    },
+    {
+      "name": "roadmap-middle",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"199,245p\" docs/roadmap.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "roadmap-middle.log"
+    },
+    {
+      "name": "roadmap-followups",
+      "command": [
+        "sh",
+        "-c",
+        "sed -n \"246,279p\" docs/roadmap.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "roadmap-followups.log"
+    },
+    {
+      "name": "final-evidence-read",
+      "command": [
+        "sh",
+        "-c",
+        "for f in domain-probes-final annotation-probes-02 open-items-probes boundary-probes composition-probes; do printf \"\\n---%s---\\n\" \"$f\"; cat reports/architecture-review-main-2026-10-11/evidence/$f.log; done; sed -n \"1,210p\" reports/architecture-review-main-2026-10-11/evidence/composition-probes.el; sed -n \"1,160p\" reports/architecture-review-main-2026-10-11/evidence/boundary-probes.el"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "final-evidence-read.log"
+    },
+    {
+      "name": "final-reference-check",
+      "command": [
+        "sh",
+        "-c",
+        "nl -ba superchat-timer.el | sed -n \"35,68p;398,442p;592,610p\"; nl -ba superchat-annotate.el | sed -n \"140,196p\"; nl -ba superchat-preset.el | sed -n \"180,242p\"; git status --short; find docs/decisions/accepted -type f -name \"*2026-10-10*\"; head -30 reports/architecture-review-main-2026-10-11/evidence/docs-read1.log"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "final-reference-check.log"
+    },
+    {
+      "name": "required-input-reread",
+      "command": [
+        "sh",
+        "-c",
+        "cat CLAUDE.md AGENTS.md CONTEXT.md docs/architecture.md docs/roadmap.md docs/agents/domain.md docs/agents/development.md docs/decisions/accepted/2026-10-10-*.md"
+      ],
+      "exit_status": 0,
+      "seconds": 0.01,
+      "log": "required-input-reread.log"
+    },
+    {
+      "name": "report-qa",
+      "command": [
+        "python3",
+        "reports/architecture-review-main-2026-10-11/evidence/qa-report.py"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "report-qa.log"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/run-review.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "verify-unchanged.log"
+    },
+    {
+      "name": "report-qa-final",
+      "command": [
+        "python3",
+        "reports/architecture-review-main-2026-10-11/evidence/qa-report.py"
+      ],
+      "exit_status": 0,
+      "seconds": 0.04,
+      "log": "report-qa-final.log"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/run-review.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.02,
+      "log": "verify-unchanged.log"
+    }
+  ],
+  "required_input_sha256": {
+    "CLAUDE.md": "f8a37aa0df0c32492fa23838ab777df1b941e2199f1a4359671c1d475bfd9706",
+    "AGENTS.md": "3379294ac59c4c6b260b88755dd91d1c9144de9eff9233d76e57d855c0daa083",
+    "CONTEXT.md": "32a1a050f91a4476c3f9749fc75bc615d7252ea9999c5703c1630c1d42731c46",
+    "docs/architecture.md": "ab0d9cabdb955466ebaa5906e5082c1afcf78b343d0629a8fbbb4d3e3a1c388f",
+    "docs/roadmap.md": "2c334fc72194d56bbc4575fb7ab8afa61b34d3090f9ae4c60bd9e5ef885c8778",
+    "docs/agents/domain.md": "4ba7e8e48710f3285799a62b252ad29bbad30935f56e21e4b71177b40f6f7525",
+    "docs/agents/development.md": "4e61feb1f69276f67be9389290c365bea1fff4f91655c0d5815b43adaf4caa23",
+    "reports/architecture-review-main-2026-10-10/index.html": "c9a576bf91205ee9e06b195709f1b455eb380bf903b9de318cc9df34a25362c9",
+    "docs/decisions/accepted/2026-10-10-a-notice-for-work-nobody-watched.md": "fe596467a2d4d2e689c998df624a0b367a278516dac1bcbcb49c8f278b1b3086",
+    "docs/decisions/accepted/2026-10-10-a-skill-message-says-where-the-user-is.md": "8ee23335b336bfcb80717b35792fd86c72ff35050f10854ca481e5bed89272b2",
+    "docs/decisions/accepted/2026-10-10-an-agent-skill-for-one-message.md": "cd6edc2250f470c82d21b337c7714c9702cf1061a4722be2e732e185cfe2cbac",
+    "docs/decisions/accepted/2026-10-10-annotations-asked-for-in-a-conversation.md": "3598861c952320fa3c90a8fdcf12b9c32a952538f4e6c76d34e6b5baf3cac411",
+    "docs/decisions/accepted/2026-10-10-remarks-hung-on-the-text.md": "108439dbc167dcedaee758c09d6dc3f8edede84d5192ac899ac484ca044c5f17",
+    "docs/decisions/accepted/2026-10-10-the-timer-tool-sets-or-refuses.md": "08074e90d8eddb318c2d5b62a031b0aac8127f2c3af66d8f61a939b52b428e39",
+    "docs/decisions/accepted/2026-10-10-the-work-record-tool-keeps-or-refuses.md": "d528376053028c2320c16a732674075594b921ed931e58dd39bce50ed3884c91",
+    "docs/decisions/accepted/2026-10-10-triggers-anywhere-in-the-message.md": "08e515b9251c566fa7545e61dd5c248c661f436aef94ba9267a2f8cf77f92583",
+    "docs/decisions/accepted/2026-10-10-work-records-and-timers-belong-to-a-workspace.md": "073109666838c2a913203a1f54ea8ef4f4d248cf2625d3d66758ebb4f8710e82"
+  },
+  "final_probe_artifacts": {
+    "domain-probes.el": {
+      "sha256": "2754cb45a4ba139b03b4d450c787db6fe2ac6fe2db44a21d0d8950e7fb2651c9",
+      "final_log": "domain-probes-final.log",
+      "observation_tests": 4
+    },
+    "annotation-probes.el": {
+      "sha256": "600327bace8ebe5ee0b5f4daf97e22bd89904cea3bebe2ed238925d87271130e",
+      "final_log": "annotation-probes-02.log",
+      "observation_tests": 4
+    },
+    "open-items-probes.el": {
+      "sha256": "bf214303112818470da3f3239f0ff9fd78744cbb8f61878251f115fcf0176fd4",
+      "final_log": "open-items-probes.log",
+      "observation_tests": 1
+    },
+    "boundary-probes.el": {
+      "sha256": "ec5cfdba3b19103aee376793b736c50405f90566022e84a3fd2fac43bbc7b9bd",
+      "final_log": "boundary-probes.log",
+      "observation_tests": 2
+    },
+    "composition-probes.el": {
+      "sha256": "e6b51bba14256e09ca1c18dd0dc77fb7233c616e6baf25fbf5ae6c16ab948406",
+      "final_log": "composition-probes.log",
+      "observation_tests": 3
+    }
+  },
+  "result_interpretation": {
+    "baseline-probes/delta-probes/notice-probe": "Exit 1 is expected: six old gap assertions no longer hold; F3 positive guard still passes. Files unchanged.",
+    "domain-probes/domain-probes-02/domain-probes-03": "Own-probe construction errors (duplicate fixture ERT definitions, then parentheses), not product defects; retained logs.",
+    "annotation-probes": "Own fixture default-directory was deleted before View recreation; own probe fixed and rerun as annotation-probes-02.",
+    "own_final_probes": "14 observation assertions include reproduced defects, accepted limitations and positive guards; green is not product acceptance.",
+    "m3": "139 total: 137 expected, 2 real-provider skips, 0 unexpected. Protected sources not edited."
+  },
+  "execution_boundaries": {
+    "emacs_checks": "Serial, emacs -Q --batch; same package initialization as round 2; no real model APIs.",
+    "scratch": "/Users/chenyibin/.cache/sc-codex-review/round3",
+    "not_run": [
+      ".scratch/task-sim/",
+      "real provider tests",
+      "GUI acceptance",
+      "whole-package byte compilation",
+      "hard process crash / power-loss"
+    ],
+    "read_only": "Only this output directory written in the worktree; initial-hashes.json / unchanged.json verify protected inputs."
+  }
+}

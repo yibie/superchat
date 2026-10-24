@@ -1,0 +1,24 @@
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 01:19:15-0700, selector ‘"^p4/"’)
+superchat: scheduled task timer-20261011011916-a782 was not started: EditorWorkspace requires a valid default directory
+superchat: scheduled task timer-20261011011916-a782 was not started: EditorWorkspace requires a valid default directory
+P4 OBSERVED (timer, ambient buffer's directory missing): timer.fired=1 timer.sending=0 timer.started=0; chat views=0
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-011918-337304-b492 completed (session 20261011-011915-7918)
+P4 OBSERVED (timer): chat View buffers before fire=0 after=1; timer.sending=1 timer.started=1; new view=("*superchat:20261011-011915-7918*"); displayed in a window=nil
+
+   passed  1/2  p4/timer-fire-creates-a-chat-view-when-none-exists (2.499235 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-011918-392842-2b0b completed (session 20261011-011918-b893)
+P4 OBSERVED (wake): chat View buffers before=1 after=2; views=("*superchat:20261011-011918-0bbb*" "*superchat:20261011-011918-b893*"); work.woken rows=1; displayed in a window=#<window 6 on *superchat:20261011-011918-0bbb*>
+
+   passed  2/2  p4/woken-record-creates-a-new-chat-view (0.051347 sec)
+
+Ran 2 tests, 2 results as expected, 0 unexpected (2026-10-11 01:19:18-0700, 2.550693 sec)
+

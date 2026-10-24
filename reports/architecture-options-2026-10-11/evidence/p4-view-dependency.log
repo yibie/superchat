@@ -1,0 +1,69 @@
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 01:09:42-0700, selector ‘"^p4/"’)
+superchat: scheduled task timer-20261011010943-b8c4 was not started: EditorWorkspace requires a valid default directory
+superchat: scheduled task timer-20261011010943-b8c4 was not started: EditorWorkspace requires a valid default directory
+Test p4/timer-fire-creates-a-chat-view-when-none-exists backtrace:
+  ert-fail(((should (smoke--wait (lambda nil (= 1 (tsf--count session "timer.started"))) 10)) :form (smoke--wait #f(lambda () [(session "20261011-010942-ffef")]
+  (if (unwind-protect (setq value-1323 (apply fn-1321 args-1322)) (setq form-description-1325 (nconc (list '(should (smoke--wait ... 10))) (list :form (cons fn-
+  (let (form-description-1325) (if (unwind-protect (setq value-1323 (apply fn-1321 args-1322)) (setq form-description-1325 (nconc (list '(should ...)) (list :fo
+  (let ((value-1323 'ert-form-evaluation-aborted-1324)) (let (form-description-1325) (if (unwind-protect (setq value-1323 (apply fn-1321 args-1322)) (setq form-
+  (let* ((fn-1321 #'smoke--wait) (args-1322 (condition-case err (list #'(lambda nil (= 1 ...)) 10) (error (progn (setq fn-1321 #'signal) (list (car err) (cdr er
+  (let ((before (length (p4--chat-views)))) (superchat-timer-catch-up) (let* ((fn-1321 #'smoke--wait) (args-1322 (condition-case err (list #'(lambda nil ...) 10
+  (let* ((pair (tsf--task p "P4 scheduled task")) (view (car pair)) (session (cdr pair))) (let ((kill-buffer-query-functions nil)) (kill-buffer view)) (let ((be
+  (progn (fset 'smoke--fake-network vnew) (let* ((pair (tsf--task p "P4 scheduled task")) (view (car pair)) (session (cdr pair))) (let ((kill-buffer-query-funct
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((pair (tsf--task p "P4 scheduled task")) (view (car pair)) (session (cdr pair))) (let ((kill-bu
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer--now 1800000000.0
+  #f(lambda () [t] (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer-
+  #f(compiled-function () #<bytecode -0x17820f41ca182531>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x17820f41ca182531>) (t) #f(compiled-function (err) #<bytecode -0x1b5c11fdaf3421a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a08b0baac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name p4/timer-fire-creates-a-chat-view-when-none-exists :documentation nil :body #f(lambda () ... ... nil) :most-recent-result #s(er
+  ert-run-or-rerun-test(#s(ert--stats :selector "^p4/" :tests ... :test-map #<hash-table eql 2/2 0x19750b646b ...> :test-results ... :test-start-times ... :test
+  ert-run-tests("^p4/" #f(compiled-function (event-type &rest event-args) #<bytecode 0xe8ceeda59dc75d8>) nil)
+  ert-run-tests-batch("^p4/")
+  ert-run-tests-batch-and-exit("^p4/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el" "/Users/
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test p4/timer-fire-creates-a-chat-view-when-none-exists condition:
+    (ert-test-failed
+     ((should (smoke--wait (lambda nil #1=(= 1 ...)) 10)) :form
+      (smoke--wait #[nil (#1#) ((session . "20261011-010942-ffef"))] 10)
+      :value nil))
+   FAILED  1/2  p4/timer-fire-creates-a-chat-view-when-none-exists (10.418204 sec) at ../../../Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el:14
+Test p4/woken-record-creates-a-new-chat-view backtrace:
+  (wrec--with '((:text "WOKEN DONE")) (p) (wrec--with-clock (let* ((view (wrec--view p)) (session (hm--session view)) (id (superchat-work-start session "P4 reco
+  #f(lambda () [t] (wrec--with '((:text "WOKEN DONE")) (p) (wrec--with-clock (let* ((view ...) (session ...) (id ...)) (superchat-work-wait session id "time" "l
+  #f(compiled-function () #<bytecode -0x17820f41ca182531>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x17820f41ca182531>) (t) #f(compiled-function (err) #<bytecode -0x1b5c11fdaf3421a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test #s(ert-test :name p4/woken-record-creates-a-new-chat-view :documentation nil :body #f(lambda () [t] (
+  ert-run-test(#s(ert-test :name p4/woken-record-creates-a-new-chat-view :documentation nil :body #f(lambda () [t] (wrec--with '((:text "WOKEN DONE")) (p) (wrec
+  ert-run-or-rerun-test(#s(ert--stats :selector "^p4/" :tests ... :test-map #<hash-table eql 2/2 0x19750b646b ...> :test-results ... :test-start-times ... :test
+  ert-run-tests("^p4/" #f(compiled-function (event-type &rest event-args) #<bytecode 0xe8ceeda59dc75d8>) nil)
+  ert-run-tests-batch("^p4/")
+  ert-run-tests-batch-and-exit("^p4/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el" "/Users/
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test p4/woken-record-creates-a-new-chat-view condition:
+    (void-function wrec--with)
+   FAILED  2/2  p4/woken-record-creates-a-new-chat-view (0.000046 sec) at ../../../Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el:34
+
+Ran 2 tests, 0 results as expected, 2 unexpected (2026-10-11 01:09:53-0700, 10.541170 sec)
+
+2 unexpected results:
+   FAILED  p4/timer-fire-creates-a-chat-view-when-none-exists
+   FAILED  p4/woken-record-creates-a-new-chat-view
+

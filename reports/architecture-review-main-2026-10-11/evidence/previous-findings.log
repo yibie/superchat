@@ -1,0 +1,578 @@
+保留显式 action，先校验并规范化本次允许组合的字段，再一致写入；不支持的组合必须明确拒绝。不要为了宽容就让任意 conclusion 自动完成，或遇到歧义替用户猜对象。
+P1 / P2 是本次建议的修复顺序，不是安全漏洞评级。
+五项探针源码
+·
+本次运行日志
+查看源码：start 只转交 goal 与 follows，update 才接附带等待
+主目录源码快照 · superchat-work.el:484–514 · SHA256 a99e917d04705258… ·
+打开源码
+484  (defun superchat-work-tool (action &optional id goal progress blocked resume
+ 485                                     wait_for detail conclusion follows
+ 486                                     in_minutes at)
+ 487    "The `work_record' tool: ACTION is start, update, wait, done or read."
+ 488    (condition-case err
+ 489        (let* ((session (superchat-work--tool-session))
+ 490               (id (if (and (stringp id) (not (string-empty-p id)))
+ 491                       id
+ 492                     (superchat-work-current session))))
+ 493          (pcase action
+ 494            ("start"
+ 495             (let ((new (superchat-work-start session goal follows)))
+ 496               (format "Started %s; it is this conversation's current work record."
+ 497                       new)))
+ 498            ("update"
+ 499             (unless id (error "No current work record; start one or give its id"))
+ 500             (when (or progress blocked resume)
+ 501               (superchat-work-update session id progress blocked resume))
+ 502             ;; A wait given with an update is registered too, never dropped: in
+ 503             ;; the real task T4W the model put wait_for and in_minutes on an
+ 504             ;; update and believed the wait was registered.
+ 505             (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+ 506               (superchat-work-wait
+ 507                session id wait_for detail
+ 508                (cond ((and (stringp at) (not (string-empty-p at)))
+ 509                       (superchat-timer-parse-time at))
+ 510                      ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+ 511             (unless (or progress blocked resume
+ 512                         (and (stringp wait_for) (not (string-empty-p wait_for))))
+ 513               (error "Say how far it got, why the next step waits, or where to pick it up"))
+ 514             (superchat-work-render (superchat-work-get id)))
+查看源码：timer_list 没有按调用会话过滤
+主目录源码快照 · superchat-timer.el:617–628 · SHA256 b14de1be2f050067… ·
+打开源码
+617  (defun superchat-timer-tool-list ()
+ 618    "The `timer_list' tool: the pending timers, then those fired in the last day."
+ 619    (let ((timers (superchat-timer-list))
+ 620          (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+ 621      (concat
+ 622       (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+ 623       (if (null timers)
+ 624           "No pending timers."
+ 625         (concat
+ 626          "Pending:\n"
+ 627          (mapconcat (lambda (timer)
+ 628                     (format "%s  %s  %s%s  %s"
+04 / NEW COUNTEREXAMPLES
+单项测试全绿，跨边界组合仍会漏
+N1 · P1 建议
+故障注入复现
+共享重试计时器，绕过了单个任务的重试额度
+触发条件：
+A 的启动持续报错；B 所属会话一直 busy；两个任务都已到点。
+A 失败时累计计数，超过额度后不再给自己安排 retry timer。
+B 的 busy 等待不受次数限制，继续安排同一个全局 retry timer。
+该回调扫描
+全部
+未启动任务；调用 A 的启动函数之前，不检查 A 是否已耗尽次数。
+retry-limit = 2
+→ 原始尝试 + 驱动 5 个产品实际安排的回调 →
+A 被发送 6 次
+，而 B 没有发送、继续保持共享计时器。
+根因：
+额度只控制“是否安排计时器”，没有控制“是否允许此次尝试”。共享调度脉冲不能代替每个 occurrence 的准入条件。
+最小修复方向：
+在开始尝试前检查该 occurrence 的额度与下次允许时间；busy 与 failure 分开计数。单个 timer 可以继续共享，但应只调度合格项。不要用新数据库或完整任务队列解决这个局部错误。
+测试手动执行已安排的计时器回调，没有真的等待 5 × 300 秒；使用真实 Timer 事实折叠和重试函数。单任务现有回归通过，未覆盖这种相互驱动。
+探针
+·
+日志
+查看源码：重试计数只限制安排 timer，不限制本次 start
+主目录源码快照 · superchat-timer.el:344–372 · SHA256 b14de1be2f050067… ·
+打开源码
+344  (defun superchat-timer--retry-later (seconds)
+ 345    "Try the unstarted tasks again in SECONDS, unless that is already set."
+ 346    (unless (timerp superchat-timer--retry-timer)
+ 347      (setq superchat-timer--retry-timer
+ 348            (run-at-time seconds nil
+ 349                         (lambda ()
+ 350                           (setq superchat-timer--retry-timer nil)
+ 351                           (superchat-timer-retry-tasks))))))
+ 352  
+ 353  (defun superchat-timer--try-task (session-id timer-id occurrence text)
+ 354    "Start the task and return its Run id, or nil when no execution began.
+ 355  A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
+ 356  without limit; a failed start after `superchat-timer-retry-seconds', at most
+ 357  `superchat-timer-retry-limit' times in one Emacs."
+ 358    (let* ((key (cons timer-id occurrence))
+ 359           (run (condition-case err
+ 360                    (superchat-timer--start-task session-id timer-id occurrence text)
+ 361                  (error (message "superchat: scheduled task %s was not started: %s"
+ 362                                  timer-id (error-message-string err))
+ 363                         nil))))
+ 364      (cond ((stringp run) (remhash key superchat-timer--retries) run)
+ 365            ((eq run 'busy)
+ 366             (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+ 367             nil)
+ 368            (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
+ 369                 (puthash key failed superchat-timer--retries)
+ 370                 (when (<= failed superchat-timer-retry-limit)
+ 371                   (superchat-timer--retry-later superchat-timer-retry-seconds)))
+ 372               nil))))
+查看源码：共享回调重新扫描所有 unstarted tasks
+主目录源码快照 · superchat-timer.el:415–437 · SHA256 b14de1be2f050067… ·
+打开源码
+415  (defun superchat-timer-retry-tasks ()
+ 416    "Start every fired task that has no execution on record.
+ 417  A task that was being sent when Emacs exited, in a conversation where a Run
+ 418  started afterwards, may or may not have run: that is said in the
+ 419  conversation, recorded as `timer.unconfirmed', and it is not started again."
+ 420    (dolist (task (superchat-timer-unstarted-tasks))
+ 421      (let ((session (plist-get task :session-id))
+ 422            (id (plist-get task :id))
+ 423            (occurrence (plist-get task :occurrence)))
+ 424        (if (and (plist-get task :sending)
+ 425                 (not (superchat-timer--session-busy-p session))
+ 426                 (superchat-timer--run-after-sending-p task))
+ 427            (let ((line (format "Scheduled task (due %s): %s -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again."
+ 428                                (superchat-timer-format-time occurrence)
+ 429                                (plist-get task :text))))
+ 430              (superchat-timer--fact session "timer.unconfirmed" id occurrence)
+ 431              (when-let* ((view (superchat-timer--live-view session)))
+ 432                (ignore-errors
+ 433                  (let ((superchat-buffer-name (buffer-name view)))
+ 434                    (with-current-buffer view
+ 435                      (superchat--insert-persistent-system-message line)))))
+ 436              (message "superchat: %s" line))
+ 437          (superchat-timer--try-task session id occurrence (plist-get task :text))))))
+N2 · P2 建议
+同步回调注入
+通知实现尚未提交
+完成观察者先运行，timer.started 后落账：通知漏掉了
+触发条件：
+脚本提供方在调用栈内同步返回正常结果。仍走 Timer → send-input → Runtime → provider → completion 的真实路径，只替换网络交付时机。
+1 · sending
+写发送事实
+调用 send-input
+2 · 已完成
+Runtime 封口
+发 turn-completed
+3 · 无通知
+此时没有 timer.started
+被判为非自动执行
+4 · started
+发送返回后写关联
+却不重新补发通知
+实际结果：
+run.completed = 1，timer.started = 1，notices = nil
+。没有第二次结束事件替它补通知。
+根因：
+“由谁启动”是执行的来源属性，却依赖提交返回后才能看到的事实。后置关联与即时终态观察者之间存在时序耦合。
+最小修复方向：
+写入已确认的 started 关联后，检查该 Run 是否已终态并幂等补通知。更稳的后续方向，是将触发来源放入 Request / Run 接受信息，在消费者收到终态前已可判断；仍须在 Runtime 确认接受之后记 started，不能预写一个不存在的 Run。
+现有异步脚本的 8 项通知测试通过。这是支持快速/同步回调的边界反例，
+不是已证明真实 LM Studio 日常会漏通知
+；本次也没有测它的发生频率。
+探针
+·
+日志
+查看源码：timer.started 在 send-input 返回后才写
+主目录源码快照 · superchat-timer.el:313–342 · SHA256 b14de1be2f050067… ·
+打开源码
+313  (defun superchat-timer--start-task (session-id timer-id occurrence text)
+ 314    "Start the model on TEXT in the conversation SESSION-ID; return the Run id.
+ 315  Return `busy', sending nothing, while an execution runs there: the message
+ 316  would only be queued in memory.  Otherwise record `timer.sending', send, and
+ 317  record `timer.started' with the Run that began; nil when none began."
+ 318    (if (superchat-timer--session-busy-p session-id)
+ 319        'busy
+ 320      (let ((view (or (superchat-timer--live-view session-id)
+ 321                      (and (fboundp 'superchat--render-session-view)
+ 322                           (superchat--render-session-view session-id)))))
+ 323        (when (buffer-live-p view)
+ 324          (with-current-buffer view
+ 325            (let ((before superchat--active-run-id))
+ 326              (superchat-timer--fact session-id "timer.sending" timer-id occurrence)
+ 327              (let ((inhibit-read-only t)
+ 328                    (start (copy-marker (point-max))))
+ 329                (goto-char (point-max))
+ 330                (insert text)
+ 331                (condition-case err
+ 332                    ;; The timer speaks here, not the user.
+ 333                    (let ((superchat-automated-input t))
+ 334                      (superchat-send-input))
+ 335                  ;; A failed send must not leave the text for the next try.
+ 336                  (error (when (<= start (point-max))
+ 337                           (delete-region start (point-max)))
+ 338                         (signal (car err) (cdr err)))))
+ 339              (let ((run superchat--active-run-id))
+ 340                (when (and (stringp run) (not (equal run before)))
+ 341                  (superchat-timer--note-started session-id timer-id occurrence run)
+ 342                  run))))))))
+查看源码：自动执行判断依赖 timer.started
+主目录源码快照 · superchat-changes.el:465–480 · SHA256 fe5aba3f84900372… ·
+打开源码
+465  (defun superchat-changes--unattended-run-p (session run)
+ 466    "Non-nil when Superchat started RUN of SESSION at a time, not the user.
+ 467  Read from SESSION's Tape: a scheduled task records `timer.started' with the
+ 468  Run it began, and a woken Work Record's Run is the first one of a
+ 469  conversation that holds `work.woken'."
+ 470    (let ((events (ignore-errors (superchat-tape-replay-events session)))
+ 471          first woken started)
+ 472      (dolist (event events)
+ 473        (pcase (plist-get event :type)
+ 474          ("run.started" (unless first (setq first (plist-get event :run-id))))
+ 475          ("work.woken" (setq woken t))
+ 476          ("timer.started"
+ 477           (when (equal run (plist-get (plist-get event :payload) :run-id))
+ 478             (setq started t)))))
+ 479      (or started (and woken (equal run first)))))
+ 480
+查看源码：结束事件当场判断并决定是否写通知
+主目录源码快照 · superchat-changes.el:709–728 · SHA256 fe5aba3f84900372… ·
+打开源码
+709  (defun superchat-changes--note-unattended (_run status)
+ 710    "At the end of an execution Superchat started by itself, leave a notice.
+ 711  Every way of ending counts: one that failed is the one most easily missed."
+ 712    (when (and (listp status)
+ 713               (fboundp 'superchat-runtime--terminal-p)
+ 714               (superchat-runtime--terminal-p (plist-get status :status)))
+ 715      (when-let* ((session (plist-get status :session-id))
+ 716                  (run (plist-get status :run-id))
+ 717                  ((superchat-changes--unattended-run-p session run))
+ 718                  ((not (cl-some (lambda (notice)
+ 719                                   (equal run (plist-get notice :run)))
+ 720                                 superchat-changes--notices))))
+ 721        (push (list :run run :session session
+ 722                    :what (superchat-changes--notice-what session run)
+ 723                    :status (plist-get status :status)
+ 724                    :unsaved (length (ignore-errors
+ 725                                       (superchat-changes-candidates session run)))
+ 726                    :time (current-time))
+ 727              superchat-changes--notices)
+ 728        (superchat-changes--notices-refresh))))
+架构层的共同结论：
+把“当前已满足的条件”放在消费它的边界上检查。重试额度应在开始尝试前检查；通知所需来源应在终态消费前可见。不要依赖“通常会晚一点”或“没人再触发一次”的偶然时序。
+05 / THE OCTOBER 4 REPORT, REVISITED
+那份简化报告：方向有价值，结论需要更新
+24-09
+25-验证与限制
+26-10
+27-源码证据
+28-打印 / 存为 PDF
+29-不是重写提案。
+30-保留正确的权威边界，
+31-补齐跨模块的产品契约。
+32-Independent architecture review / Emacs-native agent runtime
+33-执行主干已经成形。
+34-长期工作层，还没有闭环。
+35-Superchat 更准确的架构定位是：
+36:一个嵌入 Emacs 的模块化单体，以插件组织能力、以 Runtime 统一执行、以 Tape 保留事实。
+37-它还不是一个具备端到端恢复保证的持久任务引擎，也不是进程级沙箱。
+38-审阅日期：2026-10-10
+39-产品提交：
+40-92a03554
+41-工作副本：
+42-de7a2011
+43-（审阅前无改动）
+44-范围很重要：
+45-本报告分析的是指定的
+46-superchat-m11-w1
+47-worktree，产品内容停在 2026-10-03 的 M11 slice 9；不代表其他分支或主仓库在 10 月 10 日的最新状态。本次只新增报告、隔离探针与验证日志，没有修改产品代码、既有测试或用户配置。
+48-01 / THESIS
+49-不该推倒重来，但需要把边界落到操作入口。
+50-真正的问题不是“模块太多”或者“提示词太长”，而是已有的架构原则在不同层的落实程度不一致：执行内核严密，后加的工作状态与调度层相对薄弱。
+51-KEEP / 保留
+52-单一执行权威
+53-Run 的接受、取消、终结归 Runtime；模型工具经过一个执行入口；结果交给原先接受的 Sink。这些是异步系统的核心资产。
+54-CLOSE / 补齐
+55-对象范围与生命周期
+56:Workspace 的请求过滤没有自动变成对象读写约束；功能插件撤销也没有覆盖它的全部工具和 collector。
+57-PROVE / 验证
+58-持久意图到执行的交接
+59-工作等待已落盘，不等于后续 Run 已被接受。先写“已唤醒”、再提交的顺序存在实际失败窗口。
+60-本次比前一轮更进一步：
+61:不只提出风险。我用临时数据库和脚本模型复现了跨 Workspace 读写、唤醒提交失败、插件半启用以及字段丢弃。既有回归仍全部得到预期结果——说明缺的是边界测试，而不是所有主干逻辑都失效。
+62-源码事实
+63-当前源码直接支持
+64-已复现
+65-本次隔离探针实测
+66-推断
+67-机制可推导，未单独实测
+68-建议
+69-尚未批准或实施
+70-02 / SYSTEM MAP
+71-一个宿主进程，四类不同职责。
+72-这是责任图，不是文件依赖图。上方 Kernel 决定能力如何组合；中间决定一次请求如何执行；下方记录事实并更新读模型。点击节点查看它拥有和不拥有的东西。
+73-组合层 · Scope / Service / Event / Invariant
+--
+93-到点后重新走统一入口
+94-模型发出 tool call 后
+95-唯一工具管线 → Emacs / 外部 Effect
+96-监听器 → 固定 Permission level → Approval → 执行与记录
+97-Tape → View / Projection
+98-Runtime、工具及领域模块追加事实；SQLite 是存储，不负责决定业务含义。
+99-Runtime：只保留一个执行生命周期
+100-拥有 Run 接受、Step 推进、终结、排队与取消。借用 Scope 和 buffer；不因 UI 切换而重新选择结果接收者。它不负责裁定“用户的工作是否真的交付完成”。
+101-superchat-runtime.el · superchat-pipeline.el · superchat-sink.el
+102-请求准备
+103-Service lookup
+104-组合契约
+105:“可组合单体”，不是“每个框都是可独立卸载的插件”。
+106-superchat.el
+107:仍集中加载大量产品模块；Runtime 仍有对具体实现及适配器回调的依赖。插件层很好地控制注册、替换和可见性，但还没有让所有功能变成独立装卸的部署单元。这在单个 Emacs 包里不必然是坏事：
+108:不应该为了纯插件架构把每个函数都变成 Service。
+109-静态规模：顶层
+110-superchat*.el
+111-共 60 个文件、52,188 行（含注释与空行）。UI 5,826 行、Runtime 5,119 行、LLM 适配 4,467 行。数字只说明责任集中在哪里，不是重写或拆分的依据。
+112-源码指纹与计数
+113-03 / OWNERSHIP & LIFETIMES
+114-复杂度主要来自六种生命周期，而不是六种“Agent”。
+115-这些概念应当保持区分。把它们合并看似简单，通常只会把清理、恢复和授权的错误藏到另一个地方。
+116-对象
+117-拥有的权威 / 生命周期
+118-不能推出什么
+119-Workspace
+120-工作地点、规则、Session 和 Work Record 的归属。跨对话持续存在。
+--
+329-chat-collectors
+330-；调度与终态观察者属于
+331-work-records
+332-。撤销的是一部分能力，不是完整功能。
+333-建议修复位置
+334-让功能拥有其工具、collector 与 observer 的 Scope-accounted 注册；或将未满足依赖表现为明确的不可用状态。选择最小闭环，不强制一个功能只能一个文件。
+335-保留持久历史可读，不应因卸载功能删除 Tape。timers 的类似归属也应检查，而不是只修一个工具名。
+336-证据与回归要求
+337-探针：
+338-arch-probe/unmounted-work-row-still-creates-unscheduled-wait
+339-。同时验证 materialized 旧 descriptor、重新挂载、已有等待恢复、在途 Run 语义；不得破坏 exact Sink 与已接受 Run 的契约。
+340-row-owned 工具清单
+341:功能插件
+342-collector 的归属
+343-05
+344-工具接受了字段，但 action 分支悄悄丢掉。
+345-优先：中
+346-工具函数已复现
+347-观察与机制
+348-start
+349-同时给 goal、progress、resume、time wait，工具返回创建成功；落盘的只有目标，没有进展、续接说明和等待。
+350-这是“一个宽参数表 + 分支各自消费参数”造成的语义缝隙。强模型也会误用，小模型只是更早暴露它。
+351-建议修复位置
+352-明确允许的复合操作，先验证整个命令，再写入；冲突字段清楚拒绝。可以支持 start + progress + wait，但不应“任何 action 收下任何字段”或用 conclusion 暗中推断完成。
+353-输出结构化的 applied / ignored-or-rejected 结果；目标是减少隐式规程，不是为了短说明隐藏错误。
+--
+430-卸载后不再创建无法调度的等待；旧工具引用失效；重挂载不重复计时；在途 Run 按已有生命周期结束。
+431-SLICE 03
+432-交接闭合
+433-把一次等待关联到一次被接受的执行
+434-明确持久唤醒意图、Runtime 接受凭据与结果。先测试错误和 unknown，再决定最小数据结构；不增加第二个执行所有者。
+435-退出条件
+436-提交失败可见且可恢复；接受后回执丢失不重复启动；真正重启与迟到结果通过故障测试。不承诺外部副作用恰好一次。
+437-SLICE 04
+438-交互闭合
+439-给人一张“稍后”表，给模型明确命令
+440-统一待办查看与取消入口；可读唤醒结果与对话链接；合法复合 work 命令；没有对象与参数错误分开。焦点策略单独确认。
+441-退出条件
+442:用户能看到挂着什么、在哪里、怎样停止；工具无静默字段丢失；自动行为不意外夺取编辑控制。
+443-SLICE 05
+444-测量优化
+445-用本地模型和默认配置验证简化
+446-先固定版本建立 Qwen 基线；分别比较说明长度、工具面和上下文。运行默认权限与正常审阅屏；测量读取开销再优化 Projection。
+447-退出条件
+448-指标包括正确交付、错对象率、审批负担、请求数与耗时。五次试跑只作筛查，不声称通过率“不下降”。
+449-贯穿工作：
+450-每片同步修正它触及的契约和架构索引；保留先验安全约束、Tape 来源关系、唯一 Runtime 与 exact Sink。不要先删 outcome、审批或工具以换取表面精简。
+451-09 / EVIDENCE & LIMITS
+452-验证是分层证据，不是一个“全绿”标签。
+453-本次检查
+454-结果
+--
+483-代码
+484-·
+485-日志
+486-断言的是缺口仍存在，不是正确行为。不要把“探针通过”计入产品健康分。
+487-环境：GNU Emacs 32.0.50；预备 ELPA 中 llm 0.32.1；batch 模式关闭 native subr trampolines。脚本模型、不访问真实 provider；测试夹具使用临时 HOME / 数据目录，smoke 基础夹具关闭 Run 默认期限并提供测试批准回调，不代表真实用户审批体验。
+488-报告页面检查：内部锚点和本地文件链接无缺失；节点选择、路径切换、证据展开正常；320 / 375 / 768 / 1440 宽度无页面横向溢出或越界按钮。
+489-DOM 与交互检查结果
+490-。浏览器截图接口超时，未完成截图视觉验收。
+491-本次没有验证
+492-真实 Qwen / DeepSeek 的任务成功率、时延和缓存。
+493-用户日常配置、GUI 焦点、后台改动与批准负担。
+494-真正进程崩溃、断电、并发进程操作同一数据库。
+495:全部可选插件、所有 producer 组合和第三方集成。
+496-大 Tape 的性能、全量 byte-compilation、硬卡死工具。
+497-读源码能支持的结论
+498-本报告审阅执行主线、组合接口、权限与存储、工作与定时、上下文和资源 ownership 的关键路径，不宣称对 52,188 行产品代码做了逐行审计。所有性能方向都是待测建议；旧报告中的 163 次运行和模型统计没有在本次重新汇总。
+499-完整源码指纹保存于
+500-source-manifest.json
+501-。本报告与探针是审阅产物，不是正式产品测试集或批准过的改进规格。
+502-10 / SOURCE NOTES
+503-从结论回到源码。
+504-片段在生成报告时从指定 worktree 提取，行号与上面的产品快照对应。证据已嵌入本文件，离线打开也能查看；旁边源文件链接和日志链接只在保留报告目录结构时可用。
+505-组合不是进程隔离
+506-docs/design/plugin-architecture.md:17–49
+507-17  A Scope is a process-local registration context. Contributions are visible to it and its descendants, not to siblings or ancestors. Nearest-layer definitions shadow inherited names; duplicate identifiers in one layer are rejected. Registrations made through a plugin's effect Scope land in its mount layer, while cleanup remains owned by that exact installation.
+--
+1151- 273    (superchat-work--require id)
+1152- 274    (unless (and (stringp conclusion) (not (string-empty-p (string-trim conclusion))))
+1153- 275      (error "Completing a work record needs a conclusion: what was delivered"))
+1154- 276    (superchat-work--append session-id "work.completed"
+1155- 277                            (format "Work record completed: %s" id)
+1156- 278                            (list :work-id id :conclusion conclusion
+1157- 279                                  :by (symbol-name (or by 'model))
+1158- 280                                  :run-id (superchat-work--run-id)))
+1159- 281    id)
+1160- 282  
+1161- 283  ;;;; Text -----------------------------------------------------------------------
+1162-打开仓库源文件 ↗
+1163:action 分支与静默丢弃字段
+1164-superchat-work.el:461–513
+1165-461  (defun superchat-work-tool (action &optional id goal progress blocked resume
+1166- 462                                     wait_for detail conclusion follows
+1167- 463                                     in_minutes at)
+1168- 464    "The `work_record' tool: ACTION is start, update, wait, done or read."
+1169- 465    (condition-case err
+1170- 466        (let* ((session (superchat-work--tool-session))
+1171- 467               (id (if (and (stringp id) (not (string-empty-p id)))
+1172- 468                       id
+1173- 469                     (superchat-work-current session))))
+1174- 470          (pcase action
+1175- 471            ("start"
+   975	                            (list :work-id id :for nil :answered t))))
+   976	
+   977	;;;; The end of an execution (K3, K7) -----------------------------------------
+   978	
+   979	(defun superchat-work--facts-in-run (record-id run-id)
+   980	  "The Work Record facts of RECORD-ID written during RUN-ID, as (TYPE . PAYLOAD)."
+   981	  (delq nil
+   982	        (mapcar (lambda (row)
+   983	                  (cl-destructuring-bind (_session type payload) row
+   984	                    (and (equal record-id (superchat-work--get payload 'work_id 'work-id))
+   985	                         (equal run-id (superchat-work--get payload 'run_id 'run-id))
+   986	                         (cons type payload))))
+   987	                (superchat-work--rows))))
+   988	
+   989	(defun superchat-work-outcome (record-id run-id run-status)
+   990	  "How RUN-ID, ended with RUN-STATUS, left RECORD-ID, from facts alone.
+   991	`completed' when it completed the record; `waiting' when it registered a wait
+   992	still standing; `failed' when the Run failed; otherwise `continuable'.  The
+   993	answer's words are never read (K7)."
+   994	  (let* ((facts (superchat-work--facts-in-run record-id run-id))
+   995	         (record (superchat-work-get record-id)))
+   996	    (cond ((assoc "work.completed" facts) 'completed)
+   997	          ((and (assoc "work.waiting" facts) (plist-get record :waiting)) 'waiting)
+   998	          ((not (eq run-status 'completed)) 'failed)
+   999	          (t 'continuable))))
+  1000	
+  1001	(defun superchat-work--on-turn-completed (_run status)
+  1002	  "At the end of an execution, attach its facts and its outcome to the record.
+  1003	The record is the conversation's current one, or one this execution completed."
+  1004	  (when (and (listp status)
+  1005	             (fboundp 'superchat-runtime--terminal-p)
+  1006	             (superchat-runtime--terminal-p (plist-get status :status)))
+  1007	    (let* ((session (plist-get status :session-id))
+  1008	           (run (plist-get status :run-id))
+  1009	           (ids (delete-dups
+  1010	                 (delq nil
+  1011	                       (cons (superchat-work-current session)
+  1012	                             (mapcar (lambda (row)
+  1013	                                       (cl-destructuring-bind (s type payload) row
+  1014	                                         (and (equal s session)
+  1015	                                              (equal type "work.completed")
+  1016	                                              (equal run (superchat-work--get payload 'run_id 'run-id))
+  1017	                                              (superchat-work--get payload 'work_id 'work-id))))
+  1018	                                     (superchat-work--rows)))))))
+  1019	      (dolist (id ids)
+  1020	        (ignore-errors
+  1021	          (let ((rows (and (fboundp 'superchat-changes-candidates)
+  1022	                           (superchat-changes-candidates session run))))
+  1023	            (when rows
+  1024	              (superchat-work--append
+  1025	               session "work.facts" (format "Work record %s: what the execution changed" id)
+  1026	               (list :work-id id :run-id run
+  1027	                     :buffers (vconcat (mapcar (lambda (r) (plist-get r :name)) rows))
+  1028	                     :files (vconcat (delq nil (mapcar (lambda (r) (plist-get r :file)) rows)))
+  1029	                     ;; K13: in a jj repository, the change these edits sit in.
+  1030	                     :jj-change (superchat-work-jj-change
+  1031	                                 (plist-get (superchat-work-get id) :workspace-root))))))
+  1032	          (let ((outcome (superchat-work-outcome id run (plist-get status :status))))
+  1033	            (superchat-work--append
+  1034	             session "work.outcome" (format "Work record %s: %s" id outcome)
+  1035	             (list :work-id id :run-id run :outcome (symbol-name outcome))))))
+  1036	      (ignore-errors (superchat-work--report-woken run status)))))
+  1037	
+  1038	(superchat-define-plugin work-records
+  1039	  :doc "Work Records: at the end of every execution, the product attaches what
+  1040	it changed to the conversation's current record and decides how it stands."
+  1041	  :apply
+  1042	  (lambda (scope _config)
+  1043	    (superchat-on scope 'turn-completed 'work-outcome
+  1044	                  #'superchat-work--on-turn-completed)
+  1045	    (add-hook 'superchat-user-input-functions #'superchat-work--on-user-input)
+  1046	    (superchat-scope-effect
+  1047	     scope (lambda ()
+  1048	             (remove-hook 'superchat-user-input-functions
+  1049	                          #'superchat-work--on-user-input)))
+  1050	    ;; After loading finishes, so a missed wake never starts mid-`require'.
+  1051	    (let ((start (run-at-time 0 nil #'superchat-work-arm-all)))
+  1052	      (superchat-scope-effect scope
+  1053	                              (lambda ()
+  1054	                                (cancel-timer start)
+  1055	                                (superchat-work-disarm-all))))))
+  1056	
+  1057	(provide 'superchat-work)
+  1058	;;; superchat-work.el ends here
+   775	(defvar superchat-changes-notices-mode-map
+   776	  (let ((map (make-sparse-keymap)))
+   777	    (define-key map (kbd "RET") #'superchat-changes-notices-open)
+   778	    (define-key map (kbd "d") #'superchat-changes-notices-dismiss)
+   779	    (define-key map (kbd "D") #'superchat-changes-notices-dismiss-all)
+   780	    map)
+   781	  "Keys of the notices list.")
+   782	
+   783	(define-derived-mode superchat-changes-notices-mode tabulated-list-mode
+   784	  "Superchat-Notices"
+   785	  "Executions Superchat started by itself that have ended.
+   786	RET goes to the conversation and forgets the notice, d forgets it,
+   787	D forgets all."
+   788	  (setq tabulated-list-format [("Ended" 12 t) ("Started by" 40 t) ("Outcome" 12 t)
+   789	                               ("Left" 10 t) ("Conversation" 0 t)])
+   790	  (setq tabulated-list-entries #'superchat-changes--notices-entries)
+   791	  (tabulated-list-init-header))
+   792	
+   793	;;;###autoload
+   794	(defun superchat-changes-notices ()
+   795	  "List the executions Superchat started by itself that have ended.
+   796	A scheduled task or a Work Record that woke leaves one notice when its
+   797	execution ends, however it ended; the mode line shows how many are pending."
+   798	  (interactive)
+   799	  (let ((buffer (get-buffer-create superchat-changes-notices-buffer-name)))
+   800	    (with-current-buffer buffer
+   801	      (superchat-changes-notices-mode)
+   802	      (tabulated-list-print))
+   803	    (pop-to-buffer buffer)
+   804	    buffer))
+   805	
+   806	(defvar superchat-timer-started-functions)
+   807	(declare-function superchat-runtime-status "superchat-runtime" (run-id))
+   808	
+   809	(defun superchat-changes--note-started-late (session run)
+   810	  "Leave RUN's notice when it ended before it was on record as a task's.
+   811	A scheduled task's `timer.started' is written after the send returns; an
+   812	execution that ended inside that send was not yet known to be Superchat's
+   813	own when it ended.  Called with SESSION and RUN once the fact is written."
+   814	  (when-let* ((status (and (fboundp 'superchat-runtime-status)
+   815	                           (superchat-runtime-status run))))
+   816	    (superchat-changes--note-unattended
+   817	     nil (append (list :session-id session :run-id run) status))))
+   818	
+   819	(superchat-define-plugin changes
+   820	  :doc "The unsaved-changes outlet's Run-end notice and review screen, and the
+   821	notices of work Superchat started by itself.  The /changes command is
+   822	registered with the other built-in commands by `chat-commands'."
+   823	  :apply
+   824	  (lambda (scope _)
+   825	    (superchat-on scope 'turn-completed 'changes-notice
+   826	                  #'superchat-changes--on-turn-completed)
+   827	    (superchat-on scope 'turn-completed 'changes-unattended-notice
+   828	                  #'superchat-changes--note-unattended)
+   829	    (add-hook 'superchat-timer-started-functions
+   830	              #'superchat-changes--note-started-late)
+   831	    (superchat-scope-effect
+   832	     scope
+   833	     (lambda ()
+   834	       (remove-hook 'superchat-timer-started-functions
+   835	                    #'superchat-changes--note-started-late)))))
+   836	
+   837	(provide 'superchat-changes)
+   838	
+   839	;;; superchat-changes.el ends here

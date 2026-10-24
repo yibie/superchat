@@ -1,0 +1,31 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 17 tests (2026-10-11 02:59:45-0700, selector ‘"^timer/"’)
+   passed   1/17  timer/a-cancelled-timer-never-fires (0.530405 sec)
+   passed   2/17  timer/a-missed-timer-fires-once-and-says-it-is-late (0.008498 sec)
+   passed   3/17  timer/a-reminder-tells-the-user-and-leaves-a-line-without-the-model (0.008137 sec)
+   passed   4/17  timer/a-repeating-timer-fires-only-its-latest-missed-occurrence (0.008130 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/17  timer/a-task-starts-the-model-in-the-main-conversation (0.086359 sec)
+   passed   6/17  timer/a-temporary-conversation-hears-its-own-timer (0.005805 sec)
+   passed   7/17  timer/a-timer-belongs-to-the-workspace-of-its-conversation (0.008248 sec)
+   passed   8/17  timer/a-timer-survives-a-restart (0.007643 sec)
+   passed   9/17  timer/bad-timers-are-refused (0.000046 sec)
+   passed  10/17  timer/the-create-tool-sets-a-timer-in-the-asking-conversation (0.008976 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/17  timer/the-line-goes-to-the-main-conversation-of-the-workspace (0.051304 sec)
+   passed  12/17  timer/the-list-tool-tells-what-fired-in-the-last-day (0.010485 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/17  timer/the-notes-never-reach-the-model (0.048116 sec)
+   passed  14/17  timer/the-row-arms-and-disarms (0.028853 sec)
+   passed  15/17  timer/the-three-facts-are-known-tape-events (0.000056 sec)
+   passed  16/17  timer/the-tools-are-on-the-default-surface-and-built-in (0.000022 sec)
+   passed  17/17  timer/times-are-read-and-written-in-one-shape (0.000046 sec)
+
+Ran 17 tests, 17 results as expected, 0 unexpected (2026-10-11 02:59:46-0700, 0.811804 sec)
+

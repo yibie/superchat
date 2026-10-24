@@ -1,0 +1,106 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat-m11-w1/scripts/smoke-architecture.el (source)...
+Running 25 tests (2026-10-10 03:11:57-0700, selector ‘"^work-record/"’)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031157-992463-bf48 completed (session subagent-researcher-20261010-031157-1385)
+   passed   1/25  work-record/a-delegated-task-is-recorded-under-its-record (0.707731 sec)
+   passed   2/25  work-record/a-record-answers-the-four-questions (0.007569 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/25  work-record/a-registered-wait-is-the-outcome (0.094014 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031158-209434-8f9c completed (session 20261010-031158-95d2)
+   passed   4/25  work-record/a-request-lists-this-workspace-only (0.111481 sec)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031158-299052-2e0d completed (session subagent-researcher-20261010-031158-86b0)
+   passed   5/25  work-record/a-task-without-a-record-records-nothing (0.082423 sec)
+   passed   6/25  work-record/a-temporary-conversation-keeps-none (0.003475 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   7/25  work-record/a-temporary-request-has-no-records-block (0.038732 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/25  work-record/a-wait-for-a-time-is-not-ended-by-the-user-speaking (0.045682 sec)
+   passed   9/25  work-record/a-wait-for-a-time-names-the-time (0.006912 sec)
+   passed  10/25  work-record/a-wait-given-with-an-update-is-registered (0.007355 sec)
+   passed  11/25  work-record/a-wait-is-armed-while-the-row-is-mounted (0.024255 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031158-487841-bca9 completed (session 20261010-031158-2adc)
+   passed  12/25  work-record/a-wait-missed-while-emacs-was-closed-wakes-once-after-loading (0.048395 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031158-561382-d306 completed (session 20261010-031158-4c62)
+   passed  13/25  work-record/at-its-time-a-record-goes-on-in-a-new-conversation (0.074032 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-work-LxZhWl/a.txt
+   passed  14/25  work-record/in-a-jj-repository-the-change-is-recorded (0.339226 sec)
+   passed  15/25  work-record/nothing-wakes-before-its-time (0.006966 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-031158-990389-02c8 completed (session 20261010-031158-cf18)
+No unsaved buffers edited by this Session's tools.
+   passed  16/25  work-record/only-the-user-in-that-conversation-ends-the-wait (0.084271 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  17/25  work-record/the-outcome-never-reads-the-answer (0.181043 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-work-0iVAHg/a.txt
+   passed  18/25  work-record/the-product-attaches-what-changed (0.102054 sec)
+   passed  19/25  work-record/the-tool-is-built-in-and-on-the-default-surface (0.000018 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  20/25  work-record/the-tool-keeps-the-record-through-a-conversation (0.182154 sec)
+   passed  21/25  work-record/the-two-ways-to-wait-for-the-user-are-told-apart (0.000060 sec)
+   passed  22/25  work-record/the-user-lists-and-completes-records (0.016363 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  23/25  work-record/the-users-next-message-ends-the-wait-for-the-user (0.044677 sec)
+   passed  24/25  work-record/waiting-and-completing (0.009257 sec)
+   passed  25/25  work-record/with-a-current-record-a-task-timer-is-refused (0.007512 sec)
+
+Ran 25 tests, 25 results as expected, 0 unexpected (2026-10-10 03:11:59-0700, 2.226433 sec)
+

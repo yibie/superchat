@@ -1,0 +1,28 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 18 tests (2026-10-10 08:21:25-0700, selector ‘"^input-syntax/"’)
+   passed   1/18  input-syntax/a-cached-model-list-is-enough (0.001336 sec)
+   passed   2/18  input-syntax/a-command-at-the-start-keeps-a-later-skill-as-text (0.000660 sec)
+   passed   3/18  input-syntax/a-command-named-in-the-middle-is-the-command-written-first (0.000745 sec)
+   passed   4/18  input-syntax/a-message-the-user-did-not-type-is-read-at-the-start-only (0.000580 sec)
+   passed   5/18  input-syntax/a-model-and-a-skill-in-the-middle-both-count (0.000613 sec)
+   passed   6/18  input-syntax/a-model-name-is-never-fetched-to-read-a-message (0.000573 sec)
+   passed   7/18  input-syntax/a-model-named-in-the-middle-is-used (0.000570 sec)
+   passed   8/18  input-syntax/a-name-that-does-not-exist-stays-text (0.000801 sec)
+   passed   9/18  input-syntax/a-skill-named-at-the-end-is-invoked (0.000592 sec)
+   passed  10/18  input-syntax/a-skill-named-in-the-middle-is-invoked (0.000581 sec)
+   passed  11/18  input-syntax/a-skill-wins-over-a-command-in-the-same-text (0.000598 sec)
+   passed  12/18  input-syntax/an-unknown-name-does-not-hide-a-later-known-one (0.000658 sec)
+   passed  13/18  input-syntax/lines-around-a-token-are-kept (0.000744 sec)
+   passed  14/18  input-syntax/only-the-first-of-a-kind-counts (0.000775 sec)
+   passed  15/18  input-syntax/ordinary-writing-is-not-a-trigger (0.001101 sec)
+   passed  16/18  input-syntax/regenerate-refuses-a-skill-or-command-in-the-middle (0.001579 sec)
+🎯 Using skill: isx-skill
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  17/18  input-syntax/the-model-gets-the-skill-and-the-text-without-the-token (0.656086 sec)
+   passed  18/18  input-syntax/what-stood-at-the-start-reads-as-before (0.000783 sec)
+
+Ran 18 tests, 18 results as expected, 0 unexpected (2026-10-10 08:21:26-0700, 0.669904 sec)
+

@@ -1,0 +1,188 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat-m11-w1/scripts/smoke-architecture.el (source)...
+Running 62 tests (2026-10-10 03:13:12-0700, selector ‘"^m6-permissions/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/62  m6-permissions/approval/a-failing-last-resort-answerer-is-closed-and-settled (0.565254 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   2/62  m6-permissions/approval/a-faulting-or-rogue-answerer-opens-nothing (0.017742 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/62  m6-permissions/approval/a-listener-quit-is-a-cancellation-not-a-fault (0.016831 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-031312-728044-b6f2 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 0 effect(s), 1 approval(s)
+   passed   4/62  m6-permissions/approval/an-unrecorded-decision-leaves-the-approval-open (0.018165 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/62  m6-permissions/approval/answerer-of-last-resort-decides (0.017352 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/62  m6-permissions/approval/answerers-cannot-reach-the-approved-arguments (0.016783 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/62  m6-permissions/approval/approval-is-for-the-entry-snapshot (0.016698 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/62  m6-permissions/approval/audit-is-paired-and-run-scoped (0.017417 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   9/62  m6-permissions/approval/every-asked-path-renews-the-transport-wait (0.020288 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/62  m6-permissions/approval/never-rejects-before-any-answerer (0.017595 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/62  m6-permissions/approval/no-answerer-is-unavailable (0.016893 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/62  m6-permissions/approval/open-mark-spans-the-decision (0.039121 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/62  m6-permissions/approval/quit-records-a-denial-and-resignals (0.016490 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  14/62  m6-permissions/approval/waterfall-claims-or-delegates (0.016884 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  15/62  m6-permissions/chain/a-delegating-answerer-gets-the-persons-decision (0.016976 sec)
+   passed  16/62  m6-permissions/chain/a-session-that-never-asks-is-not-offered-ask-user (0.011528 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  17/62  m6-permissions/chain/an-asynchronous-body-runs-and-delivers-once (0.085161 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  18/62  m6-permissions/chain/execute-can-end-a-call-without-running-it (0.073200 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  19/62  m6-permissions/chain/execute-wraps-a-synchronous-body-once (0.097022 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  20/62  m6-permissions/chain/nobody-answers-in-batch-unless-somebody-was-put-there (0.018844 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  21/62  m6-permissions/chain/post-execute-replaces-or-blocks-a-result (0.060769 sec)
+Type C-x 1 to delete the help window, C-M-v to scroll help.
+
+Type C-x 1 to delete the help window, C-M-v to scroll help.
+   passed  22/62  m6-permissions/chain/question-mark-shows-the-arguments-and-decides-nothing (0.002049 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  23/62  m6-permissions/chain/the-decision-machine-is-gone (0.071378 sec)
+Allow `eval_elisp' once? (r)  ([Y]es, allow once, [N]o, [?]): 
+Type C-x 1 to delete the help window, C-M-v to scroll help.
+Allow `eval_elisp' once? (r)  ([Y]es, allow once, [N]o, [?]): 
+   passed  24/62  m6-permissions/chain/the-modal-key-path-shows-the-same-details (0.000428 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  25/62  m6-permissions/context/the-request-states-the-current-policy (0.094912 sec)
+   passed  26/62  m6-permissions/delegation/a-child-session-inherits-the-mode-and-asks-nobody (0.012666 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  27/62  m6-permissions/executor/a-declined-eval-never-runs (0.095241 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-031313-585955-c31f audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 0 effect(s), 1 approval(s)
+Superchat session cached for next startup.
+   passed  28/62  m6-permissions/executor/a-late-allow-after-cancel-starts-nothing (0.053263 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  29/62  m6-permissions/executor/a-listener-cannot-skip-the-level-stage (0.077008 sec)
+   passed  30/62  m6-permissions/executor/an-agent-written-tool-asks-nobody-a-second-time (0.000038 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  31/62  m6-permissions/executor/danger-full-access-asks-nobody (0.072056 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  32/62  m6-permissions/executor/eval-asks-once-and-reads-ask-nothing (0.139953 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  33/62  m6-permissions/executor/never-rejects-without-a-question (0.069649 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  34/62  m6-permissions/executor/read-only-denies-full-control-without-asking (0.098871 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  35/62  m6-permissions/executor/the-body-runs-the-approved-arguments (0.071549 sec)
+   passed  36/62  m6-permissions/executor/tool-classes (0.000049 sec)
+   passed  37/62  m6-permissions/levels/command-is-offered-by-default (0.011951 sec)
+   passed  38/62  m6-permissions/levels/command-shows-and-selects (0.012557 sec)
+   passed  39/62  m6-permissions/levels/defaults-need-no-event (0.011205 sec)
+   passed  40/62  m6-permissions/levels/selection-survives-a-closed-database (0.013577 sec)
+   passed  41/62  m6-permissions/levels/selection-survives-reopen (0.011684 sec)
+   passed  42/62  m6-permissions/levels/selection-writes-only-changed-knobs (0.040443 sec)
+   passed  43/62  m6-permissions/levels/unmatched-knobs-report-custom (0.012764 sec)
+   passed  44/62  m6-permissions/review/a-childs-fixed-values-do-not-follow-the-defaults (0.012222 sec)
+   passed  45/62  m6-permissions/review/a-session-view-named-like-the-fallback-is-not-scratch (0.011957 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  46/62  m6-permissions/review/a-tool-continuation-states-the-level-in-force (0.071953 sec)
+   passed  47/62  m6-permissions/review/registration-records-the-exact-server (0.001931 sec)
+   passed  48/62  m6-permissions/review/the-fallback-name-does-not-launder-a-file-buffer (0.013223 sec)
+   passed  49/62  m6-permissions/review/trust-is-for-the-exact-registered-server (0.000022 sec)
+   passed  50/62  m6-permissions/save/refuses-what-it-cannot-save-honestly (0.002402 sec)
+   passed  51/62  m6-permissions/save/saves-the-whole-base-buffer-and-reports-it (0.003854 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  52/62  m6-permissions/selection/a-registered-tool-needs-no-effects-under-levels (0.059899 sec)
+   passed  53/62  m6-permissions/selection/built-in-tools-leave-with-their-plugin (0.002636 sec)
+   passed  54/62  m6-permissions/targets/an-indirect-buffer-is-judged-by-its-base (0.005116 sec)
+   passed  55/62  m6-permissions/targets/read-only-denies-before-creating-anything (0.003569 sec)
+   passed  56/62  m6-permissions/targets/superchat-state-is-outside-every-workspace (0.011684 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Telega digest: reading 1 chat(s) asynchronously...
+Telega digest cancelled: [m6p]
+superchat: run run-20261010-031314-472198-f715 cancelled (session telega-digest)
+   passed  57/62  m6-permissions/telega/a-digest-cannot-send-whatever-it-is-offered (0.009814 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Telega digest: reading 1 chat(s) asynchronously...
+Telega digest cancelled: [m6p]
+superchat: run run-20261010-031314-481975-c75c cancelled (session telega-digest)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Telega digest: reading 1 chat(s) asynchronously...
+Telega digest: reading 1 chat(s) asynchronously...
+Telega digest cancelled: [m6p]
+superchat: run run-20261010-031314-489203-370f cancelled (session telega-digest)
+   passed  58/62  m6-permissions/telega/a-request-scope-ends-with-its-request (0.035668 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  59/62  m6-permissions/telega/a-session-grants-a-chat-only-after-the-person-says-yes (0.018137 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Telega digest: reading 1 chat(s) asynchronously...
+superchat: run run-20261010-031314-535791-0387 completed (session telega-digest)
+   passed  60/62  m6-permissions/telega/digest-reads-granted-chats-unasked-and-grants-nothing (0.086055 sec)
+   passed  61/62  m6-permissions/telega/request-scopes-do-not-share-grants (0.002294 sec)
+   passed  62/62  m6-permissions/workspace/write-checks-the-artifacts-target (0.039986 sec)
+
+Ran 62 tests, 62 results as expected, 0 unexpected (2026-10-10 03:13:14-0700, 2.544284 sec)
+

@@ -1,0 +1,4 @@
+Warning: Optimization failure for cl-typep: Handler: cl-typep--inliner
+(error "Unknown type llm-provider-utils-tool-use")
+Emacs=32.0.50
+llm=/Users/chenyibin/.cache/superchat-test-elpa/llm-0.32.1/llm.elc

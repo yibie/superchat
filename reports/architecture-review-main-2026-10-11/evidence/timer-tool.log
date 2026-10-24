@@ -1,0 +1,13 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-11 00:12:52-0700, selector ‘"^timer-tool/"’)
+   passed  1/5  timer-tool/mounted-again-a-timer-is-set-and-armed (0.845905 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  2/5  timer-tool/with-the-row-off-a-timer-is-refused-in-the-tool-loop (0.112194 sec)
+   passed  3/5  timer-tool/with-the-row-off-list-says-so-and-cancel-works (0.010354 sec)
+   passed  4/5  timer-tool/with-the-row-off-neither-kind-is-set (0.007978 sec)
+   passed  5/5  timer-tool/with-the-row-on-nothing-changed (0.009208 sec)
+
+Ran 5 tests, 5 results as expected, 0 unexpected (2026-10-11 00:12:53-0700, 0.986149 sec)
+

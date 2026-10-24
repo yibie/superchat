@@ -1,0 +1,18 @@
+--- baseline/superchat-tool-execution.el
++++ main/superchat-tool-execution.el
+@@ -1126,7 +1126,14 @@
+                  tool-name context))
+                ;; ── blocks: reasons a call cannot run whatever the level ──
+                (block-reason
+-                (or (and input-candidate (not trusted-input) "Untrusted human input operation")
++                (or (and input-candidate (not trusted-input)
++                         ;; The Run goes on when its View is gone; say why
++                         ;; the question cannot be put, not that it is untrusted.
++                         (if (and (fboundp 'superchat-runtime--input-adapter-current-p)
++                                  (not (superchat-runtime--input-adapter-current-p
++                                        (plist-get context :run-id))))
++                             "The user cannot be asked: this conversation's window is closed. Go on without the answer, or end by saying what you need to know"
++                           "Untrusted human input operation"))
+                     (and trusted-input
+                          (not (and (= (length args) 1) (stringp (car args))
+                                    (not (string-empty-p (string-trim (car args))))))

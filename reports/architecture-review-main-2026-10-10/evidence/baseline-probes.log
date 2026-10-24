@@ -1,0 +1,29 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-10 08:24:59-0700, selector ‘"^arch-probe/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+OBSERVED: B read, updated and completed A's supplied record id through the normal tool loop.
+
+   passed  1/5  arch-probe/cross-workspace-record-through-real-tool-loop (0.676047 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+OBSERVED: B listed and cancelled A's timer through the normal tool loop.
+
+   passed  2/5  arch-probe/cross-workspace-timer-through-real-tool-loop (0.094742 sec)
+OBSERVED: start accepts the argument list but omits progress, resume and wait.
+
+   passed  3/5  arch-probe/start-ignores-extra-progress-and-wait (0.007272 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+OBSERVED: unmounted work-records still exposes a working tool that creates an unarmed time wait.
+
+   passed  4/5  arch-probe/unmounted-work-row-still-creates-unscheduled-wait (0.103552 sec)
+FIXED: injected pre-submission failure now restores the wait, remains due, and has no active Run.
+
+   passed  5/5  arch-probe/wake-submission-error-restores-wait (0.008522 sec)
+
+Ran 5 tests, 5 results as expected, 0 unexpected (2026-10-10 08:25:00-0700, 0.890408 sec)
+

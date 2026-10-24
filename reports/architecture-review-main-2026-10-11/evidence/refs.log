@@ -1,0 +1,114 @@
+   549	  "What follows the row form in a conversation's request for annotations.")
+   550	
+   551	(defconst superchat-prompt--annotate-earlier-note
+   552	  "Earlier in this conversation the user sent a message ending in `>annotate'.  \
+   553	Its answer, rows of a line number, a quote and a remark, was hung by Superchat \
+   554	on the user's buffer (%s) as remarks beside the text; the text itself was not \
+   555	changed.  That request is finished.  Do not write those remarks into the \
+   556	buffer and do not repeat them, unless the user asks for that now."
+   557	  "What a later message of a conversation that annotated is told.
+   558	The one %s is the names of the buffers annotated.")
+   559	
+   560	(defvar superchat--annotated-buffers)
+   561	
+   562	(declare-function superchat-annotate--system-text "superchat-annotate" ())
+   563	
+   564	(defun superchat-prompt-collector--annotate (env _state _tools)
+   565	  "Return the fragments of a conversation message whose answer is annotations.
+   566	The dispatcher puts `:chat-annotate' in ENV's context for a message that
+   567	names `>annotate'.  The row form goes last among the system text, after the
+   568	persona and the Workspace rules; the text to annotate, with line numbers,
+   569	rides as an attachment.
+   570	
+   571	Any other message of a conversation that annotated before is told so
+   572	\(`superchat-prompt--annotate-earlier-note'): the earlier answer's rows are
+   573	in its history, and nothing there says they were already hung on the text."
+   574	  (if-let* ((spec (plist-get (plist-get env :context) :chat-annotate)))
+   575	    (list (superchat-prompt-fragment
+   576	           :owner 'chat :id "annotate-form" :slot 'system
+   577	           :text (concat (superchat-annotate--system-text) "\n\n"
+   578	                         superchat-prompt--annotate-chat-note "\n\n"
+   579	                         superchat-prompt--annotate-rules-note)
+   580	           :priority -10 :budget-class 'hard)
+   581	          (superchat-prompt-fragment
+   582	           :owner 'chat :id "annotate-text" :slot 'attachment
+   583	           :text (format "The text to annotate, %s, with line numbers:\n<<<TEXT>>>\n%s\n<<<END TEXT>>>\n\nReply with rows of the form LINE | QUOTE | REMARK only."
+   584	                         (plist-get spec :name) (plist-get spec :text))
+   585	           :priority 0 :budget-class 'hard :required t
+   586	           :source (list :annotate (plist-get spec :name))))
+   587	    (when-let* (((eq (plist-get env :surface) 'chat))
+   588	                (view (plist-get (plist-get env :context) :chat-buffer))
+   589	                ((buffer-live-p view))
+   590	                (record (buffer-local-value 'superchat--annotated-buffers view))
+   591	                ((equal (car record) (plist-get env :session-id)))
+   592	                (names (cdr record)))
+   593	      (list (superchat-prompt-fragment
+   594	             :owner 'chat :id "annotate-earlier" :slot 'system
+   595	             :text (format superchat-prompt--annotate-earlier-note
+   596	                           (mapconcat #'identity (reverse names) ", "))
+   597	             :priority -10 :budget-class 'hard)))))
+   598	
+   599	(defun superchat-prompt-collector--workspace-rules (env _state _tools)
+   600	  "Return the rules of the Workspace ENV's Session is bound to, as system text.
+   593	                  (format " \"%s\"" target)))
+   594	      clean)))
+   595	
+   596	(defun superchat--skill-for-this-message-only-p (turn preset)
+   597	  "Return non-nil when PRESET, invoked on TURN, leaves the Session as it is.
+   598	That is an agent skill named in the middle of the message.  A plan skill
+   599	switches the Session wherever it is named: approving a plan and leaving
+   600	plan mode are steps of the Session, not of one message."
+   601	  (and (plist-get (superchat-turn-state turn) :skill-from-body)
+   602	       (superchat-preset-agent-p preset)))
+   603	
+   604	(defun superchat--request-plan-from-turn
+   605	    (turn &optional template target-model _finalized)
+   966	
+   967	(declare-function superchat-annotate-chat-spec "superchat-annotate" (buffer))
+   968	(declare-function superchat-annotate-chat-sink "superchat-annotate"
+   969	                  (inner spec &optional hung))
+   970	
+   971	(defvar-local superchat--annotated-buffers nil
+   972	  "What this View's conversation annotated: (SESSION-ID . BUFFER-NAMES).
+   973	Written when a `>annotate' message's remarks were hung, newest name first;
+   974	later requests of that Session say what was done.  Kept in the View, for
+   975	this Emacs only, and worth nothing once the View shows another Session.")
+   976	
+   977	(defun superchat--annotated-remember (view session-id name)
+   978	  "Note in VIEW that SESSION-ID's conversation hung remarks on buffer NAME."
+   979	  (when (buffer-live-p view)
+   980	    (with-current-buffer view
+   981	      (setq superchat--annotated-buffers
+   982	            (cons session-id
+   983	                  (cl-adjoin name
+   984	                             (and (equal (car superchat--annotated-buffers)
+   985	                                         session-id)
+   986	                                  (cdr superchat--annotated-buffers))
+   987	                             :test #'equal))))))
+   988	
+   989	(defun superchat--chat-annotate-spec (composed)
+   990	  "Return what COMPOSED's request annotates, or nil for an ordinary message.
+   991	A message that named `>annotate' annotates the buffer or file named after
+96:(declare-function superchat--activate-capability "superchat" (preset &optional name restore-p))
+596:(defun superchat--skill-for-this-message-only-p (turn preset)
+646:                ((superchat--skill-for-this-message-only-p turn preset))
+1673:                (if (superchat--skill-for-this-message-only-p prepared preset)
+1676:                  (superchat--activate-capability preset)
+superchat-pipeline.el:508:(defun superchat-pipeline-submit (envelope)
+superchat-pipeline.el:597:(defun superchat-pipeline-submit-blocking (envelope &optional timeout)
+superchat-runtime.el:1746:(defun superchat-runtime--record-finish-error (entry err &optional note)
+superchat-runtime.el:1924:(defun superchat-runtime--finish-superseded-entry (run-id)
+superchat-runtime.el:2604:(defun superchat-runtime--finish (run-id status response)
+superchat-runtime.el:3336:(defun superchat-runtime-submit (request)
+superchat-runtime.el:4437:(defun superchat-runtime--input-finish-scope (run-id function)
+  1540	    (superchat-tape--request-tool-observation-item item row-at))
+  1541	   (t
+  1542	    (let ((row (funcall row-at (plist-get item :storage-id))))
+  1543	      (cond
+  1544	       ((null row) :unknown)
+  1545	       ;; A recorded item's class comes back from the Tape as a string.
+  1546	       ((equal "model-interpretation" (format "%s" (plist-get item :class)))
+  1547	        (list :class 'model-interpretation :content (nth 3 row)))
+  1548	       ((and (equal "inject" (nth 1 row)) (equal "system" (nth 2 row)))
+  1549	        (let ((text (superchat-tape--request-admitted-material-text row)))
+  1550	          (if (stringp text)

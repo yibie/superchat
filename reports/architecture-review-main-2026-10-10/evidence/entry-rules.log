@@ -1,0 +1,163 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 13 tests (2026-10-10 08:21:20-0700, selector ‘"^entry-rules/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: workspace rules are not in this request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-A5Oo31/AGENTS.md is not readable
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/13  entry-rules/a-chat-request-says-the-rules-could-not-be-read (0.612944 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-323147-22ff completed (session 20261010-082121-5bf7)
+   passed   2/13  entry-rules/a-rewrite-carries-the-rules-once-before-its-own-text (0.031690 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-356240-f783 completed (session 20261010-082121-dd43)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+   passed   3/13  entry-rules/a-rewrite-gets-the-rules-of-its-own-workspace (0.060155 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-413763-a0e6 completed (session 20261010-082121-0cb5)
+   passed   4/13  entry-rules/a-rewrite-outside-any-workspace-is-as-it-was (0.030279 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-445155-50ae completed (session 20261010-082121-950e)
+   passed   5/13  entry-rules/a-rewrite-says-which-rules-apply-to-it (0.030809 sec)
+superchat: workspace rules are not in this request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-IM3gTt/AGENTS.md is not readable
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-476043-0840 completed (session 20261010-082121-172e)
+   passed   6/13  entry-rules/a-rewrite-tells-the-user-not-the-model (0.030641 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082121-506370-a731 completed (session 20261010-082121-16a5)
+   passed   7/13  entry-rules/a-rewrite-without-rules-is-as-it-was (0.030253 sec)
+superchat: workspace rules are not in this sub-agent’s request: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/ws-rules-kPDH2E/AGENTS.md is not readable
+   passed   8/13  entry-rules/a-sub-agent-without-readable-rules-is-said-to-the-user (0.000657 sec)
+Test entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules backtrace:
+  write-region(nil nil "/Users/chenyibin/.emacs.d/superchat/workflow/erwf3.workflow" nil 0)
+  (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0))
+  (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0)))
+  (unwind-protect (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-f
+  (let ((temp-file (expand-file-name (concat name ".workflow") superchat-workflow-directory)) (temp-buffer (generate-new-buffer " *temp file*" t))) (unwind-prot
+  er--workflow(#<killed buffer> "erwf3" "just one step\n" "")
+  (let ((view (superchat))) (er--workflow view "erwf3" "just one step\n" "") (er--wait-requests 1) (let ((system (er--system-or-empty 1))) (let* ((fn-857 #'stri
+  (progn (fset 'smoke--fake-network vnew) (let ((view (superchat))) (er--workflow view "erwf3" "just one step\n" "") (er--wait-requests 1) (let ((system (er--sy
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let ((view (superchat))) (er--workflow view "erwf3" "just one step\n" "") (er--wait-requests 1) (let 
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrules--roots nil) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq wrules--roots (list)) (unwind-protect (le
+  #f(lambda () [t] (let* ((wrules--roots nil) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq wrules--roots (list)) (u
+  #f(compiled-function () #<bytecode -0x1f5f78527d658944>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x1f5f78527d658944>) (t) #f(compiled-function (err) #<bytecode 0xec7ca0337bba3e6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29d89c47ef843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules :documentation nil :body #f(lambda () [t] (let* ... ... ...) ni
+  ert-run-or-rerun-test(#s(ert--stats :selector "^entry-rules/" :tests ... :test-map #<hash-table eql 13/13 0x1aac87621c ...> :test-results ... :test-start-time
+  ert-run-tests("^entry-rules/" #f(compiled-function (event-type &rest event-args) #<bytecode -0x16525a59cd34c096>) nil)
+  ert-run-tests-batch("^entry-rules/")
+  ert-run-tests-batch-and-exit("^entry-rules/")
+  eval((ert-run-tests-batch-and-exit "^entry-rules/") t)
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules condition:
+    (file-error "Opening output file" "Operation not permitted"
+		"/Users/chenyibin/.emacs.d/superchat/workflow/erwf3.workflow")
+   FAILED   9/13  entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules (0.003456 sec) at scripts/entry-rules-regression.el:178
+Test entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown backtrace:
+  write-region(nil nil "/Users/chenyibin/.emacs.d/superchat/workflow/erwf2.workflow" nil 0)
+  (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0))
+  (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0)))
+  (unwind-protect (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-f
+  (let ((temp-file (expand-file-name (concat name ".workflow") superchat-workflow-directory)) (temp-buffer (generate-new-buffer " *temp file*" t))) (unwind-prot
+  er--workflow(#<killed buffer> "erwf2" "step one\nstep two\n" "")
+  (let ((vp (save-current-buffer (set-buffer (wrules--file p)) (superchat))) (vq (save-current-buffer (set-buffer (wrules--file q)) (superchat)))) (er--workflow
+  (progn (fset 'smoke--fake-network vnew) (wrules--write p "AGENTS.md" "RULE-MARKER-P\n") (wrules--write q "AGENTS.md" "RULE-MARKER-Q\n") (let ((vp (save-curren
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (wrules--write p "AGENTS.md" "RULE-MARKER-P\n") (wrules--write q "AGENTS.md" "RULE-MARKER-Q\n") (let (
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrules--roots nil) (p (wrules--temp-dir)) (q (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (
+  #f(lambda () [t] (let* ((wrules--roots nil) (p (wrules--temp-dir)) (q (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-
+  #f(compiled-function () #<bytecode -0x1f5f78527d658944>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x1f5f78527d658944>) (t) #f(compiled-function (err) #<bytecode 0xec7ca0337bba3e6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29d89c47ef843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown :documentation nil :body #f(lambda () [t] (let* ... ... ...
+  ert-run-or-rerun-test(#s(ert--stats :selector "^entry-rules/" :tests ... :test-map #<hash-table eql 13/13 0x1aac87621c ...> :test-results ... :test-start-time
+  ert-run-tests("^entry-rules/" #f(compiled-function (event-type &rest event-args) #<bytecode -0x16525a59cd34c096>) nil)
+  ert-run-tests-batch("^entry-rules/")
+  ert-run-tests-batch-and-exit("^entry-rules/")
+  eval((ert-run-tests-batch-and-exit "^entry-rules/") t)
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown condition:
+    (file-error "Opening output file" "Operation not permitted"
+		"/Users/chenyibin/.emacs.d/superchat/workflow/erwf2.workflow")
+   FAILED  10/13  entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown (0.009641 sec) at scripts/entry-rules-regression.el:163
+   passed  11/13  entry-rules/compaction-and-skill-matching-carry-none (0.006908 sec)
+Test entry-rules/every-workflow-step-carries-the-rules-once backtrace:
+  write-region(nil nil "/Users/chenyibin/.emacs.d/superchat/workflow/erwf.workflow" nil 0)
+  (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0))
+  (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-file nil 0)))
+  (unwind-protect (prog1 (save-current-buffer (set-buffer temp-buffer) (insert body)) (save-current-buffer (set-buffer temp-buffer) (write-region nil nil temp-f
+  (let ((temp-file (expand-file-name (concat name ".workflow") superchat-workflow-directory)) (temp-buffer (generate-new-buffer " *temp file*" t))) (unwind-prot
+  er--workflow(#<killed buffer> "erwf" "step one about $input\nstep two follows\n" "x")
+  (let ((view (save-current-buffer (set-buffer (wrules--file p)) (superchat)))) (er--workflow view "erwf" "step one about $input\nstep two follows\n" "x") (er--
+  (progn (fset 'smoke--fake-network vnew) (wrules--write p "AGENTS.md" "RULE-MARKER-P\n") (let ((view (save-current-buffer (set-buffer (wrules--file p)) (superc
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (wrules--write p "AGENTS.md" "RULE-MARKER-P\n") (let ((view (save-current-buffer (set-buffer (wrules--
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq wrules--roots (lis
+  #f(lambda () [t] (let* ((wrules--roots nil) (p (wrules--temp-dir)) (project-find-functions (list #'wrules--finder)) (superchat-display-style 'editor)) (setq w
+  #f(compiled-function () #<bytecode -0x1f5f78527d658944>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x1f5f78527d658944>) (t) #f(compiled-function (err) #<bytecode 0xec7ca0337bba3e6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x29d89c47ef843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name entry-rules/every-workflow-step-carries-the-rules-once :documentation nil :body #f(lambda () [t] (let* ... ... ...) nil) :most-
+  ert-run-or-rerun-test(#s(ert--stats :selector "^entry-rules/" :tests ... :test-map #<hash-table eql 13/13 0x1aac87621c ...> :test-results ... :test-start-time
+  ert-run-tests("^entry-rules/" #f(compiled-function (event-type &rest event-args) #<bytecode -0x16525a59cd34c096>) nil)
+  ert-run-tests-batch("^entry-rules/")
+  ert-run-tests-batch-and-exit("^entry-rules/")
+  eval((ert-run-tests-batch-and-exit "^entry-rules/") t)
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test entry-rules/every-workflow-step-carries-the-rules-once condition:
+    (file-error "Opening output file" "Operation not permitted"
+		"/Users/chenyibin/.emacs.d/superchat/workflow/erwf.workflow")
+   FAILED  12/13  entry-rules/every-workflow-step-carries-the-rules-once (0.006281 sec) at scripts/entry-rules-regression.el:146
+   passed  13/13  entry-rules/the-problem-of-a-rules-file-is-told-apart (0.001023 sec)
+
+Ran 13 tests, 10 results as expected, 3 unexpected (2026-10-10 08:21:21-0700, 1.074565 sec)
+
+3 unexpected results:
+   FAILED  entry-rules/a-workflow-in-a-temporary-conversation-has-no-rules
+   FAILED  entry-rules/a-workflow-keeps-its-rules-when-another-window-is-shown
+   FAILED  entry-rules/every-workflow-step-carries-the-rules-once
+

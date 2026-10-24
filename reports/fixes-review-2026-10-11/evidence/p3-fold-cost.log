@@ -1,0 +1,24 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 03:10:30-0700, selector ‘"^p3/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+P3 FOLD COST (ms, median of 5; live tree after 437ca4e8; isolated SQLite; the turn is one sample)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+baseline (3 real turns) | rows=36 | replay 1.5 | unattended-run-p 1.4 | work-request-text 2.6 | work-records 0.2 | timer-list 0.1 | changes-candidates 3.2 | session-history 0.4 | pending-items 0.5 | pending-render 0.7 | settle-missing 4.1 | one turn 105
+appended to 1000 rows in 0.26 s
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+~1000 rows | rows=1001 | replay 18.9 | unattended-run-p 18.4 | work-request-text 79.3 | work-records 3.4 | timer-list 0.3 | changes-candidates 45.2 | session-history 4.1 | pending-items 4.7 | pending-render 4.7 | settle-missing 1080.2 | one turn 2263
+appended to 5000 rows in 0.90 s

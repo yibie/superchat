@@ -1,0 +1,77 @@
+;;; composition-probes.el --- Round 3 exact installation resource checks -*- lexical-binding: t; -*-
+(load (expand-file-name "scripts/unattended-notice-regression.el" default-directory) nil t)
+
+(ert-deftest r3-composition/disposing-second-changes-mount-removes-global-late-hook ()
+  (let ((scope (superchat-scope-create "r3-second-changes" superchat-scope-global)))
+    (unwind-protect
+        (progn
+          (should (superchat-plugin-row-active-p 'changes))
+          (should (memq #'superchat-changes--note-started-late superchat-timer-started-functions))
+          (superchat-plugin-mount 'changes nil scope)
+          (should (eq 'active (superchat-plugin-state 'changes scope)))
+          (superchat-scope-dispose scope)
+          (should (eq 'active (superchat-plugin-state 'changes superchat-scope-global)))
+          (should-not (memq #'superchat-changes--note-started-late superchat-timer-started-functions))
+          (un--fresh
+            (un--with-task-answered-at-once '((:text "SYNC")) (session _fired)
+              (should (= 1 (length (hm--events session "run.completed"))))
+              (should (= 1 (length (hm--events session "timer.started"))))
+              (should-not superchat-changes--notices)
+              (princ "R3-08 N2 OBSERVED: dispose only second changes installation; global changes remains active but late-start hook gone; synchronous real task terminal=1 started=1 notices=0.\n"))))
+      (ignore-errors (superchat-scope-dispose scope))
+      ;; Restore with the real plugin lifecycle, not with a product patch.
+      (superchat-plugin-unmount 'changes superchat-scope-global)
+      (superchat-plugin-mount 'changes))))
+
+(ert-deftest r3-composition/disposing-second-timing-mounts-disarms-global-promises ()
+  (wrec--with nil (p)
+    (let* ((session (hm--session (wrec--view p)))
+           (id (superchat-work-start session "R3-PROMISED-WORK"))
+           (due (+ (float-time) 3600))
+           (timer (superchat-timer-create session 'reminder "R3-PROMISED-REMINDER" due))
+           (scope (superchat-scope-create "r3-second-timing" superchat-scope-global)))
+      (unwind-protect
+          (progn
+            (superchat-work-wait session id "time" "continue" due)
+            (should (gethash id superchat-work--armed))
+            (should (gethash (plist-get timer :id) superchat-timer--armed))
+            (superchat-plugin-mount 'timers nil scope)
+            (superchat-plugin-mount 'work-records nil scope)
+            ;; Dispatch the zero-delay installation setup callbacks.
+            (sleep-for 0.03)
+            (superchat-scope-dispose scope)
+            (should (eq 'active (superchat-plugin-state 'timers superchat-scope-global)))
+            (should (eq 'active (superchat-plugin-state 'work-records superchat-scope-global)))
+            (should (superchat-timer--active-p))
+            (should (superchat-work--wake-active-p))
+            (should-not (gethash id superchat-work--armed))
+            (should-not (gethash (plist-get timer :id) superchat-timer--armed))
+            (should (plist-get (superchat-work-get id) :waiting))
+            (should (= 1 (length (superchat-timer-list))))
+            (princ "R3-08 TIMING OBSERVED: dispose second timing installations; both global rows still active, pending reminder+work.waiting retained, both armed maps empty; active-row gates still answer true.\n"))
+        (ignore-errors (superchat-scope-dispose scope))
+        (superchat-plugin-unmount 'work-records superchat-scope-global)
+        (superchat-plugin-mount 'work-records)
+        (superchat-work-disarm-all)
+        (superchat-timer-disarm-all)))))
+
+(ert-deftest r3-composition/script-tool-cannot-bypass-object-checks ()
+  (wrec--with nil (p q)
+    (let* ((session (hm--session (wrec--view p)))
+           (id (superchat-work-start session "R3-SCRIPT-PRIVATE-GOAL"))
+           (timer (superchat-timer-create session 'reminder "R3-SCRIPT-PRIVATE-TIMER" (+ (float-time) 3600)))
+           (tid (plist-get timer :id))
+           (b (wrec--view q)))
+      (setq smoke--script
+            (list `(:tool-uses (("elisp_script"
+                                (code . ,(format "(out (tool \"work_record\" :action \"read\" :id %S)) (out (tool \"timer_cancel\" :id %S))" id tid)))))
+                  '(:text "DONE")))
+      (let ((superchat-llm-tool-names (append superchat-llm-tool-names '("elisp_script"))))
+        (hm--turn b "Use the script tool to call the supplied operations"))
+      (should (string-match-p "another workspace" (prin1-to-string hm--wires)))
+      (should-not (string-match-p "R3-SCRIPT-PRIVATE-GOAL" (prin1-to-string hm--wires)))
+      (should-not (string-match-p "R3-SCRIPT-PRIVATE-TIMER" (prin1-to-string hm--wires)))
+      (should (cl-find tid (superchat-timer-list) :key (lambda (r) (plist-get r :id)) :test #'equal))
+      (princ "GUARD: nested elisp_script calls reach the object scope refusal; neither private goal nor reminder reaches B and timer is not cancelled.\n"))))
+
+(ert-run-tests-batch-and-exit "^r3-composition/")

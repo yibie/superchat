@@ -1,0 +1,59 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 03:00:29-0700, selector ‘"^r3-boundary/"’)
+superchat: scheduled task timer-20261011030029-b467 was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: Scheduled task (due 2027-01-15 00:01): R3-DUE-UNSTARTED -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again.
+OPEN-C OBSERVED: due-unstarted task absent from work/notice lists; timer_list shows only fired text without id/start-state. Actual unconfirmed transition changes neither tool list nor notices (conversation receives explanation). This proves a fragmented view, not a contracted unified-screen defect.
+
+   passed  1/2  r3-boundary/no-common-view-for-due-and-unconfirmed-tasks (0.579115 sec)
+superchat: scheduled task timer-20261011030029-715c was not started: R3 start unavailable
+Test r3-boundary/remount-also-skips-failure-wait backtrace:
+  ert-fail(((should (smoke--wait (lambda nil (= tries 2)) 2)) :form (smoke--wait #f(lambda () [(tries 1)] (= tries 2)) 2) :value nil))
+  (if (unwind-protect (setq value-1333 (apply fn-1331 args-1332)) (setq form-description-1335 (nconc (list '(should (smoke--wait ... 2))) (list :form (cons fn-1
+  (let (form-description-1335) (if (unwind-protect (setq value-1333 (apply fn-1331 args-1332)) (setq form-description-1335 (nconc (list '(should ...)) (list :fo
+  (let ((value-1333 'ert-form-evaluation-aborted-1334)) (let (form-description-1335) (if (unwind-protect (setq value-1333 (apply fn-1331 args-1332)) (setq form-
+  (let* ((fn-1331 #'smoke--wait) (args-1332 (condition-case err (list #'(lambda nil (= tries 2)) 2) (error (progn (setq fn-1331 #'signal) (list (car err) (cdr e
+  (progn (fset 'superchat-send-input vnew) (superchat-timer-catch-up) (let* ((fn-1321 #'=) (args-1322 (condition-case err (list tries 1) (error (progn (setq fn-
+  (unwind-protect (progn (fset 'superchat-send-input vnew) (superchat-timer-catch-up) (let* ((fn-1321 #'=) (args-1322 (condition-case err (list tries 1) (error 
+  (let* ((vnew #'(lambda nil (setq tries (+ tries 1)) (error "R3 start unavailable"))) (old (symbol-function 'superchat-send-input))) (unwind-protect (progn (fs
+  (unwind-protect (let* ((vnew #'(lambda nil (setq tries (+ tries 1)) (error "R3 start unavailable"))) (old (symbol-function 'superchat-send-input))) (unwind-pr
+  (let* ((session (cdr (tsf--task p "R3-WAIT"))) (superchat-timer-retry-limit 2) (clock wtimer--now) (tries 0)) (unwind-protect (let* ((vnew #'(lambda nil (setq
+  (progn (fset 'smoke--fake-network vnew) (let* ((session (cdr (tsf--task p "R3-WAIT"))) (superchat-timer-retry-limit 2) (clock wtimer--now) (tries 0)) (unwind-
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((session (cdr (tsf--task p "R3-WAIT"))) (superchat-timer-retry-limit 2) (clock wtimer--now) (tr
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer--now 1800000000.0
+  #f(lambda () [t] (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer-
+  #f(compiled-function () #<bytecode 0x180b6d96cc8c1d7>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x180b6d96cc8c1d7>) (t) #f(compiled-function (err) #<bytecode -0xf44140ae849821a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a7ba759ac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-boundary/remount-also-skips-failure-wait :documentation nil :body #f(lambda () ... ... nil) :most-recent-result #s(ert-test-
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-boundary/" :tests ... :test-map #<hash-table eql 2/2 0x1955f794ed ...> :test-results ... :test-start-times 
+  ert-run-tests("^r3-boundary/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1f69914d1e2de37d>) nil)
+  ert-run-tests-batch("^r3-boundary/")
+  ert-run-tests-batch-and-exit("^r3-boundary/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/boundary-probes.el" "/Users
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-boundary/remount-also-skips-failure-wait condition:
+    (ert-test-failed
+     ((should (smoke--wait (lambda nil #1=(= tries 2)) 2)) :form
+      (smoke--wait #[nil (#1#) ((tries . 1))] 2) :value nil))
+   FAILED  2/2  r3-boundary/remount-also-skips-failure-wait (2.017314 sec) at reports/architecture-review-main-2026-10-11/evidence/boundary-probes.el:4
+
+Ran 2 tests, 1 results as expected, 1 unexpected (2026-10-11 03:00:31-0700, 2.751018 sec)
+
+1 unexpected results:
+   FAILED  r3-boundary/remount-also-skips-failure-wait
+

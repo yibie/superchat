@@ -1,0 +1,55 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 5 tests (2026-10-11 07:28:30-0700, selector ‘"^fr-settle/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-SETTLE MOVED-ON: old record outcomes=nil faults=nil said=nil
+
+   passed  1/5  fr-settle/a-record-the-conversation-moved-on-from-stays-without-outcome-and-without-fault (0.447866 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072831-034086-6c83 completed (session 20261011-072831-44b7)
+FR-SETTLE GUARD: outcomes=("continuable") reported=((:work-id "work-20261011072831-dc41" :run-id "run-20261011-072831-034086-6c83" :conversation "20261011-072831-44b7"))
+
+   passed  2/5  fr-settle/guard-a-woken-run-ended-untold-is-settled-once-and-reported-once (0.052972 sec)
+FR-SETTLE BACKFILL: 300 ended Runs under the focus without an outcome => settle-missing wrote 300 outcomes in 2735 ms; the record now has 300 outcomes and 301 execution lines for the user; the record text a request carries went from 108 to 108 characters
+
+   passed  3/5  fr-settle/mount-writes-every-outcome-the-focused-record-lacks (2.892636 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072833-980346-cea3 completed (session 20261011-072833-c111)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-SETTLE NOTE: executions of the record after a wake and one main turn: (("20261011-072833-c111" "continuable") ("20261011-072833-c8d1" "continuable"))
+
+   passed  4/5  fr-settle/note-the-main-conversations-later-turns-are-written-to-the-woken-record (0.092085 sec)
+FR-SETTLE COST (live tree; isolated SQLite; one sample each)
+runs ended under the record | settle-missing(session) ms | Tape SELECTs in it | hm--turn wall ms | Tape SELECTs in the turn | work rows on the Tape
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+0 | 0 | 6 | 38 | 66 | 3
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+50 | 8 | 6 | 189 | 68 | 54
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+200 | 49 | 6 | 534 | 70 | 205
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+1000 | 175 | 6 | 2462 | 72 | 1006
+
+   passed  5/5  fr-settle/run-end-cost-grows-with-the-runs-ended-under-the-record (3.963353 sec)
+
+Ran 5 tests, 5 results as expected, 0 unexpected (2026-10-11 07:28:38-0700, 7.449139 sec)
+

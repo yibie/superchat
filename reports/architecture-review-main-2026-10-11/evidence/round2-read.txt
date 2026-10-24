@@ -1,0 +1,697 @@
+Superchat · 主目录增量架构审阅
+superchat
+.
+MAIN · ARCHITECTURE REVIEW
+01
+核心判断
+02
+架构变化
+03
+缺口复核
+04
+两个新反例
+05
+重评 10 月 4 日报告
+06
+建议顺序
+07
+测试与证据
+审阅对象是
+superchat 主目录
+，不是旧 worktree。
+源码只读 · 隔离测试
+含未提交通知实现
+2026-10-10 · PDT
+本报告是审阅意见，不替代
+docs/roadmap.md
+，也不授权修改产品。
+Incremental Review / 2026.10.10
+打印 / 保存 PDF
+主干更稳了。
+下一步该补边界，
+不是再造一层架构。
+Superchat 已把几处“事情发生了，却没有可恢复的交代”补成了持久事实。剩下的问题，集中在
+对象归属、能力是否完整可用，以及事实写入与执行结束的先后关系
+。这些都可以沿现有 Runtime、工具管线和 Tape 修好。
+以主目录的实际文件为准
+与 92a03554 增量比较
+/Users/chenyibin/Documents/emacs/package/superchat
+15
+有增量的顶层产品模块
+1 / 5
+旧报告缺口已关闭
+97
+新增/增量套件测试通过
+2
+本次新增可复现边界问题
+这些数字是审阅范围与测试结果，不是架构评分。“探针通过”可能表示成功复现缺陷，不能算产品验收通过。
+01 / VERDICT
+我的判断：保留主干，收紧三处接缝
+应保留
+一条执行主线，而不是一套聊天框架加一套代理框架
+聊天、就地操作、改写、workflow 和自动任务仍复用 driver → Runtime → model transport；工具仍通过唯一执行管线，终态仍由 Runtime 判定。新功能没有增设第二个 Run 生命周期，这是最重要的正确方向。
+依据：
+请求生命周期契约
+；本次 Kernel、smoke 与 M3 实跑。
+已有改善
+“触发过”不再被当作“启动成功”
+Timer 增加 sending / started / unconfirmed；Work Record 可从 Tape 恢复失去的等待、找到对应执行、报告中断。默认不重跑不确定的副作用，是比“保证自动成功”更诚实的恢复策略。
+依据：
+到点未启动的裁定
+；26 项相关故障测试与旧探针复测。
+优先补
+Workspace 归属应在对象入口检查，不只在上下文选择时过滤
+历史检索已经修正为随 Run 走，但工作记录和定时器仍可被别的 Workspace 的普通工具访问。权限管线没有被绕开；问题是通过管线之后，领域操作没有检查对象归属。
+这里的 Workspace 是产品的数据与工作归属，不是抵挡任意 Lisp 或 shell 的安全沙箱。
+优先补
+启动来源与能力完整性，不能靠事后推断
+后台通知依赖发送返回后才写的
+timer.started
+；工作记录功能被关闭后，工具仍能承诺一个不会上弦的等待。消费者看到的状态，可能比已提供的能力或执行进度晚一步。
+建议是补契约和入口验证，不是再增加一层总控 Event 或新的任务系统。
+一句话：
+主目录已经证明现有分层可以承载增量修复；当前风险不是“层数不够”，而是几项领域规则尚未在唯一入口变成可执行的不变量。
+02 / ARCHITECTURAL DELTA
+变化落在哪里，什么没有变
+入口与 Turn
+用户输入 / inline / workflow
+Timer / Work Record
+新增：正文标记与一次性技能
+Driver 与上下文
+Envelope、工具上限、收集器
+同一套请求准备
+补齐：规矩、技能来源与窗口
+Runtime 与工具
+唯一 Run 所有者
+llm.el + 唯一工具执行管线
+修复：View 消失不终止 Run
+交付与观察者
+原始 Sink + turn-completed
+审阅 / 记录回报 / 通知
+新增：后台完成模式行标记
+Tape：追加事实、重建视图、恢复关联
+｜　Scope：注册可见性和撤销　｜　Session Buffer Set：精确 buffer 所有权
+示意图是职责关系，不是严格调用栈。Tape 不替 Runtime 执行任务；Scope 不是 Session，也不是 Workspace 权限边界。
+增量
+主目录实际实现
+架构评价 / 保留边界
+检索跟随 Run
+sql
+退出内置 research 与
+all
+；四个历史工具取执行上下文，无会话时不查询。
+收紧正确。用户显式启用 SQL、用户自己的
+/recall
+与 full-control 仍可跨范围；不能宣称整体隔离已完成。
+到点恢复
+Work Record 恢复未启动的等待；Timer 分开 fired、sending、started；不确定是否启动时写 unconfirmed，不自动重做。
+这是持久事实驱动的恢复，不是持久队列，也不保证外部副作用 exactly-once。重试额度仍有跨任务漏洞。
+规矩与来源
+同一 collector 扩展至改写、workflow；技能固定正文不再被误判为用户已预览，来源与窗口继续注入。
+复用接口而非各入口复制拼接。改写只带适用规矩，不应把聊天答复礼仪写进文件。
+后台执行与用户共处
+自动执行不弹审阅屏；View 被 kill 后 Run 继续；结构化编辑发现磁盘变更；记录显示各次执行。
+注意力与执行生命周期分离得更好。磁盘检测不覆盖
+eval_elisp
+/ shell；真实 GUI 验收仍应补。
+一次性 agent 技能
+正文中的 agent 技能只改本次 Request；开头调用仍切 Session；plan 仍切 Session。请求 Capability 对齐技能的 Agent Profile。
+没有“先切过去、结束再切回”的退役风险。但
+plugins:
+不挂载：数据层的一次性生效，不等于完整能力的一次性生效。
+后台完成通知
+未提交
+现有 changes 插件监听所有终态；模式行计数、列表打开或清除；通知仅存于本次 Emacs 进程。
+放在终态观察者比为此包装 Sink 更合适；不能保证所有回调时序都可见，见新反例 N2。
+需要严格分开的四件事：
+Work Record 的“交付结论”、Runtime 的“执行终态”、buffer 的“未保存改动”、用户的“已读通知”。它们不是同一个完成状态。现在的
+work.outcome
+已有用户可见消费者，不能再因旧报告说“没人读”就删除。
+一次性技能下一步的边界：不要为了 plugins 再发明一次临时 Session 切换
+建议先明确支持范围：若技能依赖尚未提供的插件能力，准备阶段应给出可理解的限制或拒绝，不要默默宣称“完整应用”。如果确需支持，请沿现有请求 Scope 和 Runtime retirement 设计，明确安装、队列等待、取消、终态之后的撤销；Service 的全局提供规则也不能被一个临时 Request 绕开。
+这是本次建议，未实现。现有决定已经明确记录
+plugins:
+不生效，所以这里是能力缺口，不是本次新发现的回归。
+查看已接受的一次性技能决定
+03 / OLD FINDINGS RECHECKED
+旧五项：关闭一项，四项仍在
+使用原来隔离夹具与脚本模型，重新加载
+主目录源码
+。跨 Workspace 的两个探针经过正常工具调用链，不是直接绕过工具管线的函数调用。
+全部 5 项
+仍存在 4 项
+已修复 1 项
+F1 · B 的工具能读、改、完成 A 的工作记录
+P1 · 仍存在
+superchat-work.el:184, 219–225, 251–301, 484–531
+A 创建记录，B 使用
+已给定的 id
+调 read → update → done；B 收到 A 的目标，并成功写入进度与结论。对象查找与
+--require
+没有校验调用会话所属 Workspace。
+改进：
+模型入口使用统一的“会话 + 对象 id → 所属对象”解析；read、update、wait、done、follows 都检查。保留用户明确打开全局记录列表的能力，不能把面向人的跨项目入口一并误禁。
+不是声称 B 已能自动发现所有 id；复现前提是 id 已知。也不声称 Workspace 能隔离获准执行的任意 Lisp。
+F2 · B 能列出并取消 A 的定时器
+P1 · 仍存在
+superchat-timer.el:617–656
+timer_list
+返回全局定时器文字；
+timer_cancel
+只凭 id 操作。探针中，B 看到了 A 的提醒并成功取消。
+改进：
+只给模型返回本 Workspace 的 pending / fired / unstarted 视图，并在取消入口再次检查归属。列表过滤不能代替写操作检查；人用的全局“稍后”面板可以另行保留。
+F3 · 唤醒发送失败吞掉等待
+已修复
+superchat-work.el:676–711, 736–794
+同样在提交之前注入发送错误，主目录会补回时间等待，记录仍满足 due 条件，没有虚构 active Run。不能再把旧版“woken 已写、等待消失、以后不再唤醒”作为现状。
+证据边界：
+这个故障点已闭合，另有 14 项 wake 测试通过。未用强杀真实 Emacs 的方式覆盖所有崩溃窗口；这不是“全部恢复问题解决”的证明。
+F4 · 功能卸载后，仍能承诺不会执行的等待
+P1 · 仍存在
+superchat-work.el:287, 978–995；工具与 collector 属于其他插件注册
+卸载
+work-records
+后，
+work_record
+仍被提供，start / wait 成功落账，但没有对应 Emacs timer。关掉的是执行侧，用户和模型仍看见可用的能力。
+改进：
+把能力的工具、collector、观察者、计时资源建立明确依赖；至少在无法兑现时间等待时不提供该写能力或明确拒绝。可以保留只读历史，不必强制整个领域只有一个文件。
+F5 · start 收到进度和等待，却悄悄丢掉
+P2 · 仍存在
+superchat-work.el:484–533
+调用 start 时附带 progress、resume、wait_for 与时间，返回“Started”，但记录上没有这三项。这是模型工具 API 的数据完整性问题，不只是提示词不够短。
+改进：
+保留显式 action，先校验并规范化本次允许组合的字段，再一致写入；不支持的组合必须明确拒绝。不要为了宽容就让任意 conclusion 自动完成，或遇到歧义替用户猜对象。
+P1 / P2 是本次建议的修复顺序，不是安全漏洞评级。
+五项探针源码
+·
+本次运行日志
+查看源码：start 只转交 goal 与 follows，update 才接附带等待
+主目录源码快照 · superchat-work.el:484–514 · SHA256 a99e917d04705258… ·
+打开源码
+484  (defun superchat-work-tool (action &optional id goal progress blocked resume
+ 485                                     wait_for detail conclusion follows
+ 486                                     in_minutes at)
+ 487    "The `work_record' tool: ACTION is start, update, wait, done or read."
+ 488    (condition-case err
+ 489        (let* ((session (superchat-work--tool-session))
+ 490               (id (if (and (stringp id) (not (string-empty-p id)))
+ 491                       id
+ 492                     (superchat-work-current session))))
+ 493          (pcase action
+ 494            ("start"
+ 495             (let ((new (superchat-work-start session goal follows)))
+ 496               (format "Started %s; it is this conversation's current work record."
+ 497                       new)))
+ 498            ("update"
+ 499             (unless id (error "No current work record; start one or give its id"))
+ 500             (when (or progress blocked resume)
+ 501               (superchat-work-update session id progress blocked resume))
+ 502             ;; A wait given with an update is registered too, never dropped: in
+ 503             ;; the real task T4W the model put wait_for and in_minutes on an
+ 504             ;; update and believed the wait was registered.
+ 505             (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+ 506               (superchat-work-wait
+ 507                session id wait_for detail
+ 508                (cond ((and (stringp at) (not (string-empty-p at)))
+ 509                       (superchat-timer-parse-time at))
+ 510                      ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+ 511             (unless (or progress blocked resume
+ 512                         (and (stringp wait_for) (not (string-empty-p wait_for))))
+ 513               (error "Say how far it got, why the next step waits, or where to pick it up"))
+ 514             (superchat-work-render (superchat-work-get id)))
+查看源码：timer_list 没有按调用会话过滤
+主目录源码快照 · superchat-timer.el:617–628 · SHA256 b14de1be2f050067… ·
+打开源码
+617  (defun superchat-timer-tool-list ()
+ 618    "The `timer_list' tool: the pending timers, then those fired in the last day."
+ 619    (let ((timers (superchat-timer-list))
+ 620          (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+ 621      (concat
+ 622       (format "Now %s.\n" (superchat-timer-format-time (superchat-timer--now)))
+ 623       (if (null timers)
+ 624           "No pending timers."
+ 625         (concat
+ 626          "Pending:\n"
+ 627          (mapconcat (lambda (timer)
+ 628                     (format "%s  %s  %s%s  %s"
+04 / NEW COUNTEREXAMPLES
+单项测试全绿，跨边界组合仍会漏
+N1 · P1 建议
+故障注入复现
+共享重试计时器，绕过了单个任务的重试额度
+触发条件：
+A 的启动持续报错；B 所属会话一直 busy；两个任务都已到点。
+A 失败时累计计数，超过额度后不再给自己安排 retry timer。
+B 的 busy 等待不受次数限制，继续安排同一个全局 retry timer。
+该回调扫描
+全部
+未启动任务；调用 A 的启动函数之前，不检查 A 是否已耗尽次数。
+retry-limit = 2
+→ 原始尝试 + 驱动 5 个产品实际安排的回调 →
+A 被发送 6 次
+，而 B 没有发送、继续保持共享计时器。
+根因：
+额度只控制“是否安排计时器”，没有控制“是否允许此次尝试”。共享调度脉冲不能代替每个 occurrence 的准入条件。
+最小修复方向：
+在开始尝试前检查该 occurrence 的额度与下次允许时间；busy 与 failure 分开计数。单个 timer 可以继续共享，但应只调度合格项。不要用新数据库或完整任务队列解决这个局部错误。
+测试手动执行已安排的计时器回调，没有真的等待 5 × 300 秒；使用真实 Timer 事实折叠和重试函数。单任务现有回归通过，未覆盖这种相互驱动。
+探针
+·
+日志
+查看源码：重试计数只限制安排 timer，不限制本次 start
+主目录源码快照 · superchat-timer.el:344–372 · SHA256 b14de1be2f050067… ·
+打开源码
+344  (defun superchat-timer--retry-later (seconds)
+ 345    "Try the unstarted tasks again in SECONDS, unless that is already set."
+ 346    (unless (timerp superchat-timer--retry-timer)
+ 347      (setq superchat-timer--retry-timer
+ 348            (run-at-time seconds nil
+ 349                         (lambda ()
+ 350                           (setq superchat-timer--retry-timer nil)
+ 351                           (superchat-timer-retry-tasks))))))
+ 352  
+ 353  (defun superchat-timer--try-task (session-id timer-id occurrence text)
+ 354    "Start the task and return its Run id, or nil when no execution began.
+ 355  A busy conversation is tried again after `superchat-timer-busy-retry-seconds'
+ 356  without limit; a failed start after `superchat-timer-retry-seconds', at most
+ 357  `superchat-timer-retry-limit' times in one Emacs."
+ 358    (let* ((key (cons timer-id occurrence))
+ 359           (run (condition-case err
+ 360                    (superchat-timer--start-task session-id timer-id occurrence text)
+ 361                  (error (message "superchat: scheduled task %s was not started: %s"
+ 362                                  timer-id (error-message-string err))
+ 363                         nil))))
+ 364      (cond ((stringp run) (remhash key superchat-timer--retries) run)
+ 365            ((eq run 'busy)
+ 366             (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+ 367             nil)
+ 368            (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
+ 369                 (puthash key failed superchat-timer--retries)
+ 370                 (when (<= failed superchat-timer-retry-limit)
+ 371                   (superchat-timer--retry-later superchat-timer-retry-seconds)))
+ 372               nil))))
+查看源码：共享回调重新扫描所有 unstarted tasks
+主目录源码快照 · superchat-timer.el:415–437 · SHA256 b14de1be2f050067… ·
+打开源码
+415  (defun superchat-timer-retry-tasks ()
+ 416    "Start every fired task that has no execution on record.
+ 417  A task that was being sent when Emacs exited, in a conversation where a Run
+ 418  started afterwards, may or may not have run: that is said in the
+ 419  conversation, recorded as `timer.unconfirmed', and it is not started again."
+ 420    (dolist (task (superchat-timer-unstarted-tasks))
+ 421      (let ((session (plist-get task :session-id))
+ 422            (id (plist-get task :id))
+ 423            (occurrence (plist-get task :occurrence)))
+ 424        (if (and (plist-get task :sending)
+ 425                 (not (superchat-timer--session-busy-p session))
+ 426                 (superchat-timer--run-after-sending-p task))
+ 427            (let ((line (format "Scheduled task (due %s): %s -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again."
+ 428                                (superchat-timer-format-time occurrence)
+ 429                                (plist-get task :text))))
+ 430              (superchat-timer--fact session "timer.unconfirmed" id occurrence)
+ 431              (when-let* ((view (superchat-timer--live-view session)))
+ 432                (ignore-errors
+ 433                  (let ((superchat-buffer-name (buffer-name view)))
+ 434                    (with-current-buffer view
+ 435                      (superchat--insert-persistent-system-message line)))))
+ 436              (message "superchat: %s" line))
+ 437          (superchat-timer--try-task session id occurrence (plist-get task :text))))))
+N2 · P2 建议
+同步回调注入
+通知实现尚未提交
+完成观察者先运行，timer.started 后落账：通知漏掉了
+触发条件：
+脚本提供方在调用栈内同步返回正常结果。仍走 Timer → send-input → Runtime → provider → completion 的真实路径，只替换网络交付时机。
+1 · sending
+写发送事实
+调用 send-input
+2 · 已完成
+Runtime 封口
+发 turn-completed
+3 · 无通知
+此时没有 timer.started
+被判为非自动执行
+4 · started
+发送返回后写关联
+却不重新补发通知
+实际结果：
+run.completed = 1，timer.started = 1，notices = nil
+。没有第二次结束事件替它补通知。
+根因：
+“由谁启动”是执行的来源属性，却依赖提交返回后才能看到的事实。后置关联与即时终态观察者之间存在时序耦合。
+最小修复方向：
+写入已确认的 started 关联后，检查该 Run 是否已终态并幂等补通知。更稳的后续方向，是将触发来源放入 Request / Run 接受信息，在消费者收到终态前已可判断；仍须在 Runtime 确认接受之后记 started，不能预写一个不存在的 Run。
+现有异步脚本的 8 项通知测试通过。这是支持快速/同步回调的边界反例，
+不是已证明真实 LM Studio 日常会漏通知
+；本次也没有测它的发生频率。
+探针
+·
+日志
+查看源码：timer.started 在 send-input 返回后才写
+主目录源码快照 · superchat-timer.el:313–342 · SHA256 b14de1be2f050067… ·
+打开源码
+313  (defun superchat-timer--start-task (session-id timer-id occurrence text)
+ 314    "Start the model on TEXT in the conversation SESSION-ID; return the Run id.
+ 315  Return `busy', sending nothing, while an execution runs there: the message
+ 316  would only be queued in memory.  Otherwise record `timer.sending', send, and
+ 317  record `timer.started' with the Run that began; nil when none began."
+ 318    (if (superchat-timer--session-busy-p session-id)
+ 319        'busy
+ 320      (let ((view (or (superchat-timer--live-view session-id)
+ 321                      (and (fboundp 'superchat--render-session-view)
+ 322                           (superchat--render-session-view session-id)))))
+ 323        (when (buffer-live-p view)
+ 324          (with-current-buffer view
+ 325            (let ((before superchat--active-run-id))
+ 326              (superchat-timer--fact session-id "timer.sending" timer-id occurrence)
+ 327              (let ((inhibit-read-only t)
+ 328                    (start (copy-marker (point-max))))
+ 329                (goto-char (point-max))
+ 330                (insert text)
+ 331                (condition-case err
+ 332                    ;; The timer speaks here, not the user.
+ 333                    (let ((superchat-automated-input t))
+ 334                      (superchat-send-input))
+ 335                  ;; A failed send must not leave the text for the next try.
+ 336                  (error (when (<= start (point-max))
+ 337                           (delete-region start (point-max)))
+ 338                         (signal (car err) (cdr err)))))
+ 339              (let ((run superchat--active-run-id))
+ 340                (when (and (stringp run) (not (equal run before)))
+ 341                  (superchat-timer--note-started session-id timer-id occurrence run)
+ 342                  run))))))))
+查看源码：自动执行判断依赖 timer.started
+主目录源码快照 · superchat-changes.el:465–480 · SHA256 fe5aba3f84900372… ·
+打开源码
+465  (defun superchat-changes--unattended-run-p (session run)
+ 466    "Non-nil when Superchat started RUN of SESSION at a time, not the user.
+ 467  Read from SESSION's Tape: a scheduled task records `timer.started' with the
+ 468  Run it began, and a woken Work Record's Run is the first one of a
+ 469  conversation that holds `work.woken'."
+ 470    (let ((events (ignore-errors (superchat-tape-replay-events session)))
+ 471          first woken started)
+ 472      (dolist (event events)
+ 473        (pcase (plist-get event :type)
+ 474          ("run.started" (unless first (setq first (plist-get event :run-id))))
+ 475          ("work.woken" (setq woken t))
+ 476          ("timer.started"
+ 477           (when (equal run (plist-get (plist-get event :payload) :run-id))
+ 478             (setq started t)))))
+ 479      (or started (and woken (equal run first)))))
+ 480
+查看源码：结束事件当场判断并决定是否写通知
+主目录源码快照 · superchat-changes.el:709–728 · SHA256 fe5aba3f84900372… ·
+打开源码
+709  (defun superchat-changes--note-unattended (_run status)
+ 710    "At the end of an execution Superchat started by itself, leave a notice.
+ 711  Every way of ending counts: one that failed is the one most easily missed."
+ 712    (when (and (listp status)
+ 713               (fboundp 'superchat-runtime--terminal-p)
+ 714               (superchat-runtime--terminal-p (plist-get status :status)))
+ 715      (when-let* ((session (plist-get status :session-id))
+ 716                  (run (plist-get status :run-id))
+ 717                  ((superchat-changes--unattended-run-p session run))
+ 718                  ((not (cl-some (lambda (notice)
+ 719                                   (equal run (plist-get notice :run)))
+ 720                                 superchat-changes--notices))))
+ 721        (push (list :run run :session session
+ 722                    :what (superchat-changes--notice-what session run)
+ 723                    :status (plist-get status :status)
+ 724                    :unsaved (length (ignore-errors
+ 725                                       (superchat-changes-candidates session run)))
+ 726                    :time (current-time))
+ 727              superchat-changes--notices)
+ 728        (superchat-changes--notices-refresh))))
+架构层的共同结论：
+把“当前已满足的条件”放在消费它的边界上检查。重试额度应在开始尝试前检查；通知所需来源应在终态消费前可见。不要依赖“通常会晚一点”或“没人再触发一次”的偶然时序。
+05 / THE OCTOBER 4 REPORT, REVISITED
+那份简化报告：方向有价值，结论需要更新
+它把事实、推论和假设分开，也试图把多步规程移交给产品，方法是好的。但它不是当前主目录的现状说明，更不能把“更少工具”直接当作弱模型架构的目标。
+原报告判断 / 建议
+主目录上的重评
+现在应做什么
+所有真实数字只有 DeepSeek，先接通 Qwen
+已过时
+10 月 4–5 日已有 Qwen 工具数量实验；10 月 7 日和 10 日另有共处、技能与通知场景。
+不重做“证明能连通”的工程。基于现有记录补默认权限和日常配置的有效基线；本次仅阅读这些运行报告，未重跑。
+14 → 9 工具、系统文字缩短，没有建议会让弱模型更难
+过强
+减少工具也可能增加 Lisp 编写、权限审批和错误恢复负担。工具名称总数不是认知负担的充分指标。
+度量任务成功、工具错误、有效等待时间、审批负担和往返数。说明缩短和工具减少分开对照。
+work_record 合并调用，缺省 id 兜底
+仍有价值
+静默丢字段已复现；但“只剩一条记录就自动认”是领域选择，不天然安全。
+先查 Workspace 归属，再处理 id 省略。默认选择必须确定、可解释；歧义时保持显式确认。
+删 work.outcome，因为没人读
+不能照做
+现有执行列表消费它；中断恢复也使用该类事实和 interrupted 结果。
+保留执行结果记录。把“agent 等待是否可用”单独讨论，不能和删除 outcome 打成一个清理包。
+自动执行显示审阅屏但不选中
+已被后续决定替代
+用户接受“不显示审阅屏”，避免占用窗口；新的模式行通知补可见性。
+尊重 10 月 7 / 10 日决定，补通知时序和易读结果，不重新弹一个旁窗。
+只读 eval_elisp 自动免审；缺右括号由产品补齐
+不是无风险简化
+静态检查器不是安全证明；补括号后直接执行可能改变程序含义。require 也会加载并执行代码。
+优先给高频查询窄工具；权限变更必须独立审查和默认级别实测。执行器不自动修复并执行破损代码。
+共用到点机制，给人一个“稍后”面板
+方向保留
+对象可分开，显示和低层调度可复用。但重复代码现在已包含不同的恢复政策。
+先列清 reminder / task / work-wait 的语义矩阵，再提取共同部分；不可为了文件合并抹掉“不确定时不重跑”。
+本地模型已有数据，但还不能宣布最优工具集
+仓库里的
+工具数量实验报告
+记载：两轮共 72 次运行，工具名与调用格式都可解析；主要调用错误集中于 Emacs Lisp。放宽无进展超时后，结果如下。
+工具数量（含 ask_user）
+第二轮通过
+不能忽略的条件
+14 / 9 / 6
+6/8 · 7/8 · 7/8
+每清单 4 个任务，每格仅 2 次；包含提醒任务。
+4 / 2
+4/6 · 6/6
+没有 timer_create，不测提醒，分母不同；2 工具的 T6 两次都耗到 1500 秒时限。
+我的推论：
+让模型少写易错的 Lisp，比让工具列表最短更值得优先实验。可以从窗口查询/布局这种高频能力做一个受限工具，并使用显式工具上限或预设控制暴露面；并不是把所有 Emacs 操作都包装成几十个默认工具。
+这不是对上述小样本的统计显著性判断。两工具的 6/6 不证明它比 14 工具更好。字节数与延迟的相关性也不能单独证明缓存是否命中。
+这份报告的实验方法，还应怎样改
+分离变量：
+“14 个长说明”对“9 个短说明”同时改了两个因素；要判断原因，应先只改工具集合，再只改说明。
+分开结果层：
+语法合法、工具调用成功、任务最终状态正确、用户没被打断，各自记分。进程 completed 不能代替任务完成。
+配对环境：
+模型/量化、上下文长度、推理开关、冷暖缓存、并发数、超时、权限和审阅设置都记录；对照交错运行。
+先看基础开销：
+第二次请求更快也可能是输出更短或模型暖机，不是前缀缓存的充分证据。
+默认权限：
+分别统计审批次数、等待时间、拒绝后是否仍能完成；危险级别的通过率不能代表日常体验。
+自动恢复：
+加真实进程中断/重启测试；手写事实与故障注入有用，但不等价于真实崩溃。
+06 / RECOMMENDED ORDER
+改进顺序：先守边界，再减负担
+下面是审阅建议，尚未作为产品计划接受；若采纳，应在现有 roadmap 中安排，不另立第二份权威路线图。
+第一批 · 正确性
+对象归属 + 重试准入 + 通知时序
+合并修 F1/F2 的 Workspace 对象校验；为 N1 在每次尝试前实施额度和时间条件；为 N2 在关联已确认后幂等补通知。它们分别属于领域入口、调度准入和终态交付，不应塞进提示词。
+验收：
+A/B/临时会话的读写矩阵；失败 + busy 两任务；同步完成/同步错误/异步完成；重复终态观察不得生成两条通知。
+第二批 · 能力完整性
+插件卸载与一次性技能的能力契约
+关闭工作记录功能后不再提供无法兑现的等待；挂载失败、卸载、重挂都验证工具/collector/定时资源的状态。一次性技能依赖的 plugins 缺失时先明确限制，不做隐式临时切换。
+验收：
+卸载后仍可读历史，但不能假装已安排执行；重挂只补该补的事件；保持 Runtime 独占生命周期、Scope 精确退役与工具唯一管线。
+第三批 · 模型负担
+修 work_record API，再试窄工具
+先消灭静默丢字段，支持清晰、一次可完成的字段组合；保留 action 和明确的完成语义。随后用同任务对照验证窗口查询/布局小工具，别先把清单压成两项再让模型编程。
+验收：
+无需用户说“工作记录”的跨轮任务；字段组合与冲突测试；默认权限 Qwen + DeepSeek 对照，成功率与审批負担都不恶化。
+第四批 · 可见性与维护
+统一“稍后”视图，谨慎提取共同机制
+面向人展示等待、到点未启动、不确定启动、已结束未读；结果用目标与结论说人话，不只显示 id。稳定后再共用计时器生命周期、事实扫描缓存等底层操作，保留两种对象和不同恢复政策。
+验收：
+真人在自己的 Emacs 上完成默认权限清单；真实重启、读写冲突和并发审批；重构前后故障语义矩阵一致。
+现在不建议：
+新 Runtime、新 Event 总线、完整持久任务队列；大规模按文件数拆模块；把任意 Lisp 的安全性寄托于简易白名单；自动补齐括号并执行；先删 outcome 再考虑消费者；照着视频另建“来源 / 去向”平行体系。
+07 / EVIDENCE & LIMITS
+这次具体查了什么
+版本与工作树
+旧审阅基线：
+92a03554
+，来自旧 worktree。
+主目录父提交：
+fcccf3aa
+。
+起始工作副本快照：
+b3f0a0fd
+，包含当时未提交文件。
+未提交的生产代码：
+superchat-changes.el
+后台通知实现；相应测试与裁定也纳入审阅。
+审阅期间发现
+docs/roadmap.md
+被外部修改，按终审内容核对；受检产品源码与测试文件的初始哈希未变化。
+jj 工作副本哈希会随新增报告变化，定位实际受检内容请以
+初始源码哈希
+与
+报告证据清单
+为准。
+操作边界
+读取 15 个顶层产品模块的差异及相关调用路径，核对主目录契约、决定、测试。
+运行隔离 batch Emacs；脚本模型走真实 Runtime / 工具链，无外部模型请求。
+没有改产品代码；没有改保护的 M3 回归集；没有建立提交或恢复别人的编辑。
+没有本次真实 Qwen / DeepSeek 运行、真人 GUI 使用、强杀进程、长期性能和全量依赖审计。
+这是相对既有报告的增量审阅，不是对全部代码重新逐行审计。Telega / emacsclient 等未改入口未在这次展开。
+本次实跑
+结果
+证据
+Kernel
+通过
+日志
+Canonical smoke
+0 mismatches
+日志
+M3（原文件未改）
+139 项：137 expected，2 real-provider skipped
+日志
+Workspace scope
+9 / 9
+日志
+Work wake fault
+14 / 14
+日志
+Timer start fault
+12 / 12
+日志
+Entry rules（隔离目录重跑）
+13 / 13
+日志
+Beside user
+13 / 13
+日志
+Input syntax
+18 / 18
+日志
+Skill once / context
+5 / 5，5 / 5
+日志
+·
+context 日志
+Unattended notice（未提交）
+8 / 8
+日志
+旧缺口复核探针
+5 / 5 符合观察断言：4 项仍有缺口、1 项已修复
+日志
+N1 重试额度反例
+1 / 1 成功复现缺口
+日志
+N2 同步完成通知反例
+1 / 1 成功复现缺口
+日志
+测试隔离问题：
+entry-rules 首跑 10/13 通过，3 项试图写
+~/.emacs.d/superchat/workflow/erwf*.workflow
+被沙盒拒绝。明确将
+superchat-workflow-directory
+指向临时目录后，13/13 通过。这是夹具目录隔离不足，不计为产品规矩功能失败；也不能隐去首跑记录。
+首跑
+·
+隔离后重跑
+文档也要避免把历史当现状
+docs/architecture.md:60
+仍说唤醒到 Run 的关联只在
+superchat-work--woken-runs
+内存表，然而该表已移除，同文后段已说明 Tape 恢复。应删旧条目，不据此指责当前实现。
+“写 fired 在先，所以崩溃后不会启动两次”过度压缩了保证。实际恢复依赖 started / unconfirmed 与 run.started 证据；更不能推成外部副作用 exactly-once。
+当前 Request 证据支持重建，但不独立比对 provider 实际收到的字节；证据记录失败也不必阻止发送。
+工具 admission 的 fail-closed 不等于所有记录都 fail-closed。
+工作树已加入后台模式行通知；架构页仍有“仅回显区”的旧描述。是否已提交、是否已加载进日常 Emacs，应与“文件已实现”分开。
+15 个受检顶层产品模块及证据哈希
+模块
+SHA256 前 16 位（初始与受检源码一致）
+superchat-changes.el
+fe5aba3f84900372
+·
+增量 diff
+superchat-core.el
+96e68020a07c305d
+·
+增量 diff
+superchat-dispatcher.el
+33a55b6c8b6ff7f4
+·
+增量 diff
+superchat-llm.el
+bbd1d016dfd360ff
+·
+增量 diff
+superchat-models.el
+413aea5ecfcd8160
+·
+增量 diff
+superchat-prompt-hooks.el
+035ef1a5b520c82a
+·
+增量 diff
+superchat-runtime.el
+d747c2e219416d8e
+·
+增量 diff
+superchat-subagent.el
+60b7ec0ef09c2dff
+·
+增量 diff
+superchat-tape.el
+cc613a7027c24c16
+·
+增量 diff
+superchat-timer.el
+b14de1be2f050067
+·
+增量 diff
+superchat-tool-execution.el
+d69614677641c627
+·
+增量 diff
+superchat-tools.el
+32b17536dcdeb018
+·
+增量 diff
+superchat-work.el
+a99e917d04705258
+·
+增量 diff
+superchat-workspace.el
+99200c5df71202f1
+·
+增量 diff
+superchat.el
+180d12397025714d
+·
+增量 diff
+复跑方法与证据性质
+在主目录使用已安装依赖，逐套独立 Emacs 进程。完整命令见
+本次测试脚本
+与
+执行结果 JSON
+。初次脚本故意保留原始返回码；entry-rules 的隔离重跑单独留痕。
+emacs -Q --batch \
+ --eval '(progn (require (quote package))
+   (setq package-user-dir (expand-file-name "~/.cache/superchat-test-elpa")
+         native-comp-enable-subr-trampolines nil)
+   (package-initialize))' \
+ -L . -L plugins/superchat-cowork-telega \
+ -l reports/architecture-review-main-2026-10-10/evidence/baseline-probes.el
+基线与增量探针断言的是
+实际行为
+。例如 N1 断言出现 6 次尝试，测试绿表示缺口确实存在；产品修复后，探针应改为期望正确行为，而不是继续追求它保持绿色。
+旧 worktree 报告（历史对照）
+当前架构文档
+唯一 roadmap
+日常 Emacs 人工检查清单
+结论保持有边界：
+这不是“架构没问题”，也不是“应该重写”。主目录的增量证明主干可用；接下来的高价值工作，是让归属、准入与完成交付在正确的地方成为硬约束。
+生成于 2026-10-10 08:32 PDT · 本地自包含 HTML，不加载远程字体、脚本或分析服务。证据文件随报告放在主目录 reports 下。
+回到开头 ↑

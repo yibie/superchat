@@ -1,0 +1,159 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 10 tests (2026-10-11 03:12:46-0700, selector ‘"^fr-pending/"’)
+superchat: scheduled task timer-20261011031247-1a91 was not started: TSF injected: send fails
+retry armed (300 s from now): detail="scheduled task, due 2027-01-15 00:01, not started"
+
+superchat: scheduled task timer-20261011031247-1a91 was not started: TSF injected: send fails
+out of tries (retry timer=nil): detail="scheduled task, due 2027-01-15 00:01, not started"
+
+===== a scheduled task that came due, whose send failed, and that this Emacs has given up on =====
+
+ Due, not started       FR-TASK whose send fails                     scheduled task, due 2027-01-15 00:01, not started    20261011-031246-d56e
+=====
+
+   passed   1/10  fr-pending/a-failed-task-reads-the-same-whether-a-retry-is-armed-or-not (0.562023 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== a sub-agent's execution under way (two Runs active) =====
+
+ Running                started by you                               execution run-20261011-031247-464821-0563            subagent-researcher-20261011-031247-eea0
+ Running                started by you                               execution run-20261011-031247-429398-e5ae            20261011-031247-9deb
+=====
+running rows: ((#1="started by you" "execution run-20261011-031247-464821-0563" "subagent-researcher-20261011-031247-eea0") (#1# "execution run-20261011-031247-429398-e5ae" "20261011-031247-9deb"))
+
+superchat: run run-20261011-031247-464821-0563 completed (session subagent-researcher-20261011-031247-eea0)
+   passed   2/10  fr-pending/a-running-sub-agent-is-started-by-you (0.908348 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-031248-336386-2c29 completed (session 20261011-031248-69f3)
+run status after its View was killed: completed; pending items=nil; notices=nil
+
+   passed   3/10  fr-pending/a-users-execution-that-ended-while-its-view-was-killed-is-listed-nowhere (0.447257 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-031248-788554-73d2 completed (session 20261011-031248-6111)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt<ws-work-NxLyWt> -> /Users/chenyibin/.cache/sc-fable-review/ws-work-NxLyWt/a.txt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-031248-868777-0336 completed (session 20261011-031248-3b13)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt<ws-work-NxLyWt> -> /Users/chenyibin/.cache/sc-fable-review/ws-work-NxLyWt/a.txt [outside this workspace, /Users/chenyibin/.cache/sc-fable-review/ws-work-yNx5AL/]
+marks newest first=(("20261011-031248-3b13" . "run-20261011-031248-868777-0336") ("20261011-031248-6111" . "run-20261011-031248-788554-73d2"))
+row's conversation="20261011-031248-6111" (first editor="20261011-031248-6111", latest editor="20261011-031248-3b13")
+
+   passed   4/10  fr-pending/an-unsaved-buffer-two-conversations-edited-names-the-first (0.196289 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat-changes-notices-open signalled: FR injected: the View cannot be rebuilt
+
+   passed   5/10  fr-pending/guard-the-notices-list-keeps-the-notice-when-the-conversation-cannot-be-shown (0.051607 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat-pending-open signalled: FR injected: the View cannot be rebuilt
+notices left after RET failed to show the conversation: 0
+
+   passed   6/10  fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown (0.054948 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 12, before stopping: running, a.txt edited =====
+
+ Running                started by you                               execution run-20261011-031249-091299-ed24            20261011-031249-7322
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-fable-review/ws-work-8mNPQn/a.txt 20261011-031249-7322
+ Can be continued       Step 12: add three lines to log.org          add 甲2 and 甲3                                      20261011-031249-7322
+=====
+
+superchat: run run-20261011-031249-091299-ed24 cancelled (session 20261011-031249-7322)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-fable-review/ws-work-8mNPQn/a.txt
+
+===== step 12, after k (stop) on the list =====
+
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-fable-review/ws-work-8mNPQn/a.txt 20261011-031249-7322
+ Can be continued       Step 12: add three lines to log.org          add 甲2 and 甲3                                      20261011-031249-7322
+=====
+run status=cancelled outcomes=("failed") view's active run="run-20261011-031249-091299-ed24"
+
+   passed   7/10  fr-pending/step-12-stopped-from-the-list (0.074420 sec)
+
+===== step 13, Emacs started and nothing took the record up yet =====
+
+ Due, not started       Step 13: add '- 重启后' after the restart    work record, due 2027-01-15 00:01, not taken up      20261011-031249-6471
+=====
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-031249-168822-eeed completed (session 20261011-031249-9af8)
+
+===== step 13, after the row mounted and the wake ran =====
+
+ Ended, not looked at   work record work-20261011031249-d0cc         completed                                            20261011-031249-9af8
+ Can be continued       Step 13: add '- 重启后' after the restart                                                         20261011-031249-9af8
+=====
+kinds: (unseen continuable) outcomes=("continuable")
+
+   passed   8/10  fr-pending/step-13-due-but-not-started-then-the-row-mounts (0.097862 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 5, just after the wake was sent: execution running, nothing edited yet =====
+
+ Running                started by Superchat: work record work-20261011031249-a859 execution run-20261011-031249-265797-1596            20261011-031249-bf13
+ Can be continued       Step 5: add '- 检查完毕' to log.org two minutes later add '- 检查完毕' at the end                          20261011-031249-bf13
+=====
+kinds: (running continuable)
+
+===== step 5, the woken execution still running, a.txt edited and unsaved =====
+
+ Running                started by Superchat: work record work-20261011031249-a859 execution run-20261011-031249-265797-1596            20261011-031249-bf13
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-fable-review/ws-work-sEevTb/a.txt 20261011-031249-bf13
+ Can be continued       Step 5: add '- 检查完毕' to log.org two minutes later add '- 检查完毕' at the end                          20261011-031249-bf13
+=====
+kinds: (running unsaved continuable)
+
+superchat: run run-20261011-031249-265797-1596 completed (session 20261011-031249-bf13)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-fable-review/ws-work-sEevTb/a.txt
+
+===== step 6, after the woken execution ended, nothing looked at yet =====
+
+ Ended, not looked at   work record work-20261011031249-a859         completed, 1 unsaved when it ended                   20261011-031249-bf13
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-fable-review/ws-work-sEevTb/a.txt 20261011-031249-bf13
+ Can be continued       Step 5: add '- 检查完毕' to log.org two minutes later add '- 检查完毕' at the end                          20261011-031249-bf13
+=====
+kinds: (unseen unsaved continuable); outcomes=("continuable")
+
+   passed   9/10  fr-pending/step-5-and-6-a-record-woken-at-its-time (0.491078 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 9, while the approval question is open =====
+
+ Running                started by you                               execution run-20261011-031249-750659-c24a            20261011-031249-0cac
+=====
+items=((running "started by you" "execution run-20261011-031249-750659-c24a"))
+runtime asking-p=t  approval.requested on Tape=1
+
+superchat: nothing is under way and nothing is waiting
+
+===== step 9, after answering no =====
+
+=====
+
+   passed  10/10  fr-pending/step-9-an-open-approval-shows-as-running-only (0.079422 sec)
+
+Ran 10 tests, 10 results as expected, 0 unexpected (2026-10-11 03:12:49-0700, 2.963742 sec)
+

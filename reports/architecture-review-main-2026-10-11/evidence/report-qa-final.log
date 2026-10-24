@@ -1,0 +1,9 @@
+{
+  "local_links_checked": 48,
+  "missing_links": [],
+  "missing_logs": [],
+  "final_observation_tests": 14,
+  "confirmed_findings": 8,
+  "required_input_hashes": 17,
+  "report_sha256": "1865bf585a66ffe375c33278e78e3fd1a63ef2867e2751cf2c987ab94b8e481f"
+}

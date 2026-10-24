@@ -1,0 +1,12 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+
+Error: end-of-file (#<buffer  *load*>)
+  read(#<buffer  *load*>)
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/domain-probes.el" "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/domain-probes.el" nil t)
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))" "--eval" "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-codex-review/round3/workflow/\")" "-L" "." "-L" "plugins/superchat-cowork-telega" "-l" "reports/architecture-review-main-2026-10-11/evidence/domain-probes.el"))
+  command-line()
+  normal-top-level()
+
+debug-early-backtrace...done
+End of file during parsing: #<killed buffer>

@@ -1,0 +1,16 @@
+## CUT1-real-12b-probe-20261021-194430-12177
+response.cut-off |  | (:stop-reason "length" :max-tokens 60 :tool-calls 2 :text-chars 66 :attempt 1 :refused t)
+tool.requested |  | (:tool-name "read_buffer" :execution-id "tool-20261022T024448002-fbfa13" :argument-count 3 :decision "allow" :arguments-text "{\"buffer\":\"draft.org\"}")
+tool.completed |  | (:tool-name "read_buffer" :execution-id "tool-20261022T024448002-fbfa13" :status "succeeded" :result-size 84 :result-hash "sha256:210e27e16ba556c3251e13e2ed47374ee399aada9f8db5348038fb0d9d383ecc" :result-text "Buffer: \"draft.org\"
+Lines: 1
+response.completed |  | (:status "failed" :content-size 138 :content-hash "sha256:a29636f75abd2016d2a72651a9cc05349a6703615fd9c18b23803c866477cb81")
+run.failed |  | (:status "failed")
+## CUT1-real-12b-probe2-20261021-194758-14738
+tool.requested |  | (:tool-name "read_buffer" :execution-id "tool-20261022T024811534-57a795" :argument-count 3 :decision "allow" :arguments-text "{\"buffer\":\"draft.org\"}")
+tool.completed |  | (:tool-name "read_buffer" :execution-id "tool-20261022T024811534-57a795" :status "succeeded" :result-size 84 :result-hash "sha256:210e27e16ba556c3251e13e2ed47374ee399aada9f8db5348038fb0d9d383ecc" :result-text "Buffer: \"draft.org\"
+Lines: 1
+response.cut-off |  | (:stop-reason "length" :max-tokens 60 :tool-calls nil :text-chars 0 :attempt 1 :refused t)
+response.cut-off |  | (:stop-reason "length" :max-tokens 60 :tool-calls nil :text-chars 0 :attempt 2 :refused t)
+response.cut-off |  | (:stop-reason "length" :max-tokens 60 :tool-calls nil :text-chars 0 :attempt 3 :refused t)
+response.completed |  | (:status "failed" :tool-budget (:action "stopped" :reason "Stopped: the reply was cut off at the output limit 3 times in a row") :content-size 69 :content-hash "sha256:ad0f4caed482b01773a893426467c34d4b51f4beb2be95efeb7877d69707c4c2")
+run.failed |  | (:status "failed" :tool-budget (:action "stopped" :reason "Stopped: the reply was cut off at the output limit 3 times in a row"))

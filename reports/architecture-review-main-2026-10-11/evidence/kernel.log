@@ -1,0 +1,40 @@
+PASS 1 mount + service call end to end
+PASS 2 preset scope adds a collector seen from the run scope
+PASS 2b global scope does not see it
+
+superchat-plugin: kc-transport-b failed: superchat-service: kc-transport must be provided from the global Scope, not preset
+PASS 2c a preset may not provide a service
+PASS 2d disposing the preset unmounts its plugins and layers
+PASS 3 provider loss suspends the driver
+PASS 3b another provider re-applies the driver
+PASS 4 config used
+
+superchat-plugin: kc-transport-b failed: superchat-plugin: kc-transport-b does not accept config key :nope
+PASS 4b unknown config key -> failed, nothing registered, good provider untouched
+
+superchat-plugin: kc-transport-a failed: superchat-plugin: invalid config :reply=42 for kc-transport-a
+PASS 4b2 invalid value -> failed state
+PASS 4c reconfigure re-applies dependents
+PASS 4d direct Scope provider activates dependent
+PASS 4e direct Scope disposal withdraws before notifying
+PASS 4f provider return re-applies after direct disposal
+PASS 4h returned Service undo notifies after withdrawal
+PASS 4i disposal after manual undo preserves returned provider
+PASS 4g old undo cannot withdraw a new registration
+PASS 4j manual effect undo detaches and runs exactly once
+PASS 4k dispose is children-first, reverse registration, synchronous and idempotent
+PASS 4l undo detaches before reentrant invocation
+PASS 4m plugin undo adapter returns the same one-shot cleanup
+
+superchat-plugin: kc-fiber-failed failed: kc-fiber-failed expected failure
+PASS 5a fibers retain one cleanup in active pending and failed states
+PASS 5b Scope disposal consumes every fiber cleanup exactly once
+PASS 5c one hundred manual mount/unmount cycles retain no Scope effects
+PASS 5d stale fiber cleanup cannot unmount a fresh same-name fiber
+PASS 5e manual then dispose and dispose then old undo stay one-shot
+PASS 5f provider cleanup reentry suspends its dependent once
+PASS 5g provider return resumes once and an old cleanup is inert
+PASS 5h provider reentry leaves the global effect baseline unchanged
+PASS 5i execution retirement is ancestry-private and disposal remains separate
+PASS 6 reset leaves no fibers, no layers
+KERNEL-CHECK OK (0 fails)

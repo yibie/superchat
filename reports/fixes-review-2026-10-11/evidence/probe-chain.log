@@ -1,0 +1,6 @@
+fr-pending-load: exit=0; 0.7s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-load.log
+fr-scope-probes: exit=1; 3.6s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-scope-probes.log
+fr-settle-probes: exit=1; 70.0s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-settle-probes.log
+fr-pending-probes: exit=1; 3.5s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.log
+fr-annotate-probes: exit=0; 2.2s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-annotate-probes.log
+PROBES-DONE

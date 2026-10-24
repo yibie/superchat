@@ -1,0 +1,204 @@
+57:(defun superchat-scope-create (name &optional parent layer-owner)
+111:(defun superchat-scope-dispose (scope)
+377:(defun superchat-plugin-mount (name &optional config scope)
+425:(defun superchat-plugin-unmount (name &optional scope)
+474:(defun superchat-plugin-mount-defaults ()
+  (let ((direct
+         (superchat--resolve-capability-preset profile-id source)))
+    (or (and direct
+             (equal profile-id (superchat-preset-profile-id direct))
+             direct)
+        ;; ponytail: O(n) only while restoring a renamed Profile; add an
+        ;; index if real Skill counts make this measurable.
+        (and (not (equal source "builtin"))
+             (fboundp 'superchat-skills-get-available)
+             (cl-loop
+              for name in (superchat-skills-get-available)
+              for preset = (ignore-errors (superchat-skills-load name))
+              when (and preset
+                        (equal profile-id
+                               (superchat-preset-profile-id preset)))
+              return preset))
+        (superchat--resolve-capability-preset capability source))))
+
+(defun superchat--preset-scope-live-p (scope)
+  "Return non-nil when SCOPE remains this process's direct global child."
+  (and (superchat-scope-p scope)
+       (eq (superchat-scope-parent scope) superchat-scope-global)
+       (memq scope (superchat-scope-children superchat-scope-global))
+       (not (superchat-execution-scope-retired-p scope))))
+
+(defun superchat--preset-owner-live-p (owner require-mode-p expected-scope)
+  "Return non-nil when OWNER can still publish EXPECTED-SCOPE's switch.
+
+The exact buffer object, not a name or Session ID, owns this composition.
+REQUIRE-MODE-P records whether activation began in a live chat View; a later
+mode-off vetoes publication just like a killed owner does."
+  (and (buffer-live-p owner)
+       (with-current-buffer owner
+         (and (not superchat--preset-switch-aborted)
+              (or (not require-mode-p) (bound-and-true-p superchat-mode))
+              (eq superchat--active-preset-scope expected-scope)))))
+
+(defun superchat--assert-preset-owner (owner require-mode-p expected-scope)
+  "Signal unless OWNER still owns EXPECTED-SCOPE for this activation."
+  (unless (superchat--preset-owner-live-p
+           owner require-mode-p expected-scope)
+    (error "Preset activation owner is no longer live")))
+
+(defun superchat--preset-scope-name (preset)
+  "Return PRESET's exact display name for its process-local Scope."
+  (let ((name (superchat-preset-name preset)))
+    (unless (or (and (stringp name) (not (string-empty-p name)))
+                (and (symbolp name) name))
+      (error "Preset activation requires a non-empty Preset name: %S" name))
+    (format "preset/%s" name)))
+
+(defun superchat--preset-plugin-plan (preset)
+  "Preflight PRESET's Plugin definitions and their configuration.
+
+This does not mount anything.  It proves every referenced definition exists
+and delegates per-Plugin config validation before candidate Scope creation,
+so a bad later item cannot disturb the active Preset Scope."
+  (mapcar
+   (lambda (entry)
+     (let ((name (car entry))
+           (config (cdr entry)))
+       (superchat-plugin-validate-config
+        (superchat-plugin-definition name) config)
+       entry))
+   (superchat-preset-plugins preset)))
+
+(defun superchat--mount-preset-candidate
+    (preset owner owner-mode-p expected-old-scope)
+  "Create and mount PRESET's validated composition in a new candidate Scope.
+
+`pending' fibers are legal because their global Service requirements may
+appear later.  A `failed' fiber is not a partial success: dispose the entire
+candidate and signal before the caller writes configuration or retires the
+old Scope."
+  (let* ((plan (superchat--preset-plugin-plan preset))
+         (scope (superchat-scope-create
+                 (superchat--preset-scope-name preset) superchat-scope-global)))
+    (condition-case condition
+        (progn
+          (dolist (entry plan)
+            (superchat-plugin-mount (car entry) (cdr entry) scope)
+101:  "The review's N2."
+          (bu--fact session "timer.started"
+                    (list :timer-id (concat "t-" run) :occurrence 1 :run-id run))
+          (superchat-changes--note-unattended
+           nil (list :status 'completed :session-id session :run-id run))
+          ;; Told twice of one ending, it is still one notice.
+          (superchat-changes--note-unattended
+           nil (list :status 'completed :session-id session :run-id run)))
+        (should (= 2 (length superchat-changes--notices)))
+        (should (= 1 (un--marks)))
+        (should (string-match-p "2" (un--shown)))
+        (superchat-changes-notice-dismiss first)
+        (should (= 1 (length superchat-changes--notices)))
+        (should (equal second (plist-get (car superchat-changes--notices) :run)))
+        (should (string-match-p "1" (un--shown)))
+        (superchat-changes-notices-dismiss-all)
+        (should-not (un--shown))
+        (should (= 1 (un--marks)))))))
+
+(ert-deftest unattended-notice/a-notice-counts-what-was-left-unsaved ()
+  (un--fresh
+    (hm--fixture (list '(:text "ONE"))
+      (let* ((view (smoke--open-chat))
+             (session (hm--session view))
+             (run (hm--turn view "one")))
+        (bu--with-candidate file
+          (bu--fact session "timer.started"
+                    (list :timer-id "t1" :occurrence 1 :run-id run))
+          (superchat-changes--note-unattended
+           nil (list :status 'completed :session-id session :run-id run))
+          (should (= 1 (plist-get (car superchat-changes--notices) :unsaved)))
+          (with-current-buffer (superchat-changes-notices)
+            (should (string-match-p "1 unsaved" (buffer-string)))))))))
+
+(ert-deftest unattended-notice/an-execution-still-running-leaves-none ()
+  (un--fresh
+    (hm--fixture (list '(:text "ONE"))
+      (let* ((view (smoke--open-chat))
+             (session (hm--session view))
+             (run (hm--turn view "one")))
+        (bu--fact session "timer.started"
+                  (list :timer-id "t1" :occurrence 1 :run-id run))
+        (superchat-changes--note-unattended
+         nil (list :status 'running :session-id session :run-id run))
+        (should-not superchat-changes--notices)))))
+
+(provide 'unattended-notice-regression)
+
+;;; unattended-notice-regression.el ends here
+# Plugin composition contract
+
+This document describes the implemented composition interfaces. It is not a completion claim for the earlier v2 specification. The [roadmap](../roadmap.md) owns remaining work, the [architecture map](../architecture.md) locates implementations, and the [historical migration log](../../.wayfinder/map.md) records earlier specifications and accepted repair batches.
+
+## Plugin definition and activation
+
+`superchat-define-plugin` defines data; mounting applies it. Its `:inject` value is a list of required Service names, `:config` is a list of `(KEY PREDICATE DEFAULT [DOC])` entries, and `:apply` receives an effect Scope and validated configuration. Values in this macro are evaluated: literal lists must be quoted.
+
+`superchat-plugin-mount`, `superchat-plugin-unmount` and `superchat-plugin-reconfigure` manage one installation. Unknown configuration keys and invalid values fail validation. Reconfiguration validates before withdrawing the old installation; changing configuration is not an in-place mutation of a live plugin.
+
+A missing injected Service leaves the plugin `pending`. When the required provider set is available it becomes `active`; losing or replacing a provider unwinds its effects and reapplies it when dependencies are available. A failed `apply` is not a successful partial mount. The plugin's exact, self-removing cleanup owns its registrations; an old cleanup cannot remove a later same-name installation.
+
+`superchat-plugins` is the current global composition list. Each element is a plugin name or `(NAME . CONFIG-PLIST)`. Defining a feature, an autoload or a tool does not prove that feature has its own plugin definition. Use `superchat-plugin-report` and the source definitions to inspect installations.
+
+## Scope and registration
+
+A Scope is a process-local registration context. Contributions are visible to it and its descendants, not to siblings or ancestors. Nearest-layer definitions shadow inherited names; duplicate identifiers in one layer are rejected. Registrations made through a plugin's effect Scope land in its mount layer, while cleanup remains owned by that exact installation.
+
+Scope disposal withdraws registrations, disposes children before parent effects and unlinks the Scope. Explicit unregister and disposal consume the same one-shot cleanup. Empty layers and consumed cleanup effects do not accumulate through repeated mount/unmount cycles.
+
+The registering interface determines the default target:
+
+- Tool and command registrations use explicit `:scope`, then the applying plugin's effect Scope, then the execution Scope, then global.
+- Event listeners take an explicit Scope through `superchat-on`.
+- Surface names are package-wide Envelope vocabulary. A plugin-added Surface has Scope-accounted cleanup, but the Surface list is not a Preset-shadowed registry.
+
+Arbitrary Elisp global mutation, timers or external effects are not automatically reversed. Register cleanup through the supplied Scope; the contribute-only-through-Scope Invariant is advisory, not an Elisp sandbox.
+
+## Services and execution lookup
+
+A Service declares required methods and has one active global provider. `superchat-service-provide` validates the method table. Preset Scopes cannot provide a shadow Service: provider replacement affects dependents globally.
+
+`superchat-service-call SCOPE NAME METHOD ...` selects the caller's execution context, not a private provider. A nil Scope inherits the current execution Scope and otherwise uses global. Explicit `superchat-scope-global` chooses global. `superchat-service-get` is lookup-only: pass the Scope explicitly when inspecting one; nil there retains its global lookup meaning.
+
+Runtime notifications, provider attempts, asynchronous tool callbacks, terminal Sink delivery and FIFO dispatch restore the accepted execution Scope. Runtime holds this reference privately while needed and releases it at quiesce; it is not serialized into Envelope, Tape or public status. Services remain global even when their methods execute for a child Scope.
+
+## Scoped tools, commands and permission listeners
+
+Tools and commands are read through the caller's visible Scope layers. A tool's materialized callable retains the exact installation identity it was materialized from. Revocation invalidates an old descriptor rather than letting it run a replacement's implementation. `superchat-register-tool NAME &key function description args async surfaces scope` declares nothing about what the tool does; there is no effect resolver, approval preview or policy registry any more.
+
+Whether a call may run is decided at execution, not inferred from a cached model-facing tool list. The Session's permission level is applied as a fixed stage after the `tools/pre-execute` waterfall, whose listeners are collected through the caller's Scope ancestry, and the stronger answer stands: `deny` over `ask` over `allow`. A listener can therefore tighten a call and never loosen it; one that answers without delegating ends the waterfall but cannot skip the level stage. An `ask` goes to the `approval/request` waterfall, which ends in the human answerer. A plugin that needs rules for one request registers both on a child Scope it creates for that request and disposes with its Run. See [Permissions the DeepSeek Harness way](../decisions/implemented/2026-09-17-permissions-the-dsh-way.md).
+
+Commands preserve user-file template fallback when a handler declines or the command provider is absent. Intentional same-layer tool or command replacement requires explicit unregister followed by registration. MCP refresh validates replacement data before changing its own installation; unchanged discovery preserves the existing installation.
+
+## Preset composition and lifetime
+
+Preset data carries a native `:plugins` composition with unique names and proper keyword configuration plists. Markdown frontmatter supports an inline list such as `plugins: [foo, "bar"]`, including `[]`. Map, nested and multiline forms are rejected; they are not silently accepted as full YAML configuration support.
+
+Each Chat View activation creates an exact `preset/<name>` Scope directly under global. Two Views choosing the same name receive different Scope objects. Preset data contains no Scope. Runtime creates no automatic `run/<id>` Scope, and Session identity is not a Scope level.
+
+The View owner validates definitions and configuration, mounts a candidate and checks its state before publishing the replacement. `pending` dependencies are legal. Candidate/configuration failure preserves the old activation while its owner is live; candidate work is retired before cleanup. If a callback kills, disables or aborts the exact owner View, both the old and candidate Scopes are released and no replacement is published. A configuration fact already appended to Tape is not rolled back.
+
+Switching, explicit deactivation, disabling `superchat-mode`, an approved View kill or changing major mode calls Runtime retirement on the old Scope before disposing its registrations. A vetoed View kill does not perform that teardown. Neither step closes another user or Session-owned buffer. Restore of the same live Preset reuses its Scope and plugins without another activation fact; View text may be rendered again.
+
+Normal chat captures one execution Scope through Preset preparation and queue/submit. If a `:pre` callback switches Preset and retires that Scope, the prepared ordinary request is rejected rather than rerouted. Explicit `>skill` and command mode-switch results may deliberately select the freshly active View Scope. Explicit caller Scope wins over ambient View selection. A plain View uses global and does not retire it or sweep unrelated Runs by Session identity.
+
+## Retirement, withdrawal and evidence
+
+`superchat-runtime-retire-scope` prohibits admission and continuation through one non-global Scope and its descendants, then uses Runtime's existing cancellation path. It does not itself unregister plugins or close buffers. The Preset owner composes retirement with disposal; generic Scope disposal does not become another lifecycle owner.
+
+Withdrawing a `model-transport` provider, including through provider Scope disposal or returned undo, triggers Runtime's provider-epoch retirement. All matching old Runs become unable to continue before reentrant callbacks can act. Provider replacement does not make an old Run eligible for the new provider.
+
+Cancellation does not prove an entered external Effect stopped. Such a Run can terminate as `audit-incomplete` while the Effect remains open; a genuine one-time late result can settle that Effect without changing the Run terminal or restarting execution. Queue handling, terminal recovery and exact delivery follow the [request lifecycle contract](../protocols/request-lifecycle.md).
+
+## Verification and change direction
+
+`scripts/kernel-check.el` exercises composition primitives; the canonical smoke script and R1–R9 exercise product interfaces, withdrawal, terminal evidence and scoped execution. See [development verification](../agents/development.md) for dependencies and invocation. Existing baselines are not evidence for a proposed replacement that has not been run.
+
+The fixed Stage registry is retired; future main-line changes are recorded in the [remaining plan](../roadmap.md). They do not change the current methods or authorize removing compatibility and safety behavior ahead of a verified replacement.

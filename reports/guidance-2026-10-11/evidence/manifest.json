@@ -1,0 +1,389 @@
+{
+  "reviewed_commits": [
+    "981719f4",
+    "87db657c",
+    "18811e04"
+  ],
+  "baseline": "437ca4e8",
+  "root": "/Users/chenyibin/Documents/emacs/package/superchat",
+  "model": "scripted transport only; SMOKE_REAL and SMOKE_BASELINE removed",
+  "commands": [
+    {
+      "name": "pending-suite-on-981719f4",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/scripts/pending-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^pending/\")"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-guide/src-981719f4",
+      "exit_status": 1,
+      "seconds": 2.43,
+      "log": "pending-suite-on-981719f4.log"
+    },
+    {
+      "name": "fr-pending-probes-on-981719f4",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-guide/src-981719f4",
+      "exit_status": 0,
+      "seconds": 3.45,
+      "log": "fr-pending-probes-on-981719f4.log"
+    },
+    {
+      "name": "fr-pending-probes-on-head",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 1,
+      "seconds": 2.85,
+      "log": "fr-pending-probes-on-head.log"
+    },
+    {
+      "name": "pending-suite",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/pending-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^pending/\")"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 3.7,
+      "log": "pending-suite.log"
+    },
+    {
+      "name": "work-outcome-suite",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/work-outcome-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^work-outcome/\")"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 2.42,
+      "log": "work-outcome-suite.log"
+    },
+    {
+      "name": "work-wake-fault-suite",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/work-wake-fault-regression.el",
+        "--eval",
+        "(ert-run-tests-batch-and-exit \"^work-wake-fault/\")"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 2.88,
+      "log": "work-wake-fault-suite.log"
+    },
+    {
+      "name": "command-load-suite",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/command-load-regression.el",
+        "-f",
+        "ert-run-tests-batch-and-exit"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 0.55,
+      "log": "command-load-suite.log"
+    },
+    {
+      "name": "long-history-suite",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/long-history-regression.el",
+        "-f",
+        "ert-run-tests-batch-and-exit"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 55.55,
+      "log": "long-history-suite.log"
+    },
+    {
+      "name": "fr-scope-probes-on-head",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/fixes-review-2026-10-11/evidence/fr-scope-probes.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 1,
+      "seconds": 4.73,
+      "log": "fr-scope-probes-on-head.log"
+    },
+    {
+      "name": "actor-probe",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/guidance-2026-10-11/evidence/actor-probe.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 1.2,
+      "log": "actor-probe.log"
+    },
+    {
+      "name": "fr-settle-probes-on-head",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "reports/fixes-review-2026-10-11/evidence/fr-settle-probes.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 8.15,
+      "log": "fr-settle-probes-on-head.log"
+    },
+    {
+      "name": "kernel",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/kernel-check.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 0.29,
+      "log": "kernel.log"
+    },
+    {
+      "name": "smoke",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/smoke.el"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 4.29,
+      "log": "smoke.log"
+    },
+    {
+      "name": "m3",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-guide/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-guide/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "scripts/m3-regression.el",
+        "-f",
+        "ert-run-tests-batch-and-exit"
+      ],
+      "cwd": "/Users/chenyibin/Documents/emacs/package/superchat",
+      "exit_status": 0,
+      "seconds": 20.65,
+      "log": "m3.log"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/run-checks.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.03,
+      "log": "unchanged.json"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/run-checks.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.03,
+      "log": "unchanged.json"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/run-checks.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.03,
+      "log": "unchanged.json"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/run-checks.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.03,
+      "log": "unchanged.json"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/run-checks.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 1,
+      "seconds": 0.06,
+      "log": "unchanged.json"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+--- baseline/superchat-workspace.el
++++ main/superchat-workspace.el
+@@ -285,6 +285,29 @@
+                         ""))))))
+     (error nil)))
+ 
++(defun superchat-workspace-rules-problem (root)
++  "Return why the Workspace at ROOT has a rules file that cannot be used, or nil.
++That is a file named as rules which exists and is not readable, or whose
++read signals, while no other rules file is readable.  The string names the
++file.  A Workspace with no rules file, or with a readable one, gives nil."
++  (when (and (stringp root) (file-directory-p root))
++    (let ((file (superchat-workspace-rules-file root)))
++      (if file
++          (condition-case err
++              (with-temp-buffer (insert-file-contents file) nil)
++            (error (format "%s could not be read (%s)"
++                           file (error-message-string err))))
++        (when-let* ((present
++                     (cl-some (lambda (name)
++                                (let ((f (expand-file-name name root)))
++                                  (and (file-regular-p f) f)))
++                              superchat-workspace-rules-file-names)))
++          (format "%s is not readable" present))))))
++
++(defconst superchat-workspace-rules-problem-note
++  "This workspace has a rules file that Superchat could not read: %s.  The user's rules are therefore NOT in this request.  Tell the user this in your answer before relying on any convention of this workspace."
++  "What a chat request says when the Workspace's rules file cannot be read.")
++
+ (defun superchat-workspace-remember-note (root)
+   "Return what a request says about remembering, for the Workspace at ROOT.
+ With a rules file, the model is told to edit that file's buffer; with a

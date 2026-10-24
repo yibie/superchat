@@ -1,0 +1,14 @@
+{
+  "fixed": [
+    "fixed"
+  ],
+  "pending": 4,
+  "mobile": {
+    "width": 390,
+    "docWidth": 390,
+    "mainWidth": 390,
+    "gridColumns": "350px"
+  },
+  "screenshot": "Page.captureScreenshot timeout; visual screenshot not verified",
+  "staticLinks": "80 local links checked, none broken"
+}

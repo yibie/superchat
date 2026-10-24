@@ -1,0 +1,74 @@
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 01:02:53-0700, selector ‘"^p1/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-010253-807805-1995 completed (session 20261011-010253-064a)
+Test p1/project-chat-and-in-place-entries backtrace:
+  region-beginning()
+  #f(compiled-function (method) #<bytecode -0x4ba3ce87f4869da>)(bounds)
+  region-bounds()
+  region-noncontiguous-p()
+  (and (fboundp 'region-noncontiguous-p) (region-noncontiguous-p))
+  (if (and (fboundp 'region-noncontiguous-p) (region-noncontiguous-p)) (let ((segments (superchat-rewrite--collect-region-segments))) (if segments nil (user-err
+  (let ((current-lang (symbol-name major-mode))) (if (and (fboundp 'region-noncontiguous-p) (region-noncontiguous-p)) (let ((segments (superchat-rewrite--collec
+  superchat-rewrite-region(11 39 "改得正式一些")
+  (save-current-buffer (set-buffer (wrec--file p "notice.org")) (erase-buffer) (insert "* 通知\n大家好。\n我们定在2026年10月9日下午三点开会，记得带电脑哦。\n") (set-buffer-modified-p nil)
+  (let* ((view (wrec--view p)) (session (hm--session view)) (id (superchat-work-start session "P1: finish the reading list"))) (superchat-work-update session id
+  (progn (fset 'smoke--fake-network vnew) (wrec--write p "AGENTS.md" (p1--rules-text)) (p1--write-skills) (let* ((view (wrec--view p)) (session (hm--session vie
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (wrec--write p "AGENTS.md" (p1--rules-text)) (p1--write-skills) (let* ((view (wrec--view p)) (session 
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (p1--capture provider prompt) (funcall network mode provider prompt partial respons
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (p1--capture provider promp
+  (progn (fset 'smoke--fake-network vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response 
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda ... ... ...)) (old (sym
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (u
+  #f(lambda () [t] (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--r
+  #f(compiled-function () #<bytecode 0x1371780ec4fb40e9>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x1371780ec4fb40e9>) (t) #f(compiled-function (err) #<bytecode -0x5dc6155f21c21a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a2ad4a12c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name p1/project-chat-and-in-place-entries :documentation nil :body #f(lambda () ... ... nil) :most-recent-result ... :expected-resul
+  ert-run-or-rerun-test(#s(ert--stats :selector "^p1/" :tests ... :test-map #<hash-table eql 2/2 0x190646645a ...> :test-results ... :test-start-times ... :test
+  ert-run-tests("^p1/" #f(compiled-function (event-type &rest event-args) #<bytecode 0xf4cb5efe23a6458>) nil)
+  ert-run-tests-batch("^p1/")
+  (let ((stats (ert-run-tests-batch "^p1/"))) (p1--report) (kill-emacs (if (= 0 (ert-stats-completed-unexpected stats)) 0 1)))
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p1-request-size.el" "/Users/che
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test p1/project-chat-and-in-place-entries condition:
+    (error "The mark is not set now, so there is no region")
+   FAILED  1/2  p1/project-chat-and-in-place-entries (0.618940 sec) at ../../../Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p1-request-size.el:122
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  2/2  p1/temporary-chat (0.044213 sec)
+
+Ran 2 tests, 1 results as expected, 1 unexpected (2026-10-11 01:02:54-0700, 0.781945 sec)
+
+1 unexpected results:
+   FAILED  p1/project-chat-and-in-place-entries
+
+
+P1 REQUEST SIZE (scripted transport, snapshot 75e83370)
+label | bytes | chars | est.tokens | system chars (est) | tools n / json bytes (est) | messages | user chars (est)
+project-chat-1 | 27074 | 23444 | ~6617 | 10820 (~3460) | 14 / 11144 (~2786) | 2 | 1236 (~310)
+project-chat-2 | 27422 | 23792 | ~6704 | 10820 (~3460) | 14 / 11144 (~2786) | 4 | 1236 (~310)
+project-chat-3 | 27534 | 23894 | ~6732 | 10820 (~3460) | 14 / 11144 (~2786) | 6 | 1241 (~314)
+inline-ask-1 | 13808 | 10166 | ~3300 | 6722 (~2436) | 4 / 2006 (~502) | 2 | 1239 (~314)
+temp-chat-1 | 15252 | 15224 | ~3812 | 3069 (~767) | 14 / 11144 (~2786) | 2 | 860 (~221)
+est.tokens = ASCII chars/4 + non-ASCII chars/1.5; a heuristic, not a tokenizer.

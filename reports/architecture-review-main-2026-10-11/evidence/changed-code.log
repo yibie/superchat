@@ -1,0 +1,375 @@
+diff --git a/superchat-core.el b/superchat-core.el
+index e5f77ac6..eaa42f65 100644
+--- a/superchat-core.el
++++ b/superchat-core.el
+@@ -98,6 +98,37 @@ the token."
+                (ignore-errors (superchat--get-all-command-names)))
+        t))
+ 
++(defvar superchat-annotate-default-instruction)
++
++(defun superchat-core--annotate-target-p (name)
++  "Return non-nil when the bare NAME after `>annotate' says what to annotate.
++That is the name of a live buffer or of an existing file."
++  (or (get-buffer name)
++      (file-regular-p (expand-file-name name))))
++
++(defun superchat-core--annotate-token (text)
++  "Return (REST . TARGET) when TEXT holds a `>annotate' standing alone.
++REST is TEXT without it.  TARGET is what follows it when that names what to
++annotate: anything in double quotes, or a bare word that is a live buffer's
++name or an existing file's; else nil, and the word stays in REST."
++  (let ((case-fold-search nil))
++    (when (and (stringp text)
++               (string-match
++                (concat "\\(?:\\`\\|[[:space:]]\\)\\(>annotate\\)"
++                        "\\(?:[ \t]+\\(\"[^\"\n]+\"\\|[^[:space:]]+\\)\\)?"
++                        "\\(?:[[:space:]]\\|\\'\\)")
++                text))
++      (let* ((token-start (match-beginning 1))
++             (word (match-string 2 text))
++             (target (cond ((null word) nil)
++                           ((string-prefix-p "\"" word) (substring word 1 -1))
++                           ((superchat-core--annotate-target-p word) word)))
++             (token-end (if target (match-end 2) (match-end 1))))
++        (cons (string-trim
++               (concat (string-trim-right (substring text 0 token-start)) " "
++                       (string-trim-left (substring text token-end))))
++              target)))))
++
+ (defun superchat-core--parse-input (turn)
+   "Parse model switch, skill, command, and file refs from TURN's inbound.
+ `@model', `>skill' and `/command' are read at the start of the input as
+@@ -118,6 +149,22 @@ docs/decisions/proposed/2026-10-10-triggers-anywhere-in-the-message.md."
+                             (cons (cdr found) (car found)))))))
+       (setf (superchat-turn-clean-input turn) (car parsed))
+       (setf (superchat-turn-target-model turn) (cdr parsed)))
++    ;; >annotate [TARGET]: where this message's answer goes, not a skill.  Read
++    ;; only from a message the user sent, and not after a leading command.
++    (let ((ci (superchat-turn-clean-input turn)))
++      (when-let* ((found (and body-p (stringp ci)
++                              (not (and (fboundp 'superchat-parser-command)
++                                        (superchat-parser-command ci)))
++                              (superchat-core--annotate-token ci))))
++        (setf (superchat-turn-clean-input turn)
++              (if (string-empty-p (car found))
++                  (or (bound-and-true-p superchat-annotate-default-instruction)
++                      "Point out what is worth noticing.")
++                (car found)))
++        (setf (superchat-turn-state turn)
++              (plist-put (plist-put (superchat-turn-state turn)
++                                    :destination 'annotate)
++                         :annotate-target (cdr found)))))
+     ;; >>workflow — dedicated workflow prefix: `>' invokes skills,
+     ;; `>>' invokes .workflow recipes.  Rewrites to the reserved
+     ;; `workflow' skill token so the dispatcher's workflow branch
+diff --git a/superchat-default-plugins.el b/superchat-default-plugins.el
+index be44f74c..7e391af3 100644
+--- a/superchat-default-plugins.el
++++ b/superchat-default-plugins.el
+@@ -66,10 +66,13 @@ Call time needs Services `driver' and `view'."
+ 
+ (superchat-define-plugin inline-rewrite
+   :doc "Inline rewrite: surface `inline-rewrite` and command loading.
+-Call time needs Services `driver' and `change-set'."
++Also the surface `inline-annotate`: remarks hung on the text, which is not
++changed.  Call time needs Services `driver' and `change-set'."
+   :apply (lambda (_scope _config)
+            (require 'superchat-rewrite)
+-           (superchat-register-surface 'inline-rewrite)))
++           (require 'superchat-annotate)
++           (superchat-register-surface 'inline-rewrite)
++           (superchat-register-surface 'inline-annotate)))
+ 
+ (superchat-define-plugin org-babel
+   :doc "Org Babel integration: surface `org-babel` and handler loading.
+diff --git a/superchat-dispatcher.el b/superchat-dispatcher.el
+index a0bfd993..1cc08ac9 100644
+--- a/superchat-dispatcher.el
++++ b/superchat-dispatcher.el
+@@ -580,6 +580,19 @@ When CONSUME is non-nil, clear memories queued by `/recall'."
+    (t (superchat--attach-indexed-memories turn input session-id)))
+   turn)
+ 
++(defun superchat--recorded-input (turn)
++  "Return the text of TURN the Tape keeps as the user's message.
++That is the clean input.  A message that named `>annotate' keeps that mark,
++put back at its end with the target it named: later requests then show what
++was asked, and regenerating or editing the message reads the mark again."
++  (let ((state (superchat-turn-state turn))
++        (clean (superchat-turn-clean-input turn)))
++    (if (eq (plist-get state :destination) 'annotate)
++        (concat clean " >annotate"
++                (when-let* ((target (plist-get state :annotate-target)))
++                  (format " \"%s\"" target)))
++      clean)))
++
+ (defun superchat--skill-for-this-message-only-p (turn preset)
+   "Return non-nil when PRESET, invoked on TURN, leaves the Session as it is.
+ That is an agent skill named in the middle of the message.  A plan skill
+@@ -602,7 +615,7 @@ TEMPLATE and TARGET-MODEL have the same meaning as in
+     ;; (already stripped by `superchat-prompt-collect' inside
+     ;; `superchat-core-prepare-turn') keeps a `#file' token out of every
+     ;; later Turn's history, not just this one's own prompt.
+-    (setq plan (plist-put plan :input (superchat-turn-clean-input turn)))
++    (setq plan (plist-put plan :input (superchat--recorded-input turn)))
+     (setq plan
+           (plist-put plan :clean-input (superchat-turn-clean-input turn)))
+     ;; Step 3: the parsed Turn rides to the chat Envelope's `:chat-turn'.
+@@ -951,6 +964,52 @@ through B's active Preset."
+           nil (plist-get composed :buffer))))
+     (superchat-pipeline-submit (superchat--chat-envelope composed))))
+ 
++(declare-function superchat-annotate-chat-spec "superchat-annotate" (buffer))
++(declare-function superchat-annotate-chat-sink "superchat-annotate"
++                  (inner spec &optional hung))
++
++(defvar-local superchat--annotated-buffers nil
++  "What this View's conversation annotated: (SESSION-ID . BUFFER-NAMES).
++Written when a `>annotate' message's remarks were hung, newest name first;
++later requests of that Session say what was done.  Kept in the View, for
++this Emacs only, and worth nothing once the View shows another Session.")
++
++(defun superchat--annotated-remember (view session-id name)
++  "Note in VIEW that SESSION-ID's conversation hung remarks on buffer NAME."
++  (when (buffer-live-p view)
++    (with-current-buffer view
++      (setq superchat--annotated-buffers
++            (cons session-id
++                  (cl-adjoin name
++                             (and (equal (car superchat--annotated-buffers)
++                                         session-id)
++                                  (cdr superchat--annotated-buffers))
++                             :test #'equal))))))
++
++(defun superchat--chat-annotate-spec (composed)
++  "Return what COMPOSED's request annotates, or nil for an ordinary message.
++A message that named `>annotate' annotates the buffer or file named after
++it, else the buffer this conversation was called from, as the request's
++frozen origin has it.  Signal `user-error' when there is neither."
++  (when-let* ((turn (plist-get composed :chat-turn))
++              (state (superchat-turn-state turn))
++              ((eq (plist-get state :destination) 'annotate)))
++    (require 'superchat-annotate)
++    (let* ((name (plist-get state :annotate-target))
++           (file (and name (expand-file-name name)))
++           (buffer (cond ((null name)
++                          (plist-get (plist-get composed :emacs-origin-data)
++                                     :buffer))
++                         ((get-buffer name))
++                         ((file-regular-p file) (find-file-noselect file)))))
++      (unless (buffer-live-p buffer)
++        (user-error
++         (if name
++             "superchat: nothing to annotate: no buffer or file named %s"
++           "superchat: nothing to annotate: this conversation was not called from a buffer; name one after >annotate%s")
++         (or name "")))
++      (superchat-annotate-chat-spec buffer))))
++
+ (defun superchat--chat-envelope (composed)
+   "Translate fully-composed chat COMPOSED into a Request envelope.
+ Since migration step 3 the chat prompt is assembled by the driver: the
+@@ -1024,6 +1083,14 @@ active-Run match (C12/C12b) depends on."
+          (clean-input (plist-get composed :clean-input))
+          (context-files (plist-get composed :context-files))
+          (content (cond
++                   ;; What the Tape keeps for a message that named
++                   ;; `>annotate' is `superchat--recorded-input', mark
++                   ;; included; the model is sent CLEAN-INPUT all the same.
++                   ((and (stringp (plist-get composed :input))
++                         (when-let* ((turn (plist-get composed :chat-turn)))
++                           (eq (plist-get (superchat-turn-state turn) :destination)
++                               'annotate)))
++                    (plist-get composed :input))
+                    ((and (stringp clean-input) (not (string-empty-p clean-input)))
+                     clean-input)
+                    ((let ((input (plist-get composed :input)))
+@@ -1054,6 +1121,7 @@ active-Run match (C12/C12b) depends on."
+          (owner (or (plist-get composed :transcript-owner)
+                     (format "chat-owner-%08x" (random #x100000000))))
+          (input-core (plist-get composed :input-core))
++         (annotate (superchat--chat-annotate-spec composed))
+          (extras
+           (superchat-pipeline--plist-extend
+            nil
+@@ -1093,14 +1161,24 @@ active-Run match (C12/C12b) depends on."
+     (superchat-pipeline--plist-extend
+       (list :content content
+             :surface 'chat
+-            :sink (superchat-render-view-sink buffer session-id owner)
++            ;; A message that named `>annotate' is still shown and recorded
++            ;; in the conversation; its answer is also hung on the text.
++            :sink (let ((view (superchat-render-view-sink buffer session-id owner)))
++                    (if annotate
++                        (superchat-annotate-chat-sink
++                         view annotate
++                         (lambda (name)
++                           (superchat--annotated-remember
++                            buffer session-id name)))
++                      view))
+             :session-id session-id
+             ;; Preparation sees the contract default, never an explicit nil
+-            ;; (S10-fix-2 finding 4).
+-            :tools (plist-get composed :tools)
++            ;; (S10-fix-2 finding 4).  Annotations are given without tools.
++            :tools (if annotate 'none (plist-get composed :tools))
+             :media images
+             :context
+             (append
++             (when annotate (list :chat-annotate annotate))
+              (list :chat-buffer buffer
+                             ;; S12: the chat composed its legacy Request
+                             ;; already; marking the envelope keeps the
+diff --git a/superchat-llm.el b/superchat-llm.el
+index 01ac5466..248796ec 100644
+--- a/superchat-llm.el
++++ b/superchat-llm.el
+@@ -565,6 +565,10 @@ llm, and `llm-warn-on-nonfree' itself, are unchanged."
+ 
+ (defvar llm-warn-on-nonfree)
+ 
++(defconst superchat-llm-empty-response-text "[Empty response from llm]"
++  "What a Run's answer is when the model returned no text at all.
++A caller that reads the answer as data checks for this before reading it.")
++
+ (defcustom superchat-llm-reasoning nil
+   "Reasoning (a.k.a. thinking) effort to request from the model.
+ 
+@@ -3604,7 +3608,7 @@ requests until it receives text, bounded by
+                                           response)
+                                          (response-parts
+                                           (string-join (nreverse response-parts) ""))
+-                                         (t "[Empty response from llm]")))))
++                                         (t superchat-llm-empty-response-text)))))
+                          (funcall finalize
+                                   "[Missing final response from llm]" 'failed)))))))))
+ 
+diff --git a/superchat-prompt-hooks.el b/superchat-prompt-hooks.el
+index 6dba039a..4207bf1a 100644
+--- a/superchat-prompt-hooks.el
++++ b/superchat-prompt-hooks.el
+@@ -516,7 +516,8 @@ compaction) never received these blocks."
+ (declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
+ (defvar superchat-workspace-rules-problem-note)
+ 
+-(defconst superchat-prompt--rules-only-surfaces '(inline-rewrite workflow)
++(defconst superchat-prompt--rules-only-surfaces
++  '(inline-rewrite inline-annotate workflow)
+   "Surfaces whose requests carry the Workspace rules without the note about
+ remembering.  A region rewrite answers with the replacement text and a
+ workflow step runs a written recipe; neither is where the user says
+@@ -531,6 +532,70 @@ itself -- its language, date format, wording, naming -- does apply to the \
+ replacement."
+   "What follows the Workspace rules in a region rewrite's request.")
+ 
++(defconst superchat-prompt--annotate-rules-note
++  "Your whole answer is read by a program that hangs each remark on the line \
++it is about, so it holds rows of the asked form and nothing else.  A rule above \
++about how to answer -- explaining first, a line of reasoning, a greeting, a \
++summary -- is about conversations and does not apply to this answer.  A rule \
++above about the text itself -- its language, date format, wording, naming -- \
++is something your remarks may point out and are themselves written by."
++  "What follows the Workspace rules in an annotation's request.")
++
++(defconst superchat-prompt--annotate-chat-note
++  "For this message the user asked that your answer be hung on the text below \
++as remarks.  What was said earlier in this conversation tells you what the user \
++cares about; use it.  Other instructions above about how to answer -- a persona, \
++a format, a greeting -- do not apply to this answer."
++  "What follows the row form in a conversation's request for annotations.")
++
++(defconst superchat-prompt--annotate-earlier-note
++  "Earlier in this conversation the user sent a message ending in `>annotate'.  \
++Its answer, rows of a line number, a quote and a remark, was hung by Superchat \
++on the user's buffer (%s) as remarks beside the text; the text itself was not \
++changed.  That request is finished.  Do not write those remarks into the \
++buffer and do not repeat them, unless the user asks for that now."
++  "What a later message of a conversation that annotated is told.
++The one %s is the names of the buffers annotated.")
++
++(defvar superchat--annotated-buffers)
++
++(declare-function superchat-annotate--system-text "superchat-annotate" ())
++
++(defun superchat-prompt-collector--annotate (env _state _tools)
++  "Return the fragments of a conversation message whose answer is annotations.
++The dispatcher puts `:chat-annotate' in ENV's context for a message that
++names `>annotate'.  The row form goes last among the system text, after the
++persona and the Workspace rules; the text to annotate, with line numbers,
++rides as an attachment.
++
++Any other message of a conversation that annotated before is told so
++\(`superchat-prompt--annotate-earlier-note'): the earlier answer's rows are
++in its history, and nothing there says they were already hung on the text."
++  (if-let* ((spec (plist-get (plist-get env :context) :chat-annotate)))
++    (list (superchat-prompt-fragment
++           :owner 'chat :id "annotate-form" :slot 'system
++           :text (concat (superchat-annotate--system-text) "\n\n"
++                         superchat-prompt--annotate-chat-note "\n\n"
++                         superchat-prompt--annotate-rules-note)
++           :priority -10 :budget-class 'hard)
++          (superchat-prompt-fragment
++           :owner 'chat :id "annotate-text" :slot 'attachment
++           :text (format "The text to annotate, %s, with line numbers:\n<<<TEXT>>>\n%s\n<<<END TEXT>>>\n\nReply with rows of the form LINE | QUOTE | REMARK only."
++                         (plist-get spec :name) (plist-get spec :text))
++           :priority 0 :budget-class 'hard :required t
++           :source (list :annotate (plist-get spec :name))))
++    (when-let* (((eq (plist-get env :surface) 'chat))
++                (view (plist-get (plist-get env :context) :chat-buffer))
++                ((buffer-live-p view))
++                (record (buffer-local-value 'superchat--annotated-buffers view))
++                ((equal (car record) (plist-get env :session-id)))
++                (names (cdr record)))
++      (list (superchat-prompt-fragment
++             :owner 'chat :id "annotate-earlier" :slot 'system
++             :text (format superchat-prompt--annotate-earlier-note
++                           (mapconcat #'identity (reverse names) ", "))
++             :priority -10 :budget-class 'hard)))))
++
+ (defun superchat-prompt-collector--workspace-rules (env _state _tools)
+   "Return the rules of the Workspace ENV's Session is bound to, as system text.
+ The root comes from the Session's own Tape (`workspace.bound'), so the rules
+@@ -568,6 +633,8 @@ by `superchat-prompt--rewrite-rules-note'."
+                      (note-p note)
+                      ((and rules (eq surface 'inline-rewrite))
+                       (concat rules "\n\n" superchat-prompt--rewrite-rules-note))
++                     ((and rules (eq surface 'inline-annotate))
++                      (concat rules "\n\n" superchat-prompt--annotate-rules-note))
+                      (t rules))))
+     ;; A request that goes without rules it should carry is said, not hidden.
+     (when problem
+@@ -1079,6 +1146,8 @@ selection, memory, history, plan, and a producer's prepared text."
+                           #'superchat-prompt-collector--prepared :owner 'core)
+     (superchat-context-register 'origin
+                           #'superchat-prompt-collector--origin :owner 'chat)
++    (superchat-context-register 'annotate
++                          #'superchat-prompt-collector--annotate :owner 'chat)
+     (superchat-context-register 'plan
+                           #'superchat-prompt-collector--plan :owner 'chat)
+     (superchat-context-register 'windows
+diff --git a/superchat-select-tools.el b/superchat-select-tools.el
+index 260f1978..3bc07555 100644
+--- a/superchat-select-tools.el
++++ b/superchat-select-tools.el
+@@ -77,7 +77,7 @@ constant."
+       "timer_create" "timer_list" "timer_cancel" "work_record")))
+ 
+ (defconst superchat--select-tools-none-surfaces
+-  '(inline-rewrite org-babel magit skills compaction)
++  '(inline-rewrite inline-annotate org-babel magit skills compaction)
+   "Surfaces whose contract §4.2 rule-3 baseline is always `none'.")
+ 
+ (defun superchat--tool-descriptor-p (name)
+diff --git a/superchat-tools.el b/superchat-tools.el
+index 37ad0bba..2af3fc87 100644
+--- a/superchat-tools.el
++++ b/superchat-tools.el
+@@ -2060,7 +2060,7 @@ It reads every conversation of every workspace, not only this one."
+ 
+          (superchat--maybe-make-llm-tool
+           "timer_list"
+-          :description "List the pending timers (id, next time, kind, text) and the timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
++          :description "List this workspace's pending timers (id, next time, kind, text) and its timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
+           :args nil
+           :function #'superchat-timer-tool-list)
+ 

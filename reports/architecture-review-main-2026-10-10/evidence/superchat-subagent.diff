@@ -1,0 +1,23 @@
+--- baseline/superchat-subagent.el
++++ main/superchat-subagent.el
+@@ -1065,6 +1065,7 @@
+                      (plist-get failure :status) (plist-get failure :tape-id)))))
+ 
+ (declare-function superchat-workspace-rules-text "superchat-workspace" (root))
++(declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
+ 
+ (defun superchat--subagent-system-with-rules (system root)
+   "Return SYSTEM followed by the rules of the Workspace rooted at ROOT.
+@@ -1075,6 +1076,12 @@
+   (let ((rules (and (stringp root)
+                     (fboundp 'superchat-workspace-rules-text)
+                     (superchat-workspace-rules-text root))))
++    (when-let* (((null rules))
++                ((stringp root))
++                ((fboundp 'superchat-workspace-rules-problem))
++                (problem (superchat-workspace-rules-problem root)))
++      (message "superchat: workspace rules are not in this sub-agent's request: %s"
++               problem))
+     (cond
+      ((null rules) system)
+      ((and (stringp system) (not (string-empty-p system)))

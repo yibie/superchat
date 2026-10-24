@@ -1,0 +1,50 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 18 tests (2026-10-11 02:59:25-0700, selector ‘"^object-scope/"’)
+Superchat session cached for next startup.
+   passed   1/18  object-scope/a-conversation-of-no-workspace-has-only-its-own-timers (0.627727 sec)
+Superchat session cached for next startup.
+   passed   2/18  object-scope/a-conversation-of-no-workspace-reaches-no-record (0.017649 sec)
+   passed   3/18  object-scope/a-fired-task-not-yet-started-is-its-workspaces-to-cancel (0.016313 sec)
+   passed   4/18  object-scope/a-record-focused-before-the-check-is-refused-the-same-way (0.013858 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/18  object-scope/a-stale-focus-brings-nothing-of-another-workspace-along (0.068505 sec)
+   passed   6/18  object-scope/a-stale-focus-is-not-a-reason-to-refuse-a-task-timer (0.014380 sec)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025926-382653-5a87 completed (session subagent-researcher-20261011-025926-210c)
+   passed   7/18  object-scope/a-sub-agent-is-told-of-its-record-and-cannot-change-it (0.157090 sec)
+   passed   8/18  object-scope/a-timer-that-does-not-exist-is-said-not-to-exist (0.007818 sec)
+   passed   9/18  object-scope/a-workspaces-conversations-share-its-timers (0.013271 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/18  object-scope/a-workspaces-own-current-record-still-rides-along (0.088297 sec)
+   passed  11/18  object-scope/another-conversation-of-the-workspace-reaches-the-record (0.010188 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/18  object-scope/another-workspaces-model-cannot-see-or-cancel-a-timer (0.110625 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/18  object-scope/another-workspaces-model-cannot-touch-a-record (0.129930 sec)
+   passed  14/18  object-scope/every-action-on-another-workspaces-record-is-refused (0.016014 sec)
+   passed  15/18  object-scope/fired-timers-are-listed-for-their-workspace-only (0.017663 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025926-875423-2dd3 completed (session 20261011-025926-c5c0)
+   passed  16/18  object-scope/the-conversation-a-record-wakes-in-reaches-it (0.162196 sec)
+   passed  17/18  object-scope/the-users-list-still-shows-every-workspaces-records (0.011622 sec)
+   passed  18/18  object-scope/the-users-own-cancel-reaches-any-timer (0.010221 sec)
+
+Ran 18 tests, 18 results as expected, 0 unexpected (2026-10-11 02:59:27-0700, 1.494862 sec)
+

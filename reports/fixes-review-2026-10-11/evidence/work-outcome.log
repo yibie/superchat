@@ -1,0 +1,50 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 10 tests (2026-10-11 02:59:30-0700, selector ‘"^work-outcome/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   1/10  work-outcome/a-failed-execution-is-caught-up-as-failed (0.595879 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   2/10  work-outcome/a-record-out-of-reach-is-given-nothing (0.058856 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/10  work-outcome/a-report-that-fails-is-recorded (0.054279 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   4/10  work-outcome/a-write-that-fails-is-recorded-and-said (0.059316 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/10  work-outcome/an-emacs-that-quit-in-between-is-caught-up (0.082285 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/10  work-outcome/an-end-observed-twice-is-written-once (0.069068 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/10  work-outcome/an-execution-belongs-to-the-record-it-ended-under (0.057274 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/10  work-outcome/an-execution-that-was-settled-leaves-nothing-to-write (0.059434 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: work record work-20261011025932-a4ee has no outcome for execution run-20261011-025932-046827-439b yet: WOUT injected: outcome storage unavailable
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   9/10  work-outcome/the-next-execution-of-the-conversation-writes-it (0.166675 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: work record work-20261011025932-c8a6 has no outcome for execution run-20261011-025932-212476-d584 yet: WOUT injected: outcome storage unavailable
+   passed  10/10  work-outcome/the-next-scan-writes-what-is-missing-once (0.068483 sec)
+
+Ran 10 tests, 10 results as expected, 0 unexpected (2026-10-11 02:59:32-0700, 1.272034 sec)
+

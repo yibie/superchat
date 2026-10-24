@@ -1,0 +1,21 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 07:28:29-0700, selector ‘"^actor/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+task conversation run.started actors=("lead")
+
+   passed  1/2  actor/a-scheduled-tasks-run-records-which-actor (0.453248 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072829-819867-6d0c completed (session 20261011-072829-00f5)
+
+main conversation run.started actors=nil
+woken conversation run.started actors=("lead")
+
+   passed  2/2  actor/a-woken-records-run-records-which-actor (0.049388 sec)
+
+Ran 2 tests, 2 results as expected, 0 unexpected (2026-10-11 07:28:29-0700, 0.502760 sec)
+

@@ -1,0 +1,163 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 21 tests (2026-10-11 02:59:38-0700, selector ‘"^annotate-chat/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   1/21  annotate-chat/a-buffer-killed-before-the-answer-is-said-not-signalled (0.669951 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed in annc-other.txt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   2/21  annotate-chat/a-buffer-named-after-the-mark-is-the-one-annotated (0.093451 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed in annc notes.txt
+Superchat session cached for next startup.
+   passed   3/21  annotate-chat/a-file-named-in-quotes-is-opened-and-annotated (0.041585 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed   4/21  annotate-chat/a-message-of-the-mark-alone-asks-the-default (0.037001 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/21  annotate-chat/a-message-superchat-sent-itself-is-never-annotations (0.048801 sec)
+   passed   6/21  annotate-chat/a-quoted-name-that-names-nothing-sends-no-request (0.008501 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: no annotations: [API error: ANNC_PROVIDER_DOWN]
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   7/21  annotate-chat/a-request-that-failed-is-not-said-to-have-hung-anything (0.094897 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed   8/21  annotate-chat/a-word-that-names-nothing-stays-part-of-the-message (0.085114 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 0 remarks placed, 1 not placed (M-x superchat-annotate-list) in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   9/21  annotate-chat/an-answer-that-placed-nothing-is-not-said-to-have-hung-anything (0.089856 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  10/21  annotate-chat/an-answer-with-nothing-placed-is-said (0.040886 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  11/21  annotate-chat/another-conversation-in-the-same-view-is-not-told (0.041279 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  12/21  annotate-chat/asking-again-replaces-the-earlier-remarks (0.082437 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025939-876651-0a76 completed (session 20261011-025939-ce36)
+   passed  13/21  annotate-chat/closing-and-opening-the-view-keeps-what-was-done (0.142619 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  14/21  annotate-chat/editing-the-message-puts-the-mark-back-in-the-prompt (0.042457 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  15/21  annotate-chat/regenerating-the-message-annotates-again (0.078389 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  16/21  annotate-chat/the-answer-is-hung-on-the-buffer-the-conversation-came-from (0.098199 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+superchat: run run-20261011-025940-189204-f27c completed (session 20261011-025940-23bd)
+Superchat session cached for next startup.
+   passed  17/21  annotate-chat/the-inspector-shows-and-sends-the-annotation-request (0.039121 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  18/21  annotate-chat/the-next-message-is-an-ordinary-one-again (0.136627 sec)
+   passed  19/21  annotate-chat/the-parser-reads-the-mark-only-where-it-stands-alone (0.000428 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  20/21  annotate-chat/the-request-can-be-rebuilt-from-the-record (0.041178 sec)
+Warning (superchat): Deprecated agent preset without profile-id: annc-agent
+🎯 Using skill: annc-agent
+Warning (superchat): Agent Profile annc-agent has no explicit capability; using its name for compatibility
+🎯 Active preset: annc-agent (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile annc-agent has no explicit capability; using annc-agent for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Agent Profile annc-agent has no explicit capability; using annc-agent for compatibility
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+   passed  21/21  annotate-chat/under-an-agent-the-form-comes-last-and-no-tools-are-offered (0.104785 sec)
+
+Ran 21 tests, 21 results as expected, 0 unexpected (2026-10-11 02:59:40-0700, 2.018962 sec)
+

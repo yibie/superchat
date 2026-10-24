@@ -1,0 +1,62 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 18 tests (2026-10-11 07:21:48-0700, selector ‘"^pending/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-guide/ws-work-ynbHf7/a.txt
+   passed   1/18  pending/a-buffer-a-tool-edited-is-listed-while-unsaved (0.470398 sec)
+   passed   2/18  pending/a-completed-record-is-not-listed (0.006110 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/18  pending/a-record-being-worked-on-is-not-also-continuable (0.436604 sec)
+   passed   4/18  pending/a-record-waiting-for-a-time-then-due-and-not-taken-up (0.009344 sec)
+   passed   5/18  pending/a-record-waiting-for-the-user-says-what-it-asks (0.008358 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/18  pending/a-running-execution-says-who-started-it (0.437679 sec)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072149-592272-fb68 completed (session subagent-researcher-20261011-072149-bfe0)
+   passed   7/18  pending/a-sub-agents-execution-names-the-execution-that-started-it (0.919102 sec)
+superchat: scheduled task timer-20261011072150-8ce7 was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/18  pending/a-task-sent-while-another-execution-began-is-unsure (0.050579 sec)
+superchat: scheduled task timer-20261011072150-4225 was not started: TSF injected: send fails
+   passed   9/18  pending/a-task-that-may-have-started-says-so (0.009624 sec)
+superchat: scheduled task timer-20261011072150-e6a8 was not started: TSF injected: send fails
+   passed  10/18  pending/a-timer-to-come-and-a-task-that-did-not-start (0.007975 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072150-554313-cdcc completed (session 20261011-072150-20d8)
+   passed  11/18  pending/a-woken-record-being-worked-on-is-not-also-continuable (0.448567 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/18  pending/an-ended-row-is-kept-when-its-conversation-cannot-be-shown (0.051910 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/18  pending/an-execution-that-asks-is-listed-as-asking (0.096029 sec)
+   passed  14/18  pending/asking-comes-before-everything-and-can-be-stopped (0.000041 sec)
+   passed  15/18  pending/reading-the-list-writes-nothing (0.011881 sec)
+   passed  16/18  pending/the-kinds-come-in-the-order-that-needs-the-user-first (0.006793 sec)
+   passed  17/18  pending/the-list-shows-a-row-for-each-item-and-leads-to-it (0.005514 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  18/18  pending/work-superchat-did-by-itself-is-listed-until-looked-at (0.044465 sec)
+
+Ran 18 tests, 18 results as expected, 0 unexpected (2026-10-11 07:21:51-0700, 3.021580 sec)
+

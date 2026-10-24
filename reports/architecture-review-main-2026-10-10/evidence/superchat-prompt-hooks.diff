@@ -1,0 +1,121 @@
+--- baseline/superchat-prompt-hooks.el
++++ main/superchat-prompt-hooks.el
+@@ -513,17 +513,39 @@
+ 
+ (declare-function superchat-workspace-rules-text "superchat-workspace" (root))
+ (declare-function superchat-workspace-remember-note "superchat-workspace" (root))
++(declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
++(defvar superchat-workspace-rules-problem-note)
++
++(defconst superchat-prompt--rules-only-surfaces '(inline-rewrite workflow)
++  "Surfaces whose requests carry the Workspace rules without the note about
++remembering.  A region rewrite answers with the replacement text and a
++workflow step runs a written recipe; neither is where the user says
++\"remember this\".")
++
++(defconst superchat-prompt--rewrite-rules-note
++  "Your whole answer is put into the user's file in place of the target, so it \
++holds the replacement text and nothing else.  A rule above about how to answer \
++-- explaining first, a line of reasoning, a greeting, a summary -- is about \
++conversations and does not apply to this answer.  A rule above about the text \
++itself -- its language, date format, wording, naming -- does apply to the \
++replacement."
++  "What follows the Workspace rules in a region rewrite's request.")
+ 
+ (defun superchat-prompt-collector--workspace-rules (env _state _tools)
+   "Return the rules of the Workspace ENV's Session is bound to, as system text.
+ The root comes from the Session's own Tape (`workspace.bound'), so the rules
+-follow the conversation, not the buffer that happens to be current.  Chat,
+-inline-ask and inline-act only, like the other system blocks.  After the
+-rules comes what to do when the user says to remember something
++follow the conversation, not the buffer that happens to be current.  On the
++chat, inline-ask and inline-act surfaces the rules are followed by what to
++do when the user says to remember something
+ \(`superchat-workspace-remember-note'); a Session with no Workspace root (a
+-temporary conversation) gets only that note, which says nothing is kept."
++temporary conversation) gets only that note, which says nothing is kept.
++The surfaces in `superchat-prompt--rules-only-surfaces' get the rules
++alone, and nothing when there are none; a region rewrite's rules are followed
++by `superchat-prompt--rewrite-rules-note'."
+   (let* ((session-id (plist-get env :session-id))
+-         (surface-p (memq (plist-get env :surface) '(chat inline-ask inline-act)))
++         (surface (plist-get env :surface))
++         (note-p (memq surface '(chat inline-ask inline-act)))
++         (surface-p (or note-p (memq surface superchat-prompt--rules-only-surfaces)))
+          (root (and surface-p
+                     (stringp session-id)
+                     (plist-get (superchat-view-session-configuration session-id)
+@@ -531,11 +553,25 @@
+          (rules (and (stringp root)
+                      (fboundp 'superchat-workspace-rules-text)
+                      (superchat-workspace-rules-text root)))
+-         (note (and surface-p
++         (note (and note-p
+                     (stringp session-id)
+                     (fboundp 'superchat-workspace-remember-note)
+                     (superchat-workspace-remember-note root)))
+-         (text (and note (if rules (concat rules "\n\n" note) note))))
++         (problem (and (stringp root) (null rules)
++                       (fboundp 'superchat-workspace-rules-problem)
++                       (superchat-workspace-rules-problem root)))
++         (note (if (and problem note)
++                   (concat (format superchat-workspace-rules-problem-note problem)
++                           "\n\n" note)
++                 note))
++         (text (cond ((and rules note) (concat rules "\n\n" note))
++                     (note-p note)
++                     ((and rules (eq surface 'inline-rewrite))
++                      (concat rules "\n\n" superchat-prompt--rewrite-rules-note))
++                     (t rules))))
++    ;; A request that goes without rules it should carry is said, not hidden.
++    (when problem
++      (message "superchat: workspace rules are not in this request: %s" problem))
+     (when text
+       (list (superchat-prompt-fragment
+              :owner 'core :id "workspace-rules" :slot 'system :text text
+@@ -819,19 +855,22 @@
+ \(a plan that previewed and then sent shares exactly that instant).  Only a
+ request that was never prepared that way resolves the View's own association
+ here, and captures it once, at this collection.  Nothing is guessed from
+-focus, buffer names or recent use, and a request that already carries an
+-assembled prompt (`:chat-prompt-override': the previewed or user-edited final
+-message) is NOT rendered into again: that text is the exact body the user
+-reviewed and confirmed, so re-rendering would both duplicate the facts and
+-restore a selection the user deleted in the inspector.
++focus, buffer names or recent use, and a request the user previewed
++\(`:chat-prepared-context') is NOT rendered into again: that text is the exact
++body the user reviewed and confirmed, so re-rendering would both duplicate the
++facts and restore a selection the user deleted in the inspector.  A message
++whose text a skill fixed (`:chat-prompt-override' alone) was reviewed by
++nobody and is rendered into like any other.
+ 
+ The live associated object is reported through the Envelope's
+ `:emacs-origin-buffer', the data-only facts through `:emacs-origin-snapshot';
+ neither is appended to the user's own text."
+   (let* ((context (plist-get env :context))
+-         (override (plist-get context :chat-prompt-override))
+          (frozen (plist-get context :emacs-origin-snapshot)))
+-    (unless (and (stringp override) (not (string-empty-p override)))
++    ;; Only a request the user previewed is left alone.  A skill also fixes
++    ;; the message text (`:chat-prompt-override'), but nobody reviewed that
++    ;; text: it still needs to say where the user is.
++    (unless (plist-get context :chat-prepared-context)
+       (let* ((view (plist-get context :chat-buffer))
+              (source (or (plist-get context :emacs-origin-buffer)
+                          (and (buffer-live-p view)
+@@ -971,11 +1010,11 @@
+   "Return the window arrangement of the selected frame as a `context' fragment.
+ Chat, inline-ask and inline-act only.  The arrangement is taken when the
+ request is collected; a request whose text the user already previewed and
+-confirmed (`:chat-prompt-override') is not rendered into again."
+-  (let* ((context (plist-get env :context))
+-         (override (plist-get context :chat-prompt-override)))
++confirmed (`:chat-prepared-context') is not rendered into again.  A message
++whose text a skill fixed is rendered into like any other."
++  (let* ((context (plist-get env :context)))
+     (when (and (memq (plist-get env :surface) '(chat inline-ask inline-act))
+-               (not (and (stringp override) (not (string-empty-p override)))))
++               (not (plist-get context :chat-prepared-context)))
+       (when-let* ((text (superchat-prompt--window-arrangement-render
+                          (superchat-prompt--window-arrangement
+                           (selected-frame) (plist-get context :chat-buffer)))))

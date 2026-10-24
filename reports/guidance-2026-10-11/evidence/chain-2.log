@@ -1,0 +1,3 @@
+actor-probe: exit=0; 1.2s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/actor-probe.log
+fr-settle-probes-on-head: exit=0; 8.2s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/fr-settle-probes-on-head.log
+CHAIN-2-DONE

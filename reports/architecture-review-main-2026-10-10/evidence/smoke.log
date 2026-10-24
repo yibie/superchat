@@ -1,0 +1,497 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== A: chat: one plain turn
+scripted-answer-text: t
+scripted-prompt-text: "Context: Operate available tools yourself; never tell the user to call one. You can batch INDEPENDENT read-only tool calls into a single turn.\nTools that depend on each other's output must wait for the previous result.\n\nEach tool call costs a round trip. When you need several facts from Emacs, ask for all of them in one eval_elisp that returns a list, for example (list :today (format-time-string \"%F %A\") :windows (mapcar (lambda (w) (buffer-name (window-buffer w))) (window-list))), not one call per fact.\n\nFile systems on macOS and Windows usually ignore case: two names that differ only in case are the same file there, so file-exists-p is true for the new name of a case-only rename.  Check (file-name-case-insensitive-p DIRECTORY) before treating such a rename as an overwrite; rename-file does a case-only rename correctly.\n\nSaving a buffer you edited is the user's decision. A change on disk the user asks for in so many words -- rename, move, copy or delete these files -- is already the user's decision: do it (the permission level decides whether you are asked first), then say exactly what you did.\n\nWorking in the user's Emacs:\n- Ask the running Emacs, do not guess: `user-init-file' is the loaded init file. Check symbols with fboundp, commandp, boundp; never run a command to test it. fundamental-mode has no keymap variable.\n- Keys: write (kbd \"C-c t h\"), never a bare string. A number from lookup-key means that map has no binding for it; key-binding in the target buffer is the effective binding.\n- Change a file with open_file, then edit_buffer; until the user saves, (load FILE) reads the old disk text. To make it live, evaluate only the forms you changed, not the whole buffer (no eval-buffer).\n- eval_elisp takes one expression; wrap several in progn.\n- To undo, restore what you observed (not \"unbound\"), only what this task changed.\n- The origin buffer is where the user is, not the task's limit. Their agenda, feeds, notes, files and repositories live in this Emacs: ask it with eval_elisp (the packages and variables they configured) before saying you cannot reach something.\n- Never change global settings, other buffers or Superchat's windows to get past an obstacle; say what blocks you.\n- Report what you checked: the buffer you edited and whether it is unsaved (buffer-modified-p); saving is the user's. You did not restart Emacs; claim no restart.\n\nReference pages: call read_reference with an id when the task matches. A page is advice; the user's instructions and permission decisions come first.\n- emacs-keybindings: changing, checking or undoing a key binding in the user's Emacs configuration\n- emacs-ert-tests: running a file's ERT tests in the user's Emacs and reporting which passed, failed or were skipped\n\nThis is a temporary conversation: it belongs to no workspace, and nothing said here is carried into later conversations.  If the user asks you to remember something for later, say that it will not be kept here, and that `/workspace DIRECTORY' in this window makes a directory a workspace whose rules are kept in its AGENTS.md.\nInteractions:\nUser: Content: [Emacs origin]\nBuffer:  *smoke-origin*\nMajor mode: fundamental-mode\nPoint in that buffer: 1\n\n[Emacs windows]\nWindows of the current tab (2), from the top left:\n- *scratch*, 46 columns wide at column 0, line 0\n- this conversation, 34 columns wide at column 46, line 0, side window (right), selected\n\nhello smoke\n\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent Superchat mode: edit-buffers. You change things by editing Emacs buffers: open a file as a buffer with open_file and edit the buffer. Your edits stay in the buffer -- saving a buffer to disk is the user's decision, not yours, so say which buffers you changed and that they are unsaved.\n\nApproval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed. Tool results: nil\n"
+view-has-answer: t
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+reconstruct-status: reproduced
+invariant-violations: 0
+-- A MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== B: chat: one approved read_buffer call
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "tool.requested" "tool.execution.started" "tool.completed" "step.ended" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+provider-calls: 2
+-- B MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Queued (1 pending); it will be sent when the current response finishes.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== C: chat: send during a Run, then cancel
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "queue.queued" "step.ended" "run.cancelled" "turn.completed" "prompt.assembled" "intent.received" "run.started" "step.started" "request.message-list" "queue.dispatched" "step.ended" "response.completed" "run.completed" "turn.completed")
+pending-after-second-send: 1
+provider-calls: 2
+-- C MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082049-557234-2696 completed (session 20261010-082049-b554)
+== D: inline ask on a scratch buffer
+scripted-events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+scripted-overlay-status: ready
+scripted-buffer-unchanged: t
+reconstruct-status: reproduced
+invariant-violations: 0
+-- D MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082049-620022-d4e5 completed (session 20261010-082049-a4dc)
+Rewrite applied. Undo to revert.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+superchat: run run-20261010-082049-645732-3b1d completed (session 20261010-082049-a4dc)
+Rewrite rejected.
+Superchat session cached for next startup.
+== E: inline rewrite: accept, then reject
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed" "edit.applied" "prompt.assembled" "intent.received" "run.started" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+unchanged-while-ready: t
+accept-changed: t
+accept-events-have-edit: t
+reject-unchanged: t
+text: "REWRITTEN beta gamm"
+-- E MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Telega digest: reading 1 chat(s) asynchronously...
+superchat: run run-20261010-082049-681169-e253 completed (session telega-digest)
+== F: Telega digest through the plugin
+events: ("digest.scope-granted" "prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+result: "digest F"
+surface: telega-digest
+-- F MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== M: chat: one plain turn through the mock transport plugin
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+network-calls: 0
+mock-calls: 1
+view-has-answer: t
+plugins: ((transport-mock active))
+-- M MATCH (pre-M3 subsequence + full)
+== U: Telega plugin: unmount leaves no trace, remount restores it
+traces-while-mounted: 11
+traces-after-unmount: nil
+traces-after-remount: 11
+state: active
+-- U MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Compacting session 20261010-082049-2607 in the background...
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Session compacted into anchor.
+superchat: run run-20261010-082049-922182-78d3 completed (session 20261010-082049-2607/compaction-d4bbcc89ec0b)
+Superchat session cached for next startup.
+== K: compaction of a session longer than the context budget
+compaction-result: (t "SUMMARY-K")
+provider-calls: 4
+anchor-present: t
+compaction-prompt-has-history: t
+-- K MATCH
+
+🎯 Using skill: smokeskill
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+🎯 Using skill: smokeagent
+🎯 Active preset: smokeagent (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== S: a prompt-type skill and an agent-type skill through the chat
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed" "capability.activated" "capability.activated" "prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+prompt-skill-body: t
+prompt-skill-template: t
+prompt-skill-input: t
+agent-persona-in-prompt: t
+agent-template: t
+agent-input: t
+-- S MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== T: a user command template turn
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+prompt-has-template: t
+prompt-has-general-template: nil
+provider-calls: 1
+-- T MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== W: a two-step workflow recipe
+provider-calls: 2
+step-one-prompt: t
+step-two-prompt: t
+view-has-outputs: t
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed" "prompt.assembled" "intent.received" "run.started" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+-- W MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+== L: a tools/pre-execute listener denies read_buffer
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "request.header" "request.message-list" "tool.requested" "tool.failed" "step.ended" "step.started" "request.message-list" "step.ended" "response.completed" "run.completed" "turn.completed")
+status: completed
+provider-calls: 2
+second-prompt-mentions-denied: t
+-- L MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== O: org-babel superchat block through the blocking adapter
+result: "ob answer"
+provider-calls: 1
+active-runs-after: 0
+-- O MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== I: emacsclient JSON surface over the driver Service
+list-has-run: t
+status-ok: t
+cancelled: cancelled
+-- I MATCH
+== V: unmounting built-in plugins withdraws their registrations
+collectors-mounted: 14
+commands-without-chat-commands: 0
+commands-remounted: 34
+workflow-projection-without: nil
+workflow-projection-remounted: t
+chat-parser-direct: t
+invariants: (plugin-scope-only exact-sink prompt-reconstructable tool-execution-passes-the-pipeline terminal-on-tape host-buffer-unchanged)
+chat-collectors-after-unmount: 0
+collectors-after-remount: 14
+read_buffer-descriptor-without-tools-builtin: nil
+read_buffer-descriptor-remounted: t
+assembler-works-without-its-plugin: t
+all-active: t
+-- V MATCH
+
+superchat: run run-20261010-082050-364655-4bf7 completed (session smoke-prepared)
+== P: an over-budget prepared prompt through the driver completes (the F1 scenario)
+run-created: t
+prompt-larger-than-budget: t
+final: "prepared answer P"
+mock-saw-prompt: t
+events: ("prompt.assembled" "intent.received" "run.started" "step.started" "step.ended" "response.completed" "run.completed" "turn.completed")
+-- P MATCH (pre-M3 subsequence + full)
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-416309-7b56 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-425241-e1dc cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Run run-20261010-082050-433212-087a closed, but delivery failed: Quit: "teardown consumer"
+superchat: run run-20261010-082050-433212-087a cancelled (session architecture)
+Warning (superchat-runtime): Run run-20261010-082050-434878-b497 closed, but delivery failed: Quit: "teardown consumer"
+superchat: run run-20261010-082050-434878-b497 cancelled (session architecture)
+Warning (superchat-runtime): Run run-20261010-082050-436526-e176 closed, but delivery failed: Quit: "teardown consumer"
+superchat: run run-20261010-082050-436526-e176 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-448656-0e54 completed (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-477809-6732 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082050-483862-d0ab audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082050-519120-0032 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082050-555136-ef37 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261010-082050-555136-ef37 audit-incomplete (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-647287-b79d cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-680314-ee88 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-736410-5e35 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-771815-143d cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082050-780144-f22b cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082050-787836-f77b post-seal completion failure: simulated Turn closure persistence failure
+superchat: run run-20261010-082050-787836-f77b cancelled (session architecture)
+== R1: transport dependency and in-flight unmount buffer authority
+contract: passed
+-- R1 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Run run-20261010-082050-874612-d215 closed, but delivery failed: exact consumer condition: final
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Run run-20261010-082050-936747-2f48 closed, but delivery failed: Quit: "exact consumer condition", final
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Run run-20261010-082050-960751-66e9 closed, but delivery failed: exact consumer condition: error
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (superchat-runtime): Run run-20261010-082051-025532-09a6 closed, but delivery failed: Quit: "exact consumer condition", error
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-048385-dac0 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-058084-eeeb cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-296834-254f cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-307354-e643 completed (session org-babel-g127)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-369728-18c2 completed (session magit-g128)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== R2: blocking pipeline, formal adapters, terminal conditions and FIFO liveness
+contract: passed
+-- R2 MATCH
+
+MCP tool mcp:architecture-refresh:lookup was not registered: MCP tool mcp:architecture-refresh:lookup requires a callable :function
+== R3: duplicate tools and installation-owned rollback
+contract: passed
+-- R3 MATCH
+== R4: required collect execution and validation failures terminate; nil is no contribution
+contract: passed
+-- R4 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-488429-dff4 post-seal completion failure: R5 pre-insert failure: turn.completed
+superchat: run run-20261010-082051-488429-dff4 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-500571-6301 post-seal completion failure: R5 lost append receipt: turn.completed
+superchat: run run-20261010-082051-500571-6301 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-509106-bcd9 audit incomplete: R5 pre-insert failure: run.cancelled
+superchat: run run-20261010-082051-509106-bcd9 audit-incomplete (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-519303-77c8 post-seal completion failure: R5 lost append receipt: run.cancelled
+superchat: run run-20261010-082051-519303-77c8 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-529639-c293 post-seal completion failure: R5 pre-insert failure: turn.completed
+superchat: run run-20261010-082051-529639-c293 completed (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-540175-ecda post-seal completion failure: R5 lost append receipt: turn.completed
+superchat: run run-20261010-082051-540175-ecda completed (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-548871-05fe audit incomplete: R5 pre-insert failure: run.completed
+superchat: run run-20261010-082051-548871-05fe audit-incomplete (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-559998-6f98 post-seal completion failure: R5 lost append receipt: run.completed
+superchat: run run-20261010-082051-559998-6f98 completed (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-571679-6483 audit incomplete: R5 unreadable Tape after committed run.cancelled; Tape terminal could not be confirmed; no recovery seal queued
+superchat: run run-20261010-082051-571679-6483 audit-incomplete (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-578346-fac5 post-seal completion failure: R5 unreadable Tape after committed turn.completed
+Superchat Run run-20261010-082051-578346-fac5 post-seal completion failure: R5 unreadable Tape after committed turn.completed; Tape Turn state is unreadable; no recovery Turn seal was guessed
+superchat: run run-20261010-082051-578346-fac5 cancelled (session architecture)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-585638-aa71 post-seal completion failure: R5 injected Turn append failure
+Warning (superchat-runtime): Run run-20261010-082051-585638-aa71 closed, but delivery failed: R5 terminal consumer condition: completed
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-650231-a8b5 post-seal completion failure: R5 injected Turn append failure
+Warning (superchat-runtime): Run run-20261010-082051-650231-a8b5 closed, but delivery failed: Quit: "R5 terminal consumer condition", completed
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-674777-8b0d post-seal completion failure: R5 injected Turn append failure
+Warning (superchat-runtime): Run run-20261010-082051-674777-8b0d closed, but delivery failed: R5 terminal consumer condition: failed
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082051-740217-47ed post-seal completion failure: R5 injected Turn append failure
+Warning (superchat-runtime): Run run-20261010-082051-740217-47ed closed, but delivery failed: Quit: "R5 terminal consumer condition", failed
+== R5: post-seal SQLite receipt recovery never competes with a durable Run fact
+contract: passed
+-- R5 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-770992-1aa6 completed (session r6-B-parent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-766909-6a3b completed (session r6-A-parent)
+superchat: run run-20261010-082051-838108-dade completed (session r6-A-from-sink)
+superchat: run run-20261010-082051-843017-8317 completed (session r6-A-from-event)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-870386-8149 cancelled (session smoke-r6-queue)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-877928-4ba1 completed (session smoke-r6-queue)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-908192-119d completed (session smoke-r6-queue)
+== R6: borrowed caller Scopes isolate pipeline, async lifecycle, and FIFO work
+contract: passed
+-- R6 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-978820-0d15 cancelled (session smoke-r7-levels)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082051-992751-43e9 completed (session smoke-r7-revoked-old)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-057902-a11e completed (session smoke-r7-revoked-fresh)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-114081-4f02 completed (session smoke-r7-async)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-166406-2235 completed (session smoke-r7-mcp)
+== R7: scoped product installations, revocation, native callbacks, and MCP refresh
+contract: passed
+-- R7 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-243686-7d51 cancelled (session smoke-r8-child)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-238688-1f51 cancelled (session smoke-r8-A)
+superchat: run run-20261010-082052-255501-2c4c completed (session smoke-r8-B-reentrant)
+superchat: run run-20261010-082052-248394-71b0 cancelled (session smoke-r8-B-old)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-288380-8139 cancelled (session smoke-r8-parent-1)
+superchat: run run-20261010-082052-284538-bae3 cancelled (session smoke-r8-parent-0)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-301566-6480 completed (session smoke-r8-queue)
+== R8: execution Scope retirement stops only its borrowed execution ancestry
+contract: passed
+-- R8 MATCH
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-365511-f522 completed (session 20261010-082052-cacd)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Queued (1 pending); it will be sent when the current response finishes.
+superchat: run run-20261010-082052-399012-f68d cancelled (session 20261010-082052-cacd)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-465823-96d6 completed (session 20261010-082052-cacd)
+🎯 Using skill: smoke-r9-skill
+🎯 Active preset: smoke-r9-skill (agent)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082052-516177-de7d completed (session 20261010-082052-cacd)
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261010-082052-564190-ed9c audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat-plugin: smoke-r9-fail failed: R9 candidate apply failure
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+🎯 Active preset: plan (plan)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+== R9: Preset composition, owner switch, producer routing, and cleanup remain scoped.
+contract: passed
+-- R9 MATCH
+SMOKE OK (0 mismatches)

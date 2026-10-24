@@ -1,0 +1,243 @@
+--- baseline/superchat-tools.el
++++ main/superchat-tools.el
+@@ -426,6 +426,48 @@
+                "Your edits stay in the buffer; saving it is the user's decision.")))))
+     (error (format "Error: %s" (error-message-string err)))))
+ 
++;;;; A file that changed on disk ------------------------------------------------
++;; docs/decisions/accepted/2026-10-07-working-beside-the-user.md
++;; Another program wrote the file after the buffer read it.  Emacs would ask
++;; "changed on disk; really edit the buffer?" in the middle of the agent's
++;; edit, a question nobody expects and the model never hears of.  Superchat
++;; looks first and says what it found to the model and to the user.
++
++(defun superchat-tools--disk-changed-p (buffer)
++  "Non-nil when the file BUFFER visits changed on disk after BUFFER read it.
++BUFFER's base buffer is the one asked.  A file that is gone is not a change."
++  (let ((base (or (buffer-base-buffer buffer) buffer)))
++    (and (buffer-file-name base)
++         (file-exists-p (buffer-file-name base))
++         (not (verify-visited-file-modtime base)))))
++
++(defun superchat-tools--disk-change-before-edit (buffer-name)
++  "Deal with a change on disk before a structured edit of BUFFER-NAME.
++Return nil when the file did not change.  When it did and the buffer has no
++unsaved changes, reload the buffer from disk and return (:final TEXT): the
++edit is not made and TEXT is the tool's answer.  When the buffer has unsaved
++changes, leave it alone and return (:note TEXT) to append to the edit's
++answer.  The user is told in the echo area either way."
++  (when-let* ((buffer (get-buffer buffer-name))
++              ((superchat-tools--disk-changed-p buffer))
++              (base (or (buffer-base-buffer buffer) buffer))
++              (file (buffer-file-name base)))
++    (if (buffer-modified-p base)
++        (progn
++          (message "superchat: %s changed on disk while buffer %s has unsaved changes; the agent edited the buffer"
++                   file (buffer-name base))
++          (list :note
++                (format "\nNote: %s changed on disk after buffer %s read it, and the buffer has unsaved changes, so the two differ. This edit went into the buffer. Saving the buffer would overwrite what is on disk now: tell the user."
++                        file (buffer-name base))))
++      (with-current-buffer base
++        (let ((inhibit-message t))
++          (revert-buffer t t t)))
++      (message "superchat: %s changed on disk; buffer %s was reloaded before the agent's edit"
++               file (buffer-name base))
++      (list :final
++            (format "Error: edit not applied. %s changed on disk after buffer %s read it. The buffer had no unsaved changes, so it was reloaded from disk and now holds the file's current text. Read the buffer again, then make the edit against that text."
++                    file (buffer-name base))))))
++
+ (defun superchat-tool-read-buffer (buffer &optional offset limit)
+   "Return lines of the live text of BUFFER, unsaved changes included.
+ OFFSET is the 1-based first line (default 1); LIMIT the number of lines
+@@ -460,6 +502,9 @@
+          (when (and buffer-file-name (buffer-modified-p))
+            (format "Note: this is the unsaved text of %s; the version on disk differs.\n"
+                    buffer-file-name))
++         (when (superchat-tools--disk-changed-p (current-buffer))
++           (format "Note: %s changed on disk after this buffer read it; this is the buffer's text, not the file's current text.\n"
++                   (buffer-file-name (or (buffer-base-buffer) (current-buffer)))))
+          "Content:\n"
+          (cdr window))))))
+ 
+@@ -593,8 +638,9 @@
+ returns the evidence lines.  Only a buffer whose mode derives from
+ `lisp-data-mode' is rehearsed."
+   (let* ((buffer (get-buffer buffer-name))
++         (disk (superchat-tools--disk-change-before-edit buffer-name))
+          (verdict
+-          (when (and buffer
++          (when (and buffer (not (plist-get disk :final))
+                      (with-current-buffer buffer (derived-mode-p 'lisp-data-mode)))
+             (let ((copy (generate-new-buffer " *superchat-edit-rehearsal*" t)))
+               (unwind-protect
+@@ -623,6 +669,7 @@
+                             :where (and after (superchat-tools--lisp-problem-text after)))))
+                 (kill-buffer copy))))))
+     (cond
++     ((plist-get disk :final))
+      ((and verdict (not (plist-get verdict :before)) (plist-get verdict :after))
+       (format "Error: edit not applied; buffer %s was not changed. It reads as Lisp now, and after this edit it would not: %s. Correct the text you are inserting so that parentheses and strings balance, then call again."
+               buffer-name (plist-get verdict :where)))
+@@ -634,6 +681,7 @@
+                             buffer-name (plist-get verdict :where))
+                   (format "\nNote: buffer %s did not read as Lisp before this edit; it now reads as Lisp."
+                           buffer-name)))
++              (plist-get disk :note)
+               (funcall evidence))))))
+ 
+ (defun superchat-tool-edit-buffer (buffer-name old-string new-string)
+@@ -1260,10 +1308,31 @@
+ Each row becomes a JSON array so mixed-type columns encode reliably."
+   (json-encode (mapcar (lambda (row) (vconcat row)) rows)))
+ 
++(defconst superchat-tools--no-conversation-error
++  "Error: this call belongs to no conversation, so there is nothing to search."
++  "What a history tool returns when it cannot tell whose history to read.")
++
++(defun superchat-tools--history-session ()
++  "Return the conversation a history tool reads for, or nil.
++That is the conversation of the Run making the call
++\(`superchat--tool-execution-context'), which the execution pipeline binds
++around every tool; the current buffer's is used only without one.  The
++buffer that happens to be current when a tool runs may show another
++Workspace's conversation.  Nil is never read as \"every conversation\": a
++caller that gets nil searches nothing."
++  (let ((session-id
++         (or (and (boundp 'superchat--tool-execution-context)
++                  (plist-get superchat--tool-execution-context :session-id))
++             (and (boundp 'superchat--session-id) superchat--session-id))))
++    (and (stringp session-id) (not (string-empty-p session-id)) session-id)))
++
+ (defun superchat-tool-sql (query)
+   "Execute a read-only SELECT/WITH QUERY against the superchat SQLite DB.
+ Returns results as a JSON string.  Mutating statements are rejected
+-by signaling an error."
++by signaling an error.
++The query is not kept to a Workspace: it reads every conversation's rows.
++That is why nothing Superchat ships offers this tool (see
++`superchat-tools--sql-offered-p')."
+   (if (fboundp 'superchat-db-tape-select)
+       (superchat-tools--rows-to-json (superchat-db-tape-select query))
+     "Error: tape database is not available."))
+@@ -1282,46 +1351,47 @@
+ before any row-count limit, so an eligible row is never crowded out by
+ ineligible or merely better-ranked ones."
+   (if (fboundp 'superchat-view-search)
+-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+-             (cross-session
+-              (if (boundp 'superchat-memory-auto-recall-cross-session)
+-                  superchat-memory-auto-recall-cross-session
+-                'all))
+-             (rows
+-              (cond
+-               ((eq cross-session 'none)
+-                (superchat-view-search query session-id 20))
+-               ((fboundp 'superchat-db-tape-search-prioritized)
+-                (superchat-db-tape-search-prioritized
+-                 query session-id 20 (eq cross-session 'remembered) nil nil
+-                 (and (fboundp 'superchat-view-recall-session-ids)
+-                      (superchat-view-recall-session-ids session-id))))
+-               (t (superchat-view-search query session-id 20)))))
+-        (superchat-tools--rows-to-json rows))
++      (if-let* ((session-id (superchat-tools--history-session)))
++          (let* ((cross-session
++                  (if (boundp 'superchat-memory-auto-recall-cross-session)
++                      superchat-memory-auto-recall-cross-session
++                    'all))
++                 (rows
++                  (cond
++                   ((eq cross-session 'none)
++                    (superchat-view-search query session-id 20))
++                   ((fboundp 'superchat-db-tape-search-prioritized)
++                    (superchat-db-tape-search-prioritized
++                     query session-id 20 (eq cross-session 'remembered) nil nil
++                     (and (fboundp 'superchat-view-recall-session-ids)
++                          (superchat-view-recall-session-ids session-id))))
++                   (t (superchat-view-search query session-id 20)))))
++            (superchat-tools--rows-to-json rows))
++            superchat-tools--no-conversation-error)
+     "Error: tape view layer is not available."))
+ 
+ (defun superchat-tool-tool-history (tool-name)
+   "Return recent tool_call/tool_result entries for TOOL-NAME as JSON."
+   (if (fboundp 'superchat-view-tool-history)
+-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+-             (rows (superchat-view-tool-history tool-name session-id 20)))
+-        (superchat-tools--rows-to-json rows))
++      (if-let* ((session-id (superchat-tools--history-session)))
++          (superchat-tools--rows-to-json (superchat-view-tool-history tool-name session-id 20))
++        superchat-tools--no-conversation-error)
+     "Error: tape view layer is not available."))
+ 
+ (defun superchat-tool-file-history (path)
+   "Return recent tool entries mentioning PATH as JSON."
+   (if (fboundp 'superchat-view-file-history)
+-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+-             (rows (superchat-view-file-history path session-id 20)))
+-        (superchat-tools--rows-to-json rows))
++      (if-let* ((session-id (superchat-tools--history-session)))
++          (superchat-tools--rows-to-json (superchat-view-file-history path session-id 20))
++        superchat-tools--no-conversation-error)
+     "Error: tape view layer is not available."))
+ 
+ (defun superchat-tool-recent-errors ()
+   "Return recent error-like tool results as JSON."
+   (if (fboundp 'superchat-view-recent-errors)
+-      (let* ((session-id (when (boundp 'superchat--session-id) superchat--session-id))
+-             (rows (superchat-view-recent-errors session-id 10)))
+-        (superchat-tools--rows-to-json rows))
++      (if-let* ((session-id (superchat-tools--history-session)))
++          (superchat-tools--rows-to-json (superchat-view-recent-errors session-id 10))
++        superchat-tools--no-conversation-error)
+     "Error: tape view layer is not available."))
+ 
+ ;;;---------------------------------------------
+@@ -1485,8 +1555,9 @@
+ tools only into Requests they are active for.  The full library stays
+ available to any explicit tool list.
+ 
+-Set to `all' to expose every built-in tool.  Set to nil to expose no
+-built-in tools.
++Set to `all' to expose every built-in tool except `sql'.  Set to nil to
++expose no built-in tools.  `sql' reads every conversation of every
++Workspace, so it is offered only when a list names it.
+ 
+ This variable governs only Superchat's own **built-in** tools.  A tool a
+ plugin registered through `superchat-register-tool' is offered by default
+@@ -1504,6 +1575,16 @@
+   "Return non-nil when built-in tool NAME should be registered."
+   (or (eq superchat-llm-tool-names 'all)
+       (member name superchat-llm-tool-names)))
++
++(defun superchat-tools--sql-offered-p ()
++  "Non-nil when the tool names in force name `sql' themselves.
++`sql' reads every conversation's rows, so it would undo what a Workspace
++keeps apart.  It is therefore not part of `all' and no built-in Preset
++lists it; it exists only where the user's own `superchat-llm-tool-names'
++list, or an explicit tool list of the user's Preset, names it."
++  (and (listp superchat-llm-tool-names)
++       (member "sql" superchat-llm-tool-names)
++       t))
+ 
+ (defconst superchat-tools--buffer-edit-teaching
+   " The change stays in the buffer: nothing is saved to disk, and saving is the user's decision, so tell the user which buffer you changed."
+@@ -1913,14 +1994,15 @@
+ 
+          ;; ── Tape / memory retrieval tools ──
+ 
+-         (superchat--maybe-make-llm-tool
+-          "sql"
++         (when (superchat-tools--sql-offered-p)
++          (llm-make-tool
++          :name "sql"
+           :description "Run a read-only SELECT/WITH SQL query against the superchat SQLite database. \
+-Use this to compose complex views across the conversation tape."
++It reads every conversation of every workspace, not only this one."
+           :args (list (list :name "query"
+                             :type 'string
+                             :description "SQL query (SELECT or WITH only)."))
+-          :function #'superchat-tool-sql)
++          :function #'superchat-tool-sql))
+ 
+          (when (superchat--llm-tool-enabled-p "elisp_script")
+           (llm-make-tool

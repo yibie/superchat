@@ -1,0 +1,8 @@
+before (require 'superchat): superchat-pending fboundp=nil commandp=nil | superchat-annotate fboundp=nil | superchat-work-list=nil | superchat-changes-notices=nil | superchat-tape-browser=nil | superchat-research-workflow=nil
+
+Warning: Optimization failure for cl-typep: Handler: cl-typep--inliner
+(error "Unknown type llm-provider-utils-tool-use")
+after (require 'superchat): superchat-pending fboundp=nil commandp=nil | superchat-annotate fboundp=t | superchat-work-list=t | superchat-changes-notices=t | superchat-tape-browser=nil | superchat-research-workflow=t
+after (superchat-plugin-mount-defaults): superchat-pending fboundp=nil commandp=nil | superchat-annotate fboundp=t | superchat-work-list=t | superchat-changes-notices=t | superchat-tape-browser=nil | superchat-research-workflow=t
+files naming superchat-pending outside its own file and its test: nil
+a package install generates autoloads from cookies: superchat-pending.el has 1 ;;;###autoload cookie(s)

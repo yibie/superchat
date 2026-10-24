@@ -1,0 +1,20 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 3 tests (2026-10-11 00:18:43-0700, selector ‘"^r3-composition/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-08 N2 OBSERVED: dispose only second changes installation; global changes remains active but late-start hook gone; synchronous real task terminal=1 started=1 notices=0.
+
+   passed  1/3  r3-composition/disposing-second-changes-mount-removes-global-late-hook (0.608906 sec)
+R3-08 TIMING OBSERVED: dispose second timing installations; both global rows still active, pending reminder+work.waiting retained, both armed maps empty; active-row gates still answer true.
+
+   passed  2/3  r3-composition/disposing-second-timing-mounts-disarms-global-promises (0.043464 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+GUARD: nested elisp_script calls reach the object scope refusal; neither private goal nor reminder reaches B and timer is not cancelled.
+
+   passed  3/3  r3-composition/script-tool-cannot-bypass-object-checks (0.090027 sec)
+
+Ran 3 tests, 3 results as expected, 0 unexpected (2026-10-11 00:18:44-0700, 0.742710 sec)
+

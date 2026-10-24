@@ -1,0 +1,140 @@
+--- baseline/superchat-core.el
++++ main/superchat-core.el
+@@ -51,12 +51,71 @@
+    :clean-input (string-trim (or inbound ""))
+    :state nil))
+ 
++(defun superchat-core--body-token (text sigil name-regexp known-p)
++  "Return (NAME . REST) for the first SIGIL token in TEXT that KNOWN-P accepts.
++The token stands alone: the start of TEXT or whitespace before it, whitespace
++or the end of TEXT after it.  NAME-REGEXP matches a name; KNOWN-P is called
++with one.  A name KNOWN-P refuses stays ordinary text.  REST is TEXT without
++the token."
++  (let ((regexp (concat "\\(?:\\`\\|[[:space:]]\\)\\(" (regexp-quote sigil)
++                        "\\(" name-regexp "\\)\\)\\(?:[[:space:]]\\|\\'\\)"))
++        (case-fold-search nil)
++        (start 0)
++        found)
++    (while (and (not found) (string-match regexp text start))
++      (let ((name (match-string 2 text))
++            (token-start (match-beginning 1))
++            (token-end (match-end 1)))
++        (if (funcall known-p name)
++            (let ((before (substring text 0 token-start))
++                  (after (substring text token-end)))
++              (setq found
++                    (cons name
++                          (string-trim
++                           (concat before
++                                   (if (string-match-p "[[:space:]]\\'" before)
++                                       (replace-regexp-in-string
++                                        "\\`[ \t]+" "" after)
++                                     after))))))
++          (setq start token-end))))
++    found))
++
++(defun superchat-core--known-skill-p (name)
++  "Return non-nil when NAME is an existing skill."
++  (and (fboundp 'superchat-skills-exists-p)
++       (ignore-errors (superchat-skills-exists-p name))))
++
++(defun superchat-core--known-model-p (name)
++  "Return non-nil when NAME is a model known without asking the provider."
++  (and (fboundp 'superchat--models-known-without-fetch)
++       (member name (ignore-errors (superchat--models-known-without-fetch)))
++       t))
++
++(defun superchat-core--known-command-p (name)
++  "Return non-nil when NAME is an existing command."
++  (and (fboundp 'superchat--get-all-command-names)
++       (member (concat "/" name)
++               (ignore-errors (superchat--get-all-command-names)))
++       t))
++
+ (defun superchat-core--parse-input (turn)
+-  "Parse model switch, skill, command, and file refs from TURN's inbound."
+-  (let ((input (superchat-turn-inbound turn)))
++  "Parse model switch, skill, command, and file refs from TURN's inbound.
++`@model', `>skill' and `/command' are read at the start of the input as
++before.  When the user sent the message, each is also read once from the
++middle of the text, there only when its name exists; see
++docs/decisions/proposed/2026-10-10-triggers-anywhere-in-the-message.md."
++  (let ((input (superchat-turn-inbound turn))
++        ;; A timer's task and a woken Work Record send text the model wrote.
++        (body-p (not (bound-and-true-p superchat-automated-input))))
+     ;; @model
+-    (when-let* ((parsed (and (fboundp 'superchat-parser-model-switch)
+-                            (superchat-parser-model-switch input))))
++    (when-let* ((parsed
++                 (or (and (fboundp 'superchat-parser-model-switch)
++                          (superchat-parser-model-switch input))
++                     (and body-p
++                          (when-let* ((found (superchat-core--body-token
++                                              input "@" "[a-zA-Z0-9_./:-]+"
++                                              #'superchat-core--known-model-p)))
++                            (cons (cdr found) (car found)))))))
+       (setf (superchat-turn-clean-input turn) (car parsed))
+       (setf (superchat-turn-target-model turn) (cdr parsed)))
+     ;; >>workflow — dedicated workflow prefix: `>' invokes skills,
+@@ -71,21 +130,48 @@
+               (string-trim (substring ci (match-end 0))))))
+     ;; >skill
+     (unless (superchat-turn-skill turn)
+-      (when-let* ((parsed (and (fboundp 'superchat-skills-parse-input)
+-                              (superchat-skills-parse-input
+-                               (superchat-turn-clean-input turn)))))
+-        (setf (superchat-turn-skill turn) (car parsed))
+-        (setf (superchat-turn-clean-input turn)
+-              (replace-regexp-in-string
+-               (concat ">" (regexp-quote (car parsed)) "\\s-*")
+-               "" (superchat-turn-clean-input turn)))))
++      (let ((ci (superchat-turn-clean-input turn)))
++        (if-let* ((parsed (and (fboundp 'superchat-skills-parse-input)
++                               (superchat-skills-parse-input ci))))
++            (progn
++              (setf (superchat-turn-skill turn) (car parsed))
++              (setf (superchat-turn-clean-input turn)
++                    (replace-regexp-in-string
++                     (concat ">" (regexp-quote (car parsed)) "\\s-*")
++                     "" ci)))
++          ;; What stands at the start wins: a message that opens with a
++          ;; command keeps a later `>name' as its text.
++          (when-let* ((found (and body-p (stringp ci)
++                                  (not (and (fboundp 'superchat-parser-command)
++                                            (superchat-parser-command ci)))
++                                  (superchat-core--body-token
++                                   ci ">" "[a-zA-Z0-9_-]+"
++                                   #'superchat-core--known-skill-p))))
++            (setf (superchat-turn-skill turn) (car found))
++            (setf (superchat-turn-clean-input turn) (cdr found))
++            ;; Named in the middle, an agent skill applies to this message
++            ;; only; the dispatcher reads this to leave the Session as it is.
++            (setf (superchat-turn-state turn)
++                  (plist-put (superchat-turn-state turn)
++                             :skill-from-body t))))))
+     ;; /command
+     (unless (superchat-turn-skill turn)
+-      (when-let* ((parsed (and (fboundp 'superchat-parser-command)
+-                              (superchat-parser-command
+-                               (superchat-turn-clean-input turn)))))
+-        (setf (superchat-turn-command turn) (car parsed))
+-        (setf (superchat-turn-command-args turn) (or (cdr parsed) ""))))
++      (let ((ci (superchat-turn-clean-input turn)))
++        (if-let* ((parsed (and (fboundp 'superchat-parser-command)
++                               (superchat-parser-command ci))))
++            (progn
++              (setf (superchat-turn-command turn) (car parsed))
++              (setf (superchat-turn-command-args turn) (or (cdr parsed) "")))
++          ;; A command found in the middle is the same message with the
++          ;; command written first.
++          (when-let* ((found (and body-p (stringp ci)
++                                  (superchat-core--body-token
++                                   ci "/" "[^[:space:]/]+"
++                                   #'superchat-core--known-command-p))))
++            (setf (superchat-turn-command turn) (car found))
++            (setf (superchat-turn-command-args turn) (cdr found))
++            (setf (superchat-turn-clean-input turn)
++                  (string-trim (concat "/" (car found) " " (cdr found))))))))
+     ;; #file
+     (when (fboundp 'superchat--extract-file-path)
+       (when-let* ((file (ignore-errors

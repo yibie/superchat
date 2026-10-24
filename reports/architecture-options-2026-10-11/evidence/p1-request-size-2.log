@@ -1,0 +1,43 @@
+Loading /Users/chenyibin/.cache/sc-arch-research/src/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 01:08:13-0700, selector ‘"^p1/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-010813-993575-57b3 completed (session 20261011-010813-707e)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+superchat: run run-20261011-010814-042738-2afe completed (session 20261011-010813-707e)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FOLDED
+superchat: 1 remark placed
+superchat: run run-20261011-010814-118100-fde5 completed (session 20261011-010813-707e)
+   passed  1/2  p1/project-chat-and-in-place-entries (0.794920 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  2/2  p1/temporary-chat (0.045348 sec)
+
+Ran 2 tests, 2 results as expected, 0 unexpected (2026-10-11 01:08:14-0700, 0.840404 sec)
+
+
+P1 REQUEST SIZE (scripted transport, snapshot 75e83370)
+label | bytes | chars | est.tokens | system chars (est) | tools n / json bytes (est) | messages | user chars (est)
+project-chat-1 | 27074 | 23444 | ~6617 | 10820 (~3460) | 14 / 11144 (~2786) | 2 | 1236 (~310)
+project-chat-2 | 27422 | 23792 | ~6704 | 10820 (~3460) | 14 / 11144 (~2786) | 4 | 1236 (~310)
+project-chat-3 | 27534 | 23894 | ~6732 | 10820 (~3460) | 14 / 11144 (~2786) | 6 | 1241 (~314)
+inline-ask-1 | 13808 | 10166 | ~3300 | 6722 (~2436) | 4 / 2006 (~502) | 2 | 1239 (~314)
+inline-rewrite-1 | 11216 | 7526 | ~2650 | 6996 (~2504) | 0 / 0 (~0) | 2 | 361 (~104)
+inline-annotate-1 | 11145 | 7503 | ~2634 | 7191 (~2553) | 0 / 0 (~0) | 2 | 144 (~40)
+temp-chat-1 | 15252 | 15224 | ~3812 | 3069 (~767) | 14 / 11144 (~2786) | 2 | 860 (~221)
+est.tokens = ASCII chars/4 + non-ASCII chars/1.5; a heuristic, not a tokenizer.

@@ -1,0 +1,249 @@
+### M3a — Remove Closure and Claims, park Experience (`done`)
+
+Goal: superchat keeps only what DeepSeek Harness has a counterpart for, as [the M3a removal decision](decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) rules, without changing how a cancelled Run ends.
+
+Removes: `superchat-closure.el`, the `closure` plugin row and Service, and the driver's `:inject` of `closure`; Runtime's terminal guard, shadow report and closure observation ring; the Tape's Closure role tags and opaque-row marking; `superchat-claims.el`; the Experience context collector with its prompt slot; the review of recovery needs, as `/review` and as `M-x superchat-review`.
+
+Mechanism: the record's. Runtime tracks each Run's open Effects and Approvals and seals `audit-incomplete` when any is open; reopening a saved Session seals each cut-off Run `abandoned` without a judgment; subagent handoff, workflow resume and artifact delivery decide from the Run terminal recorded on the Tape.
+
+Delivered (`current`, 2026-09-15), in four slices. Runtime tracks each Run's entered-but-unsettled Effects and requested-but-undecided Approvals by execution identity, reported by Authority before each fact is appended, and seals `audit-incomplete` when any of them is open, whatever ending was requested, while settled work keeps its ending and a late result still appends its one fact. Subagent handoff, workflow resume, cross-Run Artifact delivery and Experience evaluation decide from the Run terminal recorded on the Tape through the `tape` Service's `recorded-run-terminal`, which answers present, absent or unknown, never resolves two recorded terminals by picking one, and is refused rather than waited for when the record cannot be read. Reopening a Session repairs a cut-off Run without judging its record, inventing no tool result and no `step.ended`. Closure, Claims, the `experience` context collector and prompt slot, the `history` collector's `:experience-view` copy and `/review` in both forms are gone; Experience keeps its recovery view, Authority's gate over it, `M-x superchat-experience-monitor`, evaluation and its projection, and old `claim.recorded` and `feedback.recorded` rows stay readable. The current documents describe this.
+
+Verification: the M3 regression set's 31 `m3a/` tests, written before the implementation and each shown to fail at the gap it named, all pass; the whole set is 121 tests with one expected failure, the M3 middleware follow-up. The complete canonical smoke set passes, with one bounded baseline change the user approved for this removal: case V's `collectors-mounted`, `commands-remounted` and `collectors-after-remount` counts drop by one each, because the collector and the command they counted are gone; it authorises nothing else. The Kernel check passes, the package loads with no Closure or Claims feature, byte-compiling every changed module adds no warning, and against a real provider (LM Studio `qwen/qwen3.8-27b`) one normal turn and one cancelled turn end with the expected terminal facts. Experience's real recovery assembler, not a stub, is called once after a tool failure, returns no Candidate without Claim rows, signals nothing, and leaves the dependent tool unblocked (`.scratch/m3-verification/evidence-m3a-final.txt`).
+
+Acceptance:
+
+- A Run cancelled while a tool Effect is entered and unsettled seals `audit-incomplete` at once with the Effect open, and a genuine late result appends its one fact without reopening the Run. The same holds for an Approval requested and undecided. A Run whose Effects and Approvals are all settled seals with its requested status.
+- Reopening a Session whose Run was cut off writes one `abandoned` pair for that Run, nothing while a Run in the Session is live, and never a synthetic tool result or `step.ended`.
+- Subagent handoff, workflow resume and artifact delivery give the answers in the record's consumer table.
+- No loaded file refers to Closure, Claims or the removed Experience entries. The default set without `closure` loads, and one chat turn completes.
+- The complete canonical smoke set passes. Its R1, R5, R7 and R9 assertions that called `superchat-closure-judge` are rewritten against recorded facts, and any baseline file change is accepted by the user explicitly.
+- The M3 regression set's M3a tests are written by the leader before implementation starts, and they pass.
+- One normal turn and one cancelled turn against a real provider (LM Studio) end with the expected terminal facts.
+
+### M4 — Surfaces as plugins, composition by profile (`done`)
+
+Goal: the chat window, inline ask and rewrite, Org Babel, Magit and emacsclient are plugins that a profile row list assembles.
+
+The user approved this text on 2026-09-16, and the mechanism with it: [the M4 record](decisions/implemented/2026-09-16-m4-surfaces-as-plugins.md) fixes that a profile is layers over the default rows with an explicit disable, that `superchat-plugins` stays as the default profile's layer, that a row left pending is reported with the Services it waits for, and that a surface entry point refuses when its row is not mounted, because an Emacs autoload cannot be withdrawn.
+
+State (2026-09-16): delivered in three slices. A profile is a named list of layers over the `default` profile's rows, which are still `superchat-plugins`; a layer inherits with `(:inherit NAME)` and disables with `(NAME . :disabled)`, `(require 'superchat)` mounts `superchat-profile`, and mounting a profile makes the composition exactly its rows. `superchat-profile-report` names any row left pending with the Services it waits for. The two empty seats are gone and all five surfaces are rows: `chat`, `inline-ask`, `inline-rewrite`, `org-babel`, `magit` and `emacsclient`, each registering its own surface name, so the core seed keeps only `workflow`, `subagent`, `compaction`, `skills` and `external`. The chat row is the one that owns registration without owning loading: the chat code lives in `superchat.el`, which eager `require' pulls in, so the row owns the `chat` surface name and twelve entry points ask whether it is mounted before they open a View, build an envelope or reach the driver. An entry point whose row is not mounted refuses, naming the row and the active profile, and submits nothing; emacsclient returns that as a JSON error. Unmounting a row never touches work already running: a Run in flight keeps its Sink and reaches its terminal, because the chat Sink is built into the envelope rather than resolved from the row. The shipped `headless` profile disables every user-interface row and Telega, keeps `emacsclient`, and answers a prompt end to end; switching back to `default` restores the chat window, which can be used again. The default profile is 29 rows and the default experience is unchanged. Every one of the leader's `m4/` tests passes, with no known failure left in the regression set.
+
+Verification: the M3 regression set's `m4/` tests, written before the implementation and each shown to fail at the gap it named, all pass, and the whole set had no expected failure left for the first time since M3 opened. Two mutants pin the chat row specifically: with the entry guard removed the front-door refusal test fails, and with the row mounted but not registering its name the ownership test fails, each biting exactly one test. The complete canonical smoke set passes with its baselines untouched (`SMOKE OK (0 mismatches)`), the Kernel check passes, the package loads with every row active and `chat` registered by its row, and byte-compiling the four changed modules produces warnings identical to the baseline's. Against a real provider (LM Studio `qwen/qwen3.8-27b`) the two real-model M3 turns and every M4 test pass, including the front door opening and answering. End to end, with the row unmounted all eighteen chat entry points refuse without creating a View, a Run or a provider request, while pause, resume, cancel and the read-only inspector commands still work; a Run already in flight survives both unmounting the row and switching to `headless`, keeps rendering into its window and reaches `completed` with no `run.cancelled`.
+
+Two follow-ups found at M4's acceptance were fixed after it closed, each registered as its own issue first. The `view` Service's `sink-for` operation had no caller and is deleted; the chat Sink is built into the envelope, which is why an in-flight Run keeps rendering after its row leaves. And a chat Turn's attachment fact, which a seal-time row used to write, is now written when Runtime admits the request ([the record](decisions/accepted/2026-09-16-chat-attachments-recorded-at-admission.md)), so an image can no longer reach the model with nothing recording that it did. A third, that inline answers failed when `chat-view` was not in the profile because they reached its `markdown-to-org` through a Service while testing for the function, is fixed by making rendering a plain function ([the record](decisions/accepted/2026-09-16-rendering-is-a-function-not-a-service.md)): inline calls it directly as every other caller already did, the `view` Service has no consumers left and is deleted, and the `chat-view` row, which provided nothing else, goes with it. The default profile is 29 rows.
+
+Removes: nothing from the default set. `superchat-plugins` stays until a profile mechanism exists and the default profile reproduces it exactly.
+
+Acceptance: removing any row of the default profile leaves the rest loading; a `headless` profile answers one prompt with no UI plugin mounted.
+
+### M5 — Operating context and reference reading (`done` for the accepted scopes; slices 3–4 accepted as mechanisms and operating workflow, utility not established)
+
+Slices 3–4 closure (`accepted`, 2026-09-20): the user stopped further utility testing and accepted the implemented mechanisms and operating workflow, retaining their current defaults. The [closure report](reports/2026-09-20-m5-slices-3-4-closure.md) preserves the incomplete comparison and observed flaws. Slice 3 has three finished attempts (two declared valid and reviewed as failures despite passing state checks; one undeclared/unreviewed); slice 4 has no independent utility runs. This is not evidence of model-performance benefit, nor a waiver of product permission, approval, feedback or recording contracts. The earlier [bounded comparison plan](decisions/accepted/2026-09-20-m5-slices-3-4-utility-closure.md) is historical, not a remaining work queue.
+
+Goal: the model is told where it actually is and what it can already do, before any new capability is built. The user reframed the tool-surface question on 2026-09-16 after reading how Omarchy ships operating knowledge to each agent's native skill entry and how yayster.el gives Emacs the same treatment: what a model needs first is not more verbs but a map of the machine it is standing on. The direction is in [the AI-layer tool-surface proposal](decisions/proposed/2026-09-16-emacs-ai-layer-tool-surface.md) (`proposed`); the mechanism is in [the operating-context contract](decisions/proposed/2026-09-16-emacs-operating-context-and-reference-contract.md), whose first two slices the user accepted the same day while the last two wait.
+
+The contract's load-bearing finding is that superchat has no carrier for reference material. `superchat-skills-load` returns a Preset: invoking a skill applies its model, tools and pre-hook, and an agent or plan skill also switches the View's Capability and composition for the rest of the session. A skill is a mode switch, not something a model may read to inform one thought, so reference reading needs its own path that applies no Preset. Measured gaps behind the four slices: the default request offered no way to read what a symbol does; the chat entry carried no facts about the user's Emacs at all, while `superchat-act` carried them by appending an `[Emacs origin]` block to the user's own input text; and the skills directory is seeded once, so a guide shipped in a later version never reaches a user who already has any skill file.
+
+State (`current`, 2026-09-17): slices 1 and 2 are delivered. `describe-function` joins the default tool surface next to `apropos`, so the discovery loop — find a symbol, read what it does, then act — is whole without falling back to the approval-gated `eval_elisp`. Approval is unchanged: the name was already on the user-owned unprompted read list, which is why documentation may be read without a prompt while `describe-variable`, which returns a live value, still asks. The second hand-written copy of those names in the tool-selection fallback is updated with the constant and now says it must be. Slice 2 supplies one frozen source snapshot to chat and act through the shared collector. Queued requests, renamed or dead sources and edited inspection previews retain their stated identity and text. Slices 3 and 4 — bundled reference data with a reading entry point, and the operating guide itself — stay `proposed`: the task comparison does not yet establish a benefit for either.
+
+The reviewed comparison (`current`) gives strong task evidence for origin context: T1 succeeds 0/3 in A and 3/3 in both B and C. It does not isolate the benefit of documentation discovery, and it does not test on-demand reference reading. Product wait-clock behavior, tool budgets, model execution mistakes and an incomplete answer extractor confound broader claims; neither “knowledge is irrelevant” nor “the guide is useless” follows. The complete-answer extractor checks Runtime body identity against Tape byte size and SHA-256. The raw 27 trials remain unchanged; the corrected review is in `.scratch/abc-comparison/runs/auto-20260917-050939/REVIEW-20260917.md`.
+
+Execution reliability (`current`): per-attempt progress clocks, explicit compatible-provider reasoning mapping, and recorded tool-budget finalization follow the [implemented decision](decisions/implemented/2026-09-17-model-attempt-progress-and-budget-finalization.md). Their focused regression is `scripts/m5-execution-regression.el`. A final answer or a correctly closed Run does not itself meet the persistent-key-binding acceptance below; real task postconditions remain a separate check. The initial isolated task findings and observation limits are in `.scratch/m5-execution/LEADER-HANDOFF.md`.
+
+Missing final responses (`current`): the [native callback decision](decisions/implemented/2026-09-17-missing-provider-response.md) sends absent answer material through the existing failed path. Explicit empty strings, current-attempt visible text, tool continuation, pending steering and budget metadata keep their stated behavior; a prior tool preamble cannot stand in for a missing follow-up answer. `scripts/m5-response-regression.el` tests the real adapter and Runtime. This corrects recorded execution truth, not the model's configuration-task performance.
+
+Tool feedback (`current`): the [existing-tool decision](decisions/implemented/2026-09-17-emacs-tool-feedback.md) covers unique edits, no-change feedback, complete eval expressions, pre-reader effect classification and recognized evaluation errors. [Bounded diagnostic context](decisions/implemented/2026-09-17-bounded-tool-error-context.md) keeps a single compact error body instead of repeating large returned objects in corrective messages. `scripts/m5-tool-feedback-regression.el` verifies these contracts through direct observations and the real wrapped tool loop. A repaired-baseline T2 trial has the requested binding both live and after an independent restart; model assertions and independently observed results are kept separate. The remaining complete configuration acceptance, including both entry paths and undo, is tracked in `.scratch/m5-tool-feedback/LEADER-HANDOFF.md`; M5 stays in progress until that acceptance is met.
+
+Prepared request context (`current`): [act and inspected sends](decisions/implemented/2026-09-17-prepared-chat-request-context.md) keep the raw system configuration separate from its preview, reuse collected context, and submit the exact final body under the current budget. Deleted attachments and source selections are not restored; since 2026-09-25 earlier turns are not part of the editable body and go with an edited body as with an unedited one. `scripts/m5-request-context-regression.el` verifies the provider-facing text and the history selection sent.
+
+System contributions (`current`): [ordered system contributions](decisions/implemented/2026-09-17-ordered-system-contributions.md) carry identity from assembly through the Request to every attempt, so a tool rewrite refreshes a dynamic block in place and never edits an explicit base or static block whose text happens to match; a middleware that replaces the whole `:system` string owns it from then on. `scripts/m5-guidance-regression.el` verifies the provider-visible system text per attempt. The default chat and act configurations do not exercise the collision; custom collectors and non-default surfaces with renderers did.
+
+---
+status: accepted
+---
+
+# Use a Tape-backed epistemic loop for self-learning
+
+The [M3a decision](../decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) supersedes the implementation consequences concerning Closure, the Claims module and Experience's context/review entry points. The consequences below record the 2026-08 implementation and are kept as written; where they name Closure or the Claims module, the current mechanics are in the [request lifecycle](../protocols/request-lifecycle.md). The epistemic-time, provenance and promotion constraints in this ADR remain in force, and they do not authorize restoring the removed interfaces.
+
+Superchat will pursue self-learning without changing model weights by changing
+versioned View and Action policies only after auditable experience and held-out
+evaluation.  We choose `tape.systems` as the problem model—not a prescribed
+solution—because it keeps durable history, reconstruction, current context, and
+execution separate while allowing domain-specific Entry and Anchor schemas.
+
+## Decision
+
+The learning loop is:
+
+```text
+Decision Snapshot
+  → Execution
+  → Outcome
+  → Attribution Claim
+  → Pattern Claim
+  → boundary-targeted Exercise
+  → held-out Evaluation
+  → Promotion or Rejection
+  → changed future View / Action policy
+```
+
+The following invariants apply:
+
+1. **Epistemic time is preserved.** A model-visible View contains only what was
+   available before its Action.  Later Outcomes, expected targets, sealed
+   oracles, and evaluator judgments cannot be backfilled into that View.
+2. **Success is evidence, not prior knowledge.** A successful Run does not make
+   every earlier step correct, prove causal attribution, or establish a
+   transferable Pattern.
+3. **Tape may carry graph structure.** Custom node and edge Entries may record
+   proposed, supported, challenged, corrected, or retired relations.  Their
+   presence records that the relation was asserted; it does not make the
+   relation true.
+4. **Graph state is interpreted, not authoritative.** An Applicability Graph may
+   be rebuilt as a Projection from Tape and exposed as a task-specific subgraph
+   through a View.  Topology, similarity, connectedness, or centrality alone do
+   not prove applicability, causation, or priority.
+5. **Anchor policy is customizable.** An Anchor may be a deterministic index,
+   graph checkpoint, semantic interpretation, curriculum marker, or Handoff.
+   It retains provenance and never replaces the Entries it represents.
+6. **Exercises reduce a named uncertainty.** A useful Exercise distinguishes
+   competing Pattern Claims, probes an applicability boundary, supplies a
+   counterexample, or checks regression.  Its oracle remains outside the
+   Actor's View until Execution is terminal.
+7. **Entropy is advisory.** Uncertainty may identify an Observation Opportunity
+   or trigger retrieval, evidence gathering, reflection, or additional
+   sampling.  It cannot create an Outcome, establish a Pattern, or authorize
+   Promotion.
+8. **Promotion is evidence-gated and reversible.** A Candidate may shape future
+   behavior only after preregistered held-out, counterexample, sham,
+   contradictory, safety, cost, and regression gates.  Promotion, rejection,
+   correction, retirement, and rollback are appended; prior Entries remain.
+
+## Consequences
+
+- Tape remains the append-only evidence substrate; Graph, Anchor, Projection,
+  View, Exercise generation, and promotion are replaceable policies built on
+  that substrate.
+- Runtime continues to own execution, Authority continues to own Effects, and
+  Closure continues to judge Runtime evidence only.  None of them becomes a
+  semantic truth or learning authority.
+- The first implementation must be one narrow vertical experiment, not a
+  general learning platform: repair the current semantic-use false-positive
+  boundary, preserve exact Decision Snapshot/Outcome separation, and test one
+  conditional tool-action Pattern end to end.
+- The initial implementation reuses Tape, SQLite, Projection, Claims/Feedback,
+  Workspace revisions, and existing evaluation seams.  A graph database,
+  vector database, training service, automatic Skill mutation, and model-weight
+  updates are not prerequisites.
+
+## Rejected shortcuts
+
+- Promoting a successful trajectory directly into Memory or Skills.
+- Treating model self-evaluation, low entropy, or semantic consistency as an
+  Outcome or truth signal.
+- Labelling every step in a successful or failed trajectory from its terminal
+  result.
+- Building a graph database or general ontology before a minimal vertical
+  experiment demonstrates incremental value.
+
+## Research basis
+
+The research notes this decision drew on (a study of `tape.systems`, Bub and
+Observations; a frozen-weight self-learning literature map; entropy measures
+for frozen-weight Agent learning) were removed from `docs/research/` on
+2026-09-12 as historical material. They remain in version-control history
+before that date.
+---
+status: accepted
+scope: live Emacs resources created for a Superchat Session and native Session-tab closure
+applies_when: Superchat allocates or closes process-local editor buffers associated with a stable Session ID
+source Evidence ID: E-20260903-003
+verification: slices 01–02 focused tests and canonical 1184-test suite; independent adversarial review found no remaining High or Medium issue
+clarifies: ADR 0002 uses “Workspace” for optional buffer-derived or durable work scope; it does not describe this Session-scoped live ownership authority
+---
+
+# Put live editor-resource ownership at the Session boundary
+
+## Context
+
+Runtime's legacy HostLease/Cleanup model makes a Run responsible for an
+ephemeral editor buffer.  In interactive Emacs use, the useful lifetime is the
+Session: several Runs use the same chat surface, and users expect the Session
+tab and its private buffers to close together.  Inferring ownership from a
+buffer name, project root, selected window, or tab layout cannot prove that
+Superchat created the buffer.
+
+ADR 0002 deliberately rejected making a filesystem Workspace the mandatory
+parent of every Session or Run.  This decision does not reverse that result.
+It introduces a different object: a process-local Session EditorWorkspace for
+live resources, distinct from the durable Artifact Workspace and optional
+project scope discussed there.
+
+## Decision
+
+- One stable Session ID names one logical EditorWorkspace.  Its live state is
+  lazy and may be unmaterialized.
+- Buffer-local Session and owned markers on the live buffer object grant close
+  authority.  Membership is recalculated from `buffer-list`; there is no
+  parallel buffer ledger.
+- Existing file, Artifact, and other user buffers are borrowed.  Association,
+  location under a root, or display in a tab/project/ibuffer view does not make
+  them owned.
+- A Session tab is a native presentation and close adapter.  Its stable Session
+  parameter routes closure but does not prove buffer ownership.
+- Native tagged-tab closure is exclusive once it reaches Superchat's hook:
+  earlier prevent hooks may veto first, but EditorWorkspace then performs the
+  whole close transaction and consumes the event.  This avoids a later hook
+  leaving a tagged tab after irreversible Run cancellation and buffer closure.
+- Runtime keeps authority over Run cancellation and its still-enacted legacy
+  HostLease/Cleanup compatibility path until the remaining migration slices
+  retire that path.
+
+## Consequences
+
+- Rejected close has zero effects and gives the user a manual retry command.
+- Buffer kill refusal produces a visible `retained` workspace; retry rescans
+  current markers instead of consulting stale inventory.
+- Project and ibuffer integration can remain read-only projections over the
+  same membership authority.
+- The hook is intentionally not cooperative with later prevent-close hooks for
+  tagged Session tabs.  Ordinary pre-close hooks still execute during the
+  internal native deletion.
+- Closing the live scope has no authority to delete durable Session, Artifact,
+  Anchor, or Tape data.
+
+## Rejected alternatives
+
+- Per-Run editor ownership: it couples optional UI resource failure to the Run
+  terminal lifecycle and requires a second cleanup-recovery contract.
+- Name-, directory-, project-, or tab-derived ownership: each can include
+  buffers that Superchat did not create.
+- Allowing later prevent hooks after Session effects: a later veto can split
+  the visible tab state from already performed cancellations and kills.
+### M1 — One model history (`done`)
+
+Goal: one authority for model-visible history. The Tape is the source from which it is derived; the chat View may keep a cache only if that cache is regenerated from the Tape and never read as an authority.
+
+Removes: the in-buffer history list as an authority for compaction and rendering; any path that composes prompt history from a buffer instead of the Tape.
+
+Mechanism: a `derive-messages` function over the Tape Context View; compaction and the chat window read it; before the buffer list loses its authority, the two histories are rebuilt for the same recorded session and compared. The evidence this acceptance needs is not on the Tape today; [the request-header decision](decisions/implemented/2026-09-13-reconstructable-provider-request.md) is `implemented` and fixes what to record and how to keep it from restating every request.
+
+Delivered (`current`): `superchat-view-derive-messages` is the one derivation, honoring the compaction digest, the expanded-Anchor reading and the in-buffer cap; `request.header` and `request.message-list` are recorded before each provider attempt under the four write reasons the decision fixes; `superchat-tape-request-evidence` rebuilds a request from those rows and reports `unknown` when a reference does not resolve; `prompt-reconstructable` performs that reconstruction; the in-buffer list is regenerated from the derivation and is no longer edited by compaction or Anchor expansion.
+
+Verification: the scripted fixture reproduces the provider-visible system text, message history and tool schemas, reports `unknown` when a reference does not resolve, and the buffer list and the derivation agree before compaction, after compaction and after Anchor expansion; compaction keeps the Anchor's identity, summary and sources. Against a real provider, one chat turn and one inline turn both complete their model exchange with every request rebuilt from the Tape and no invariant violations. The two transports assert different facts and the smoke script records which: the exact event sequence, the settled overlay and the untouched host buffer are `scripted-' keys, which the accepted criteria waive for a real model's free text, while `reconstruct-status' and `invariant-violations' are asserted in both modes.
+
+Acceptance: for a recorded fixture (fixed input and fixed model result, scripted transport), an independent reconstruction from the Tape reproduces the provider-visible system text, messages and tool schemas of every request, including each rewrite and retry, with the source relation of every message stated; where redaction or missing evidence prevents reconstruction the check reports `unknown`, never a pass; the buffer-list history and the Tape-derived history agree on that same fixture; compaction on the fixture produces the same anchors as before. A recorded `prompt.assembled` receipt alone is not acceptance. Separately, one chat turn and one inline turn against a real provider (LM Studio) complete with their history derived from the Tape; the model's free text is not compared byte for byte with an older output.
+
+### M2 — One tool pipeline (`done`)
+
+Goal: every tool execution goes through one pipeline with Authority as the single decision point and approval as a seam. The mechanism is [the one-tool-pipeline decision](decisions/implemented/2026-09-13-one-tool-pipeline.md).
+
+Candidates for removal, re-confirmed against the source before M2 started (they come from the 2026-09-12 full-read audit and were not re-checked after 4C-2). All four were still present, and two are narrower than the audit described; a candidate that the source no longer shows is dropped from the list, not removed from the code:
+
+| Candidate | Re-checked finding | Outcome |
+|---|---|---|
+| a duplicated default tool list | `superchat--select-tools-baseline-names` and the default value of `superchat-llm-tool-names` hold the same five names in different order | removed: the baseline reads the one home (`superchat-llm-default-tool-names`), with a declared fallback literal for the load order |
+| a second tool-selection pass on chat input | The decision is not recomputed -- the pipeline's `:tool-decision` reaches the LLM layer and is honored. The redundancy is a second registry query in `superchat--collect-llm-tools` | removed: a `baseline` decision's own `:materialized` structs are reused, so the chat path no longer queries the registry a second time |
+| `fboundp` probes between Authority and the agent-loop wrappers | Seven probes in `superchat-authority.el`; four point at the agent loop and three at Runtime | removed for the four: each is a declared row in `superchat-authority--contributors` whose absent-case answer is written down. The three Runtime-side probes stay, out of this record's scope |
+| the `on-demand` selection alias | Inert by its own documentation; kept for saved custom values and identical to `always` | retained, as the record decides |

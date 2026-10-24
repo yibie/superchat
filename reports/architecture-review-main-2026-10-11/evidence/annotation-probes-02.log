@@ -1,0 +1,53 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 00:15:30-0700, selector ‘"^r3-annotation/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: the model gave no remarks in the asked form (1 rows not understood; M-x superchat-annotate-list) in m5rc-source.el
+superchat: run run-20261011-001530-714566-0b8b completed (session 20261011-001530-dcd1)
+R3-06 OBSERVED: actual act inspector send has no tools, no LINE | QUOTE | REMARK, no numbered target; annotation sink still parses prose as 1 unparsed line.
+
+   passed  1/4  r3-annotation/inspected-annotate-has-sink-but-no-row-contract (0.615070 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+R3-04 OBSERVED: model quotes lowercase target, source contains only uppercase TARGET; annotation placed, source text/tick unchanged.
+
+   passed  2/4  r3-annotation/quote-search-is-case-folded (0.028399 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 remarks placed in m5rc-source.el
+Superchat session cached for next startup.
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001530-815376-b2bc completed (session 20261011-001530-6395)
+R3-05 OBSERVED: same Session, same Emacs, source still has 2 remarks; close/reopen only the View => history keeps >annotate but next provider system loses the hung/completed note.
+
+   passed  3/4  r3-annotation/reopening-view-forgets-hung-fact-while-overlay-lives (0.075846 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001530-853700-2d2f completed (session 20261011-001530-c7c4)
+FOLDED
+FOLDED
+FOLDED
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 remark placed
+superchat: run run-20261011-001531-026362-6d3c completed (session 20261011-001530-c7c4)
+FOLDED
+FOLDED
+FOLDED
+R3-07 OBSERVED: second command while first pending => 2 overlapping remarks retained; latest report says placed=1; queued Runtime not a second execution engine.
+
+   passed  4/4  r3-annotation/two-pending-command-answers-accumulate (0.217513 sec)
+
+Ran 4 tests, 4 results as expected, 0 unexpected (2026-10-11 00:15:31-0700, 0.937152 sec)
+

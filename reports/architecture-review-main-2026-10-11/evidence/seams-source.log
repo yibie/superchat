@@ -1,0 +1,530 @@
+   460	                   (if (active-minibuffer-window)
+   461	                       (add-hook 'minibuffer-exit-hook
+   462	                                 #'superchat-changes--review-select-after-minibuffer)
+   463	                     (superchat-changes--review-select window))))))
+   464	
+   465	(defun superchat-changes--unattended-run-p (session run)
+   466	  "Non-nil when Superchat started RUN of SESSION at a time, not the user.
+   467	Read from SESSION's Tape: a scheduled task records `timer.started' with the
+   468	Run it began, and a woken Work Record's Run is the first one of a
+   469	conversation that holds `work.woken'."
+   470	  (let ((events (ignore-errors (superchat-tape-replay-events session)))
+   471	        first woken started)
+   472	    (dolist (event events)
+   473	      (pcase (plist-get event :type)
+   474	        ("run.started" (unless first (setq first (plist-get event :run-id))))
+   475	        ("work.woken" (setq woken t))
+   476	        ("timer.started"
+   477	         (when (equal run (plist-get (plist-get event :payload) :run-id))
+   478	           (setq started t)))))
+   479	    (or started (and woken (equal run first)))))
+   480	
+   481	(defun superchat-changes--review-after-run (session run)
+   482	  "Show the review screen for what RUN of SESSION left unsaved and select it.
+   483	While the minibuffer is in use it is shown unselected and selected after.
+   484	An execution Superchat started at a time shows no screen: the user is doing
+   485	something else, and the echo area has already said what is unsaved."
+   486	  (when-let* (((not (superchat-changes--unattended-run-p session run)))
+   487	              (rows (ignore-errors (superchat-changes-candidates session run))))
+   488	    (let ((busy (active-minibuffer-window)))
+   489	      (when (and (superchat-changes-review rows (not busy)) busy)
+   490	        (add-hook 'minibuffer-exit-hook
+   491	                  #'superchat-changes--review-select-after-minibuffer)))))
+   492	
+   493	(defun superchat-changes--review-buffer ()
+   494	  (or (and (local-variable-p 'superchat-changes-review--state)
+   495	           (current-buffer))
+   496	      (get-buffer superchat-changes-review-buffer-name)
+   497	      (user-error "No review screen is open")))
+   498	
+   499	(defun superchat-changes--review-advance (review)
+   500	  "Show REVIEW's next candidate, or close it after the last."
+   501	  (with-current-buffer review
+   502	    (let ((state superchat-changes-review--state))
+   503	      (if (< (1+ (cdr state)) (length (car state)))
+   504	          (progn
+   505	            (setq superchat-changes-review--state (cons (car state) (1+ (cdr state))))
+   506	            (superchat-changes--review-render review))
+   507	        (superchat-changes--review-close review)))))
+   508	
+   509	(defun superchat-changes--review-close (review)
+   510	  "Close the review buffer REVIEW, give its windows back and the cursor too."
+   511	  (let ((return (and (buffer-live-p review)
+   512	                     (buffer-local-value 'superchat-changes-review--return-window
+   513	                                         review))))
+   514	    (dolist (window (get-buffer-window-list review nil t))
+   515	      (quit-restore-window window 'bury))
+   516	    (when (buffer-live-p review)
+   517	      (kill-buffer review))
+   518	    (when (window-live-p return)
+   519	      (select-window return))))
+   520	
+   521	(defun superchat-changes-review-save ()
+   522	  "Save the buffer on the review screen, then show the next one.
+   523	Saving is the user's operation, the same `superchat-changes-save' offers."
+   524	  (interactive)
+   525	  (let* ((review (superchat-changes--review-buffer))
+   526	         (buffer (plist-get (with-current-buffer review (superchat-changes--review-row))
+   527	                            :buffer)))
+   528	    (cond
+   529	     ((not (buffer-live-p buffer)) (message "That buffer is gone; nothing to save"))
+   530	     ((not (buffer-modified-p buffer)) (message "%s has no unsaved changes" (buffer-name buffer)))
+   531	     (t (superchat-changes-save buffer)))
+   532	    (superchat-changes--review-advance review)))
+   533	
+   534	(defun superchat-changes-review-next ()
+   535	  "Leave the buffer on the review screen unsaved and show the next one."
+   536	  (interactive)
+   537	  (superchat-changes--review-advance (superchat-changes--review-buffer)))
+   538	
+   539	(defun superchat-changes-review-quit ()
+   540	  "Stop reviewing.  Every buffer not saved on the screen stays unsaved."
+   541	  (interactive)
+   542	  (superchat-changes--review-close (superchat-changes--review-buffer)))
+   543	
+   544	(defun superchat-changes-review-refresh ()
+   545	  "Redraw the review screen from the buffer's text as it is now."
+   546	  (interactive)
+   547	  (superchat-changes--review-render (superchat-changes--review-buffer)))
+   548	
+   549	(defun superchat-changes-review-unavailable ()
+   550	  "Say that this key does nothing on the review screen."
+   551	  (interactive)
+   552	  (message "Not on the review screen: s saves, n leaves unsaved, q stops"))
+   553	
+   554	;;;; The user's operations -----------------------------------------------------
+   555	
+   556	;; A code buffer has no conversation of its own.  See the review screen's
+   557	;; part of docs/decisions/implemented/2026-09-24-editor-mode-agent-mode-and-review-screen.md.
+   558	(defun superchat-changes--session ()
+   559	  "Return the Session a review command acts on here.
+   560	The current buffer's own, when it is a chat View; else the conversation the
+   561	chat window shows, as an in-place command from this buffer would join it
+   562	(M10 slice 2): the chat beside this buffer, else the main one."
+   563	  (or (and (local-variable-p 'superchat--session-id) superchat--session-id)
+   564	      (and (fboundp 'superchat-conversation-session-id)
+   565	           (superchat-conversation-session-id))
+   566	      (user-error "No conversation here")))
+   567	
+   568	(defun superchat-changes--read-buffer (session-id)
+   569	  (let* ((rows (superchat-changes-candidates session-id))
+   570	         (names (mapcar (lambda (row) (plist-get row :name)) rows)))
+   571	    (unless names (user-error "No unsaved buffers edited by this Session's tools"))
+   572	    (get-buffer (completing-read "Buffer: " names nil t))))
+   573	
+   574	(defun superchat-changes-diff (buffer)
+   575	  "Open the review screen for BUFFER alone: how it differs from its file.
+   576	`s' there saves it (the user's operation) and `q' leaves it unsaved.  A buffer
+   577	that visits no file has nothing to compare with and is simply displayed.
+   578	Interactively, BUFFER is one the conversation here left unsaved: this chat's,
+   579	or the one shown beside this buffer."
+   580	  (interactive
+   581	   (list (superchat-changes--read-buffer (superchat-changes--session))))
+   582	  (if (buffer-file-name buffer)
+   583	      (superchat-changes-review
+   584	       (list (list :buffer buffer :name (buffer-name buffer)
+   585	                   :file (buffer-file-name buffer)
+   650	
+   651	(defun superchat--preview-chat-prompt (turn &optional template)
+   652	  "Assemble parsed TURN for an act request or its optional inspector.
+   653	Return the display system, editable body and prepared context for sending.
+   654	Use the same collection boundary and base fragments as the driver, without
+   655	submitting.  Required content over budget signals before a plan is produced.
+   656	`superchat--preview-origin-data' supplies the frozen origin snapshot."
+   657	  (superchat--with-chat-execution-scope
+   658	    (let* ((state (superchat-turn-state turn))
+   659	           (env (list :content (or (superchat-turn-clean-input turn) "")
+   660	                      :surface 'chat
+   661	                      :session-id (superchat-turn-session-id turn)
+   662	                      :target-model (superchat-turn-target-model turn)
+   663	                      :system-prompt (superchat-turn-system-prompt turn)
+   664	                      :context
+   665	                      (append
+   666	                       (list :chat-turn turn
+   667	                             :chat-file-ref (plist-get state :file-ref)
+   668	                             :chat-template template)
+   669	                       (superchat--origin-context
+   670	                        (list :emacs-origin-data superchat--preview-origin-data)))))
+   671	           (collected
+   672	            (superchat-pipeline--collect-context
+   673	             env nil (superchat-turn-tools turn)))
+   674	           (result
+   675	            (superchat-prompt-assemble
+   676	             (superchat-pipeline--context-fragments env collected)
+   677	             (superchat-pipeline--budget (superchat-turn-target-model turn)))))
+   678	      (list :system (or (plist-get result :system) "")
+   679	            :prompt (plist-get (car (plist-get result :messages)) :content)
+   680	            :prepared-context
+   681	            (list :prompt
+   682	                  (plist-get (car (plist-get result :messages)) :content)
+   683	                  :system-fragments
+   684	                  (cl-remove-if-not
+   685	                   (lambda (fragment)
+   686	                     (memq (plist-get fragment :slot) '(system instruction)))
+   687	                   collected)
+   688	                  ;; History refitting during assembly fixes this selection.
+   689	                  :context-envelope
+   690	                  (copy-tree (plist-get (superchat-turn-state turn)
+   691	                                        :context-envelope)))))))
+   692	
+   693	(defun superchat-build-request-plan (input &optional session-id origin)
+   694	  "Build a dry-run request plan for INPUT, SESSION-ID, and ORIGIN.
+   695	No backend call or post-turn side effect occurs.  The first slice
+   696	supports plain requests and active command mode; slash commands,
+   697	skills, workflows, and agent presets continue to use the chat buffer.
+   698	
+   699	This is the one moment a request prepared here captures its source: ORIGIN
+   700	is this call's own source (the act entry), otherwise the View's associated
+   701	editing source is read.  The captured snapshot is frozen on the plan, so the
+   702	preview, the inspector's confirmed send and the submitted request all speak
+   703	about the same instant -- the source buffer may change afterwards and the
+   704	request still reports what was true when it was prepared.  INPUT itself
+   705	stays the user's own text; the facts travel as request data, never appended
+   706	to what the user typed and never as instructions."
+   707	  (let* ((raw-input (string-trim (or input "")))
+   708	         (full-input raw-input)
+   709	         (turn (superchat-turn-new full-input session-id))
+   710	         (view (current-buffer))
+   711	         (origin-data (superchat--resolve-origin-data view origin)))
+   712	    (when (string-empty-p (superchat-turn-inbound turn))
+   713	      (user-error "Request input is empty"))
+   714	    (setf (superchat-turn-origin turn) origin)
+   715	    (superchat--attach-turn-memories turn full-input session-id)
+   716	    (let* ((prepared (superchat--with-chat-execution-scope
+   717	                       (superchat-core-prepare-turn turn)))
+   718	           (skill (superchat-turn-skill prepared))
+   719	           (command (superchat-turn-command prepared))
+   720	           (superchat-execution-scope
+   721	            (if (and (null skill)
+   722	                     (boundp 'superchat--active-preset)
+   723	                     superchat--active-preset)
+   724	                (superchat--apply-active-preset prepared)
+   725	              superchat-execution-scope)))
+   726	      (when (or skill command
+   727	                (and (superchat-turn-preset prepared)
+   728	                     (superchat-preset-agent-p
+   729	                      (superchat-turn-preset prepared))))
+   730	        (user-error
+   731	         "Request inspection currently supports plain and prompt-mode turns"))
+   732	      (let* ((template (when superchat--current-command
+   733	                         (superchat--lookup-command-template
+   734	                          superchat--current-command)))
+   735	             (plan (superchat--request-plan-from-turn
+   736	                    prepared template
+   737	                    (superchat-turn-target-model prepared)))
+   738	             ;; Capture once, including history and attachments.  Sending
+   739	             ;; reuses the system fragments and the exact final body instead
+   740	             ;; of collecting into an already assembled body a second time.
+   741	             (preview (let ((superchat--preview-origin-data origin-data))
+   742	                        (superchat--preview-chat-prompt prepared template))))
+   743	        ;; The body is the inspector's exact editable text.  The assembled
+   744	        ;; system is display-only: sending it as the base system would add
+   745	        ;; every system collector a second time.  Keep :system-prompt as the
+   746	        ;; original Turn/Preset contribution for ordinary pipeline assembly.
+   747	        (setq plan (plist-put plan :prompt (plist-get preview :prompt)))
+   748	        (setq plan (plist-put plan :preview-system-prompt
+   749	                              (plist-get preview :system)))
+   750	        (setq plan (plist-put plan :chat-prepared-context
+   751	                              (plist-get preview :prepared-context)))
+   752	        (setq plan (plist-put plan :input raw-input))
+   753	        (setq plan (plist-put plan :clean-input raw-input))
+   754	        (setq plan (plist-put plan :user-message raw-input))
+   755	        ;; The frozen source snapshot the preview above was assembled with.
+   756	        ;; The send that follows this inspection reuses it verbatim rather
+   757	        ;; than capturing again.
+   758	        (setq plan (plist-put plan :emacs-origin-data origin-data))
+   759	        (setq plan
+   760	              (plist-put plan :consume-pending-memories
+   761	                         (and superchat--pending-recalled-memories t)))
+   762	        plan))))
+   763	
+   764	(defun superchat--prepare-generated-request (instruction)
+   765	  "Prepare an explicit producer INSTRUCTION without borrowing the user draft.
+  1120	         ;; cases in `test/test-llm-backend.el').
+  1121	         (owner (or (plist-get composed :transcript-owner)
+  1122	                    (format "chat-owner-%08x" (random #x100000000))))
+  1123	         (input-core (plist-get composed :input-core))
+  1124	         (annotate (superchat--chat-annotate-spec composed))
+  1125	         (extras
+  1126	          (superchat-pipeline--plist-extend
+  1127	           nil
+  1128	           :input-core input-core
+  1129	           ;; `superchat-runtime--turn-from-request' reads `:clean-input'
+  1130	           ;; straight off the legacy Request to rebuild the private Turn
+  1131	           ;; (falls back to `:user-message'/`:input' only when absent);
+  1132	           ;; `--dispatch-to-runtime''s own fixed field list does not carry
+  1133	           ;; it, so it must ride along as an extra or the reconstructed
+  1134	           ;; Turn's `clean-input' silently reverts to the unstripped
+  1135	           ;; `:input' value (caught by
+  1136	           ;; `skill/mixed-input-uses-clean-prompt-and-echoes-skipped-command').
+  1137	           :clean-input clean-input
+  1138	           :workspace-id (plist-get composed :workspace-id)
+  1139	           :workspace-root (plist-get composed :workspace-root)
+  1140	           ;; A prepared (inspected) request's selection is the one its plan
+  1141	           ;; saved, read by `superchat-pipeline--context-envelope'; the
+  1142	           ;; legacy extra carries none for it.
+  1143	           :context-envelope
+  1144	           (unless (plist-get composed :chat-prepared-context)
+  1145	             (plist-get composed :context-envelope))
+  1146	           :lang (plist-get composed :lang)
+  1147	           :accepted-function (plist-get composed :accepted-function)
+  1148	           :owner-stop-function (plist-get composed :owner-stop-function)
+  1149	           :actor-id (plist-get composed :actor-id)
+  1150	           :correlation-id (plist-get composed :correlation-id)
+  1151	           ;; Runtime's legacy submit path reads `:preset' to resolve
+  1152	           ;; capability/topology naming and to pass the Preset object
+  1153	           ;; itself to `superchat--llm-generate-answer' (max-tokens,
+  1154	           ;; reasoning, temperature overrides); `composed :preset' is set
+  1155	           ;; by `superchat--execute-llm-query' whenever the Turn carries
+  1156	           ;; one but was never forwarded here (caught by
+  1157	           ;; `test-send-input-inherits-active-preset-tools').
+  1158	           :preset (plist-get composed :preset)
+  1159	           :max-tokens (plist-get composed :max-tokens)
+  1160	           :transcript-owner owner)))
+  1161	    (superchat-pipeline--plist-extend
+  1162	      (list :content content
+  1163	            :surface 'chat
+  1164	            ;; A message that named `>annotate' is still shown and recorded
+  1165	            ;; in the conversation; its answer is also hung on the text.
+1:;;; superchat-event.el --- Scoped Events, waterfalls and faults -*- lexical-binding: t; -*-
+9:(defvar superchat-event-faults nil
+10:  "Bounded ring (100 entries) of listener and cross-cutting faults.
+17:(defun superchat-event-record-fault (site id owner condition)
+25:        superchat-event-faults)
+26:  (when (> (length superchat-event-faults) 100)
+27:    (setcdr (nthcdr 99 superchat-event-faults) nil)))
+133:observe: every listener runs, its errors are recorded as faults; return this
+38:  :plugins        Preset-local Plugin entries, each NAME or
+62:  (plugins nil)
+119:(defun superchat-preset-normalize-plugins (plugins)
+123:`superchat-plugins': each item is a NAME or `(NAME . CONFIG-PLIST)'.
+128:  (unless (superchat-preset--proper-list-p plugins)
+129:    (error "Preset plugins must be a proper list: %S" plugins))
+131:    (dolist (entry plugins (nreverse normalized))
+140:          (error "Preset plugins contains duplicate %S" name))
+183:(defun superchat-preset-apply (preset turn)
+242:    "plugins" "model" "temperature" "max_tokens" "reasoning" "max_tool_calls"
+247:  "Parse the supported `plugins: [name, ...]' frontmatter VALUE.
+254:    (error "Preset plugins supports only an inline name list: %S" value))
+291:         ;; small frontmatter reader.  `plugins:' with no inline value is a
+294:         ((string-match "^plugins:\\s-*$" line)
+295:          (error "Preset plugins does not support multiline YAML"))
+296:         ((string-match "^plugins:\\s-*\\(.+\\)$" line)
+297:          (when (assoc "plugins" alist)
+298:            (error "Preset frontmatter declares plugins more than once"))
+299:          (push (cons "plugins"
+346:               :plugins (cdr (assoc "plugins" alist))
+450:Accepts keys :name :profile-id :description :type :capability :body :tools :plugins :model
+471:         (plugins (superchat-preset-normalize-plugins
+472:                   (plist-get plist :plugins)))
+511:     :plugins plugins
+           (interprogram-cut-function nil)
+           (interprogram-paste-function nil))
+       (smoke--with-fixture ,script
+         (let ((network (symbol-function 'smoke--fake-network))
+               (submit (symbol-function 'superchat-runtime-submit)))
+           (superchat-context-register
+            'm5rc-system-note #'m5rc--collect-system
+            :owner 'm5rc :required t :scope superchat-scope-global)
+           (unwind-protect
+               (cl-letf (((symbol-function 'smoke--fake-network)
+                          (lambda (mode provider prompt partial response error multi)
+                            (push (m5rc--snapshot-prompt prompt) m5rc--requests)
+                            (funcall network mode provider prompt
+                                     partial response error multi)))
+                         ((symbol-function 'superchat-runtime-submit)
+                          (lambda (request)
+                            (push (list :prompt (plist-get request :prompt)
+                                        :context-envelope
+                                        (copy-tree (plist-get request :context-envelope)))
+                                  m5rc--submissions)
+                            (funcall submit request))))
+                 ,@body)
+             (superchat-context-unregister
+              'm5rc-system-note superchat-scope-global)))))))
+
+(defun m5rc--count (needle text)
+  "Count nonoverlapping literal NEEDLE occurrences in TEXT."
+  (let ((start 0) (count 0))
+    (while (string-match (regexp-quote needle) text start)
+      (setq count (1+ count) start (match-end 0)))
+    count))
+
+(defun m5rc--assert-system (text &optional static-count base)
+  "Check independent system contributions in provider or inspector TEXT."
+  (should (= (or static-count 1) (m5rc--count "M5RC_STATIC_SYSTEM_NOTE" text)))
+  (should (= 1 (m5rc--count m5rc--guidance text)))
+  (when base (should (= 1 (m5rc--count base text)))))
+
+(defun m5rc--settle (expected-requests)
+  "Wait for EXPECTED-REQUESTS to reach the provider and settle."
+  (should (smoke--wait
+           (lambda ()
+             (and (= expected-requests (length m5rc--requests))
+                  (null (superchat-runtime-active-runs))))
+           15))
+  (should (= expected-requests (length smoke--requests)))
+  (car m5rc--requests))
+
+(defun m5rc--source (&optional text select)
+  "Create an editing source with TEXT and optionally SELECT its contents."
+  (let ((source (generate-new-buffer "m5rc-source.el")))
+    (with-current-buffer source
+      (emacs-lisp-mode)
+      (insert (or text "(message \"source\")\n"))
+      (when select
+        (goto-char (point-min))
+        (set-mark (point-min))
+        (goto-char (point-max))
+        (activate-mark)))
+    source))
+
+(defun m5rc--open (source)
+  "Open an actual View from SOURCE."
+  (with-current-buffer source (superchat))
+  (let ((view (get-buffer superchat-buffer-name)))
+    (should (buffer-live-p view))
+    view))
+
+(defun m5rc--inspect (source text)
+  "Inspect TEXT through the actual external act entry from SOURCE."
+  (with-current-buffer source (superchat-act text t))
+  (let ((inspector
+         (cl-find-if (lambda (buffer)
+                       (with-current-buffer buffer
+                         (derived-mode-p 'superchat-request-mode)))
+                     (buffer-list))))
+    (should (buffer-live-p inspector))
+    inspector))
+
+(defun m5rc--body (inspector)
+  "Read the exact editable body shown in INSPECTOR."
+  (with-current-buffer inspector
+    (buffer-substring-no-properties superchat--request-prompt-start
+                                    superchat--request-prompt-end)))
+
+(defun m5rc--read-only-part (inspector)
+  "Read what INSPECTOR shows before its editable body."
+  (with-current-buffer inspector
+    (buffer-substring-no-properties (point-min) superchat--request-prompt-start)))
+
+(defun m5rc--replace-body (inspector text)
+  "Replace the actual inspector's editable body with TEXT."
+  (with-current-buffer inspector
+    (let ((inhibit-read-only t))
+      (goto-char superchat--request-prompt-start)
+      (delete-region superchat--request-prompt-start superchat--request-prompt-end)
+    30	(require 'superchat-event)
+    31	
+    32	(declare-function superchat-runtime--terminal-p "superchat-runtime" (status))
+    33	
+    34	(declare-function superchat-view-session-configuration "superchat-tape-view"
+    35	                  (session-id))
+    36	(declare-function superchat-changes-candidates "superchat-changes"
+    37	                  (session-id &optional run-id))
+    38	(defvar superchat--tool-execution-context)
+    39	
+    40	(defconst superchat-work-fact-types
+    41	  '("work.created" "work.updated" "work.waiting" "work.completed"
+    42	    "work.focused" "work.facts" "work.outcome" "work.woken" "work.reported"
+    43	    "work.task")
+    44	  "The Tape facts a Work Record is made of.")
+    45	
+    46	(defconst superchat-work-wait-kinds '("user" "agent" "time")
+    47	  "What a record may wait for: the user's answer, another agent, a time.")
+    48	
+    49	;;;; Reading the facts ----------------------------------------------------------
+    50	
+    51	(defun superchat-work--get (payload &rest keys)
+    52	  "The first of KEYS present in the JSON alist PAYLOAD."
+    53	  (cl-some (lambda (key) (alist-get key payload)) keys))
+    54	
+    55	(defun superchat-work--rows ()
+    56	  "Every Work Record fact, oldest first, as (SESSION TYPE PAYLOAD)."
+    57	  (let (out)
+    58	    (dolist (row (superchat-db-tape-select
+    59	                  "SELECT session_id, meta FROM tape
+    60	                   WHERE kind = 'system' AND meta LIKE '%\"work.%'
+    61	                   ORDER BY id ASC"))
+    62	      (let* ((json-object-type 'alist)
+    63	             (json-array-type 'list)
+    64	             (json-key-type 'symbol)
+    65	             (meta (ignore-errors (json-read-from-string (or (nth 1 row) ""))))
+    66	             (type (alist-get 'event_type meta)))
+    67	        (when (member type superchat-work-fact-types)
+    68	          (push (list (nth 0 row) type (alist-get 'payload meta)) out))))
+    69	    (nreverse out)))
+    70	
+   184	  (cl-find id (superchat-work-records) :key (lambda (r) (plist-get r :id)) :test #'equal))
+   185	
+   186	(defun superchat-work-current (session-id)
+   187	  "The id of SESSION-ID's current Work Record, or nil.
+   188	That is the record of its last `work.focused' fact, while not completed."
+   189	  (let (current)
+   190	    (dolist (row (superchat-work--rows))
+   191	      (cl-destructuring-bind (session type payload) row
+   192	        (when (and (equal session session-id) (equal type "work.focused"))
+   193	          (setq current (superchat-work--get payload 'work_id 'work-id)))))
+   194	    (and current
+   195	         (let ((record (superchat-work-get current)))
+   196	           (and record (not (plist-get record :conclusion)) current)))))
+   197	
+   198	;;;; Writing the facts ----------------------------------------------------------
+   199	
+   200	(defun superchat-work--append (session-id type summary payload)
+   201	  "Append the Work Record fact TYPE with PAYLOAD to SESSION-ID's Tape."
+   202	  (superchat-tape-append-event
+   203	   (list :type type :session-id session-id :actor-id "work-records"
+   204	         :summary summary :payload payload)))
+   205	
+   206	(defun superchat-work--run-id ()
+   207	  "The Run the current tool call belongs to, or nil."
+   208	  (and (boundp 'superchat--tool-execution-context)
+   209	       (plist-get superchat--tool-execution-context :run-id)))
+   210	
+   211	(defun superchat-work--workspace (session-id)
+   212	  "(ID . ROOT) of the Workspace SESSION-ID is bound to, or nil without a root."
+   213	  (when (fboundp 'superchat-view-session-configuration)
+   214	    (let* ((config (superchat-view-session-configuration session-id))
+   215	           (id (plist-get config :workspace-id))
+   216	           (root (plist-get config :workspace-root)))
+   217	      (and (stringp id) (stringp root) (not (string-empty-p root)) (cons id root)))))
+   218	
+   219	(defun superchat-work--require (id)
+   220	  "The open record ID, or signal why it cannot be written to."
+   221	  (let ((record (superchat-work-get id)))
+   222	    (cond ((null record) (error "No work record %s" id))
+   223	          ((plist-get record :conclusion)
+   224	           (error "Work record %s is completed; start a new one that follows it" id))
+superchat-workspace.el:41:ROOT's real path, the same value `superchat--workspace-binding-for-directory'
+superchat.el:670:     (if superchat--workspace-binding
+superchat.el:671:         (if-let* ((name (plist-get superchat--workspace-binding :name)))
+superchat.el:1648:(defvar-local superchat--workspace-binding nil
+superchat.el:2085:(defun superchat--workspace-binding-for-directory (directory)
+superchat.el:2106:(defun superchat--apply-workspace-binding (binding)
+superchat.el:2125:  (setq-local superchat--workspace-binding binding)
+superchat.el:2130:(defun superchat--bind-workspace (directory)
+superchat.el:2132:  (superchat--apply-workspace-binding
+superchat.el:2136:     (superchat--workspace-binding-for-directory directory))))
+superchat.el:2144:(defun superchat--session-bind-workspace-at-creation (view source)
+superchat.el:2157:          (unless (or superchat--workspace-binding
+superchat.el:2159:            (superchat--apply-workspace-binding
+superchat.el:2165:  (let ((workspace superchat--workspace-binding))
+superchat.el:2237:    (setq-local superchat--workspace-binding
+superchat.el:3512:                                  'superchat--workspace-binding buffer)
+superchat.el:3937:       (not (buffer-local-value 'superchat--workspace-binding view))))
+superchat.el:3980:      (superchat--apply-workspace-binding
+superchat.el:4005:    (superchat--session-bind-workspace-at-creation buffer source)
+superchat.el:4087:      (when-let* ((binding superchat--workspace-binding))
+superchat.el:4143:                        (plist-get superchat--workspace-binding :root))
+superchat.el:4170:    (superchat--session-bind-workspace-at-creation buffer source)
+superchat.el:4215:        (superchat--session-bind-workspace-at-creation view source)
+superchat.el:5664:      (when directory (superchat--bind-workspace directory))
+superchat.el:5692:        :content ,(if superchat--workspace-binding
+superchat.el:5693:                      (superchat--workspace-echo superchat--workspace-binding)
+superchat.el:5697:          (progn (superchat--bind-workspace nil)
+superchat.el:5706:         ((and (null superchat--workspace-binding) fresh)
+superchat.el:5707:          (superchat--apply-workspace-binding target)
+superchat.el:5709:         ((equal (plist-get superchat--workspace-binding :id)
+superchat.el:5712:            :content ,(superchat--workspace-echo superchat--workspace-binding)))
+superchat.el:5770:  (superchat--bind-workspace nil)

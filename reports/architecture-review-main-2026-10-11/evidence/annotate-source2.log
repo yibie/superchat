@@ -1,0 +1,287 @@
+   330	         (previous (or (cl-find-if (lambda (o) (< (overlay-start o) (point)))
+   331	                                   (reverse overlays))
+   332	                       (car (last overlays)))))
+   333	    (unless previous (user-error "No annotations in this buffer"))
+   334	    (goto-char (overlay-start previous))
+   335	    (message "%s" (plist-get (overlay-get previous 'superchat-annotate) :remark))
+   336	    previous))
+   337	
+   338	;;;; Placing an answer ------------------------------------------------------------
+   339	
+   340	(defun superchat-annotate--place (buffer beg end answer run-id)
+   341	  "Hang the remarks of ANSWER on BEG..END of BUFFER and return the report.
+   342	BEG and END are markers.  RUN-ID is the Run that gave ANSWER.  The report is
+   343	the plist `superchat-annotate--report' holds; BUFFER's text is not changed."
+   344	  (with-current-buffer buffer
+   345	    (let* ((empty (superchat-annotate--empty-answer-p answer))
+   346	           (parsed (superchat-annotate--parse (if empty "" answer)))
+   347	           (placed 0)
+   348	           unplaced)
+   349	      (dolist (row (car parsed))
+   350	        (let ((where (superchat-annotate--locate
+   351	                      (marker-position beg) (marker-position end)
+   352	                      (plist-get row :line) (plist-get row :quote))))
+   353	          (if where
+   354	              (progn (superchat-annotate--make (car where) (cdr where) row run-id)
+   355	                     (cl-incf placed))
+   356	            (push row unplaced))))
+   357	      (setq superchat-annotate--report
+   358	            (list :placed placed
+   359	                  :unplaced (nreverse unplaced)
+   360	                  :unparsed (cdr parsed)
+   361	                  :empty empty)))))
+   362	
+   363	(defun superchat-annotate--report-text (report)
+   364	  "Return one line saying what REPORT, an annotation's outcome, holds."
+   365	  (let ((placed (plist-get report :placed))
+   366	        (unplaced (length (plist-get report :unplaced)))
+   367	        (unparsed (length (plist-get report :unparsed))))
+   368	    (cond
+   369	     ((plist-get report :empty)
+   370	      "superchat: the model gave no remarks: its answer was empty")
+   371	     ((and (zerop placed) (zerop unplaced))
+   372	      (format "superchat: the model gave no remarks in the asked form (%d rows not understood; M-x superchat-annotate-list)"
+   373	              unparsed))
+   374	     (t
+   375	      (concat (format "superchat: %d remark%s placed" placed (if (= placed 1) "" "s"))
+   376	              (unless (zerop unplaced) (format ", %d not placed" unplaced))
+   377	              (unless (zerop unparsed) (format ", %d rows not understood" unparsed))
+   378	              (unless (and (zerop unplaced) (zerop unparsed))
+   379	                " (M-x superchat-annotate-list)"))))))
+   380	
+   381	;;;; The request ------------------------------------------------------------------
+   382	
+   383	(defun superchat-annotate--pending (beg)
+   384	  "Return an overlay at BEG saying an annotation is being asked for."
+   385	  (let ((overlay (make-overlay beg beg nil t nil)))
+   386	    (overlay-put overlay 'superchat-annotate-pending t)
+   387	    (overlay-put overlay 'before-string
+   388	                 (propertize "[superchat: annotating…]\n"
+   389	                             'face 'superchat-annotate-remark))
+   390	    overlay))
+   391	
+   392	(defun superchat-annotate--sink (buffer beg end pending session-id)
+   393	  "Return the Sink that hangs an answer's remarks on BEG..END of BUFFER.
+   394	PENDING is the overlay shown while waiting; SESSION-ID is the conversation."
+   395	  (let ((done (lambda ()
+   396	                (when (overlayp pending) (delete-overlay pending))
+   397	                (set-marker beg nil) (set-marker end nil))))
+   398	    (superchat-sink-create
+   399	     :id (format "annotate-%08x" (random #x100000000))
+   400	     :live-p (lambda () (buffer-live-p buffer))
+   401	     :status #'ignore
+   402	     :stream #'ignore
+   403	     :final (lambda (run result)
+   404	              (let* ((run-id (if (stringp run) run (plist-get run :run-id)))
+   405	                     (report (superchat-annotate--place
+   406	                              buffer beg end (plist-get result :text) run-id))
+   407	                     (line (with-current-buffer buffer
+   408	                             (line-number-at-pos (marker-position beg)))))
+   409	                (funcall done)
+   410	                (message "%s" (superchat-annotate--report-text report))
+   411	                (when (and (stringp run-id)
+   412	                           (fboundp 'superchat-conversation-show-turn))
+   413	                  (superchat-conversation-show-turn
+   414	                   session-id run-id
+   415	                   (list :kind "annotation" :buffer buffer
+   416	                         :file (buffer-file-name buffer) :line line)))))
+   417	     :error (lambda (_run failure)
+   418	              (funcall done)
+   419	              (message "superchat: no annotations: %s"
+   420	                       (if (eq (plist-get failure :status) 'cancelled)
+   421	                           "cancelled"
+   422	                         (or (plist-get failure :text) "the request failed"))))
+   423	     :orphaned (lambda (_run _reason) (funcall done)))))
+   424	
+   425	(defun superchat-annotate--bounds ()
+   426	  "Return (BEG . END), the whole lines `superchat-annotate' is about.
+   427	The lines the active region touches, else the whole buffer."
+   428	  (if (use-region-p)
+   429	      (let ((beg (region-beginning)) (end (region-end)))
+   430	        (cons (save-excursion (goto-char beg) (line-beginning-position))
+   431	              (save-excursion
+   432	                (goto-char end)
+   433	                ;; A region ending at the start of a line does not touch it.
+   434	                (when (and (bolp) (> end beg)) (backward-char))
+   435	                (line-end-position))))
+   436	    (cons (point-min)
+   437	          (save-excursion
+   438	            (goto-char (point-max))
+   439	            (when (and (bolp) (> (point) (point-min))) (backward-char))
+   440	            (point)))))
+   441	
+   442	(defun superchat-annotate--start (beg end instruction)
+   443	  "Ask for annotations of BEG..END under INSTRUCTION; return the Run handle."
+   444	  (superchat-plugin-require-active-row 'inline-rewrite)
+   445	  (unless superchat-llm-backend
+   446	    (user-error "superchat-llm-backend is not configured"))
+   447	  (when (= beg end)
+   448	    (user-error "Nothing to annotate"))
+   449	  (let* ((buffer (current-buffer))
+   450	         (text (buffer-substring-no-properties beg end))
+   451	         (lines (superchat-annotate--line-count beg end))
+   452	         (session-id (superchat-inline-session-id buffer))
+   453	         (beg-marker (copy-marker beg))
+   454	         (end-marker (copy-marker end t))
+   455	         (pending (superchat-annotate--pending beg))
+   456	         (envelope
+   457	          (list :surface 'inline-annotate
+   458	                :session-id session-id
+   459	                :content (superchat-annotate--content text instruction)
+   460	                :tools 'none
+   461	                :system-prompt (superchat-annotate--system-text)
+   462	                :sink (superchat-annotate--sink buffer beg-marker end-marker
+   463	                                                pending session-id)
+   464	                :context (list :annotate-buffer buffer))))
+   465	    (when (> lines superchat-annotate-warn-lines)
+   466	      (message "superchat: annotating %d lines; placement was measured on texts of up to 87"
+   467	               lines))
+   468	    (condition-case err
+   469	        (superchat-service-call nil 'driver 'submit envelope)
+   470	      ((error quit)
+   471	       (delete-overlay pending)
+   472	       (signal (car err) (cdr err))))))
+   473	
+   474	;;;; Asked for in a conversation -------------------------------------------------
+   475	
+   476	(defun superchat-annotate-chat-spec (buffer)
+   477	  "Return what a conversation's request needs to annotate all of BUFFER.
+   478	A plist: :buffer BUFFER, :beg and :end markers around its whole lines,
+   479	:name its name, :lines how many, :text its text with line numbers."
+   480	  (with-current-buffer buffer
+   481	    (let* ((beg (point-min))
+   482	           (end (save-excursion
+   483	                  (goto-char (point-max))
+   484	                  (when (and (bolp) (> (point) (point-min))) (backward-char))
+   485	                  (point))))
+   486	      (when (= beg end)
+   487	        (user-error "superchat: nothing to annotate: %s is empty" (buffer-name)))
+   488	      (list :buffer buffer
+   489	            :beg (copy-marker beg)
+   490	            :end (copy-marker end t)
+   491	            :name (buffer-name)
+   492	            :lines (superchat-annotate--line-count beg end)
+   493	            :text (superchat-annotate--numbered
+   494	                   (buffer-substring-no-properties beg end))))))
+   495	
+   496	(defun superchat-annotate-chat-sink (inner spec &optional hung)
+   497	  "Return a Sink that does what INNER does and hangs the answer on SPEC's buffer.
+   498	INNER is the conversation's own Sink: the answer is still shown and recorded
+   499	there.  SPEC is what `superchat-annotate-chat-spec' returned.  HUNG, when
+   500	given, is called with the buffer's name once at least one remark is on its
+   501	text; not for an answer that placed nothing, failed, or found no buffer."
+   502	  (let* ((buffer (plist-get spec :buffer))
+   503	         (beg (plist-get spec :beg))
+   504	         (end (plist-get spec :end))
+   505	         (done (lambda () (set-marker beg nil) (set-marker end nil)))
+   506	         (pass (lambda (slot)
+   507	                 (lambda (run payload)
+   508	                   (superchat-sink-emit inner slot run payload)))))
+   509	    (superchat-sink-create
+   510	     :id (superchat-sink-id inner)
+   511	     :live-p (lambda () (superchat-sink-live-p inner))
+   512	     :stream (funcall pass 'stream)
+   513	     :status (funcall pass 'status)
+   514	     :final
+   515	     (lambda (run result)
+   516	       (superchat-sink-emit inner 'final run result)
+   517	       (if (not (buffer-live-p buffer))
+   518	           (message "superchat: no annotations: the buffer to annotate is gone")
+   519	         (let ((run-id (if (stringp run) run (plist-get run :run-id))))
+   520	           (with-current-buffer buffer
+   521	             (dolist (overlay (superchat-annotate-overlays))
+   522	               (when (and (>= (overlay-start overlay) (marker-position beg))
+   523	                          (<= (overlay-end overlay) (marker-position end)))
+   524	                 (superchat-annotate--delete overlay))))
+   525	           (let ((report (superchat-annotate--place
+   526	                          buffer beg end (plist-get result :text) run-id)))
+   527	             (message "%s in %s" (superchat-annotate--report-text report)
+   528	                      (buffer-name buffer))
+   529	             (when (and hung (> (plist-get report :placed) 0))
+   530	               (funcall hung (buffer-name buffer))))))
+   531	       (funcall done))
+   532	     :error
+   533	     (lambda (run failure)
+   534	       (superchat-sink-emit inner 'error run failure)
+   535	       (funcall done)
+   536	       (message "superchat: no annotations: %s"
+   537	                (if (eq (plist-get failure :status) 'cancelled)
+   538	                    "cancelled"
+   539	                  (or (plist-get failure :text) "the request failed"))))
+   540	     :orphaned
+   541	     (lambda (run reason)
+   542	       (superchat-sink-emit inner 'orphaned run reason)
+   543	       (funcall done)))))
+   544	
+   545	;;;###autoload
+   546	(defun superchat-annotate (instruction)
+   547	  "Ask the model for remarks on the region, else on the whole buffer.
+   548	Each remark is hung on the text it is about; the text itself is not
+   549	changed.  INSTRUCTION says what to look for.  Earlier annotations of the
+   550	same lines are replaced.  `superchat-annotate-next' and
+   551	`superchat-annotate-previous' go from one to the other,
+   552	`superchat-annotate-list' lists them with the ones that could not be
+   553	placed, `superchat-annotate-clear' removes them."
+   554	  (interactive
+   555	   (list (let ((typed (read-string
+   556	                       (format "Annotate (default: %s): "
+   557	                               superchat-annotate-default-instruction)
+   558	                       nil 'superchat-annotate-instruction-history)))
+   559	           (if (string-empty-p (string-trim typed))
+   560	               superchat-annotate-default-instruction
+   561	             typed))))
+   562	  (let ((bounds (superchat-annotate--bounds)))
+   563	    (dolist (overlay (superchat-annotate-overlays))
+   564	      (when (and (>= (overlay-start overlay) (car bounds))
+   565	                 (<= (overlay-end overlay) (cdr bounds)))
+   566	        (superchat-annotate--delete overlay)))
+   567	    (superchat-annotate--start (car bounds) (cdr bounds) instruction)))
+   568	
+   569	;;;; The list ---------------------------------------------------------------------
+   570	
+   571	(defun superchat-annotate--go (buffer position)
+   572	  "Show BUFFER with point at POSITION."
+   573	  (when (buffer-live-p buffer)
+   574	    (pop-to-buffer buffer)
+   575	    (goto-char position)))
+   576	
+   577	;;;###autoload
+   578	(defun superchat-annotate-list (&optional buffer)
+   579	  "List BUFFER's annotations, and the remarks that could not be placed."
+   580	  (interactive)
+   581	  (let* ((source (or buffer (current-buffer)))
+   582	         (overlays (superchat-annotate-overlays source))
+   583	         (report (buffer-local-value 'superchat-annotate--report source))
+   584	         (inhibit-read-only t))
+   585	    (with-current-buffer (get-buffer-create superchat-annotate--list-buffer)
+   586	      (erase-buffer)
+   587	      (special-mode)
+   588	      (insert (format "Annotations of %s\n\n" (buffer-name source)))
+   589	      (if (null overlays)
+   590	          (insert (if (plist-get report :empty)
+   591	                      "The model gave no remarks: its answer was empty.\n"
+   592	                    "No remarks are placed.\n"))
+   593	        (dolist (overlay overlays)
+   594	          (let ((position (overlay-start overlay)))
+   595	            (insert-text-button
+   596	             (format "%4d" (with-current-buffer source (line-number-at-pos position)))
+   597	             'action (lambda (_) (superchat-annotate--go source position))
+   598	             'follow-link t)
+   599	            (insert "  "
+   600	                    (plist-get (overlay-get overlay 'superchat-annotate) :remark)
+   601	                    "\n"))))
+   602	      (when-let* ((unplaced (plist-get report :unplaced)))
+   603	        (insert (format "\nNot placed (%d): the quoted text was not found near the stated line.\n"
+   604	                        (length unplaced)))
+   605	        (dolist (row unplaced)
+   606	          (insert (format "  line %d, \"%s\": %s\n" (plist-get row :line)
+   607	                          (plist-get row :quote) (plist-get row :remark)))))
+   608	      (when-let* ((unparsed (plist-get report :unparsed)))
+   609	        (insert (format "\nNot understood (%d): rows of the answer not in the asked form.\n"
+   610	                        (length unparsed)))
+   611	        (dolist (row unparsed) (insert "  " row "\n")))
+   612	      (goto-char (point-min))
+   613	      (pop-to-buffer (current-buffer)))))
+   614	
+   615	(provide 'superchat-annotate)
+   616	;;; superchat-annotate.el ends here

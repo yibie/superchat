@@ -1,0 +1,34 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 03:14:27-0700, selector ‘"^fr-loop/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-LOOP OBSERVER FAULT: faults=(((event turn-completed) changes-unattended-notice)); anything said about them=nil
+
+   passed  1/4  fr-loop/a-run-end-observer-that-fails-is-a-fault-nobody-is-told-of (0.627752 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FR-LOOP TASK CUT OFF: sealed abandoned on Tape=1; notices=nil; pending rows=nil; unstarted tasks=nil; unconfirmed=nil
+
+   passed  2/4  fr-loop/a-scheduled-task-cut-off-mid-run-is-told-to-nobody-after-a-restart (0.048939 sec)
+superchat: scheduled task timer-20261011031427-aa29 was not started: TSF injected: send fails
+FR-LOOP OUT OF TRIES: timer facts on the Tape=("timer.created" "timer.fired" "timer.sending") (no fact says it was given up); retry timer=nil; list row=((due "scheduled task, due 2027-01-15 00:01, not started"))
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  3/4  fr-loop/a-task-out-of-tries-leaves-no-durable-fact-and-is-tried-again-after-a-restart (0.062205 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FOLDED
+FOLDED
+FR-LOOP USER RUN CUT OFF: sealed=1 pending rows=nil notices=nil
+
+   passed  4/4  fr-loop/a-users-execution-cut-off-mid-run-is-sealed-and-listed-nowhere (0.032274 sec)
+
+Ran 4 tests, 4 results as expected, 0 unexpected (2026-10-11 03:14:27-0700, 0.771461 sec)
+

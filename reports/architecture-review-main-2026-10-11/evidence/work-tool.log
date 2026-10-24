@@ -1,0 +1,18 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 10 tests (2026-10-11 00:12:50-0700, selector ‘"^work-tool/"’)
+   passed   1/10  work-tool/a-plain-start-answers-as-before (0.845053 sec)
+   passed   2/10  work-tool/a-start-keeps-a-wait-for-the-user (0.011824 sec)
+   passed   3/10  work-tool/a-start-keeps-the-progress-the-place-and-the-wait-it-came-with (0.041449 sec)
+   passed   4/10  work-tool/a-start-that-cannot-keep-what-it-came-with-starts-nothing (0.019404 sec)
+   passed   5/10  work-tool/an-update-still-keeps-its-progress-and-its-wait (0.011496 sec)
+   passed   6/10  work-tool/an-update-whose-wait-is-refused-writes-nothing (0.010572 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/10  work-tool/with-the-row-off-a-wait-for-a-time-is-refused (0.107248 sec)
+   passed   8/10  work-tool/with-the-row-off-nothing-that-comes-with-a-time-is-half-kept (0.010346 sec)
+   passed   9/10  work-tool/with-the-row-off-what-needs-no-timer-still-works (0.013615 sec)
+   passed  10/10  work-tool/with-the-row-on-again-a-wait-for-a-time-is-kept-and-armed (0.012475 sec)
+
+Ran 10 tests, 10 results as expected, 0 unexpected (2026-10-11 00:12:51-0700, 1.084219 sec)
+

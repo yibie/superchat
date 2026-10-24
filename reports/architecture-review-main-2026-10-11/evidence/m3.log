@@ -1,0 +1,681 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 139 tests (2026-10-11 00:13:18-0700, selector ‘t’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001318-367211-42b5 cancelled (session m3r)
+   passed    1/139  m3/admission/a-follow-up-awaiting-drop-confirmation-is-not-dispatched (1.026275 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001319-393744-758e cancelled (session m3r)
+   passed    2/139  m3/admission/a-follow-up-drop-whose-receipt-is-lost-is-recorded-once (0.016139 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001320-391087-f162 audit incomplete: Exact evidence audit failed
+Superchat session cached for next startup.
+   passed    3/139  m3/admission/an-unrecordable-attachment-is-refused-before-it-is-sent (0.996012 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-406195-6f62 completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-821090-41a6 completed (session m3r)
+   passed    4/139  m3/admission/busy-submit-queues-then-dispatches-one-new-turn (0.447796 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-857434-dfb8 completed (session m3r)
+superchat: run run-20261011-001320-852746-0128 cancelled (session m3r)
+   passed    5/139  m3/admission/child-run-is-not-forced-into-the-parent-session-fifo (0.035822 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-888385-9eea completed (session m3r-explicit)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-915335-3d2a completed (session ephemeral-req-425d2d72)
+   passed    6/139  m3/admission/explicit-session-is-kept-and-a-missing-one-is-ephemeral (0.056674 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-945317-53d0 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-954899-9054 completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001320-982082-416d completed (session m3r)
+   passed    7/139  m3/admission/fifo-order-holds-across-an-idle-gap (0.071347 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-016941-1961 completed (session m3r)
+   passed    8/139  m3/admission/idle-submit-runs-without-queue-facts (0.029487 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-046205-6e80 cancelled (session m3r)
+   passed    9/139  m3/admission/invalid-envelopes-are-refused-before-queueing (0.038709 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-084926-72b5 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-093469-04a7 completed (session m3r)
+   passed   10/139  m3/admission/queued-input-is-not-a-run-until-dispatched (0.049339 sec)
+   passed   11/139  m3/admission/retired-scope-submission-is-refused-before-acceptance (0.002724 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-136784-a19b cancelled (session m3r)
+   passed   12/139  m3/admission/view-close-drops-queued-followup-with-fact (0.010358 sec)
+   passed   13/139  m3/context/assembly-order-follows-priority-not-collection (0.000224 sec)
+   passed   14/139  m3/context/no-stage-vocabulary-survives (0.001024 sec)
+   passed   15/139  m3/context/optional-failure-and-invalid-fragment-are-recorded-not-fatal (0.000177 sec)
+   passed   16/139  m3/context/required-failure-aborts-before-dispatch-and-reports-once (0.002635 sec)
+   passed   17/139  m3/context/stage-registry-is-gone-and-collect-context-is-an-event (0.000020 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-151602-d0f1 completed (session m3r)
+   passed   18/139  m3/driver/handle-is-opaque-plain-data-and-grants-nothing (0.029563 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-181218-a03a ended; 1 steer instruction not delivered
+   passed   19/139  m3/driver/turn-stopping-seam-reports-waiting-input (0.010361 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-192005-467a completed (session m3r)
+   passed   20/139  m3/inject/a-drop-awaiting-confirmation-is-not-admitted-as-input (0.030435 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-224957-cc9f cancelled (session m3r)
+   passed   21/139  m3/inject/a-drop-whose-receipt-is-lost-is-recorded-once (0.014332 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   22/139  m3/inject/admitted-material-reaches-the-next-turn-once (0.195442 sec)
+   passed   23/139  m3/inject/failed-drop-fact-keeps-the-material (0.003619 sec)
+   passed   24/139  m3/inject/idle-injection-never-wakes-the-driver (0.002961 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-438851-897b completed (session m3r)
+   passed   25/139  m3/inject/idle-material-reaches-the-next-matching-turn-once (0.032739 sec)
+   passed   26/139  m3/inject/invalid-material-is-refused-and-not-stored (0.002783 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   27/139  m3/inject/later-step-derives-material-recorded-once (0.081359 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-556076-b20c completed (session m3r)
+   passed   28/139  m3/inject/material-is-recorded-before-dispatch (0.028952 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-584754-f681 completed (session m3r)
+   passed   29/139  m3/inject/material-over-the-inline-limit-is-refused-at-the-inbox (0.030656 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-615695-fbbc failed (session m3r)
+   passed   30/139  m3/inject/material-that-grows-past-the-inline-limit-fails-the-step-with-a-drop-fact (0.008455 sec)
+   passed   31/139  m3/inject/retired-scope-is-refused (0.003460 sec)
+   passed   32/139  m3/inject/retirement-and-view-close-drop-only-their-own-material (0.005325 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-634728-7a1b completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-666832-92e6 completed (session m3r)
+   passed   33/139  m3/inject/scope-is-exact-identity-not-ancestry (0.121724 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-755460-9066 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-769894-e17f completed (session m3r)
+   passed   34/139  m3/inject/unconsumed-live-run-material-is-dropped-with-fact (0.050843 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001321-806690-cf31 completed (session m3r)
+   passed   35/139  m3/parse/a-non-chat-submission-records-no-context-fault (0.033909 sec)
+Warning (emacs): No model predefined for model m3r-other-model, using restrictive defaults
+Warning (emacs): No model predefined for model m3r-other-model, using restrictive defaults
+Warning (emacs): No model predefined for model m3r-other-model, using restrictive defaults
+Switching to model: m3r-other-model
+   passed   36/139  m3/parse/at-model-selects-the-model-for-that-turn (0.051034 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+🎯 Using skill: m3rskill
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   37/139  m3/parse/chat-command-and-skill-during-a-run-are-parsed-before-queueing (0.590210 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Queued (1 pending); it will be sent when the current response finishes.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   38/139  m3/parse/chat-input-sent-during-a-run-is-queued-parsed (0.486864 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: Inlined 21 characters from /Users/chenyibin/.cache/sc-codex-review/round3/superchat-smoke-data-VbkAXW/m3r-notes.txt
+superchat: Tracking file for context: /Users/chenyibin/.cache/sc-codex-review/round3/superchat-smoke-data-VbkAXW/m3r-notes.txt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   39/139  m3/parse/hash-file-reference-adds-the-file-and-strips-the-token (0.046515 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001323-016451-dec4 completed (session m3r)
+   passed   40/139  m3/parse/non-chat-surfaces-are-not-chat-parsed (0.035302 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+🎯 Using skill: m3rskill
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   41/139  m3/parse/rejected-queueing-keeps-a-command-or-skill-draft (3.241464 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   42/139  m3/parse/rejected-queueing-keeps-a-plain-draft-editable (1.585962 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   43/139  m3/parse/turn-facts-are-recorded-once-per-turn-not-per-step (0.104662 sec)
+Unknown command: `/m3r-no-such-command'.
+   passed   44/139  m3/parse/unknown-chat-command-starts-no-run (0.319681 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-301725-059e cancelled (session m3r)
+   passed   45/139  m3/pre-step/cancelling-inside-the-gate-opens-no-step-and-sends-nothing (0.007244 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-309187-217f completed (session m3r)
+   passed   46/139  m3/pre-step/derived-source-survives-the-tape-round-trip (0.031908 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-341027-cf47 completed (session m3r)
+   passed   47/139  m3/pre-step/gate-cannot-replace-execution-identity (0.028658 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-369738-7df4 completed (session m3r)
+   passed   48/139  m3/pre-step/gate-sees-the-real-execution-identity (0.030344 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-400021-df79 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-408084-06e9 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-416084-08ce failed (session m3r)
+   passed   49/139  m3/pre-step/invalid-replacement-fails-closed (0.024998 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-425580-8857 completed (session m3r)
+   passed   50/139  m3/pre-step/merge-records-the-actual-sources-of-its-inputs (0.032795 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-458410-bbc0 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-466736-5bf3 failed (session m3r)
+   passed   51/139  m3/pre-step/non-entry-discards-claimed-material-with-outcome (0.016366 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-474840-94fe completed (session m3r)
+   passed   52/139  m3/pre-step/one-to-one-rewrite-keeps-identity-and-source (0.032933 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-507456-c030 completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-540348-4674 completed (session m3r)
+   passed   53/139  m3/pre-step/partial-and-empty-admission-drop-the-rest (0.063317 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-570625-73be failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-577534-e69d failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-584042-51c5 failed (session m3r)
+   passed   54/139  m3/pre-step/reject-refuse-and-throw-open-no-step (0.020201 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-590912-0010 completed (session m3r)
+   passed   55/139  m3/pre-step/split-links-every-part-to-its-input (0.030853 sec)
+   passed   56/139  m3/pre-step/tape-tag-is-an-object-and-a-lookalike-list-is-inert (0.000126 sec)
+  skipped   57/139  m3/real/cancelled-turn-seals-cancelled-with-a-closed-step (0.000040 sec)
+  skipped   58/139  m3/real/normal-turn-completes-with-a-closed-step (0.000025 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-622063-ddb8 cancelled (session m3r)
+   passed   59/139  m3/request/cancelling-inside-request-middleware-is-not-reported-as-an-error (0.007514 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-629558-6828 cancelled (session m3r)
+   passed   60/139  m3/request/cancelling-inside-request-middleware-sends-nothing (0.007691 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-637222-d5eb completed (session m3r)
+   passed   61/139  m3/request/fold-and-middleware-rewrites-reach-the-provider (0.029228 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-666558-845c failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-674385-c335 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-681647-81ab failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-689403-0754 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-698024-0004 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-706123-9753 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-713807-775a failed (session m3r)
+   passed   62/139  m3/request/identity-and-tool-ceiling-are-not-rewritable (0.055370 sec)
+   passed   63/139  m3/request/late-continuation-is-inert (0.000153 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-721990-a95b completed (session m3r)
+   passed   64/139  m3/request/non-delegating-middleware-ends-the-chain (0.030278 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   65/139  m3/request/ordinary-tools-without-a-trusted-wrapper-cannot-dispatch (0.011053 sec)
+   passed   66/139  m3/request/prepared-tool-surface-cannot-be-replaced (0.000112 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001328-763501-2d2f failed (session m3r)
+   passed   67/139  m3/request/refusal-closes-the-entered-step-as-failed (0.007800 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   68/139  m3/request/tool-guidance-follows-final-tools-without-recollecting (0.094870 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   69/139  m3/request/tool-rewrite-applies-per-attempt-through-the-pipeline (0.063485 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   70/139  m3/request/tools-added-on-a-later-step-execute-through-the-pipeline (0.083909 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   71/139  m3/run-sealing/a-failed-turn-recording-leaves-a-cancelled-run-cancelled (0.024198 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   72/139  m3/run-sealing/a-failed-turn-recording-seals-audit-incomplete (0.046214 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-084567-68be completed (session m3r)
+   passed   73/139  m3/run-sealing/listener-fault-leaves-exactly-one-terminal-fact (0.030442 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   74/139  m3/run-sealing/other-failures-do-not-change-the-disposition (0.046033 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-161036-225a completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-188255-5650 completed (session m3r)
+   passed   75/139  m3/run-sealing/submission-during-seal-is-queued-not-duplicated (0.060270 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-221417-e6bf completed (session m3r)
+   passed   76/139  m3/steer/refused-without-a-live-run (0.030420 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-251753-8c0d cancelled (session m3r)
+   passed   77/139  m3/steer/steer-and-inject-share-one-ordered-claim (0.015941 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-267681-4ed0 ended; 1 steer instruction not delivered
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-277967-ee8c completed (session m3r)
+   passed   78/139  m3/steer/unconsumed-steer-does-not-migrate-to-a-later-run (0.043144 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   79/139  m3/step/a-provider-failure-on-a-later-attempt-closes-that-step-failed (0.112187 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   80/139  m3/step/a-tool-protocol-retry-closes-the-prior-step-failed (0.076366 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-499890-326a cancelled (session m3r)
+   passed   81/139  m3/step/advance-step-records-the-prior-disposition (0.014116 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-513746-74a1 cancelled (session m3r)
+   passed   82/139  m3/step/cancel-closes-the-step-as-cancelled-before-run-cancelled (0.012117 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   83/139  m3/step/each-model-attempt-is-its-own-step (0.078453 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-604815-fa52 completed (session m3r)
+   passed   84/139  m3/step/facts-carry-identity-and-close-before-the-run-terminal (0.031034 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   85/139  m3/step/full-baseline-rejects-missing-step-facts (0.051560 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-687143-9bd1 failed (session m3r)
+   passed   86/139  m3/step/provider-failure-closes-the-step-as-failed (0.029454 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-716626-13a0 failed (session m3r)
+   passed   87/139  m3/step/refused-advance-opens-no-step-and-fails-the-run (0.011934 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-728547-5dd6 completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-756212-33dd completed (session m3r)
+   passed   88/139  m3/turn-stopping/followup-during-notification-starts-a-new-turn (0.062837 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-791493-2ddb completed (session m3r)
+   passed   89/139  m3/turn-stopping/injection-during-notification-continues-the-same-run (0.054343 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-846292-01d9 failed (session m3r)
+   passed   90/139  m3/turn-stopping/listener-failure-fails-the-run (0.029898 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-876106-92c1 completed (session m3r)
+   passed   91/139  m3/turn-stopping/notifies-each-listener-once-before-the-seal (0.032146 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001329-908185-6363 completed (session m3r)
+   passed   92/139  m3/turn-stopping/steering-during-notification-continues-the-same-run (0.090499 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001329-998917-aeb5 audit incomplete: Admitted material settlement incomplete; 1 attachment(s) not durably recorded, 0 input(s) unresolved
+superchat: run run-20261011-001329-998917-aeb5 audit-incomplete (session m3r)
+   passed   93/139  m3/turn-stopping/unrecordable-material-is-audit-incomplete-without-dispatch (0.035388 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-034104-570a completed (session m3r)
+   passed   94/139  m3/turn-stopping/unrelated-recorded-fault-does-not-fail-the-run (0.029783 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-064480-49ea completed (session m3r)
+   passed   95/139  m3a/consumer/a-completed-run-is-delivered-after-the-artifact-checks (0.065431 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-129900-c153 cancelled (session m3r)
+   passed   96/139  m3a/consumer/a-run-without-a-terminal-is-waited-for (0.043574 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-172990-e3e0 completed (session m3r)
+   passed   97/139  m3a/consumer/an-artifact-of-unknown-provenance-still-needs-manual-review (0.031701 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-205112-646a completed (session m3r)
+   passed   98/139  m3a/consumer/an-unreadable-record-is-refused-not-waited-for (0.059719 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-265537-783c completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-329975-9758 completed (session m3r)
+   passed   99/139  m3a/consumer/decisions-read-only-the-recorded-terminal (0.128942 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001330-394210-6937 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001330-394210-6937 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-445527-c20c failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001330-512878-073b timed-out (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-537381-3095 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+   passed  100/139  m3a/consumer/every-other-ending-is-rejected (1.270657 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-664592-a607 completed (session m3r)
+   passed  101/139  m3a/consumer/two-recorded-terminals-are-refused-not-resolved (0.062434 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-726668-2785 completed (session m3r)
+   passed  102/139  m3a/experience/a-completed-run-can-be-evaluated (0.034879 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  103/139  m3a/experience/a-completed-run-without-its-turn-seal-cannot-be-evaluated (0.010965 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-772531-acbe completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001331-804312-cd31 audit incomplete: m3a: the completed seal cannot be written
+superchat: run run-20261011-001331-804312-cd31 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-844807-3d93 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001331-877158-e065 timed-out (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001332-901154-7534 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+   passed  104/139  m3a/experience/an-evaluation-row-for-an-unsuccessful-run-is-not-evidence (1.160134 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001332-932633-8a3d audit incomplete: m3a: the completed seal cannot be written
+superchat: run run-20261011-001332-932633-8a3d audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001332-977010-3d0f failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001333-009630-7045 timed-out (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001334-034514-c785 cancelled (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+   passed  105/139  m3a/experience/only-a-completed-run-can-be-evaluated (1.166835 sec)
+   passed  106/139  m3a/removal/claim-and-feedback-rows-stay-readable (0.002929 sec)
+   passed  107/139  m3a/removal/claims-is-gone (0.001471 sec)
+   passed  108/139  m3a/removal/closure-is-gone (0.004528 sec)
+   passed  109/139  m3a/removal/experience-has-no-context-collector-or-prompt-slot (0.002521 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  110/139  m3a/removal/history-does-not-copy-an-experience-view-into-the-context-envelope (0.042101 sec)
+   passed  111/139  m3a/removal/no-product-or-smoke-file-names-a-removed-part (0.017169 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001334-171571-fc3e completed (session m3r)
+   passed  112/139  m3a/removal/recovery-keeps-its-experience-view-and-its-gate (0.062834 sec)
+   passed  113/139  m3a/removal/review-is-gone-and-the-monitor-stays (0.005200 sec)
+   passed  114/139  m3a/removal/runtime-has-no-closure-guard-shadow-or-observations (0.000029 sec)
+   passed  115/139  m3a/removal/the-tape-keeps-no-closure-vocabulary (0.004898 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+   passed  116/139  m3a/reopen/a-cut-off-run-gets-one-abandoned-pair-and-nothing-else (0.041778 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+FOLDED
+   passed  117/139  m3a/reopen/a-half-written-abandoned-pair-gets-only-its-turn-seal (0.018096 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+superchat: run run-20261011-001334-303603-e88d cancelled (session m3r)
+   passed  118/139  m3a/reopen/a-live-run-is-not-repaired (0.015500 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+FOLDED
+FOLDED
+   passed  119/139  m3a/reopen/repair-does-not-judge-the-record (0.014018 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001334-333903-1c11 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001334-333903-1c11 audit-incomplete (session m3r)
+   passed  120/139  m3a/seal/a-late-result-is-recorded-once-and-does-not-reopen-the-run (0.344231 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001334-678048-34c0 audit incomplete: Open Runtime tool work at completed: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001334-678048-34c0 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001334-715755-00f8 audit incomplete: Open Runtime tool work at failed: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001334-715755-00f8 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001334-755656-a2d7 audit incomplete: Open Runtime tool work at timed-out: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001334-755656-a2d7 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001335-779921-f58b audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001335-779921-f58b audit-incomplete (session m3r)
+   passed  121/139  m3a/seal/an-open-effect-seals-audit-incomplete-whatever-the-requested-ending (1.139841 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001335-817891-19a3 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 0 effect(s), 1 approval(s)
+superchat: run run-20261011-001335-817891-19a3 audit-incomplete (session m3r)
+   passed  122/139  m3a/seal/an-undecided-approval-beside-a-settled-effect-still-seals-audit-incomplete (0.078335 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001335-896231-ca44 audit incomplete: Open Runtime tool work at completed: 1 execution(s), 0 effect(s), 1 approval(s)
+superchat: run run-20261011-001335-896231-ca44 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001335-938803-c1e9 audit incomplete: Open Runtime tool work at failed: 1 execution(s), 0 effect(s), 1 approval(s)
+superchat: run run-20261011-001335-938803-c1e9 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001335-978614-2d60 audit incomplete: Open Runtime tool work at timed-out: 1 execution(s), 0 effect(s), 1 approval(s)
+superchat: run run-20261011-001335-978614-2d60 audit-incomplete (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001336-017164-2a45 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 0 effect(s), 1 approval(s)
+superchat: run run-20261011-001336-017164-2a45 audit-incomplete (session m3r)
+   passed  123/139  m3a/seal/an-undecided-approval-seals-audit-incomplete-whatever-the-requested-ending (0.159767 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat Run run-20261011-001336-056115-8ee7 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-001336-056115-8ee7 audit-incomplete (session m3r)
+   passed  124/139  m3a/seal/one-open-effect-beside-a-settled-one-still-seals-audit-incomplete (0.041852 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001336-097887-0fa0 completed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001336-136720-1565 failed (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001336-183010-e4e1 timed-out (session m3r)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001337-203404-2dd1 cancelled (session m3r)
+   passed  125/139  m3a/seal/settled-effects-and-approvals-keep-the-requested-ending (1.144576 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  126/139  m4/default/the-chat-entry-opens-and-answers (0.041459 sec)
+   passed  127/139  m4/default/todays-rows-are-mounted-and-active (0.002895 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  128/139  m4/headless/no-user-interface-row-and-one-answer (0.035661 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  129/139  m4/in-flight/a-live-run-keeps-its-attachment-record (1.036958 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  130/139  m4/in-flight/a-live-run-keeps-rendering-through-a-profile-switch (1.091744 sec)
+   passed  131/139  m4/profile/a-layer-can-disable-a-row-and-keeps-the-order (0.000188 sec)
+   passed  132/139  m4/profile/a-pending-row-is-reported-with-its-missing-service (0.017384 sec)
+   passed  133/139  m4/profile/mounting-a-profile-makes-the-composition-exactly-its-rows (0.008815 sec)
+   passed  134/139  m4/profile/the-default-profile-resolves-to-the-default-rows (0.000160 sec)
+   passed  135/139  m4/profile/the-empty-seats-are-gone-and-the-declarations-stay (0.000067 sec)
+   passed  136/139  m4/surface/an-entry-point-without-its-row-refuses (0.007011 sec)
+   passed  137/139  m4/surface/the-chat-front-door-refuses-without-its-row (0.006523 sec)
+   passed  138/139  m4/surface/the-chat-window-is-a-row-that-owns-its-name (0.008149 sec)
+   passed  139/139  m4/surface/the-non-chat-surfaces-are-rows-that-own-their-names (0.007336 sec)
+
+Ran 139 tests, 137 results as expected, 0 unexpected, 2 skipped (2026-10-11 00:13:39-0700, 21.141738 sec)
+
+2 skipped results:
+  SKIPPED  m3/real/cancelled-turn-seals-cancelled-with-a-closed-step
+  SKIPPED  m3/real/normal-turn-completes-with-a-closed-step
+

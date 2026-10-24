@@ -1,0 +1,132 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 5e01b8841c..b27ea091b8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,16 @@
+ 
+ All notable changes to superchat.
+ 
++## Unreleased — work the user puts off waits for the user
++
++- The `work_record` description the model is given ends with one more
++  sentence: "When the user says to do the rest later, register wait_for user
++  with what is left in detail; Superchat will not go on by itself."  Nothing
++  else in it changed.  With goal rounds on, a record left continuable is
++  taken up at once, so "the rest next time" needs this wait.  The claim in
++  the sentence's second half is pinned by `scripts/work-defer-regression.el`.
++  Evidence for the wording is three task-sim runs per arm, a direction only.
++
+ ## Unreleased — the tool loop gets two hard hooks; failures in a row stop
+ 
+ - New option `superchat-tool-loop-hooks`: functions asked about every tool
+diff --git a/docs/roadmap.md b/docs/roadmap.md
+index c135bd2a8f..e4b5e72294 100644
+--- a/docs/roadmap.md
++++ b/docs/roadmap.md
+@@ -514,10 +514,12 @@
+ 
+ A tool-loop hook's rewrite (slice 11b) is what the model is given in the execution where it happened. The Tape keeps the original in `tool.completed` and the rewrite in `tool.rewritten`, and the history later requests are rebuilt from shows the original. No default hook rewrites today (the failure brake only stops). Before any hook rewrites by default, decide which of the two later requests should carry.
+ 
+-### Open observation: "the rest next time" can only be said as a wait for the user (2026-10-20, recorded, not ruled)
++### Open observation: "the rest next time" can only be said as a wait for the user (2026-10-20, recorded; ruled 2026-10-21)
+ 
+ With goal rounds on by default (`superchat-work-rounds-when-started`), a Work Record left `continuable` means "go on now": Superchat queues the next round itself. When the user says to do the rest later, the only way the model has to keep that is `work_record` with `wait_for user`, and that argument's description speaks only of questions the user may answer later. Found in the task-sim K2C runs (slice 11d, `reports/guidance-2026-10-11/evidence/slice-11d-k2c.md`): runs that recorded progress and stopped had already queued round 1, which would have done the deferred books at once. Any change to the wording given to the model is the user's to decide.
+ 
++Ruled by the user on 2026-10-21 ("按照建议"), delivered in slice 12a, the commit "Work the user puts off waits for the user": the `work_record` description ends with one sentence, "When the user says to do the rest later, register wait_for user with what is left in detail; Superchat will not go on by itself." The second half is pinned by `scripts/work-defer-regression.el`: after a wait for the user, an unrelated message leaves the record continuable with no round queued, and only `/work resume` goes on. Evidence for the wording itself is the task-sim harness, three runs per arm (K2C 2/3 without, 3/3 with; T4W 3/3), a direction rather than a measurement.
++
+ ### Open observations from the architecture walk: four conditional hazards (2026-10-13, recorded, not reproduced, not ruled)
+ 
+ Source: `reports/architecture-map-2026-10-13/CONTRADICTIONS.md`. Each is a path read in the source; none was made to happen, and the user has not ruled whether any is to be repaired.
+diff --git a/scripts/work-defer-regression.el b/scripts/work-defer-regression.el
+new file mode 100644
+index 0000000000..28d8b4de93
+--- /dev/null
++++ b/scripts/work-defer-regression.el
+@@ -0,0 +1,59 @@
++;;; work-defer-regression.el --- work the user put off waits for the user -*- lexical-binding: t; -*-
++
++;;; Commentary:
++;; Slice 12a (reports/guidance-2026-10-11/SLICE-12.md).  The `work_record'
++;; description now ends: "When the user says to do the rest later, register
++;; wait_for user with what is left in detail; Superchat will not go on by
++;; itself."  The second half of that sentence is a claim about the product.
++;; This file pins it: an execution the user began registers a wait for the
++;; user; the user's next message is unrelated; no round is queued or run; the
++;; record is continuable but its rounds are not going on; `/work resume' then
++;; starts the next round.  It was expected green on the code before the
++;; sentence and was.
++;;
++;; Run from the repository root:
++;;   emacs -Q --batch \
++;;     --eval "(progn (require 'package) (setq package-user-dir \"$HOME/.cache/superchat-test-elpa\" native-comp-enable-subr-trampolines nil) (package-initialize))" \
++;;     -L . -L scripts -L plugins/superchat-cowork-telega \
++;;     -l scripts/work-defer-regression.el \
++;;     --eval '(ert-run-tests-batch-and-exit "^work-defer/")'
++
++;;; Code:
++
++(load (expand-file-name "work-resume-regression.el"
++                        (file-name-directory (or load-file-name buffer-file-name)))
++      nil t)
++
++(ert-deftest work-defer/a-wait-for-the-user-is-not-taken-up-by-itself ()
++  (pend--fresh
++    (wrec--with (list (gr--start)
++                      (wrec--call '(action . "wait") '(wait_for . "user")
++                                  '(detail . "three books are left for next time"))
++                      '(:text "The first three are done; the rest next time.")
++                      '(:text "You're welcome.")
++                      (wrec--call '(action . "done") '(conclusion . "WD-ALL-SIX"))
++                      '(:text "All six are done."))
++        (p)
++      (let* ((view (wrec--view p)) (session (hm--session view)))
++        (gr--first-turn view)
++        (let ((id (gr--record)))
++          (should (eq 'waiting-user (superchat-work-status (superchat-work-get id))))
++          ;; An unrelated message from the user.
++          (hm--turn view "thanks")
++          (gr--quiet)
++          (should (= 0 (gr--count session "work.round")))
++          (should (= 0 (gr--count session "queue.queued")))
++          (should (= 0 (gr--queued-anywhere)))
++          (should (= 4 (length hm--wires)))
++          (should-not (member "goal-rounds" (gr--actors session)))
++          (should (eq 'continuable (superchat-work-status (superchat-work-get id))))
++          (should-not (superchat-work-continuing-p id))
++          ;; Only the user's word starts the rounds again.
++          (should (string-match-p "\\`Superchat goes on with " (wres--resume view)))
++          (gr--quiet)
++          (should (= 1 (gr--count session "work.round")))
++          (should (member "goal-rounds" (gr--actors session)))
++          (should (eq 'completed (superchat-work-status (superchat-work-get id)))))))))
++
++(provide 'work-defer-regression)
++;;; work-defer-regression.el ends here
+diff --git a/scripts/work-record-regression.el b/scripts/work-record-regression.el
+index 63f65d68b8..eba0d3b6d2 100644
+--- a/scripts/work-record-regression.el
++++ b/scripts/work-record-regression.el
+@@ -595,7 +595,9 @@
+          (work (llm-tool-description (cl-find "work_record" tools :key #'llm-tool-name :test #'equal))))
+     (should (string-match-p "register wait_for user and end your turn" work))
+     (should (string-match-p "the user's next message in this conversation clears the wait" work))
+-    (should (string-match-p "use ask_user only for a question the user can answer right now" work))))
++    (should (string-match-p "use ask_user only for a question the user can answer right now" work))
++    ;; Slice 12a: work the user puts off waits for the user, said plainly.
++    (should (string-suffix-p " When the user says to do the rest later, register wait_for user with what is left in detail; Superchat will not go on by itself." work))))
+ 
+ (provide 'work-record-regression)
+ ;;; work-record-regression.el ends here
+diff --git a/superchat-tools.el b/superchat-tools.el
+index 4c5b045bad..2145bcbd9c 100644
+--- a/superchat-tools.el
++++ b/superchat-tools.el
+@@ -2246,7 +2246,7 @@
+ 
+          (superchat--maybe-make-llm-tool
+           "work_record"
+-          :description "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail). For a question the user may answer later, register wait_for user and end your turn -- the user's next message in this conversation clears the wait; use ask_user only for a question the user can answer right now. for a time give in_minutes or at, and at that time Superchat takes the record up again in a new conversation -- use it to continue work later, not timer_create. An empty wait_for clears the wait. done completes it with a conclusion. read shows a record by id. A record started in an execution the user began is worked on in rounds: if a turn ends with it neither done nor waiting, Superchat starts the next round itself. After the user stopped a round, resume (only when the user says to go on) continues the rounds. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable."
++          :description "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail). For a question the user may answer later, register wait_for user and end your turn -- the user's next message in this conversation clears the wait; use ask_user only for a question the user can answer right now. for a time give in_minutes or at, and at that time Superchat takes the record up again in a new conversation -- use it to continue work later, not timer_create. An empty wait_for clears the wait. done completes it with a conclusion. read shows a record by id. A record started in an execution the user began is worked on in rounds: if a turn ends with it neither done nor waiting, Superchat starts the next round itself. After the user stopped a round, resume (only when the user says to go on) continues the rounds. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable. When the user says to do the rest later, register wait_for user with what is left in detail; Superchat will not go on by itself."
+           :args (list (list :name "action" :type 'string
+                             :description "start, update, wait, done, resume or read.")
+                       (list :name "id" :type 'string :optional t

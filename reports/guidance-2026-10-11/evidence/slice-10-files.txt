@@ -1,0 +1,14 @@
+# Slice 10 — files in .scratch/task-sim/harness-tools/ changed or added (not committed)
+# baseline: ~/.cache/sc-slice10/harness-tools.before/ (copied before any change); diff: slice-10.diff
+# status  sha256-before  sha256-after  file
+changed  0c84faf0626e092cf7d8193de5d573c76e64b53c81d38a2dde88fd6ac9195fa5  9a24d4d677f3749239b4134e371442776622bb5bafa0cdf4c789445e874e8d49  batch.sh
+changed  8d1e39ce958672de38306a257a20b525dce927e525a7c8173d8f074b5bd7a457  a0abc31db7a03aa0c0562234a1f38a46a217d21b065727a0e130812349d6d70a  launch.sh
+changed  6d3d74ce621012cdbef4d162284f8ded25568a8a5d3200b8c6d862d6f2b72dab  f6196b3652dbb51a469904a51ee8545cd505ff7ae53991777fcc350c869834e4  run-task.el
+changed  bb47108d8d911b51b851fff5c437aa4108a1843975b7af9ca9e2af0687e8c026  c56ea790b7c110b1e98efd15382cc8bb056bea982fcad681f13e4e2916d5a85a  surface-batch.sh
+changed  950a8bafc07503a3849988b8d90e39fe3fba322cefadfe0a314349b8fd28b5aa  dc25837f372a3b038bac17e224d5d24238cef0f589221bf308e5f191afa0fb2a  surface-report.py
+changed  6533ea60efa8c3f57b6b988bad89b84dae2264fa183cf25cd08a179bb4e9015e  a21e905fa6b94910c9d1cdb380c9c651836b12687219468eadd08b91565d8965  tasks-goals.el
+changed  9d4246e8050dfb98b9574b87134b14ec3edc5c1591e8ed9ee9e8a6786505edb9  c8e58dae140068bb839d423ce0e620e72d6648b50593eb614c4eaa0fc23cac5f  tasks.el
+added  none  1ed515ff0d336cd56879a4a8b1fcbe241502f0383f23fbff4194fc7bbc5c83b7  checks-goals.el
+added  none  ec76377c2705a28d41a33af834b501e1f3b069944f0c635f440bf42a561929c9  fingerprint.py
+added  none  2e32489fec9986ccc0c7b0152bb05b89dfaf2c395c72152abba02934e48b704e  leak-scan.py
+sha256 of slice-10.diff: 01532b1d3902f96528dabceae150bd50461b3ceb8d29967bf07aea1c362c1d82

@@ -1,0 +1,15 @@
+307,316d306
+<         ;; TS_EXTRA_LISP: a file loaded after the tool list is set (the
+<         ;; tool-surface experiment's discovery prototype lives there).
+<         (let ((extra (getenv "TS_EXTRA_LISP")))
+<           (when (and extra (not (string-empty-p extra)))
+<             ;; The sandbox reads only the run's harness copy: a bare file
+<             ;; name is resolved next to this file.
+<             (load (expand-file-name extra (file-name-directory
+<                                            (or load-file-name buffer-file-name)))
+<                   nil t)
+<             (ts-mark (format "extra lisp: %s" extra))))
+64c64
+<   TS_TOOLS="${TS_TOOLS:-}" TS_EXTRA_LISP="${TS_EXTRA_LISP:-}" TS_RESPONSE_TIMEOUT="${TS_RESPONSE_TIMEOUT:-}" \
+---
+>   TS_TOOLS="${TS_TOOLS:-}" TS_RESPONSE_TIMEOUT="${TS_RESPONSE_TIMEOUT:-}" \

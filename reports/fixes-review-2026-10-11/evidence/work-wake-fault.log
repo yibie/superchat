@@ -1,0 +1,70 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 14 tests (2026-10-11 02:59:52-0700, selector ‘"^work-wake-fault/"’)
+   passed   1/14  work-wake-fault/a-cut-off-wake-is-left-alone-once-the-record-moved-on (0.678779 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025952-713991-3f85 failed (session 20261011-025952-2e94)
+   passed   2/14  work-wake-fault/a-failed-execution-is-recorded-as-failed (0.068079 sec)
+superchat: work record work-20261011025952-99ab was not taken up: WWF injected: first send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025952-784367-f045 completed (session 20261011-025952-d6bb)
+   passed   3/14  work-wake-fault/a-failed-wake-is-tried-again-without-a-restart (0.073790 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025952-854908-cb7b completed (session 20261011-025952-400e)
+   passed   4/14  work-wake-fault/a-running-execution-is-not-taken-for-a-cut-off-one (0.069953 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025952-926327-38d3 completed (session 20261011-025952-da22)
+   passed   5/14  work-wake-fault/a-scan-during-the-execution-starts-nothing-more (0.117885 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025953-051191-7ca5 completed (session 20261011-025953-20c9)
+   passed   6/14  work-wake-fault/a-wake-cut-off-by-emacs-quitting-is-taken-up-on-the-next-start (0.093045 sec)
+superchat: work record work-20261011025953-9596 was not taken up: WWF injected: nothing accepted the wake
+   passed   7/14  work-wake-fault/a-wake-nothing-accepted-is-not-shown-as-settled (0.017898 sec)
+superchat: work record work-20261011025953-90d6 was not taken up: WWF injected: nothing accepted the wake
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025953-166644-ef82 completed (session 20261011-025953-4d34)
+   passed   8/14  work-wake-fault/a-wake-nothing-accepted-is-taken-up-on-the-next-start (0.074356 sec)
+superchat: work record work-20261011025953-ddc8 was not taken up: WWF injected: send always fails
+superchat: work record work-20261011025953-ddc8 was not taken up: WWF injected: send always fails
+superchat: work record work-20261011025953-ddc8 was not taken up: WWF injected: send always fails
+   passed   9/14  work-wake-fault/a-wake-that-keeps-failing-stops-being-retried (1.058129 sec)
+   passed  10/14  work-wake-fault/an-execution-cut-off-by-emacs-quitting-is-reported-as-interrupted (0.019148 sec)
+superchat: work record work-20261011025954-41aa was not taken up: WWF injected: first wake fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025954-357916-2e21 completed (session 20261011-025954-1acf)
+   passed  11/14  work-wake-fault/one-failed-wake-does-not-stop-the-others (0.122788 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025954-430032-5ba6 completed (session 20261011-025954-5bb7)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025954-500668-111f completed (session 20261011-025954-5bb7)
+   passed  12/14  work-wake-fault/the-main-conversation-is-told-once (0.142298 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025954-640555-faa4 completed (session 20261011-025954-c92e)
+   passed  13/14  work-wake-fault/the-report-survives-losing-the-in-memory-link (0.134179 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025954-703117-ef4c completed (session 20261011-025954-044d)
+   passed  14/14  work-wake-fault/the-woken-execution-is-not-told-the-record-still-waits (0.059650 sec)
+
+Ran 14 tests, 14 results as expected, 0 unexpected (2026-10-11 02:59:54-0700, 2.730973 sec)
+

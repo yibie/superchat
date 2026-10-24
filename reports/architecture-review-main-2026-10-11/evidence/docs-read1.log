@@ -1,0 +1,606 @@
+Superchat · 主目录增量架构审阅
+superchat
+.
+MAIN · ARCHITECTURE REVIEW
+01
+核心判断
+02
+架构变化
+03
+缺口复核
+04
+两个新反例
+05
+重评 10 月 4 日报告
+06
+建议顺序
+07
+测试与证据
+审阅对象是
+superchat 主目录
+，不是旧 worktree。
+源码只读 · 隔离测试
+含未提交通知实现
+2026-10-10 · PDT
+本报告是审阅意见，不替代
+docs/roadmap.md
+，也不授权修改产品。
+Incremental Review / 2026.10.10
+打印 / 保存 PDF
+主干更稳了。
+下一步该补边界，
+不是再造一层架构。
+Superchat 已把几处“事情发生了，却没有可恢复的交代”补成了持久事实。剩下的问题，集中在
+对象归属、能力是否完整可用，以及事实写入与执行结束的先后关系
+。这些都可以沿现有 Runtime、工具管线和 Tape 修好。
+以主目录的实际文件为准
+与 92a03554 增量比较
+/Users/chenyibin/Documents/emacs/package/superchat
+15
+有增量的顶层产品模块
+1 / 5
+旧报告缺口已关闭
+97
+新增/增量套件测试通过
+2
+本次新增可复现边界问题
+这些数字是审阅范围与测试结果，不是架构评分。“探针通过”可能表示成功复现缺陷，不能算产品验收通过。
+01 / VERDICT
+我的判断：保留主干，收紧三处接缝
+应保留
+一条执行主线，而不是一套聊天框架加一套代理框架
+聊天、就地操作、改写、workflow 和自动任务仍复用 driver → Runtime → model transport；工具仍通过唯一执行管线，终态仍由 Runtime 判定。新功能没有增设第二个 Run 生命周期，这是最重要的正确方向。
+依据：
+请求生命周期契约
+；本次 Kernel、smoke 与 M3 实跑。
+已有改善
+“触发过”不再被当作“启动成功”
+Timer 增加 sending / started / unconfirmed；Work Record 可从 Tape 恢复失去的等待、找到对应执行、报告中断。默认不重跑不确定的副作用，是比“保证自动成功”更诚实的恢复策略。
+依据：
+到点未启动的裁定
+；26 项相关故障测试与旧探针复测。
+优先补
+Workspace 归属应在对象入口检查，不只在上下文选择时过滤
+历史检索已经修正为随 Run 走，但工作记录和定时器仍可被别的 Workspace 的普通工具访问。权限管线没有被绕开；问题是通过管线之后，领域操作没有检查对象归属。
+这里的 Workspace 是产品的数据与工作归属，不是抵挡任意 Lisp 或 shell 的安全沙箱。
+优先补
+启动来源与能力完整性，不能靠事后推断
+后台通知依赖发送返回后才写的
+timer.started
+；工作记录功能被关闭后，工具仍能承诺一个不会上弦的等待。消费者看到的状态，可能比已提供的能力或执行进度晚一步。
+建议是补契约和入口验证，不是再增加一层总控 Event 或新的任务系统。
+一句话：
+主目录已经证明现有分层可以承载增量修复；当前风险不是“层数不够”，而是几项领域规则尚未在唯一入口变成可执行的不变量。
+02 / ARCHITECTURAL DELTA
+变化落在哪里，什么没有变
+入口与 Turn
+用户输入 / inline / workflow
+Timer / Work Record
+新增：正文标记与一次性技能
+Driver 与上下文
+Envelope、工具上限、收集器
+同一套请求准备
+补齐：规矩、技能来源与窗口
+Runtime 与工具
+唯一 Run 所有者
+llm.el + 唯一工具执行管线
+修复：View 消失不终止 Run
+交付与观察者
+原始 Sink + turn-completed
+审阅 / 记录回报 / 通知
+新增：后台完成模式行标记
+Tape：追加事实、重建视图、恢复关联
+｜　Scope：注册可见性和撤销　｜　Session Buffer Set：精确 buffer 所有权
+示意图是职责关系，不是严格调用栈。Tape 不替 Runtime 执行任务；Scope 不是 Session，也不是 Workspace 权限边界。
+增量
+主目录实际实现
+架构评价 / 保留边界
+检索跟随 Run
+sql
+退出内置 research 与
+all
+；四个历史工具取执行上下文，无会话时不查询。
+收紧正确。用户显式启用 SQL、用户自己的
+/recall
+与 full-control 仍可跨范围；不能宣称整体隔离已完成。
+到点恢复
+Work Record 恢复未启动的等待；Timer 分开 fired、sending、started；不确定是否启动时写 unconfirmed，不自动重做。
+这是持久事实驱动的恢复，不是持久队列，也不保证外部副作用 exactly-once。重试额度仍有跨任务漏洞。
+规矩与来源
+同一 collector 扩展至改写、workflow；技能固定正文不再被误判为用户已预览，来源与窗口继续注入。
+复用接口而非各入口复制拼接。改写只带适用规矩，不应把聊天答复礼仪写进文件。
+后台执行与用户共处
+自动执行不弹审阅屏；View 被 kill 后 Run 继续；结构化编辑发现磁盘变更；记录显示各次执行。
+注意力与执行生命周期分离得更好。磁盘检测不覆盖
+eval_elisp
+/ shell；真实 GUI 验收仍应补。
+一次性 agent 技能
+正文中的 agent 技能只改本次 Request；开头调用仍切 Session；plan 仍切 Session。请求 Capability 对齐技能的 Agent Profile。
+没有“先切过去、结束再切回”的退役风险。但
+plugins:
+不挂载：数据层的一次性生效，不等于完整能力的一次性生效。
+后台完成通知
+未提交
+现有 changes 插件监听所有终态；模式行计数、列表打开或清除；通知仅存于本次 Emacs 进程。
+放在终态观察者比为此包装 Sink 更合适；不能保证所有回调时序都可见，见新反例 N2。
+需要严格分开的四件事：
+Work Record 的“交付结论”、Runtime 的“执行终态”、buffer 的“未保存改动”、用户的“已读通知”。它们不是同一个完成状态。现在的
+work.outcome
+已有用户可见消费者，不能再因旧报告说“没人读”就删除。
+一次性技能下一步的边界：不要为了 plugins 再发明一次临时 Session 切换
+建议先明确支持范围：若技能依赖尚未提供的插件能力，准备阶段应给出可理解的限制或拒绝，不要默默宣称“完整应用”。如果确需支持，请沿现有请求 Scope 和 Runtime retirement 设计，明确安装、队列等待、取消、终态之后的撤销；Service 的全局提供规则也不能被一个临时 Request 绕开。
+这是本次建议，未实现。现有决定已经明确记录
+plugins:
+不生效，所以这里是能力缺口，不是本次新发现的回归。
+查看已接受的一次性技能决定
+03 / OLD FINDINGS RECHECKED
+旧五项：关闭一项，四项仍在
+使用原来隔离夹具与脚本模型，重新加载
+主目录源码
+。跨 Workspace 的两个探针经过正常工具调用链，不是直接绕过工具管线的函数调用。
+全部 5 项
+仍存在 4 项
+已修复 1 项
+F1 · B 的工具能读、改、完成 A 的工作记录
+P1 · 仍存在
+superchat-work.el:184, 219–225, 251–301, 484–531
+A 创建记录，B 使用
+已给定的 id
+调 read → update → done；B 收到 A 的目标，并成功写入进度与结论。对象查找与
+--require
+没有校验调用会话所属 Workspace。
+改进：
+模型入口使用统一的“会话 + 对象 id → 所属对象”解析；read、update、wait、done、follows 都检查。保留用户明确打开全局记录列表的能力，不能把面向人的跨项目入口一并误禁。
+不是声称 B 已能自动发现所有 id；复现前提是 id 已知。也不声称 Workspace 能隔离获准执行的任意 Lisp。
+F2 · B 能列出并取消 A 的定时器
+P1 · 仍存在
+superchat-timer.el:617–656
+timer_list
+返回全局定时器文字；
+timer_cancel
+只凭 id 操作。探针中，B 看到了 A 的提醒并成功取消。
+改进：
+只给模型返回本 Workspace 的 pending / fired / unstarted 视图，并在取消入口再次检查归属。列表过滤不能代替写操作检查；人用的全局“稍后”面板可以另行保留。
+F3 · 唤醒发送失败吞掉等待
+已修复
+superchat-work.el:676–711, 736–794
+同样在提交之前注入发送错误，主目录会补回时间等待，记录仍满足 due 条件，没有虚构 active Run。不能再把旧版“woken 已写、等待消失、以后不再唤醒”作为现状。
+证据边界：
+这个故障点已闭合，另有 14 项 wake 测试通过。未用强杀真实 Emacs 的方式覆盖所有崩溃窗口；这不是“全部恢复问题解决”的证明。
+F4 · 功能卸载后，仍能承诺不会执行的等待
+P1 · 仍存在
+superchat-work.el:287, 978–995；工具与 collector 属于其他插件注册
+卸载
+work-records
+后，
+work_record
+仍被提供，start / wait 成功落账，但没有对应 Emacs timer。关掉的是执行侧，用户和模型仍看见可用的能力。
+改进：
+把能力的工具、collector、观察者、计时资源建立明确依赖；至少在无法兑现时间等待时不提供该写能力或明确拒绝。可以保留只读历史，不必强制整个领域只有一个文件。
+F5 · start 收到进度和等待，却悄悄丢掉
+P2 · 仍存在
+superchat-work.el:484–533
+调用 start 时附带 progress、resume、wait_for 与时间，返回“Started”，但记录上没有这三项。这是模型工具 API 的数据完整性问题，不只是提示词不够短。
+改进：
+保留显式 action，先校验并规范化本次允许组合的字段，再一致写入；不支持的组合必须明确拒绝。不要为了宽容就让任意 conclusion 自动完成，或遇到歧义替用户猜对象。
+P1 / P2 是本次建议的修复顺序，不是安全漏洞评级。
+五项探针源码
+·
+本次运行日志
+查看源码：start 只转交 goal 与 follows，update 才接附带等待
+重新读 Tape
+记录保留“已唤醒”，waiting 已清空；due-p 返回 nil，不再作为到期等待被扫描。
+实际后果
+工作记录还在，但这次自动唤醒机会已被消费。没有证明任务启动成功，也没有待启动状态供调度器重试。
+已复现
+这是进程内提交错误注入，不是真正断电测试；同一写入顺序暴露的崩溃窗口仍需独立验证。
+分析与修复方向
+05 / TRUST & DATA
+必须区分三种“边界”。
+注册边界
+Scope：
+谁能看到某个工具、监听器或命令；卸载时撤销哪些注册。
+它约束正常组合路径，不约束任意 Lisp 的全局修改。Service provider 仍是全局的。
+领域范围
+Workspace：
+哪些规则、会话、工作记录属于这个工作的地方。
+请求阶段的过滤已存在；按 id 的工作读写和 timer API 没有全面守住这个范围。
+执行权限
+Permission level：
+这个工具调用是允许、询问还是拒绝。
+eval_elisp 是完整 Emacs 控制。批准后在宿主执行，不等于有 OS 隔离或可回滚事务。
+一次调用经过权限管线，不等于它操作了正确对象。
+当前
+work_record
+属于内置工具；管线允许调用后，业务函数仍应校验“调用 Session 与目标记录是否同 Workspace”。这个校验目前缺失。相反，编辑 Workspace 外的普通文件是 W9 接受的行为，不能把它误判成同一种缺陷。
+Tape 是事实源，不是整个 Emacs 世界的快照。
+状态
+实际来源
+恢复能力的界线
+对话、Run、工具事实
+Tape → SQLite
+可以查证、选择和重建已保存证据；不能据此撤销外部副作用。
+模型历史与压缩
+Tape View、Anchor、存储引用
+改变选择，不改写过去；缺失引用应呈现 unknown，不凭空补出材料。
+待保存清单
+Tape 的编辑 Run ∩ 活 buffer 标记 ∩ modified 状态
+不是纯 Tape Projection；杀掉或重新打开 buffer 会改变当前结果。
+规则
+Workspace 磁盘上的 AGENTS.md / 后备文件
+未保存的规则 buffer 不自动成为新请求规则；用户保存是生效边界。
+排队与回调
+Runtime 进程内 FIFO、闭包、借用 Scope
+排队事实可持久化，不代表队列闭包可跨重启恢复。
+工作等待 / 提醒
+Tape fold + 进程内 Emacs timers
+可重新上弦；触发事实到新 Run 的接受仍需可靠交接。
+权限阶段
+eval_elisp
+待保存清单
+已有增量 Projection
+推断
+完整 Lisp 与 UI 同处 Emacs 宿主，意味着工具执行的可用性与响应性也是共同风险。Run deadline 不能被宣传成对任意同步代码的独立进程级硬抢占。本次没有执行卡死或资源耗尽探针。
+06 / REPRODUCED GAPS
+五个缺口，指向三个共同根因。
+共同根因：① 范围校验停在上下文准备，而未落到业务操作；② 注册 ownership 与功能 ownership 不一致；③ 把“事实已记下”误当成“后续执行已接管”。以下五项均在隔离数据上复现，不是从旧报告直接抄来的判断。
+01
+知道记录 id，就能跨 Workspace 读、更新、完成它。
+优先：高
+正常工具链已复现
+观察与机制
+在 A 建记录；在 B 的脚本模型回合里，传入 A 的 id 调用
+read → update → done
+。模型的下一次请求看到了 A 的目标，A 的进度与结论被 B 改写。
+superchat-work--require
+只检查记录存在且未完成；
+read
+直接全局按 id 获取。
+这是当前 API 范围缺口，不需要绕过权限管线。
+建议修复位置
+在模型操作入口，把调用 Session 的 Workspace 与目标记录的 Workspace 一起校验；将用户明确的全局管理操作与模型操作分开。不能只在列表或 prompt 里过滤。
+本次探针主动提供目标 id，未证明模型在正常任务中会自动发现该 id。此风险是单用户应用内的数据与工作范围，不是互联网多租户攻击结论。
+证据与回归要求
+探针：
+arch-probe/cross-workspace-record-through-real-tool-loop
+。应增加跨域 read/update/wait/done/follows、临时会话、错误 id 与同域正常路径的回归；不要把 id 当作授权凭据。
+记录 API
+工具入口
+探针代码
+02
+在 B 可以看到并取消 A 的提醒。
+优先：高
+正常工具链已复现
+观察与机制
+A 创建未来提醒；B 调用
+timer_list
+，provider 后续请求中出现 A 的提醒文字；随后 B 的
+timer_cancel
+成功取消该提醒。
+模型接口复用了全局定时器读取与取消，没有按工具调用 Session 缩小范围。这比“上下文里多带几行”更先需要解决。
+建议修复位置
+模型的 list/cancel 必须有明确的 Workspace 范围。给用户的全局“稍后”总表则可以跨域，并显示归属。
+全局管理能力和模型默认能力不必相同。
+已有
+sql
+工具也无 Workspace 参数（源码事实，本次未单独执行 SQL 跨域探针），应纳入同一次操作入口清查。
+证据与回归要求
+探针：
+arch-probe/cross-workspace-timer-through-real-tool-loop
+。验证 pending、fired、cancel 和临时会话；只过滤 list 但不校验 cancel 仍然不完整。
+timer API
+SQL 入口
+探针日志
+03
+“已唤醒”先落盘，提交失败后不再是到期等待。
+优先：高
+提交错误注入已复现
+观察与机制
+在
+superchat-send-input
+注入错误，前面的三个工作事件已经落盘。重新读取后，记录有
+woken
+，无
+waiting
+，没有活动 Run，
+due-p
+为 nil。
+它防止了一次等待重复触发，却没有保证一次等待最终被 Runtime 接受。
+记录先行解决防重的一边，但牺牲了失败可恢复性。
+建议修复位置
+为一次等待到一次执行建立稳定关联；区分待提交、已接受和执行结果。对“确认未接受”重试，对“未知是否接受”先核对，不能盲目补跑外部副作用。
+复用 Runtime 的唯一接受权，不另建执行引擎。对 timer task 的先 fired 后启动路径做同类故障测试；本次没有把该路径算成已复现。
+证据与回归要求
+探针：
+arch-probe/wake-submission-error-consumes-wait
+。还需覆盖：接受后回执丢失、排队、transport 缺席、重启、重复扫描、记录存储 unknown。当前结论不等于“所有唤醒都会丢”。
+写入与提交顺序
+错误注入
+04
+卸载 work-records，工具仍能创建永不上弦的等待。
+优先：高
+卸载后工具链已复现
+观察与机制
+卸载该 row 后，
+work_record
+descriptor 仍可选。真实工具链仍成功 start、wait，但
+superchat-work--armed
+没有该记录。
+工具由通用内置工具注册；上下文 collector 属于
+chat-collectors
+；调度与终态观察者属于
+work-records
+。撤销的是一部分能力，不是完整功能。
+建议修复位置
+让功能拥有其工具、collector 与 observer 的 Scope-accounted 注册；或将未满足依赖表现为明确的不可用状态。选择最小闭环，不强制一个功能只能一个文件。
+保留持久历史可读，不应因卸载功能删除 Tape。timers 的类似归属也应检查，而不是只修一个工具名。
+证据与回归要求
+探针：
+arch-probe/unmounted-work-row-still-creates-unscheduled-wait
+。同时验证 materialized 旧 descriptor、重新挂载、已有等待恢复、在途 Run 语义；不得破坏 exact Sink 与已接受 Run 的契约。
+row-owned 工具清单
+功能插件
+collector 的归属
+05
+工具接受了字段，但 action 分支悄悄丢掉。
+优先：中
+工具函数已复现
+观察与机制
+start
+同时给 goal、progress、resume、time wait，工具返回创建成功；落盘的只有目标，没有进展、续接说明和等待。
+这是“一个宽参数表 + 分支各自消费参数”造成的语义缝隙。强模型也会误用，小模型只是更早暴露它。
+建议修复位置
+明确允许的复合操作，先验证整个命令，再写入；冲突字段清楚拒绝。可以支持 start + progress + wait，但不应“任何 action 收下任何字段”或用 conclusion 暗中推断完成。
+输出结构化的 applied / ignored-or-rejected 结果；目标是减少隐式规程，不是为了短说明隐藏错误。
+证据与回归要求
+探针：
+arch-probe/start-ignores-extra-progress-and-wait
+（直接工具函数，不算完整 provider 回合）。验证无效时间时是否部分建档、done 与 wait 冲突、字段归一化、重复命令。
+action 分支
+观察结果
+07 / ARCHITECTURAL TRADE-OFFS
+简化应该减少隐式状态，不是削弱证据和权限。
+组合：闭合功能，不追求纯化
+建议
+只在可选能力、替换点和独立生命周期上使用 Service / Event。纯转换函数继续直接调用。先修“关掉一行仍留下半个功能”，再考虑模块内部拆分。
+不做：
+按文件行数重构、每个 helper 都服务化、重新引入空的 Run Scope。
+持久化：已有基础，不需新数据库
+源码事实
+现有 Projection 已支持 version、checkpoint 和同事务 catch-up。Work / Timer 却仍自己全量 fold。先复用一次请求的读取快照，量出瓶颈再考虑增量化。
+不做：
+没有基准就引入第二套存储，或把可变 Projection 当新事实源。
+Projection
+全量读取
+上下文：统一必要约束，不统一全文
+源码事实
+规则 collector 只处理 chat / inline-ask / inline-act；subagent 单独拼规则和记录快照；workflow 走 prepared 路径。共享 Runtime 不自动保证相同约束。
+建议
+为每个 producer 明确规则、身份、权限、历史与预算的责任；在实际 provider 请求上验证。不要强塞完整聊天历史到 rewrite 或 compaction。
+入口限制
+子代理补充路径
+模型接口：先降决策成本，再降字节
+建议
+统一参数名、返回当前状态、提供合法复合命令、消除必败工具。Qwen 基线是接口压力测试，不是预先删到九个工具的理由。
+不做：
+自动补括号再 eval、静态脚本检查器直接变成免审批权威、read 偷偷切换当前记录、依据“碰巧存在当前记录”自动转换业务意图。
+不是所有写 Tape 的路径，都有同样的可靠性保证。
+源码事实
+Runtime 的必需记录失败可以影响终态可信度；但 Work Record 的
+turn-completed
+observer 是终态之后的领域补记，其 facts、outcome 与结果回报路径使用
+ignore-errors
+。因此，“Run 已可靠结束”不能推出“工作记录的后续摘要也已可靠保存”。
+查看这条链
+建议
+把后续补记失败变成可见、可重试的领域义务，以 Run / Work Record 身份幂等补齐。不要为补写工作摘要而重新打开已终结的 Run，也不要把所有观察者都改成终态前的强依赖。本次没有对这组写入做存储失败注入，它是源码可见的保证差异，不是第六项已复现缺陷。
+日常 Emacs 体验，是架构的一部分。
+Buffer-first 利用了 Emacs 最独特的能力：模型与用户操作同一个活对象，用户可以检查和保存。但这也意味着多个 Session / Run 可能接触同一用户 buffer。Session 内排队不能证明跨 Session 的目标协调已经解决；本次没有做多 Run 争用实验，不能宣称存在或不存在覆盖缺陷。
+下一步应测用户同时编辑、后台到期任务、外部磁盘变更、切换 View、长时间未答审批。
+先定义冲突时的行为，再决定是否需要锁或版本前置条件。
+不预先造一套资源调度器。
+自动任务与前台审阅目前没有完整分工。
+终态 observer 会调度审阅屏，显示路径会选择窗口；本次只读了这条链，没有在 GUI 中复现焦点抢占。建议为自动启动保留明确来源，决定通知、展示与选中策略。改变默认审阅行为需用户确认，不能算纯重构。
+源码
+两份旧分析需要校正的地方
+前一轮的唤醒风险已经收紧为具体复现：
+不是泛泛担心重启，而是提交失败后等待被消费。
+范围问题比 SQL 更广：
+默认提供的 Work Record 与 timer 操作也需检查，因此不能只撤 SQL 就宣布 Workspace 边界完成。
+“临时对话不保存”过于笼统：
+接受契约 W10 允许历史列表翻看临时对话；关键限制是不把它带入别的对话、没有目录规则，而不是一概没有持久记录。
+文档已经漂移：
+CONTEXT 的 Session 段还保留“不按项目选择”的旧描述；当前入口代码按 Workspace 路由。architecture 的 receipt 说明和 roadmap 的 slice 状态也滞后。以源码、现行决定和测试相互校准，不把任何一份索引文档视作自动正确。
+当前路由
+实际请求重建
+Workspace 契约
+08 / RECOMMENDED SEQUENCE
+不另开宏大里程碑，按五个可验收切片推进。
+以下全部是建议，不是用户已批准的生产改动。它们应归并进现有 roadmap，而不是让本报告变成第二个工作队列。
+SLICE 01
+范围闭合
+让领域对象自己守住访问范围
+Work Record 与 timer 的模型操作校验 Workspace；用户全局管理另有入口；SQL 与 prepared producer 同步清查。先写失败测试，再修入口。
+退出条件
+A 不能被 B 的模型读取、修改或取消；同域继续工作、委派及临时会话不退化。跨 Workspace 文件编辑仍保留 W9 语义。
+SLICE 02
+组合闭合
+功能卸载后不留下半启用承诺
+工具、collector、调度和 observer 的 ownership 对齐。持久历史保留；重挂载恢复按明确契约进行。
+退出条件
+卸载后不再创建无法调度的等待；旧工具引用失效；重挂载不重复计时；在途 Run 按已有生命周期结束。
+SLICE 03
+交接闭合
+把一次等待关联到一次被接受的执行
+明确持久唤醒意图、Runtime 接受凭据与结果。先测试错误和 unknown，再决定最小数据结构；不增加第二个执行所有者。
+退出条件
+提交失败可见且可恢复；接受后回执丢失不重复启动；真正重启与迟到结果通过故障测试。不承诺外部副作用恰好一次。
+SLICE 04
+交互闭合
+给人一张“稍后”表，给模型明确命令
+统一待办查看与取消入口；可读唤醒结果与对话链接；合法复合 work 命令；没有对象与参数错误分开。焦点策略单独确认。
+退出条件
+用户能看到挂着什么、在哪里、怎样停止；工具无静默字段丢失；自动行为不意外夺取编辑控制。
+SLICE 05
+测量优化
+用本地模型和默认配置验证简化
+rules, holds one conversation, and nothing in it is carried into another
+conversation.
+_Avoid_: default workspace, global workspace
+
+**Personal Workspace**:
+The Workspace the user designates as the home of interfaces that belong to no
+directory, such as the agenda, feeds and chats.  Until one is designated, work
+started from them is in a Temporary Workspace.
+_Avoid_: global workspace, default workspace, home
+
+**Work Record**:
+The durable record of a piece of work that has to outlive the Run that started
+it: what is to be delivered, how far it has got, why it cannot go on yet, and
+where to pick it up.  Its id is what the conversations, Runs and agents working
+on that piece share; it is not a log of every Run.
+_Avoid_: work item, todo, task, reminder, ticket, work log
+
+**Artifact Board**:
+The durable registry of Artifacts — published pieces of work product, each with
+a revision — through which a lead agent and its sub-agents pass results.
+_Avoid_: Artifact Workspace, Workspace (for this), shared memory
+
+## Composition
+
+**Plugin**:
+A unit of code that is mounted into a Scope and contributes Services, Event
+listeners, tools, commands, Surfaces and policies through that Scope.
+Scope-accounted contributions are reversible: unmounting the Plugin withdraws
+them.  This does not make arbitrary Elisp mutation or an external Effect
+reversible.  Built-in and third-party Plugins use the same composition model;
+a product feature is not necessarily one Plugin.
+_Avoid_: Extension (pi's term for a flat event-subscribing module), module,
+package
+
+**Scope**:
+The registration context a Plugin receives.  Everything registered through a
+Scope is visible within it and is withdrawn when it is disposed.  Scopes may
+nest; a child sees its ancestors' contributions, never the reverse.
+_Avoid_: context (overloaded with prompt context), namespace
+
+**Service**:
+A named capability with a declared interface, provided by exactly one mounted
+Plugin at a time and consumed by others by name.  A Plugin declares the
+Services it requires and is mounted only once they exist.  Consumers never
+reach a provider's code directly.
+_Avoid_: library, helper, `require`
+
+**Event**:
+A named extension point on the execution main line.  An Event declares one
+combination rule for its listeners (first result wins, collect all, fold,
+observe only, or an ordered-await waterfall), which is part of its contract.
+An observe listener may be declared required when it is registered; its
+failure is returned to the caller of that emission, which decides what it means.
+_Avoid_: hook, signal
+
+**Kernel**:
+The part of Superchat that is not a Plugin: the Plugin loader, the Scope,
+Service, Event and Invariant registries, the default mount list, and the
+shared vocabulary every Plugin speaks (Envelope, Sink).  Kernel names
+composition infrastructure, not the product responsibilities of the driver,
+model loop, tool pipeline, Tape or chat window.
+_Avoid_: core, runtime
+
+**Invariant**:
+A rule that holds regardless of which Plugins are mounted, checked at a seam
+the Kernel owns rather than inside any one Plugin.  Examples: a source buffer
+is unchanged until its Change Set is accepted; every terminal Run state is
+recorded on the Tape; every tool execution passes the tool pipeline.
+_Avoid_: assertion, contract
+
+**Envelope**:
+The immutable description of one Request as a producer hands it in: content,
+Surface, media, Sink, and owner-prefixed context.  Every Surface produces the
+same shape.
+_Avoid_: request plist, legacy request
+
+**Sink**:
+The exact delivery target of a Run: the callbacks that receive its stream,
+status, terminal result or failure.  A Sink carries no buffer routing; the
+producer decides what to do with what it is handed.
+_Avoid_: delivery function, stream function, view
+
+## Tape and Context
+
+**Tape**:
+The append-only, durable history of Runtime Facts.  New summaries,
+---
+status: accepted
+scope: ordinary non-prepared LLM Requests with a non-empty tool surface
+applies_when: LLM has resolved effective tools and wrapper sources before any provider effect
+source Evidence ID: E-20260905-011
+verification: independent P3 check and recheck; focused 5/5; canonical 1264/1246/0/18 RUNNER_GATE_OK
+---
+
+# Fail closed when ordinary LLM tools lack a trusted wrapper
+
+## Context
+
+An external or headless caller could previously pass ordinary raw tools to LLM
+while neither a request-local wrapper nor the optional Agent Loop wrapper
+producer was callable.  The provider could then receive tools outside the
+shared Authority execution seam.
+
+## Decision
+
+- A non-empty, non-prepared tool surface is admitted only when wrapper
+  selection yields a callable trusted wrapper.
+- Otherwise LLM signals `superchat-llm-tool-wrapper-required` before prompt or
+  provider-request construction, provider invocation, or tool effects.
+- Exact-evidence validation remains prior and stricter.  Tool-free Requests,
+  standard Agent Loop wrapping, trusted request-local wrapping, and prepared
+  internal Subagent tools retain their existing contracts.
+- Runtime lifecycle and Authority ownership do not move.  Kernel does not
+  require Agent Loop, and no registry or second wrapper authority is added.
+
+## Compatibility and migration
+
+This is a user-approved breaking tightening for external direct callers that
+attach ordinary tools without the existing trusted wrapper.  Such callers must
+use a standard Superchat Request producer or supply the existing callable
+wrapper contract.  Marking raw tools as prepared is not a supported migration;
+prepared remains a trusted internal contract, and callable Lisp does not prove
+arbitrary or malicious code safe.  Unknown external callers remain unknown.
+Release selection and publication are outside this decision.
+
+## Rejected alternatives
+
+- Passing raw tools through for headless compatibility, because that bypasses
+  the Authority invariant.
+- Requiring Agent Loop from Kernel, because it reverses the enforced layering.
+- Adding wrapper authentication, a registry, or another policy owner, because
+  the approved change only closes the existing admission boundary.
+---
+status: accepted
+scope: public superchat-tool-execute refusal delivery
+applies_when: blocked, policy-denied, declined-approval or admitted run-inactive refusal reaches its consumer
+source Evidence ID: E-20260906-007
+verification: independent crc implementation PASS; independent ckr Kernel/ADR text ACCEPTABLE, leader accepted
+supersedes: K31 unresolved public-refusal consumer-error redelivery exception
+---
+
+# Preserve the consumer condition after one Authority refusal delivery
+
+User approved option A: public Authority refusal delivery attempts the async
+consumer once and propagates its original error/quit symbol and data. The local
+guard is published before delivery; the public caller supplies its refusal closure
+to the private invoke liveness branch. Gate1 retains its existing external path.
+
+This is breaking for custom async consumers whose errors previously disappeared
+or were redelivered as audit failures. Such callers must catch/handle their own
+conditions at their boundary if isolation is needed. There is no new context key,
+registry, or alternative Runtime authority. Release selection is not part of this
+record. The omitted optional private argument keeps its existing path; this is
+not a guarantee for arbitrary private invocations.
+
+Successful async consumer-error swallowing, implementation-failure delivery,
+true audit-failure routing, legitimate refusal audit, approval obligations and
+Runtime lifecycle remain unchanged. Choosing to swallow every callback error or
+to terminate a Run automatically would be a different decision, not this migration.
+Actual aggregate-receiver observations do not establish a general recovery rule.

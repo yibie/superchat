@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Superchat · 主目录增量架构审阅</title>
+<style>
+:root{--ink:#202d31;--muted:#5f6c70;--paper:#f6f6f0;--white:#fff;--line:#dce2da;--teal:#16645b;--soft:#e6f0e8;--orange:#a15e18;--red:#a63d2f;--redbg:#fff0e9;--blue:#365b91}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:28px}body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC","Microsoft Yahei",sans-serif}a{color:var(--teal);text-underline-offset:4px}button{font:inherit;cursor:pointer}aside{position:fixed;inset:0 auto 0 0;width:235px;padding:36px 24px;border-right:1px solid var(--line);background:#eef0e9;overflow:auto}.brand{font-size:22px;letter-spacing:-.8px;font-weight:800}.edition{font:11px/1.6 ui-monospace,monospace;color:var(--teal);letter-spacing:1.3px;margin:5px 0 30px}nav a{display:block;padding:9px 0;text-decoration:none;font-size:14px;color:#475952}nav a:hover,nav a.active{color:var(--teal);font-weight:700}nav small{display:inline-block;width:26px;color:#8a9891}.side-note{font-size:12px;line-height:1.8;color:var(--muted);border-top:1px solid var(--line);margin-top:30px;padding-top:20px}main{max-width:1420px;margin-left:235px;padding:42px 54px 60px}.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--teal);font-weight:700}.topline{display:flex;justify-content:space-between;gap:16px;align-items:center}.topline button,.filters button{background:white;border:1px solid #bfcfc3;border-radius:30px;padding:6px 16px;color:var(--teal);font-size:13px}.topline button:hover,.filters button:hover,.filters button[aria-pressed=true]{background:var(--teal);color:#fff}h1{font-size:clamp(32px,4.3vw,56px);line-height:1.18;letter-spacing:-2px;margin:26px 0 20px}h2{font-size:29px;line-height:1.4;letter-spacing:-.8px;margin:8px 0 20px}h3{font-size:20px;line-height:1.5;margin:6px 0 12px}h4{margin:16px 0 8px}p{margin:12px 0}.lead{max-width:840px;font-size:19px;line-height:1.8;color:#405650}.pill,.tag{display:inline-block;border-radius:5px;padding:2px 8px;font-size:11px;line-height:1.8;font-weight:700;letter-spacing:.3px}.pill{border:1px solid #abc2b5;background:#edf4ec}.tag{margin-right:6px;color:var(--teal);background:var(--soft)}.tag.risk{color:var(--red);background:var(--redbg)}.tag.wait{color:var(--orange);background:#fff1d8}.tag.note{color:var(--blue);background:#edf1fa}.path{display:block;font-size:12px;line-height:1.8;overflow-wrap:anywhere;color:#496555;margin-top:20px;background:#eaf0e8;padding:12px 16px;border-left:3px solid var(--teal)}code{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;background:#edf0e9;border-radius:3px;padding:2px 4px;overflow-wrap:anywhere}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:30px}.metric{background:white;padding:20px 24px}.metric b{display:block;font:600 38px/1.2 ui-monospace,monospace;color:var(--teal)}.metric span{font-size:13px;color:var(--muted)}section{border-top:1px solid var(--line);padding-top:38px;margin-top:44px;scroll-margin-top:28px}.num{font:12px/1.8 ui-monospace,monospace;color:var(--teal);letter-spacing:1px}.callout{background:var(--soft);border-left:4px solid var(--teal);padding:18px 24px;margin:20px 0;border-radius:0 8px 8px 0}.callout.warn{background:#fff2df;border-color:var(--orange)}.callout.alert{background:var(--redbg);border-color:var(--red)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.card{background:var(--white);border:1px solid var(--line);padding:23px;border-radius:10px}.card p:last-child{margin-bottom:0}.small{font-size:13px;color:var(--muted)}.mono{font-family:ui-monospace,monospace}.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:white;margin:20px 0}table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.7}th{text-align:left;background:#edf1ea;color:#4f655b;font-size:12px;font-weight:700;padding:13px 16px}td{vertical-align:top;padding:15px 16px;border-top:1px solid var(--line)}td:first-child{font-weight:600}tr:last-child td{border-bottom:0}ul,ol{padding-left:23px}li{margin:6px 0}.filters{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0}.findings{display:grid;gap:15px}.finding{padding:22px 25px;border:1px solid var(--line);border-left:4px solid var(--red);background:#fff;border-radius:7px}.finding.fixed{border-left-color:var(--teal)}.finding .meta{font-size:12px;color:var(--muted);margin-bottom:10px}.finding[hidden]{display:none}.finding-head{display:flex;justify-content:space-between;gap:15px;align-items:start}.finding h3{margin:0 0 9px;font-size:19px}details{border:1px solid var(--line);border-radius:7px;background:white;margin:14px 0}summary{cursor:pointer;padding:12px 17px;font-size:13px;color:var(--teal);font-weight:600}summary:hover{background:var(--soft)}details>.body{padding:0 18px 18px}pre{margin:0;max-height:440px;overflow:auto;background:#172d2e;color:#d8ede7;padding:18px;font:11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:2;white-space:pre}pre code{padding:0;background:none;color:inherit;overflow-wrap:normal;font:inherit}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:22px 0}.node{border:1px solid #b7cbbd;border-radius:9px;padding:17px;background:white;position:relative;min-height:150px}.node:not(:last-child):after{content:'→';position:absolute;right:-14px;top:52px;z-index:1;color:var(--teal);background:var(--paper);line-height:1}.node b{display:block;color:var(--teal);font-size:17px}.node span{font-size:12px;color:var(--muted)}.rail{border:1px dashed #86a899;background:#e9f0e7;padding:15px 18px;text-align:center;font-size:13px;border-radius:8px}.timeline{counter-reset:step}.step{display:grid;grid-template-columns:45px 1fr;gap:18px;padding:23px 0;border-top:1px solid var(--line)}.step:first-child{border-top:0}.step:before{counter-increment:step;content:'0' counter(step);font:600 21px ui-monospace,monospace;color:var(--teal);padding-top:7px}.step h3{margin-top:0}.step p{margin:8px 0}.test-pass{color:var(--teal);font-weight:700}.footer{padding-top:30px;margin-top:45px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}.link-list{display:flex;gap:8px 20px;flex-wrap:wrap;font-size:13px}.labelrow{display:flex;flex-wrap:wrap;gap:6px}.evidence-caption{padding:10px 16px;background:#edf1ea;font-size:12px;color:var(--muted)}.faint{color:#77877b}.toplink{font-size:12px}.legend{font-size:12px;line-height:2}.legend b{font-weight:600}.print-note{display:none}
+@media(min-width:1600px){main{margin-left:max(235px,calc((100vw - 1150px)/2));padding-left:30px;padding-right:70px}}
+@media(max-width:1050px){aside{width:195px;padding:28px 18px}main{margin-left:195px;padding:34px 28px}.flow{grid-template-columns:repeat(2,1fr)}.node:nth-child(2):after{display:none}.metric{padding:18px 15px}}
+@media(max-width:750px){aside{position:relative;width:100%;padding:16px 20px;border-right:0;border-bottom:1px solid var(--line)}.brand{display:inline-block}.edition{display:inline-block;margin:0 0 0 12px}nav{display:flex;overflow:auto;gap:18px;margin-top:12px}nav a{white-space:nowrap}nav small,.side-note{display:none}main{margin:0;padding:24px 20px 45px}.grid{grid-template-columns:1fr}h1{letter-spacing:-1px}.metrics{grid-template-columns:repeat(2,1fr)}.metric b{font-size:32px}.topline{align-items:start}.topline .eyebrow{font-size:10px}.finding-head{display:block}h2{font-size:25px}td,th{padding:12px}.flow{gap:9px}.node{padding:13px}.finding{padding:19px}.path{font-size:11px}.tablewrap table{min-width:620px}section{margin-top:36px;padding-top:30px}}
+@media print{aside,.topline button,.filters,.toplink{display:none}main{margin:0;max-width:none;padding:0}body{font-size:11px;background:white}h1{font-size:32px}h2{font-size:22px}.lead{font-size:14px}section{margin-top:25px;padding-top:20px}.card,.finding,.step{break-inside:avoid}.metrics,.flow,.grid{break-inside:avoid}.print-note{display:block}a{color:#234f43}details{break-inside:avoid}pre{max-height:none;white-space:pre-wrap;word-break:break-all;font-size:8px}.tablewrap{overflow:visible}table{font-size:10px}.finding[hidden]{display:block}th{font-size:9px}}
+</style></head><body id="top">
+<aside><div class="brand">superchat<span style="color:var(--teal)">.</span></div><div class="edition">MAIN · ARCHITECTURE REVIEW</div><nav aria-label="审阅导航"><a href="#verdict"><small>01</small>核心判断</a><a href="#architecture"><small>02</small>架构变化</a><a href="#findings"><small>03</small>缺口复核</a><a href="#new"><small>04</small>两个新反例</a><a href="#report"><small>05</small>重评 10 月 4 日报告</a><a href="#plan"><small>06</small>建议顺序</a><a href="#evidence"><small>07</small>测试与证据</a></nav><div class="side-note">审阅对象是 <b>superchat 主目录</b>，不是旧 worktree。<br><br>源码只读 · 隔离测试<br>含未提交通知实现<br>2026-10-10 · PDT<br><br>本报告是审阅意见，不替代 <code>docs/roadmap.md</code>，也不授权修改产品。</div></aside>
+<main><header><div class="topline"><div class="eyebrow">Incremental Review / 2026.10.10</div><button id="print" type="button">打印 / 保存 PDF</button></div><h1>主干更稳了。<br>下一步该补边界，<br><span style="color:var(--teal)">不是再造一层架构。</span></h1><p class="lead">Superchat 已把几处“事情发生了，却没有可恢复的交代”补成了持久事实。剩下的问题，集中在<strong>对象归属、能力是否完整可用，以及事实写入与执行结束的先后关系</strong>。这些都可以沿现有 Runtime、工具管线和 Tape 修好。</p><span class="pill">以主目录的实际文件为准</span> <span class="pill">与 92a03554 增量比较</span><code class="path">/Users/chenyibin/Documents/emacs/package/superchat</code><div class="metrics"><div class="metric"><b>15</b><span>有增量的顶层产品模块</span></div><div class="metric"><b>1 / 5</b><span>旧报告缺口已关闭</span></div><div class="metric"><b>97</b><span>新增/增量套件测试通过</span></div><div class="metric"><b>2</b><span>本次新增可复现边界问题</span></div></div><p class="small">这些数字是审阅范围与测试结果，不是架构评分。“探针通过”可能表示成功复现缺陷，不能算产品验收通过。</p></header>
+
+<section id="verdict"><div class="num">01 / VERDICT</div><h2>我的判断：保留主干，收紧三处接缝</h2><div class="grid"><article class="card"><span class="tag">应保留</span><h3>一条执行主线，而不是一套聊天框架加一套代理框架</h3><p>聊天、就地操作、改写、workflow 和自动任务仍复用 driver → Runtime → model transport；工具仍通过唯一执行管线，终态仍由 Runtime 判定。新功能没有增设第二个 Run 生命周期，这是最重要的正确方向。</p><p class="small">依据：<a href="../../docs/protocols/request-lifecycle.md">请求生命周期契约</a>；本次 Kernel、smoke 与 M3 实跑。</p></article><article class="card"><span class="tag">已有改善</span><h3>“触发过”不再被当作“启动成功”</h3><p>Timer 增加 sending / started / unconfirmed；Work Record 可从 Tape 恢复失去的等待、找到对应执行、报告中断。默认不重跑不确定的副作用，是比“保证自动成功”更诚实的恢复策略。</p><p class="small">依据：<a href="../../docs/decisions/accepted/2026-10-06-a-fired-task-that-did-not-start.md">到点未启动的裁定</a>；26 项相关故障测试与旧探针复测。</p></article><article class="card"><span class="tag risk">优先补</span><h3>Workspace 归属应在对象入口检查，不只在上下文选择时过滤</h3><p>历史检索已经修正为随 Run 走，但工作记录和定时器仍可被别的 Workspace 的普通工具访问。权限管线没有被绕开；问题是通过管线之后，领域操作没有检查对象归属。</p><p class="small">这里的 Workspace 是产品的数据与工作归属，不是抵挡任意 Lisp 或 shell 的安全沙箱。</p></article><article class="card"><span class="tag risk">优先补</span><h3>启动来源与能力完整性，不能靠事后推断</h3><p>后台通知依赖发送返回后才写的 <code>timer.started</code>；工作记录功能被关闭后，工具仍能承诺一个不会上弦的等待。消费者看到的状态，可能比已提供的能力或执行进度晚一步。</p><p class="small">建议是补契约和入口验证，不是再增加一层总控 Event 或新的任务系统。</p></article></div><div class="callout"><strong>一句话：</strong>主目录已经证明现有分层可以承载增量修复；当前风险不是“层数不够”，而是几项领域规则尚未在唯一入口变成可执行的不变量。</div></section>
+
+<section id="architecture"><div class="num">02 / ARCHITECTURAL DELTA</div><h2>变化落在哪里，什么没有变</h2><div class="flow" aria-label="Superchat 当前请求主线"><div class="node"><b>入口与 Turn</b><span>用户输入 / inline / workflow<br>Timer / Work Record<br><br>新增：正文标记与一次性技能</span></div><div class="node"><b>Driver 与上下文</b><span>Envelope、工具上限、收集器<br>同一套请求准备<br><br>补齐：规矩、技能来源与窗口</span></div><div class="node"><b>Runtime 与工具</b><span>唯一 Run 所有者<br>llm.el + 唯一工具执行管线<br><br>修复：View 消失不终止 Run</span></div><div class="node"><b>交付与观察者</b><span>原始 Sink + turn-completed<br>审阅 / 记录回报 / 通知<br><br>新增：后台完成模式行标记</span></div></div><div class="rail"><strong>Tape：追加事实、重建视图、恢复关联</strong>　｜　Scope：注册可见性和撤销　｜　Session Buffer Set：精确 buffer 所有权</div><p class="small">示意图是职责关系，不是严格调用栈。Tape 不替 Runtime 执行任务；Scope 不是 Session，也不是 Workspace 权限边界。</p><div class="tablewrap"><table><thead><tr><th style="width:22%">增量</th><th>主目录实际实现</th><th style="width:29%">架构评价 / 保留边界</th></tr></thead><tbody>
+<tr><td>检索跟随 Run</td><td><code>sql</code> 退出内置 research 与 <code>all</code>；四个历史工具取执行上下文，无会话时不查询。</td><td>收紧正确。用户显式启用 SQL、用户自己的 <code>/recall</code> 与 full-control 仍可跨范围；不能宣称整体隔离已完成。</td></tr>
+<tr><td>到点恢复</td><td>Work Record 恢复未启动的等待；Timer 分开 fired、sending、started；不确定是否启动时写 unconfirmed，不自动重做。</td><td>这是持久事实驱动的恢复，不是持久队列，也不保证外部副作用 exactly-once。重试额度仍有跨任务漏洞。</td></tr>
+<tr><td>规矩与来源</td><td>同一 collector 扩展至改写、workflow；技能固定正文不再被误判为用户已预览，来源与窗口继续注入。</td><td>复用接口而非各入口复制拼接。改写只带适用规矩，不应把聊天答复礼仪写进文件。</td></tr>
+<tr><td>后台执行与用户共处</td><td>自动执行不弹审阅屏；View 被 kill 后 Run 继续；结构化编辑发现磁盘变更；记录显示各次执行。</td><td>注意力与执行生命周期分离得更好。磁盘检测不覆盖 <code>eval_elisp</code> / shell；真实 GUI 验收仍应补。</td></tr>
+<tr><td>一次性 agent 技能</td><td>正文中的 agent 技能只改本次 Request；开头调用仍切 Session；plan 仍切 Session。请求 Capability 对齐技能的 Agent Profile。</td><td>没有“先切过去、结束再切回”的退役风险。但 <code>plugins:</code> 不挂载：数据层的一次性生效，不等于完整能力的一次性生效。</td></tr>
+<tr><td>后台完成通知 <span class="tag wait">未提交</span></td><td>现有 changes 插件监听所有终态；模式行计数、列表打开或清除；通知仅存于本次 Emacs 进程。</td><td>放在终态观察者比为此包装 Sink 更合适；不能保证所有回调时序都可见，见新反例 N2。</td></tr>
+</tbody></table></div><div class="callout warn"><strong>需要严格分开的四件事：</strong>Work Record 的“交付结论”、Runtime 的“执行终态”、buffer 的“未保存改动”、用户的“已读通知”。它们不是同一个完成状态。现在的 <code>work.outcome</code> 已有用户可见消费者，不能再因旧报告说“没人读”就删除。</div><details><summary>一次性技能下一步的边界：不要为了 plugins 再发明一次临时 Session 切换</summary><div class="body"><p>建议先明确支持范围：若技能依赖尚未提供的插件能力，准备阶段应给出可理解的限制或拒绝，不要默默宣称“完整应用”。如果确需支持，请沿现有请求 Scope 和 Runtime retirement 设计，明确安装、队列等待、取消、终态之后的撤销；Service 的全局提供规则也不能被一个临时 Request 绕开。</p><p>这是本次建议，未实现。现有决定已经明确记录 <code>plugins:</code> 不生效，所以这里是能力缺口，不是本次新发现的回归。</p><a href="../../docs/decisions/accepted/2026-10-10-an-agent-skill-for-one-message.md">查看已接受的一次性技能决定</a></div></details></section>
+
+<section id="findings"><div class="num">03 / OLD FINDINGS RECHECKED</div><h2>旧五项：关闭一项，四项仍在</h2><p>使用原来隔离夹具与脚本模型，重新加载<strong>主目录源码</strong>。跨 Workspace 的两个探针经过正常工具调用链，不是直接绕过工具管线的函数调用。</p><div class="filters" role="group" aria-label="筛选旧缺口"><button data-filter="all" aria-pressed="true">全部 5 项</button><button data-filter="open" aria-pressed="false">仍存在 4 项</button><button data-filter="fixed" aria-pressed="false">已修复 1 项</button></div><div class="findings">
+<article class="finding" data-status="open"><div class="finding-head"><h3>F1 · B 的工具能读、改、完成 A 的工作记录</h3><span class="tag risk">P1 · 仍存在</span></div><div class="meta">superchat-work.el:184, 219–225, 251–301, 484–531</div><p>A 创建记录，B 使用<strong>已给定的 id</strong> 调 read → update → done；B 收到 A 的目标，并成功写入进度与结论。对象查找与 <code>--require</code> 没有校验调用会话所属 Workspace。</p><p><b>改进：</b>模型入口使用统一的“会话 + 对象 id → 所属对象”解析；read、update、wait、done、follows 都检查。保留用户明确打开全局记录列表的能力，不能把面向人的跨项目入口一并误禁。</p><p class="small">不是声称 B 已能自动发现所有 id；复现前提是 id 已知。也不声称 Workspace 能隔离获准执行的任意 Lisp。</p></article>
+<article class="finding" data-status="open"><div class="finding-head"><h3>F2 · B 能列出并取消 A 的定时器</h3><span class="tag risk">P1 · 仍存在</span></div><div class="meta">superchat-timer.el:617–656</div><p><code>timer_list</code> 返回全局定时器文字；<code>timer_cancel</code> 只凭 id 操作。探针中，B 看到了 A 的提醒并成功取消。</p><p><b>改进：</b>只给模型返回本 Workspace 的 pending / fired / unstarted 视图，并在取消入口再次检查归属。列表过滤不能代替写操作检查；人用的全局“稍后”面板可以另行保留。</p></article>
+<article class="finding fixed" data-status="fixed"><div class="finding-head"><h3>F3 · 唤醒发送失败吞掉等待</h3><span class="tag">已修复</span></div><div class="meta">superchat-work.el:676–711, 736–794</div><p>同样在提交之前注入发送错误，主目录会补回时间等待，记录仍满足 due 条件，没有虚构 active Run。不能再把旧版“woken 已写、等待消失、以后不再唤醒”作为现状。</p><p><b>证据边界：</b>这个故障点已闭合，另有 14 项 wake 测试通过。未用强杀真实 Emacs 的方式覆盖所有崩溃窗口；这不是“全部恢复问题解决”的证明。</p></article>
+<article class="finding" data-status="open"><div class="finding-head"><h3>F4 · 功能卸载后，仍能承诺不会执行的等待</h3><span class="tag risk">P1 · 仍存在</span></div><div class="meta">superchat-work.el:287, 978–995；工具与 collector 属于其他插件注册</div><p>卸载 <code>work-records</code> 后，<code>work_record</code> 仍被提供，start / wait 成功落账，但没有对应 Emacs timer。关掉的是执行侧，用户和模型仍看见可用的能力。</p><p><b>改进：</b>把能力的工具、collector、观察者、计时资源建立明确依赖；至少在无法兑现时间等待时不提供该写能力或明确拒绝。可以保留只读历史，不必强制整个领域只有一个文件。</p></article>
+<article class="finding" data-status="open"><div class="finding-head"><h3>F5 · start 收到进度和等待，却悄悄丢掉</h3><span class="tag wait">P2 · 仍存在</span></div><div class="meta">superchat-work.el:484–533</div><p>调用 start 时附带 progress、resume、wait_for 与时间，返回“Started”，但记录上没有这三项。这是模型工具 API 的数据完整性问题，不只是提示词不够短。</p><p><b>改进：</b>保留显式 action，先校验并规范化本次允许组合的字段，再一致写入；不支持的组合必须明确拒绝。不要为了宽容就让任意 conclusion 自动完成，或遇到歧义替用户猜对象。</p></article>
+</div><p class="small">P1 / P2 是本次建议的修复顺序，不是安全漏洞评级。<a href="evidence/baseline-probes.el">五项探针源码</a> · <a href="evidence/baseline-probes.log">本次运行日志</a></p><details><summary>查看源码：start 只转交 goal 与 follows，update 才接附带等待</summary><div class="evidence-caption">主目录源码快照 · superchat-work.el:484–514 · SHA256 a99e917d04705258… · <a href="../../superchat-work.el">打开源码</a></div><pre><code> 484  (defun superchat-work-tool (action &amp;optional id goal progress blocked resume
+ 485                                     wait_for detail conclusion follows
+ 486                                     in_minutes at)
+ 487    &quot;The `work_record&#x27; tool: ACTION is start, update, wait, done or read.&quot;
+ 488    (condition-case err
+ 489        (let* ((session (superchat-work--tool-session))
+ 490               (id (if (and (stringp id) (not (string-empty-p id)))
+ 491                       id
+ 492                     (superchat-work-current session))))
+ 493          (pcase action
+ 494            (&quot;start&quot;
+ 495             (let ((new (superchat-work-start session goal follows)))
+ 496               (format &quot;Started %s; it is this conversation&#x27;s current work record.&quot;
+ 497                       new)))
+ 498            (&quot;update&quot;
+ 499             (unless id (error &quot;No current work record; start one or give its id&quot;))
+ 500             (when (or progress blocked resume)
+ 501               (superchat-work-update session id progress blocked resume))
+ 502             ;; A wait given with an update is registered too, never dropped: in
+ 503             ;; the real task T4W the model put wait_for and in_minutes on an
+ 504             ;; update and believed the wait was registered.
+ 505             (when (and (stringp wait_for) (not (string-empty-p wait_for)))
+ 506               (superchat-work-wait
+ 507                session id wait_for detail
+ 508                (cond ((and (stringp at) (not (string-empty-p at)))
+ 509                       (superchat-timer-parse-time at))
+ 510                      ((numberp in_minutes) (+ (superchat-work--now) (* 60 in_minutes))))))
+ 511             (unless (or progress blocked resume
+ 512                         (and (stringp wait_for) (not (string-empty-p wait_for))))
+ 513               (error &quot;Say how far it got, why the next step waits, or where to pick it up&quot;))
+ 514             (superchat-work-render (superchat-work-get id)))</code></pre></details><details><summary>查看源码：timer_list 没有按调用会话过滤</summary><div class="evidence-caption">主目录源码快照 · superchat-timer.el:617–628 · SHA256 b14de1be2f050067… · <a href="../../superchat-timer.el">打开源码</a></div><pre><code> 617  (defun superchat-timer-tool-list ()
+ 618    &quot;The `timer_list&#x27; tool: the pending timers, then those fired in the last day.&quot;
+ 619    (let ((timers (superchat-timer-list))
+ 620          (fired (superchat-timer-fired-since (- (superchat-timer--now) 86400))))
+ 621      (concat
+ 622       (format &quot;Now %s.\n&quot; (superchat-timer-format-time (superchat-timer--now)))
+ 623       (if (null timers)
+ 624           &quot;No pending timers.&quot;
+ 625         (concat
+ 626          &quot;Pending:\n&quot;
+ 627          (mapconcat (lambda (timer)
+ 628                     (format &quot;%s  %s  %s%s  %s&quot;</code></pre></details></section>
+
+<section id="new"><div class="num">04 / NEW COUNTEREXAMPLES</div><h2>单项测试全绿，跨边界组合仍会漏</h2><article class="card"><div class="labelrow"><span class="tag risk">N1 · P1 建议</span><span class="tag note">故障注入复现</span></div><h3>共享重试计时器，绕过了单个任务的重试额度</h3><p><b>触发条件：</b>A 的启动持续报错；B 所属会话一直 busy；两个任务都已到点。</p><ol><li>A 失败时累计计数，超过额度后不再给自己安排 retry timer。</li><li>B 的 busy 等待不受次数限制，继续安排同一个全局 retry timer。</li><li>该回调扫描<strong>全部</strong>未启动任务；调用 A 的启动函数之前，不检查 A 是否已耗尽次数。</li></ol><div class="callout alert"><code>retry-limit = 2</code> → 原始尝试 + 驱动 5 个产品实际安排的回调 → <strong>A 被发送 6 次</strong>，而 B 没有发送、继续保持共享计时器。</div><p><b>根因：</b>额度只控制“是否安排计时器”，没有控制“是否允许此次尝试”。共享调度脉冲不能代替每个 occurrence 的准入条件。</p><p><b>最小修复方向：</b>在开始尝试前检查该 occurrence 的额度与下次允许时间；busy 与 failure 分开计数。单个 timer 可以继续共享，但应只调度合格项。不要用新数据库或完整任务队列解决这个局部错误。</p><p class="small">测试手动执行已安排的计时器回调，没有真的等待 5 × 300 秒；使用真实 Timer 事实折叠和重试函数。单任务现有回归通过，未覆盖这种相互驱动。<a href="evidence/delta-probes.el">探针</a> · <a href="evidence/delta-probes.log">日志</a></p></article><details><summary>查看源码：重试计数只限制安排 timer，不限制本次 start</summary><div class="evidence-caption">主目录源码快照 · superchat-timer.el:344–372 · SHA256 b14de1be2f050067… · <a href="../../superchat-timer.el">打开源码</a></div><pre><code> 344  (defun superchat-timer--retry-later (seconds)
+ 345    &quot;Try the unstarted tasks again in SECONDS, unless that is already set.&quot;
+ 346    (unless (timerp superchat-timer--retry-timer)
+ 347      (setq superchat-timer--retry-timer
+ 348            (run-at-time seconds nil
+ 349                         (lambda ()
+ 350                           (setq superchat-timer--retry-timer nil)
+ 351                           (superchat-timer-retry-tasks))))))
+ 352  
+ 353  (defun superchat-timer--try-task (session-id timer-id occurrence text)
+ 354    &quot;Start the task and return its Run id, or nil when no execution began.
+ 355  A busy conversation is tried again after `superchat-timer-busy-retry-seconds&#x27;
+ 356  without limit; a failed start after `superchat-timer-retry-seconds&#x27;, at most
+ 357  `superchat-timer-retry-limit&#x27; times in one Emacs.&quot;
+ 358    (let* ((key (cons timer-id occurrence))
+ 359           (run (condition-case err
+ 360                    (superchat-timer--start-task session-id timer-id occurrence text)
+ 361                  (error (message &quot;superchat: scheduled task %s was not started: %s&quot;
+ 362                                  timer-id (error-message-string err))
+ 363                         nil))))
+ 364      (cond ((stringp run) (remhash key superchat-timer--retries) run)
+ 365            ((eq run &#x27;busy)
+ 366             (superchat-timer--retry-later superchat-timer-busy-retry-seconds)
+ 367             nil)
+ 368            (t (let ((failed (1+ (gethash key superchat-timer--retries 0))))
+ 369                 (puthash key failed superchat-timer--retries)
+ 370                 (when (&lt;= failed superchat-timer-retry-limit)
+ 371                   (superchat-timer--retry-later superchat-timer-retry-seconds)))
+ 372               nil))))</code></pre></details><details><summary>查看源码：共享回调重新扫描所有 unstarted tasks</summary><div class="evidence-caption">主目录源码快照 · superchat-timer.el:415–437 · SHA256 b14de1be2f050067… · <a href="../../superchat-timer.el">打开源码</a></div><pre><code> 415  (defun superchat-timer-retry-tasks ()
+ 416    &quot;Start every fired task that has no execution on record.
+ 417  A task that was being sent when Emacs exited, in a conversation where a Run
+ 418  started afterwards, may or may not have run: that is said in the
+ 419  conversation, recorded as `timer.unconfirmed&#x27;, and it is not started again.&quot;
+ 420    (dolist (task (superchat-timer-unstarted-tasks))
+ 421      (let ((session (plist-get task :session-id))
+ 422            (id (plist-get task :id))
+ 423            (occurrence (plist-get task :occurrence)))
+ 424        (if (and (plist-get task :sending)
+ 425                 (not (superchat-timer--session-busy-p session))
+ 426                 (superchat-timer--run-after-sending-p task))
+ 427            (let ((line (format &quot;Scheduled task (due %s): %s -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again.&quot;
+ 428                                (superchat-timer-format-time occurrence)
+ 429                                (plist-get task :text))))
+ 430              (superchat-timer--fact session &quot;timer.unconfirmed&quot; id occurrence)
+ 431              (when-let* ((view (superchat-timer--live-view session)))
+ 432                (ignore-errors
+ 433                  (let ((superchat-buffer-name (buffer-name view)))
+ 434                    (with-current-buffer view
+ 435                      (superchat--insert-persistent-system-message line)))))
+ 436              (message &quot;superchat: %s&quot; line))
+ 437          (superchat-timer--try-task session id occurrence (plist-get task :text))))))</code></pre></details>
+<article class="card"><div class="labelrow"><span class="tag wait">N2 · P2 建议</span><span class="tag note">同步回调注入</span><span class="tag wait">通知实现尚未提交</span></div><h3>完成观察者先运行，timer.started 后落账：通知漏掉了</h3><p><b>触发条件：</b>脚本提供方在调用栈内同步返回正常结果。仍走 Timer → send-input → Runtime → provider → completion 的真实路径，只替换网络交付时机。</p><div class="flow"><div class="node"><b>1 · sending</b><span>写发送事实<br>调用 send-input</span></div><div class="node"><b>2 · 已完成</b><span>Runtime 封口<br>发 turn-completed</span></div><div class="node"><b>3 · 无通知</b><span>此时没有 timer.started<br>被判为非自动执行</span></div><div class="node"><b>4 · started</b><span>发送返回后写关联<br>却不重新补发通知</span></div></div><div class="callout alert">实际结果：<strong>run.completed = 1，timer.started = 1，notices = nil</strong>。没有第二次结束事件替它补通知。</div><p><b>根因：</b>“由谁启动”是执行的来源属性，却依赖提交返回后才能看到的事实。后置关联与即时终态观察者之间存在时序耦合。</p><p><b>最小修复方向：</b>写入已确认的 started 关联后，检查该 Run 是否已终态并幂等补通知。更稳的后续方向，是将触发来源放入 Request / Run 接受信息，在消费者收到终态前已可判断；仍须在 Runtime 确认接受之后记 started，不能预写一个不存在的 Run。</p><p class="small">现有异步脚本的 8 项通知测试通过。这是支持快速/同步回调的边界反例，<strong>不是已证明真实 LM Studio 日常会漏通知</strong>；本次也没有测它的发生频率。<a href="evidence/notice-probe.el">探针</a> · <a href="evidence/notice-probe.log">日志</a></p></article><details><summary>查看源码：timer.started 在 send-input 返回后才写</summary><div class="evidence-caption">主目录源码快照 · superchat-timer.el:313–342 · SHA256 b14de1be2f050067… · <a href="../../superchat-timer.el">打开源码</a></div><pre><code> 313  (defun superchat-timer--start-task (session-id timer-id occurrence text)
+ 314    &quot;Start the model on TEXT in the conversation SESSION-ID; return the Run id.
+ 315  Return `busy&#x27;, sending nothing, while an execution runs there: the message
+ 316  would only be queued in memory.  Otherwise record `timer.sending&#x27;, send, and
+ 317  record `timer.started&#x27; with the Run that began; nil when none began.&quot;
+ 318    (if (superchat-timer--session-busy-p session-id)
+ 319        &#x27;busy
+ 320      (let ((view (or (superchat-timer--live-view session-id)
+ 321                      (and (fboundp &#x27;superchat--render-session-view)
+ 322                           (superchat--render-session-view session-id)))))
+ 323        (when (buffer-live-p view)
+ 324          (with-current-buffer view
+ 325            (let ((before superchat--active-run-id))
+ 326              (superchat-timer--fact session-id &quot;timer.sending&quot; timer-id occurrence)
+ 327              (let ((inhibit-read-only t)
+ 328                    (start (copy-marker (point-max))))
+ 329                (goto-char (point-max))
+ 330                (insert text)
+ 331                (condition-case err
+ 332                    ;; The timer speaks here, not the user.
+ 333                    (let ((superchat-automated-input t))
+ 334                      (superchat-send-input))
+ 335                  ;; A failed send must not leave the text for the next try.
+ 336                  (error (when (&lt;= start (point-max))
+ 337                           (delete-region start (point-max)))
+ 338                         (signal (car err) (cdr err)))))
+ 339              (let ((run superchat--active-run-id))
+ 340                (when (and (stringp run) (not (equal run before)))
+ 341                  (superchat-timer--note-started session-id timer-id occurrence run)
+ 342                  run))))))))</code></pre></details><details><summary>查看源码：自动执行判断依赖 timer.started</summary><div class="evidence-caption">主目录源码快照 · superchat-changes.el:465–480 · SHA256 fe5aba3f84900372… · <a href="../../superchat-changes.el">打开源码</a></div><pre><code> 465  (defun superchat-changes--unattended-run-p (session run)
+ 466    &quot;Non-nil when Superchat started RUN of SESSION at a time, not the user.
+ 467  Read from SESSION&#x27;s Tape: a scheduled task records `timer.started&#x27; with the
+ 468  Run it began, and a woken Work Record&#x27;s Run is the first one of a
+ 469  conversation that holds `work.woken&#x27;.&quot;
+ 470    (let ((events (ignore-errors (superchat-tape-replay-events session)))
+ 471          first woken started)
+ 472      (dolist (event events)
+ 473        (pcase (plist-get event :type)
+ 474          (&quot;run.started&quot; (unless first (setq first (plist-get event :run-id))))
+ 475          (&quot;work.woken&quot; (setq woken t))
+ 476          (&quot;timer.started&quot;
+ 477           (when (equal run (plist-get (plist-get event :payload) :run-id))
+ 478             (setq started t)))))
+ 479      (or started (and woken (equal run first)))))
+ 480  </code></pre></details><details><summary>查看源码：结束事件当场判断并决定是否写通知</summary><div class="evidence-caption">主目录源码快照 · superchat-changes.el:709–728 · SHA256 fe5aba3f84900372… · <a href="../../superchat-changes.el">打开源码</a></div><pre><code> 709  (defun superchat-changes--note-unattended (_run status)
+ 710    &quot;At the end of an execution Superchat started by itself, leave a notice.
+ 711  Every way of ending counts: one that failed is the one most easily missed.&quot;
+ 712    (when (and (listp status)
+ 713               (fboundp &#x27;superchat-runtime--terminal-p)
+ 714               (superchat-runtime--terminal-p (plist-get status :status)))
+ 715      (when-let* ((session (plist-get status :session-id))
+ 716                  (run (plist-get status :run-id))
+ 717                  ((superchat-changes--unattended-run-p session run))
+ 718                  ((not (cl-some (lambda (notice)
+ 719                                   (equal run (plist-get notice :run)))
+ 720                                 superchat-changes--notices))))
+ 721        (push (list :run run :session session
+ 722                    :what (superchat-changes--notice-what session run)
+ 723                    :status (plist-get status :status)
+ 724                    :unsaved (length (ignore-errors
+ 725                                       (superchat-changes-candidates session run)))
+ 726                    :time (current-time))
+ 727              superchat-changes--notices)
+ 728        (superchat-changes--notices-refresh))))</code></pre></details>
+<div class="callout"><strong>架构层的共同结论：</strong>把“当前已满足的条件”放在消费它的边界上检查。重试额度应在开始尝试前检查；通知所需来源应在终态消费前可见。不要依赖“通常会晚一点”或“没人再触发一次”的偶然时序。</div></section>
+
+<section id="report"><div class="num">05 / THE OCTOBER 4 REPORT, REVISITED</div><h2>那份简化报告：方向有价值，结论需要更新</h2><p>它把事实、推论和假设分开，也试图把多步规程移交给产品，方法是好的。但它不是当前主目录的现状说明，更不能把“更少工具”直接当作弱模型架构的目标。</p><div class="tablewrap"><table><thead><tr><th>原报告判断 / 建议</th><th>主目录上的重评</th><th>现在应做什么</th></tr></thead><tbody>
+<tr><td>所有真实数字只有 DeepSeek，先接通 Qwen</td><td><span class="tag">已过时</span>10 月 4–5 日已有 Qwen 工具数量实验；10 月 7 日和 10 日另有共处、技能与通知场景。</td><td>不重做“证明能连通”的工程。基于现有记录补默认权限和日常配置的有效基线；本次仅阅读这些运行报告，未重跑。</td></tr>
+<tr><td>14 → 9 工具、系统文字缩短，没有建议会让弱模型更难</td><td><span class="tag wait">过强</span>减少工具也可能增加 Lisp 编写、权限审批和错误恢复负担。工具名称总数不是认知负担的充分指标。</td><td>度量任务成功、工具错误、有效等待时间、审批负担和往返数。说明缩短和工具减少分开对照。</td></tr>
+<tr><td>work_record 合并调用，缺省 id 兜底</td><td><span class="tag">仍有价值</span>静默丢字段已复现；但“只剩一条记录就自动认”是领域选择，不天然安全。</td><td>先查 Workspace 归属，再处理 id 省略。默认选择必须确定、可解释；歧义时保持显式确认。</td></tr>
+<tr><td>删 work.outcome，因为没人读</td><td><span class="tag risk">不能照做</span>现有执行列表消费它；中断恢复也使用该类事实和 interrupted 结果。</td><td>保留执行结果记录。把“agent 等待是否可用”单独讨论，不能和删除 outcome 打成一个清理包。</td></tr>
+<tr><td>自动执行显示审阅屏但不选中</td><td><span class="tag">已被后续决定替代</span>用户接受“不显示审阅屏”，避免占用窗口；新的模式行通知补可见性。</td><td>尊重 10 月 7 / 10 日决定，补通知时序和易读结果，不重新弹一个旁窗。</td></tr>
+<tr><td>只读 eval_elisp 自动免审；缺右括号由产品补齐</td><td><span class="tag risk">不是无风险简化</span>静态检查器不是安全证明；补括号后直接执行可能改变程序含义。require 也会加载并执行代码。</td><td>优先给高频查询窄工具；权限变更必须独立审查和默认级别实测。执行器不自动修复并执行破损代码。</td></tr>
+<tr><td>共用到点机制，给人一个“稍后”面板</td><td><span class="tag">方向保留</span>对象可分开，显示和低层调度可复用。但重复代码现在已包含不同的恢复政策。</td><td>先列清 reminder / task / work-wait 的语义矩阵，再提取共同部分；不可为了文件合并抹掉“不确定时不重跑”。</td></tr>
+</tbody></table></div>
+<h3>本地模型已有数据，但还不能宣布最优工具集</h3><p>仓库里的 <a href="../../docs/reports/2026-10-05-tool-count-on-a-local-model.md">工具数量实验报告</a>记载：两轮共 72 次运行，工具名与调用格式都可解析；主要调用错误集中于 Emacs Lisp。放宽无进展超时后，结果如下。</p><div class="tablewrap"><table><thead><tr><th>工具数量（含 ask_user）</th><th>第二轮通过</th><th>不能忽略的条件</th></tr></thead><tbody><tr><td>14 / 9 / 6</td><td>6/8 · 7/8 · 7/8</td><td>每清单 4 个任务，每格仅 2 次；包含提醒任务。</td></tr><tr><td>4 / 2</td><td>4/6 · 6/6</td><td>没有 timer_create，不测提醒，分母不同；2 工具的 T6 两次都耗到 1500 秒时限。</td></tr></tbody></table></div><p><strong>我的推论：</strong>让模型少写易错的 Lisp，比让工具列表最短更值得优先实验。可以从窗口查询/布局这种高频能力做一个受限工具，并使用显式工具上限或预设控制暴露面；并不是把所有 Emacs 操作都包装成几十个默认工具。</p><p class="small">这不是对上述小样本的统计显著性判断。两工具的 6/6 不证明它比 14 工具更好。字节数与延迟的相关性也不能单独证明缓存是否命中。</p><details><summary>这份报告的实验方法，还应怎样改</summary><div class="body"><ul><li><b>分离变量：</b>“14 个长说明”对“9 个短说明”同时改了两个因素；要判断原因，应先只改工具集合，再只改说明。</li><li><b>分开结果层：</b>语法合法、工具调用成功、任务最终状态正确、用户没被打断，各自记分。进程 completed 不能代替任务完成。</li><li><b>配对环境：</b>模型/量化、上下文长度、推理开关、冷暖缓存、并发数、超时、权限和审阅设置都记录；对照交错运行。</li><li><b>先看基础开销：</b>第二次请求更快也可能是输出更短或模型暖机，不是前缀缓存的充分证据。</li><li><b>默认权限：</b>分别统计审批次数、等待时间、拒绝后是否仍能完成；危险级别的通过率不能代表日常体验。</li><li><b>自动恢复：</b>加真实进程中断/重启测试；手写事实与故障注入有用，但不等价于真实崩溃。</li></ul></div></details></section>
+
+<section id="plan"><div class="num">06 / RECOMMENDED ORDER</div><h2>改进顺序：先守边界，再减负担</h2><p class="small">下面是审阅建议，尚未作为产品计划接受；若采纳，应在现有 roadmap 中安排，不另立第二份权威路线图。</p><div class="timeline">
+<article class="step"><div><span class="tag risk">第一批 · 正确性</span><h3>对象归属 + 重试准入 + 通知时序</h3><p>合并修 F1/F2 的 Workspace 对象校验；为 N1 在每次尝试前实施额度和时间条件；为 N2 在关联已确认后幂等补通知。它们分别属于领域入口、调度准入和终态交付，不应塞进提示词。</p><p><b>验收：</b>A/B/临时会话的读写矩阵；失败 + busy 两任务；同步完成/同步错误/异步完成；重复终态观察不得生成两条通知。</p></div></article>
+<article class="step"><div><span class="tag risk">第二批 · 能力完整性</span><h3>插件卸载与一次性技能的能力契约</h3><p>关闭工作记录功能后不再提供无法兑现的等待；挂载失败、卸载、重挂都验证工具/collector/定时资源的状态。一次性技能依赖的 plugins 缺失时先明确限制，不做隐式临时切换。</p><p><b>验收：</b>卸载后仍可读历史，但不能假装已安排执行；重挂只补该补的事件；保持 Runtime 独占生命周期、Scope 精确退役与工具唯一管线。</p></div></article>
+<article class="step"><div><span class="tag wait">第三批 · 模型负担</span><h3>修 work_record API，再试窄工具</h3><p>先消灭静默丢字段，支持清晰、一次可完成的字段组合；保留 action 和明确的完成语义。随后用同任务对照验证窗口查询/布局小工具，别先把清单压成两项再让模型编程。</p><p><b>验收：</b>无需用户说“工作记录”的跨轮任务；字段组合与冲突测试；默认权限 Qwen + DeepSeek 对照，成功率与审批負担都不恶化。</p></div></article>
+<article class="step"><div><span class="tag">第四批 · 可见性与维护</span><h3>统一“稍后”视图，谨慎提取共同机制</h3><p>面向人展示等待、到点未启动、不确定启动、已结束未读；结果用目标与结论说人话，不只显示 id。稳定后再共用计时器生命周期、事实扫描缓存等底层操作，保留两种对象和不同恢复政策。</p><p><b>验收：</b>真人在自己的 Emacs 上完成默认权限清单；真实重启、读写冲突和并发审批；重构前后故障语义矩阵一致。</p></div></article>
+</div><div class="callout warn"><strong>现在不建议：</strong>新 Runtime、新 Event 总线、完整持久任务队列；大规模按文件数拆模块；把任意 Lisp 的安全性寄托于简易白名单；自动补齐括号并执行；先删 outcome 再考虑消费者；照着视频另建“来源 / 去向”平行体系。</div></section>
+
+<section id="evidence"><div class="num">07 / EVIDENCE & LIMITS</div><h2>这次具体查了什么</h2><div class="grid"><article class="card"><h3>版本与工作树</h3><ul><li>旧审阅基线：<code>92a03554</code>，来自旧 worktree。</li><li>主目录父提交：<code>fcccf3aa</code>。</li><li>起始工作副本快照：<code>b3f0a0fd</code>，包含当时未提交文件。</li><li>未提交的生产代码：<code>superchat-changes.el</code> 后台通知实现；相应测试与裁定也纳入审阅。</li><li>审阅期间发现 <code>docs/roadmap.md</code> 被外部修改，按终审内容核对；受检产品源码与测试文件的初始哈希未变化。</li></ul><p class="small">jj 工作副本哈希会随新增报告变化，定位实际受检内容请以 <a href="evidence/main-initial-hashes.json">初始源码哈希</a> 与 <a href="evidence/review-manifest.json">报告证据清单</a> 为准。</p></article><article class="card"><h3>操作边界</h3><ul><li>读取 15 个顶层产品模块的差异及相关调用路径，核对主目录契约、决定、测试。</li><li>运行隔离 batch Emacs；脚本模型走真实 Runtime / 工具链，无外部模型请求。</li><li>没有改产品代码；没有改保护的 M3 回归集；没有建立提交或恢复别人的编辑。</li><li>没有本次真实 Qwen / DeepSeek 运行、真人 GUI 使用、强杀进程、长期性能和全量依赖审计。</li></ul><p class="small">这是相对既有报告的增量审阅，不是对全部代码重新逐行审计。Telega / emacsclient 等未改入口未在这次展开。</p></article></div>
+<div class="tablewrap"><table><thead><tr><th>本次实跑</th><th>结果</th><th>证据</th></tr></thead><tbody><tr><td>Kernel</td><td>通过</td><td><a href="evidence/kernel.log">日志</a></td></tr><tr><td>Canonical smoke</td><td>0 mismatches</td><td><a href="evidence/smoke.log">日志</a></td></tr><tr><td>M3（原文件未改）</td><td>139 项：137 expected，2 real-provider skipped</td><td><a href="evidence/m3.log">日志</a></td></tr><tr><td>Workspace scope</td><td>9 / 9</td><td><a href="evidence/workspace-scope.log">日志</a></td></tr><tr><td>Work wake fault</td><td>14 / 14</td><td><a href="evidence/work-wake-fault.log">日志</a></td></tr><tr><td>Timer start fault</td><td>12 / 12</td><td><a href="evidence/timer-start-fault.log">日志</a></td></tr><tr><td>Entry rules（隔离目录重跑）</td><td>13 / 13</td><td><a href="evidence/entry-rules-isolated.log">日志</a></td></tr><tr><td>Beside user</td><td>13 / 13</td><td><a href="evidence/beside-user.log">日志</a></td></tr><tr><td>Input syntax</td><td>18 / 18</td><td><a href="evidence/input-syntax.log">日志</a></td></tr><tr><td>Skill once / context</td><td>5 / 5，5 / 5</td><td><a href="evidence/skill-once.log">日志</a> · <a href="evidence/skill-context.log">context 日志</a></td></tr><tr><td>Unattended notice（未提交）</td><td>8 / 8</td><td><a href="evidence/unattended-notice.log">日志</a></td></tr><tr><td>旧缺口复核探针</td><td>5 / 5 符合观察断言：4 项仍有缺口、1 项已修复</td><td><a href="evidence/baseline-probes.log">日志</a></td></tr><tr><td>N1 重试额度反例</td><td>1 / 1 成功复现缺口</td><td><a href="evidence/delta-probes.log">日志</a></td></tr><tr><td>N2 同步完成通知反例</td><td>1 / 1 成功复现缺口</td><td><a href="evidence/notice-probe.log">日志</a></td></tr></tbody></table></div><div class="callout warn"><b>测试隔离问题：</b>entry-rules 首跑 10/13 通过，3 项试图写 <code>~/.emacs.d/superchat/workflow/erwf*.workflow</code> 被沙盒拒绝。明确将 <code>superchat-workflow-directory</code> 指向临时目录后，13/13 通过。这是夹具目录隔离不足，不计为产品规矩功能失败；也不能隐去首跑记录。<a href="evidence/entry-rules.log">首跑</a> · <a href="evidence/entry-rules-isolated.log">隔离后重跑</a></div>
+<h3>文档也要避免把历史当现状</h3><ul><li><code>docs/architecture.md:60</code> 仍说唤醒到 Run 的关联只在 <code>superchat-work--woken-runs</code> 内存表，然而该表已移除，同文后段已说明 Tape 恢复。应删旧条目，不据此指责当前实现。</li><li>“写 fired 在先，所以崩溃后不会启动两次”过度压缩了保证。实际恢复依赖 started / unconfirmed 与 run.started 证据；更不能推成外部副作用 exactly-once。</li><li>当前 Request 证据支持重建，但不独立比对 provider 实际收到的字节；证据记录失败也不必阻止发送。<b>工具 admission 的 fail-closed 不等于所有记录都 fail-closed。</b></li><li>工作树已加入后台模式行通知；架构页仍有“仅回显区”的旧描述。是否已提交、是否已加载进日常 Emacs，应与“文件已实现”分开。</li></ul>
+<details><summary>15 个受检顶层产品模块及证据哈希</summary><div class="body"><div class="tablewrap"><table><thead><tr><th>模块</th><th>SHA256 前 16 位（初始与受检源码一致）</th></tr></thead><tbody><tr><td><a href="../../superchat-changes.el">superchat-changes.el</a></td><td><code>fe5aba3f84900372</code> · <a href="evidence/superchat-changes.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-core.el">superchat-core.el</a></td><td><code>96e68020a07c305d</code> · <a href="evidence/superchat-core.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-dispatcher.el">superchat-dispatcher.el</a></td><td><code>33a55b6c8b6ff7f4</code> · <a href="evidence/superchat-dispatcher.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-llm.el">superchat-llm.el</a></td><td><code>bbd1d016dfd360ff</code> · <a href="evidence/superchat-llm.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-models.el">superchat-models.el</a></td><td><code>413aea5ecfcd8160</code> · <a href="evidence/superchat-models.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-prompt-hooks.el">superchat-prompt-hooks.el</a></td><td><code>035ef1a5b520c82a</code> · <a href="evidence/superchat-prompt-hooks.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-runtime.el">superchat-runtime.el</a></td><td><code>d747c2e219416d8e</code> · <a href="evidence/superchat-runtime.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-subagent.el">superchat-subagent.el</a></td><td><code>60b7ec0ef09c2dff</code> · <a href="evidence/superchat-subagent.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-tape.el">superchat-tape.el</a></td><td><code>cc613a7027c24c16</code> · <a href="evidence/superchat-tape.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-timer.el">superchat-timer.el</a></td><td><code>b14de1be2f050067</code> · <a href="evidence/superchat-timer.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-tool-execution.el">superchat-tool-execution.el</a></td><td><code>d69614677641c627</code> · <a href="evidence/superchat-tool-execution.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-tools.el">superchat-tools.el</a></td><td><code>32b17536dcdeb018</code> · <a href="evidence/superchat-tools.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-work.el">superchat-work.el</a></td><td><code>a99e917d04705258</code> · <a href="evidence/superchat-work.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat-workspace.el">superchat-workspace.el</a></td><td><code>99200c5df71202f1</code> · <a href="evidence/superchat-workspace.diff">增量 diff</a></td></tr><tr><td><a href="../../superchat.el">superchat.el</a></td><td><code>180d12397025714d</code> · <a href="evidence/superchat.diff">增量 diff</a></td></tr></tbody></table></div></div></details><details><summary>复跑方法与证据性质</summary><div class="body"><p>在主目录使用已安装依赖，逐套独立 Emacs 进程。完整命令见 <a href="evidence/run-checks.py">本次测试脚本</a> 与 <a href="evidence/checks.json">执行结果 JSON</a>。初次脚本故意保留原始返回码；entry-rules 的隔离重跑单独留痕。</p><pre><code>emacs -Q --batch \
+ --eval '(progn (require (quote package))
+   (setq package-user-dir (expand-file-name "~/.cache/superchat-test-elpa")
+         native-comp-enable-subr-trampolines nil)
+   (package-initialize))' \
+ -L . -L plugins/superchat-cowork-telega \
+ -l reports/architecture-review-main-2026-10-10/evidence/baseline-probes.el</code></pre><p>基线与增量探针断言的是<strong>实际行为</strong>。例如 N1 断言出现 6 次尝试，测试绿表示缺口确实存在；产品修复后，探针应改为期望正确行为，而不是继续追求它保持绿色。</p></div></details><div class="link-list"><a href="../architecture-review-2026-10-10/superchat-architecture-review.html">旧 worktree 报告（历史对照）</a><a href="../../docs/architecture.md">当前架构文档</a><a href="../../docs/roadmap.md">唯一 roadmap</a><a href="../../docs/reports/2026-10-07-hands-on-checklist.md">日常 Emacs 人工检查清单</a></div>
+</section><footer class="footer"><p><b>结论保持有边界：</b>这不是“架构没问题”，也不是“应该重写”。主目录的增量证明主干可用；接下来的高价值工作，是让归属、准入与完成交付在正确的地方成为硬约束。</p><p>生成于 2026-10-10 08:32 PDT · 本地自包含 HTML，不加载远程字体、脚本或分析服务。证据文件随报告放在主目录 reports 下。</p><a href="#top" class="toplink">回到开头 ↑</a></footer></main>
+<script>
+document.getElementById('print').addEventListener('click',()=>window.print());
+document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));document.querySelectorAll('[data-status]').forEach(c=>c.hidden=b.dataset.filter!=='all'&&c.dataset.status!==b.dataset.filter)}));
+if('IntersectionObserver' in window){const links=[...document.querySelectorAll('nav a')];const obs=new IntersectionObserver(es=>{for(const e of es)if(e.isIntersecting){links.forEach(a=>a.classList.toggle('active',a.hash==='#'+e.target.id))}},{rootMargin:'-10% 0px -65% 0px'});document.querySelectorAll('section[id]').forEach(s=>obs.observe(s))}
+</script></body></html>

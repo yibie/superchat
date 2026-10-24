@@ -1,0 +1,18 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 2 tests (2026-10-11 00:17:33-0700, selector ‘"^r3-boundary/"’)
+superchat: scheduled task timer-20261011001733-06be was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: Scheduled task (due 2027-01-15 00:01): R3-DUE-UNSTARTED -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again.
+OPEN-C OBSERVED: due-unstarted task absent from work/notice lists; timer_list shows only fired text without id/start-state. Actual unconfirmed transition changes neither tool list nor notices (conversation receives explanation). This proves a fragmented view, not a contracted unified-screen defect.
+
+   passed  1/2  r3-boundary/no-common-view-for-due-and-unconfirmed-tasks (0.629301 sec)
+superchat: scheduled task timer-20261011001733-a9ad was not started: R3 start unavailable
+superchat: scheduled task timer-20261011001733-a9ad was not started: R3 start unavailable
+R3-03 WAIT: retry-limit=2, wait=300s; ordinary scan waits, remount sends again at virtual elapsed=0s.
+
+   passed  2/2  r3-boundary/remount-also-skips-failure-wait (0.025864 sec)
+
+Ran 2 tests, 2 results as expected, 0 unexpected (2026-10-11 00:17:33-0700, 0.655409 sec)
+

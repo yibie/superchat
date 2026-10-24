@@ -1,0 +1,14 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-10 08:25:39-0700, selector ‘"^delta-probe/"’)
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+superchat: scheduled task timer-20261010082540-a17f was not started: AUDIT start unavailable
+OBSERVED: retry-limit=2, initial+5 scheduled callbacks -> 6 failed send attempts for A; B remains busy and keeps the retry timer alive.
+
+   passed  1/1  delta-probe/exhausted-task-retried-by-another-busy-task (0.566176 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-10 08:25:40-0700, 0.566335 sec)
+

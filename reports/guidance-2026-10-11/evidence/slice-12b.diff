@@ -1,0 +1,601 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index b27ea091b8..1965bbe9bb 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,29 @@
+ 
+ All notable changes to superchat.
+ 
++## Unreleased — a reply cut off at the output limit runs no call
++
++- When the provider gives the stop reason `length`, none of the reply's tool
++  calls runs (`superchat-cut-off-reply-runs-nothing`, default t).  The whole
++  reply is refused before its text is added to the prompt or any call runs
++  (around `llm-provider-utils-process-result`); a reply cut off in the middle
++  of its arguments, whose JSON llm.el cannot parse, is told the same thing
++  instead of "invalid JSON".  The model is told the limit and asked to work in
++  smaller pieces; after `superchat-llm-unknown-tool-retries` such retries in a
++  row the execution stops with `Stopped: the reply was cut off at the output
++  limit N times in a row` in the chat, the pending list and the notices.  A
++  reply that was not cut off starts the count again.  Text only that was cut
++  off stays the answer, with a line under it.
++- New fact `response.cut-off` (`:stop-reason :max-tokens :tool-calls
++  :text-chars :attempt :refused`), written with the option off too.
++- Without streaming, llm.el reads the stop reason after the arguments, so a
++  parse error came without it and the Run failed with `[API error: …]` and no
++  retry (seen with DeepSeek and tools, 2026-10-21).  The stop reason is now
++  kept for the error callback.
++- Not covered: Claude's `stop_reason` and OpenAI Responses'
++  `incomplete_details` (the llm fork normalizes only the openai-compatible
++  family).
++
+ ## Unreleased — work the user puts off waits for the user
+ 
+ - The `work_record` description the model is given ends with one more
+diff --git a/README.md b/README.md
+index 0033869073..a75946e977 100644
+--- a/README.md
++++ b/README.md
+@@ -485,6 +485,8 @@
+ 
+ That hard limit is `superchat-agent-max-tool-calls`, 120 calls per execution. While an execution runs, the status line shows `tools N/120`. When 15 calls are left (after the 105th of 120; `superchat-tool-budget-reminder-left`, nil turns it off) the model is told so once. Calls past the limit are refused, and the execution's end says so: the chat, `M-x superchat-pending` and the notices list read `Cut off after 120 tool calls`, and the ending facts carry `:tool-budget (:action cut-off :limit 120 :used 120)`. When `superchat-tool-failure-brake` (default 3, nil turns it off) tool calls in a row have failed, the execution stops: no further call and no further request, and the chat, `M-x superchat-pending` and the notices list read `Stopped after 3 failed calls in a row`. A call that succeeds starts the count again, and a call you or the permission level refused is not a failure. The brake is one of `superchat-tool-loop-hooks`: functions asked about every tool call before its body and after its result, which may let it be, give the model other text (the original stays on the Tape, the rewrite is recorded as `tool.rewritten`), or stop the execution. nil turns them all off. An `edit_buffer` error (text not found, more than one match) counts as a failed call, like an `eval_elisp` error.
+ 
++When the provider says a reply was cut off at the output limit (stop reason `length`), none of that reply's tool calls runs (`superchat-cut-off-reply-runs-nothing`, default t, nil runs them as before). The model is told `Your reply was cut off at the output limit (N tokens), so none of its tool calls ran. Do the same work in smaller pieces: …` and asked again; after `superchat-llm-unknown-tool-retries` (2) such retries in a row the execution stops, and the chat, `M-x superchat-pending` and the notices list read `Stopped: the reply was cut off at the output limit 3 times in a row`. A reply of text only that was cut off is still the answer, with a line under it saying so. Every cut-off is the fact `response.cut-off` on the Tape, with the option off too. Without a stop reason from the provider nothing changes; nothing is guessed from the text.
++
+ **Memory not persisting**
+ 
+ Check `superchat-data-directory` and that the SQLite database is writable. Run `/recall test` to verify queries work. Memory auto-retrieval only activates for queries longer than 8 characters (configurable via `superchat-memory-auto-recall-min-length`).
+diff --git a/README_cn.md b/README_cn.md
+index fcaeb38822..5ce07200f6 100644
+--- a/README_cn.md
++++ b/README_cn.md
+@@ -485,6 +485,8 @@
+ 
+ 这个 hard 上限是 `superchat-agent-max-tool-calls`，每次执行 120 次工具调用。执行进行中，状态行显示 `tools N/120`。还剩 15 次时（120 次里的第 105 次之后；`superchat-tool-budget-reminder-left`，设 nil 关掉），模型会被告知一次。超过上限的调用被拒绝，执行结束时会说明：聊天里、`M-x superchat-pending` 和通知列表里写 `Cut off after 120 tool calls`，结束的事实里带 `:tool-budget (:action cut-off :limit 120 :used 120)`。连续 `superchat-tool-failure-brake` 次（默认 3，设 nil 关掉）工具调用失败后，这次执行就停下：不再调用工具、不再发请求，聊天里、`M-x superchat-pending` 和通知列表里写 `Stopped after 3 failed calls in a row`。中间有一次成功就重新计数，你或权限档位拒绝的调用不算失败。这个刹车是 `superchat-tool-loop-hooks` 里的一个：这些函数在每次工具调用执行前、结果出来后各被问一次，可以放行、让模型看到另一段文字（原结果仍在 Tape 上，改写另记一条 `tool.rewritten`），或者让这次执行停下。设 nil 全部关掉。`edit_buffer` 报错（找不到文字、匹配不止一处）和 `eval_elisp` 报错一样算一次失败的调用。
+ 
++模型服务说一条回复是在输出上限处被截断的（停止原因 `length`）时，这条回复里的工具调用一个都不执行（`superchat-cut-off-reply-runs-nothing`，默认 t，设 nil 就照旧执行）。模型会收到 `Your reply was cut off at the output limit (N tokens), so none of its tool calls ran. Do the same work in smaller pieces: …`，然后重新请求；这样连续重来 `superchat-llm-unknown-tool-retries`（2）次之后，这次执行就停下，聊天里、`M-x superchat-pending` 和通知列表里写 `Stopped: the reply was cut off at the output limit 3 times in a row`。只有文字、没有调用的回复被截断时，仍然算作答案，下面加一行说明它被截断了。每次截断都在 Tape 上记一条 `response.cut-off`，开关关着也记。模型服务不给停止原因时什么都不变，不从文字长度去猜。
++
+ **记忆不能持久化**
+ 
+ 检查 `superchat-data-directory` 以及 SQLite 数据库是否可写。运行 `/recall test` 验证查询是否正常。记忆自动检索仅在查询超过 8 个字符时激活（可通过 `superchat-memory-auto-recall-min-length` 配置）。
+diff --git a/docs/roadmap.md b/docs/roadmap.md
+index e4b5e72294..74d5c13a8c 100644
+--- a/docs/roadmap.md
++++ b/docs/roadmap.md
+@@ -510,6 +510,10 @@
+ 
+ Slices 11b and 11c (`reports/guidance-2026-10-11/SLICE-11.md`). `superchat-tool-loop-hooks` before the body and after the result: let it be, rewrite (recorded as `tool.rewritten`, the original kept), or stop the execution with a visible ending, as a cut-off ends it. The failure brake is the default hook and replaces 9c's sentence. Tests: `scripts/tool-hooks-regression.el`; six 9c-era tests rewritten (five in tool-nudge, one in edit-all).
+ 
++### Tool calls — a reply cut off at the output limit runs no call (`implemented` 2026-10-21, scripted evidence and two real-model probes)
++
++Slice 12b (`reports/guidance-2026-10-11/SLICE-12.md`). A reply whose stop reason is `length` runs none of its calls (`superchat-cut-off-reply-runs-nothing`); the model is told the limit and asked for smaller pieces; after `superchat-llm-unknown-tool-retries` retries in a row the execution stops with the reason on its ending, under the answer and on the pending row. Every cut-off is the fact `response.cut-off`. A text-only reply cut off stays the answer, with a line under it. Without streaming, the stop reason of a reply whose arguments did not parse is kept for the error callback. Tests: `scripts/reply-cut-off-regression.el`. Not covered: Claude `stop_reason`, OpenAI Responses `incomplete_details`. Not done with the slice-11b per-call hooks: they run per call after llm.el has added the assistant record, while a cut-off must refuse the whole reply before its first call. The DeepSeek streaming handler change lives only in the user's llm fork working tree (`slice-12-llm-deepseek-stop-reason.diff`), not in this repository.
++
+ ### Open observation: a rewrite is seen by the model only in that execution (2026-10-20, recorded, not ruled)
+ 
+ A tool-loop hook's rewrite (slice 11b) is what the model is given in the execution where it happened. The Tape keeps the original in `tool.completed` and the rewrite in `tool.rewritten`, and the history later requests are rebuilt from shows the original. No default hook rewrites today (the failure brake only stops). Before any hook rewrites by default, decide which of the two later requests should carry.
+diff --git a/scripts/reply-cut-off-regression.el b/scripts/reply-cut-off-regression.el
+new file mode 100644
+index 0000000000..4cef21259e
+--- /dev/null
++++ b/scripts/reply-cut-off-regression.el
+@@ -0,0 +1,190 @@
++;;; reply-cut-off-regression.el --- a reply cut off at the output limit runs no call -*- lexical-binding: t; -*-
++
++;;; Commentary:
++;; Slice 12b (reports/guidance-2026-10-11/SLICE-12.md).  When the provider
++;; says a reply stopped at the output limit (`:stop-reason' `length'), none
++;; of that reply's tool calls runs; Superchat tells the model why and asks it
++;; to do the work in smaller pieces; after `superchat-llm-unknown-tool-retries'
++;; such retries in a row the execution stops and says why.  Every cut-off is
++;; the fact `response.cut-off' on the Tape, with the option off too.  A
++;; reply of text only that was cut off is still the answer, with a line
++;; under it.  Nothing is guessed from the text or the JSON: without a
++;; `:stop-reason' nothing changes.
++;;
++;; Run with the canonical smoke dependency load paths, then:
++;;   -L scripts -l scripts/reply-cut-off-regression.el
++;;   --eval '(ert-run-tests-batch-and-exit "^reply-cut-off/")'
++
++;;; Code:
++
++(load (expand-file-name "tool-hooks-regression.el"
++                        (file-name-directory (or load-file-name buffer-file-name)))
++      nil t)
++
++(defvar superchat-cut-off-reply-runs-nothing)
++(defvar superchat-llm-streaming)
++(defvar superchat--llm-unparsed-stop-reason)
++(declare-function superchat--llm-cut-off-feedback "superchat-llm")
++
++(defconst rco--two-calls
++  '(("read_buffer" (buffer . "hm-target"))
++    ("edit_buffer" (buffer_name . "hm-target")
++     (old_string . "HM-TARGET") (new_string . "RCO-EDITED"))))
++
++(defconst rco--sentence "Your reply was cut off at the output limit")
++
++(defun rco--target ()
++  (with-current-buffer "hm-target" (buffer-string)))
++
++(defun rco--ran-nothing (session)
++  (should-not (th--facts session "tool.requested"))
++  (should-not (th--facts session "tool.completed"))
++  (should (equal "HM-TARGET-TEXT\n" (rco--target))))
++
++(ert-deftest reply-cut-off/the-words-say-the-limit-or-that-there-is-one ()
++  (should (equal "Your reply was cut off at the output limit (60 tokens), so none of its tool calls ran. Do the same work in smaller pieces: fewer calls per reply, and split long content over several calls."
++                 (superchat--llm-cut-off-feedback 60)))
++  (should (string-prefix-p "Your reply was cut off at the output limit (the provider's output limit), so none"
++                           (superchat--llm-cut-off-feedback nil))))
++
++(ert-deftest reply-cut-off/1-two-whole-calls-cut-off-run-neither ()
++  (th--run (list (list :tool-uses rco--two-calls :stop-reason 'length)
++                 '(:text "RCO-DONE"))
++      nil
++    (rco--ran-nothing session)
++    (should (= 2 (length smoke--requests)))
++    (should (string-match-p rco--sentence (nth 1 (th--prompts))))
++    (let ((fact (car (th--payloads session "response.cut-off"))))
++      (should fact)
++      (should (equal "length" (plist-get fact :stop-reason)))
++      (should (= 2 (plist-get fact :tool-calls)))
++      (should (eq t (plist-get fact :refused)))
++      (should (= 1 (plist-get fact :attempt))))
++    (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))))
++
++(ert-deftest reply-cut-off/2-cut-off-in-the-middle-of-arguments-is-said-so ()
++  ;; Either condition llm.el may deliver for arguments it cannot parse.
++  (dolist (type '(llm-tool-call-error error))
++    (th--run (list (list :chunks '((:stop-reason length))
++                         :error (cons type "Invalid JSON in tool arguments"))
++                   '(:text "RCO-DONE"))
++        nil
++      (rco--ran-nothing session)
++      (let ((second (nth 1 (th--prompts))))
++        (should (string-match-p rco--sentence second))
++        (should-not (string-match-p "not complete valid JSON" second)))
++      (should (th--facts session "response.cut-off")))))
++
++(ert-deftest reply-cut-off/2b-without-streaming-the-stop-reason-is-kept-for-the-error ()
++  "Seen in the real probe of 2026-10-21: no stream, so no stop-reason chunk."
++  (let ((superchat--llm-unparsed-stop-reason nil))
++    (cl-letf (((symbol-function 'llm-provider-extract-stop-reason) (lambda (_p _r) 'length)))
++      (should-error (superchat--llm-keep-unparsed-stop-reason
++                     (lambda (_p _r) (signal 'llm-tool-call-error '("Invalid JSON")))
++                     'provider 'response)
++                    :type 'llm-tool-call-error))
++    (should (eq 'length superchat--llm-unparsed-stop-reason))
++    (setq superchat--llm-unparsed-stop-reason nil)
++    (should (equal '(:text "x")
++                   (superchat--llm-keep-unparsed-stop-reason (lambda (_p _r) '(:text "x")) 'p 'r)))
++    (should-not superchat--llm-unparsed-stop-reason))
++  (let ((superchat-llm-streaming nil))
++    (th--run (list '(:unparsed-stop-reason length
++                     :error (error . "An error occurred when calling an LLM tool: Invalid JSON"))
++                   '(:text "RCO-DONE"))
++        nil
++      (rco--ran-nothing session)
++      (should (string-match-p rco--sentence (nth 1 (th--prompts))))
++      (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
++      (should-not superchat--llm-unparsed-stop-reason))))
++
++(ert-deftest reply-cut-off/3-a-reply-that-was-not-cut-off-runs-its-calls ()
++  (dolist (stop '(stop nil))
++    (th--run (list (append (list :tool-uses (list (car rco--two-calls)))
++                           (when stop (list :stop-reason stop)))
++                   '(:text "RCO-DONE"))
++        nil
++      (should (= 1 (length (th--facts session "tool.completed"))))
++      (should-not (th--facts session "response.cut-off"))
++      (should-not (string-match-p rco--sentence (nth 1 (th--prompts)))))))
++
++(ert-deftest reply-cut-off/4-three-in-a-row-stop-the-execution-visibly ()
++  (pend--fresh
++    (hm--fixture (list (list :tool-uses rco--two-calls :stop-reason 'length)
++                       (list :tool-uses rco--two-calls :stop-reason 'length)
++                       (list :tool-uses rco--two-calls :stop-reason 'length)
++                       '(:text "RCO-NEVER"))
++      (let* ((view (smoke--open-chat))
++             (session (buffer-local-value 'superchat--session-id view))
++             (run (let ((superchat-automated-input 'timers)) (smoke--send view "a task")))
++             (reason "Stopped: the reply was cut off at the output limit 3 times in a row"))
++        (should (smoke--wait (lambda () (smoke--run-done-p run)) 20))
++        (rco--ran-nothing session)
++        ;; No fourth request.
++        (should (= 3 (length smoke--requests)))
++        (should (equal '(1 2 3) (mapcar (lambda (p) (plist-get p :attempt))
++                                        (th--payloads session "response.cut-off"))))
++        ;; The Run's ending facts, under the answer, the pending row.
++        (should (equal reason (plist-get (plist-get (superchat-runtime-status run) :tool-budget)
++                                         :reason)))
++        (should (cl-some (lambda (event)
++                           (and (equal run (plist-get event :run-id))
++                                (equal reason (plist-get (plist-get (plist-get event :payload)
++                                                                    :tool-budget)
++                                                         :reason))))
++                         (superchat-tape-replay-events session)))
++        (should (string-match-p (regexp-quote reason) (with-current-buffer view (buffer-string))))
++        (superchat-changes-notices-reload)
++        (let ((item (car (pend--of 'unseen))))
++          (should (equal run (plist-get item :key)))
++          (should (string-match-p (concat "\\`" (regexp-quote reason)) (plist-get item :detail))))))))
++
++(ert-deftest reply-cut-off/a-reply-in-between-starts-the-count-again ()
++  (th--run (list (list :tool-uses rco--two-calls :stop-reason 'length)
++                 (list :tool-uses rco--two-calls :stop-reason 'length)
++                 (list :tool-uses (list (car rco--two-calls)))
++                 (list :tool-uses rco--two-calls :stop-reason 'length)
++                 (list :tool-uses rco--two-calls :stop-reason 'length)
++                 '(:text "RCO-DONE"))
++      nil
++    (should (= 6 (length smoke--requests)))
++    (should (equal '(1 2 1 2) (mapcar (lambda (p) (plist-get p :attempt))
++                                      (th--payloads session "response.cut-off"))))
++    (should-not (plist-get (plist-get (superchat-runtime-status run) :tool-budget) :reason))))
++
++(ert-deftest reply-cut-off/5-with-the-option-off-the-calls-run-and-the-fact-is-kept ()
++  (let ((superchat-cut-off-reply-runs-nothing nil))
++    (th--run (list (list :tool-uses rco--two-calls :stop-reason 'length)
++                   '(:text "RCO-DONE"))
++        nil
++      (should (= 2 (length (th--facts session "tool.completed"))))
++      (should-not (string-match-p rco--sentence (nth 1 (th--prompts))))
++      (let ((fact (car (th--payloads session "response.cut-off"))))
++        (should fact)
++        (should (= 2 (plist-get fact :tool-calls)))
++        (should-not (plist-get fact :refused))))))
++
++(ert-deftest reply-cut-off/6-text-cut-off-is-still-the-answer-with-a-line-under-it ()
++  (th--run (list '(:text "RCO-HALF-AN-ANS" :stop-reason length)) nil
++    (should (= 1 (length smoke--requests)))
++    (should (eq 'completed (plist-get (superchat-runtime-status run) :status)))
++    (let ((fact (car (th--payloads session "response.cut-off"))))
++      (should fact)
++      (should (= 0 (plist-get fact :tool-calls)))
++      (should (= (length "RCO-HALF-AN-ANS") (plist-get fact :text-chars))))
++    (let ((text (with-current-buffer view (buffer-string))))
++      (should (string-match-p "RCO-HALF-AN-ANS" text))
++      (should (string-match-p "The reply was cut off at the output limit" text)))))
++
++(ert-deftest reply-cut-off/7-without-streaming-the-same ()
++  (let ((superchat-llm-streaming nil))
++    (th--run (list (list :tool-uses rco--two-calls :stop-reason 'length)
++                   '(:text "RCO-DONE"))
++        nil
++      (should (equal "async" (format "%s" (plist-get (car (last smoke--requests)) :mode))))
++      (rco--ran-nothing session)
++      (should (string-match-p rco--sentence (nth 1 (th--prompts))))
++      (should (= 2 (plist-get (car (th--payloads session "response.cut-off")) :tool-calls))))))
++
++(provide 'reply-cut-off-regression)
++;;; reply-cut-off-regression.el ends here
+diff --git a/scripts/smoke.el b/scripts/smoke.el
+index c5145a105e..2e27b2c3db 100644
+--- a/scripts/smoke.el
++++ b/scripts/smoke.el
+@@ -35,15 +35,25 @@
+    :id (format "smoke-call-%06x" (random #x1000000)) :name (car use) :args (cdr use)))
+ 
+ (defun smoke--deliver (provider prompt partial response error multi step)
++  ;; A chunk is text, or a plist given as the provider would (slice 12b:
++  ;; a `:stop-reason' chunk before a parse error).
+   (dolist (chunk (plist-get step :chunks))
+-    (when partial (funcall partial (if multi (list :text chunk) chunk))))
++    (when partial (funcall partial (cond ((consp chunk) chunk)
++                                         (multi (list :text chunk))
++                                         (t chunk)))))
+   (cond
+    ((plist-get step :hang) nil)
+    ((plist-get step :error)
++    ;; What `superchat--llm-keep-unparsed-stop-reason' leaves when a whole
++    ;; response's arguments fail to parse (slice 12b).
++    (when (plist-get step :unparsed-stop-reason)
++      (setq superchat--llm-unparsed-stop-reason (plist-get step :unparsed-stop-reason)))
+     (funcall error (car (plist-get step :error)) (cdr (plist-get step :error))))
+    (t (let* ((uses (mapcar #'smoke--tool-use (plist-get step :tool-uses)))
+              (result (append (when (plist-member step :text) (list :text (plist-get step :text)))
+-                             (when uses (list :tool-uses uses)))))
++                             (when uses (list :tool-uses uses))
++                             (when (plist-get step :stop-reason)
++                               (list :stop-reason (plist-get step :stop-reason))))))
+         (llm-provider-utils-process-result provider prompt result multi response error)))))
+ 
+ (defun smoke--fake-network (mode provider prompt partial response error multi)
+diff --git a/superchat-llm.el b/superchat-llm.el
+index d1967fa398..35a5e094f1 100644
+--- a/superchat-llm.el
++++ b/superchat-llm.el
+@@ -1388,6 +1388,74 @@
+         (signal 'llm-error (list superchat--llm-input-not-alone)))))
+   (funcall original provider prompt tool-uses))
+ 
++;;;; A reply cut off at the output limit (slice 12b) ---------------------------
++
++(defcustom superchat-cut-off-reply-runs-nothing t
++  "When non-nil, a reply cut off at the output limit runs none of its tool calls.
++The provider says so with the stop reason `length'.  Superchat then tells the
++model why and asks it to do the work in smaller pieces; after
++`superchat-llm-unknown-tool-retries' such retries in a row the execution stops
++and says why.  A reply of text only that was cut off is still the answer.
++Without a stop reason from the provider nothing changes.  nil runs the calls of
++a cut-off reply as before; the fact `response.cut-off' is written either way."
++  :type 'boolean
++  :group 'superchat)
++
++(defun superchat--llm-cut-off-feedback (max-tokens)
++  "What the model is told when its reply was cut off at MAX-TOKENS (or nil)."
++  (format "Your reply was cut off at the output limit (%s), so none of its tool calls ran. Do the same work in smaller pieces: fewer calls per reply, and split long content over several calls."
++          (if (integerp max-tokens)
++              (format "%d tokens" max-tokens)
++            "the provider's output limit")))
++
++(defvar superchat--llm-unparsed-stop-reason nil
++  "The stop reason of a whole response whose tool arguments did not parse.
++Set just before llm.el's parse error goes on to the error callback, which
++takes it and clears it.")
++
++(defvar superchat--llm-cut-off-handlers (make-hash-table :test #'eq :weakness 'key)
++  "Prompt -> the function its request asks about a reply that stopped at `length'.
++Called with the reply's partial result; non-nil means refuse the whole reply.")
++
++(defun superchat--llm-refuse-cut-off-reply
++    (original provider prompt partial-result multi-output success-callback error-callback)
++  "Call ORIGINAL unless PARTIAL-RESULT is a cut-off reply PROMPT's request refuses.
++This runs before any of the reply's text is added to PROMPT and before any of
++its calls runs, for streaming and non-streaming requests alike; a refused
++reply reaches ERROR-CALLBACK as `superchat-llm-reply-cut-off'."
++  (let ((handler (and (eq 'length (plist-get partial-result :stop-reason))
++                      (gethash prompt superchat--llm-cut-off-handlers))))
++    (if (and handler (funcall handler partial-result))
++        (funcall error-callback 'superchat-llm-reply-cut-off
++                 "The reply was cut off at the output limit")
++      (funcall original provider prompt partial-result multi-output
++               success-callback error-callback))))
++
++(defun superchat--llm-keep-unparsed-stop-reason (original provider response)
++  "Call ORIGINAL; keep RESPONSE's stop reason if its tool arguments fail.
++Without streaming the stop reason is read after the arguments, so llm.el's
++parse error would reach the request's error callback without it (seen in a
++real run, slice 12b); `superchat--llm-unparsed-stop-reason' carries it there."
++  (condition-case err
++      (funcall original provider response)
++    (llm-tool-call-error
++     (setq superchat--llm-unparsed-stop-reason
++           (and (fboundp 'llm-provider-extract-stop-reason)
++                (ignore-errors (llm-provider-extract-stop-reason provider response))))
++     (signal (car err) (cdr err)))))
++
++(with-eval-after-load 'llm-provider-utils
++  (unless (advice-member-p #'superchat--llm-keep-unparsed-stop-reason
++                           'llm-provider-utils-extract-all)
++    (advice-add 'llm-provider-utils-extract-all :around
++                #'superchat--llm-keep-unparsed-stop-reason)))
++
++(with-eval-after-load 'llm-provider-utils
++  (unless (advice-member-p #'superchat--llm-refuse-cut-off-reply
++                           'llm-provider-utils-process-result)
++    (advice-add 'llm-provider-utils-process-result :around
++                #'superchat--llm-refuse-cut-off-reply)))
++
+ (with-eval-after-load 'llm-provider-utils
+   (unless (advice-member-p #'superchat--llm-capture-provider-tool-uses
+                            'llm-provider-populate-tool-uses)
+@@ -2943,6 +3011,12 @@
+            (tool-progress-cumulative nil)
+            (tool-marker-cumulative nil)
+            (tool-error-retries 0)
++           ;; Replies cut off at the output limit since the last reply that
++           ;; was not (slice 12b); and the stop reason the stream gave for
++           ;; the reply now arriving, for a cut-off that fails to parse.
++           (cut-off-streak 0)
++           (stream-stop-reason nil)
++           (note-cut-off nil)
+            (transient-retries 0)
+            (unknown-tool-retry-limit
+             (or superchat--llm-unknown-tool-retry-limit
+@@ -3057,6 +3131,9 @@
+             (lambda (chunk)
+               (when (funcall callback-active-p)
+                 (funcall record-usage chunk))
++              (when (and (consp chunk) (funcall callback-active-p))
++                (when (plist-get chunk :stop-reason)
++                  (setq stream-stop-reason (plist-get chunk :stop-reason))))
+               (when (funcall callback-active-p)
+                 (let* ((text (cond
+                               ((stringp chunk) chunk)
+@@ -3261,6 +3338,27 @@
+           (message "⏱ TTFT [prompt-size]: %d chars + %d tools + %d history-msgs (~%d tokens)"
+                    chars tools-chars history-len est-tokens)))
+ 
++      (setq note-cut-off
++            (lambda (calls text-chars refused)
++              (cl-incf cut-off-streak)
++              (when (functionp runtime-observer)
++                (funcall runtime-observer 'reply-cut-off
++                         (list :stop-reason "length"
++                               :max-tokens (llm-chat-prompt-max-tokens real-prompt)
++                               :tool-calls calls
++                               :text-chars text-chars
++                               :attempt cut-off-streak
++                               :refused refused)))))
++      (puthash real-prompt
++               (lambda (result)
++                 (let* ((calls (length (plist-get result :tool-uses)))
++                        (refuse (and superchat-cut-off-reply-runs-nothing
++                                     (> calls 0)
++                                     (funcall run-active-p))))
++                   (funcall note-cut-off calls
++                            (length (or (plist-get result :text) "")) refuse)
++                   refuse))
++               superchat--llm-cut-off-handlers)
+       (setq error-cb
+             (lambda (type &rest more)
+               (let ((err (if more (car more) type)))
+@@ -3273,6 +3371,20 @@
+                   (remhash real-prompt superchat--llm-input-corrections)
+                   (setq type 'superchat-llm-input-not-alone
+                         err reason))
++                ;; Arguments that do not parse after the stream said `length'
++                ;; were cut off (slice 12b): say that, not "invalid JSON".
++                (when superchat--llm-unparsed-stop-reason
++                  (unless stream-stop-reason
++                    (setq stream-stop-reason superchat--llm-unparsed-stop-reason))
++                  (setq superchat--llm-unparsed-stop-reason nil))
++                (when (and superchat-cut-off-reply-runs-nothing
++                           (eq stream-stop-reason 'length)
++                           (or (eq type 'error)
++                               (and (superchat--llm-tool-protocol-error-p type)
++                                    (not (eq type 'superchat-llm-input-not-alone)))))
++                  (setq stream-stop-reason nil)
++                  (funcall note-cut-off nil (length cumulative) t)
++                  (setq type 'superchat-llm-reply-cut-off))
+                 (when (superchat--llm-tool-protocol-error-p type)
+                   (funcall record-first-output
+                            (list :kind "tool-protocol-error"
+@@ -3295,6 +3407,40 @@
+                                 (format "[API context overflow: %s]" err)
+                                 last-attempt-details))
+                   nil)
++                 ;; A reply cut off at the output limit ran none of its calls
++                 ;; (slice 12b).  Ask for smaller pieces; after the retries
++                 ;; in a row are used up, stop and say why.
++                 ((and (eq type 'superchat-llm-reply-cut-off)
++                       (not completed)
++                       (funcall run-active-p))
++                  (if (and (<= cut-off-streak unknown-tool-retry-limit)
++                           (not final-answer-requested)
++                           (fboundp 'superchat--llm-drop-dangling-tool-use)
++                           (fboundp 'llm-chat-prompt-append-response))
++                      (progn
++                        (superchat--llm-drop-dangling-tool-use real-prompt)
++                        (llm-chat-prompt-append-response
++                         real-prompt
++                         (superchat--llm-cut-off-feedback
++                          (llm-chat-prompt-max-tokens real-prompt))
++                         'user)
++                        (setq response-parts '()
++                              cumulative ""
++                              reasoning-cumulative "")
++                        (condition-case e
++                            (funcall send-request 'tool-protocol-retry)
++                          (superchat-llm-evidence-recording-error
++                           (signal (car e) (cdr e)))
++                          (error
++                           (funcall finalize
++                                    (format "[llm-chat-streaming error: %s]"
++                                            (error-message-string e))
++                                    'failed))))
++                    (let ((reason (format "Stopped: the reply was cut off at the output limit %d times in a row"
++                                          cut-off-streak)))
++                      (when (functionp runtime-observer)
++                        (funcall runtime-observer 'stop-tools reason))
++                      (funcall finalize (format "[%s]" reason) 'failed))))
+                  ;; Tool-call validation errors are model-correctable.  The
+                  ;; provider has already appended an assistant tool-use
+                  ;; record, so remove that dangling record, append the exact
+@@ -3375,7 +3521,8 @@
+       (setq response-cb
+             (lambda (response)
+               (when (funcall run-active-p)
+-                (setq transient-retries 0)
++                (setq transient-retries 0
++                      cut-off-streak 0)
+                 (funcall record-usage response)
+                 (let ((final-text
+                        (cond
+@@ -3643,6 +3790,8 @@
+             (lambda (attempt-reason &optional recovery-wait-p)
+               (unless (funcall run-active-p)
+                 (error "Runtime Run is no longer active; continuation refused"))
++              (setq stream-stop-reason nil
++                    superchat--llm-unparsed-stop-reason nil)
+               (unless (superchat-llm-provider-attempt-reason-p
+                        attempt-reason)
+                 (error "Unknown provider attempt reason: %s" attempt-reason))
+diff --git a/superchat-render.el b/superchat-render.el
+index 9ffa361455..dbb4af1969 100644
+--- a/superchat-render.el
++++ b/superchat-render.el
+@@ -1584,6 +1584,23 @@
+ 
+ (declare-function superchat-tape-replay-events "superchat-tape" (session-id &optional since-id limit))
+ 
++(defun superchat-render-run-cut-off-line (session-id run-id)
++  "A line saying RUN-ID's answer was cut off at the output limit, or nil.
++Read from its `response.cut-off' facts of a reply whose calls were not
++refused, so the person sees that the answer may be incomplete (slice 12b).
++It is shown under the answer and never sent to the model."
++  (when-let* ((fact (cl-find-if
++                     (lambda (event)
++                       (and (equal (plist-get event :run-id) run-id)
++                            (equal "response.cut-off" (plist-get event :type))
++                            (not (plist-get (plist-get event :payload) :refused))))
++                     (and (stringp session-id) (stringp run-id)
++                          (ignore-errors (superchat-tape-replay-events session-id)))
++                     :from-end t)))
++    (let ((max-tokens (plist-get (plist-get fact :payload) :max-tokens)))
++      (format "The reply was cut off at the output limit%s; the answer may be incomplete."
++              (if (integerp max-tokens) (format " (%d tokens)" max-tokens) "")))))
++
+ (defun superchat-render-run-record-line (session-id run-id)
+   "The product's record line for RUN-ID's tool calls, or nil when it made none.
+ It says what the Run's tools changed, read from the Tape: every buffer a
+@@ -1736,7 +1753,12 @@
+               (plist-get payload :text) (plist-get payload :tape-id)
+               transcript-owner)
+              (budget-notice payload)
+-             (record-line run)))))
++             (record-line run)
++             (when-let* ((line (superchat-render-run-cut-off-line
++                                session-id
++                                (if (stringp run) run (plist-get run :run-id)))))
++               (superchat--response-region-insert-persistent
++                (propertize line 'face 'shadow) nil transcript-owner))))))
+      :error
+      (lambda (run failure)
+        (when (current-p)
+diff --git a/superchat-runtime.el b/superchat-runtime.el
+index 0bde9eccd4..f9c545d175 100644
+--- a/superchat-runtime.el
++++ b/superchat-runtime.el
+@@ -3772,6 +3772,27 @@
+                       (superchat-runtime--tool-nudges run-id))
+                      ('tools-stopped
+                       (superchat-runtime-tools-stopped run-id))
++                     ;; A reply stopped at the output limit (slice 12b): one
++                     ;; fact each time, whether its calls run or not.
++                     ('reply-cut-off
++                      (when-let* ((current (superchat-runtime--entry run-id)))
++                        (superchat-runtime--append-event
++                         current "response.cut-off" value
++                         (format "Reply cut off at the output limit%s: %s"
++                                 (if (integerp (plist-get value :max-tokens))
++                                     (format " (%d tokens)" (plist-get value :max-tokens))
++                                   "")
++                                 (let ((calls (plist-get value :tool-calls)))
++                                   (cond ((not (integerp calls)) "its tool calls did not run")
++                                         ((zerop calls) "text only, kept as the answer")
++                                         ((plist-get value :refused)
++                                          (format "%d tool call%s not run" calls
++                                                  (if (= calls 1) "" "s")))
++                                         (t (format "%d tool call%s ran" calls
++                                                    (if (= calls 1) "" "s"))))))))
++                      nil)
++                     ('stop-tools
++                      (superchat-runtime-stop-tools run-id value))
+                      ('next-step
+                       ;; The adapter is one caller of the driver-owned attempt
+                       ;; boundary rather than the owner of it: a custom
+diff --git a/superchat-tape.el b/superchat-tape.el
+index 6bb4c7db2f..2a9af4265a 100644
+--- a/superchat-tape.el
++++ b/superchat-tape.el
+@@ -128,6 +128,8 @@
+              "admission.dropped" "edit.applied" "turn.superseded"
+              ;; A tool-loop hook gave the model other text (slice 11b).
+              "tool.rewritten"
++             ;; A reply stopped at the output limit (slice 12b).
++             "response.cut-off"
+              "workspace.artifact.added" "workspace.artifact.changed"
+              "workspace.artifact.removed"
+              ;; Timers (M11 slice 4): a timer is these facts.

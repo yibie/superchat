@@ -1,0 +1,221 @@
+--- baseline/superchat-changes.el
++++ main/superchat-changes.el
+@@ -462,10 +462,29 @@
+                                  #'superchat-changes--review-select-after-minibuffer)
+                      (superchat-changes--review-select window))))))
+ 
++(defun superchat-changes--unattended-run-p (session run)
++  "Non-nil when Superchat started RUN of SESSION at a time, not the user.
++Read from SESSION's Tape: a scheduled task records `timer.started' with the
++Run it began, and a woken Work Record's Run is the first one of a
++conversation that holds `work.woken'."
++  (let ((events (ignore-errors (superchat-tape-replay-events session)))
++        first woken started)
++    (dolist (event events)
++      (pcase (plist-get event :type)
++        ("run.started" (unless first (setq first (plist-get event :run-id))))
++        ("work.woken" (setq woken t))
++        ("timer.started"
++         (when (equal run (plist-get (plist-get event :payload) :run-id))
++           (setq started t)))))
++    (or started (and woken (equal run first)))))
++
+ (defun superchat-changes--review-after-run (session run)
+   "Show the review screen for what RUN of SESSION left unsaved and select it.
+-While the minibuffer is in use it is shown unselected and selected after."
+-  (when-let* ((rows (ignore-errors (superchat-changes-candidates session run))))
++While the minibuffer is in use it is shown unselected and selected after.
++An execution Superchat started at a time shows no screen: the user is doing
++something else, and the echo area has already said what is unsaved."
++  (when-let* (((not (superchat-changes--unattended-run-p session run)))
++              (rows (ignore-errors (superchat-changes-candidates session run))))
+     (let ((busy (active-minibuffer-window)))
+       (when (and (superchat-changes-review rows (not busy)) busy)
+         (add-hook 'minibuffer-exit-hook
+@@ -618,14 +637,182 @@
+                       "Buffers that visit no file are listed here only.  Saving is yours, not the model's.")
+             "No unsaved buffers edited by this Session's tools."))))
+ 
++;;;; What work Superchat started by itself has left for the user ----------------
++
++;; An execution the user did not start shows no review screen and its line in
++;; the echo area is gone with the next key.  Each one that ends leaves a
++;; notice here and a mark on the mode line that stays until the user has
++;; looked.  The list lives in this Emacs only: the buffers it points at do
++;; not outlive it either, and a Work Record keeps its executions on its own.
++
++(declare-function superchat--render-session-view "superchat" (session-id))
++(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
++                  (session-id role))
++
++(defvar superchat-changes--notices nil
++  "Notices of ended executions Superchat started by itself, newest first.
++Each is a plist: `:run' and `:session' (strings), `:what' (what started it),
++`:status' (how it ended, a symbol), `:unsaved' (how many buffers it left
++unsaved, counted when it ended) and `:time'.")
++
++(defvar superchat-changes-notice-mode-line nil
++  "The mode line's mark for `superchat-changes--notices'; nil when none.")
++;; A string with a keymap in the mode line is honoured only from a risky
++;; variable.
++(put 'superchat-changes-notice-mode-line 'risky-local-variable t)
++
++(defconst superchat-changes-notices-buffer-name "*superchat notices*")
++
++(defvar superchat-changes-notice-mode-line-map
++  (let ((map (make-sparse-keymap)))
++    (define-key map [mode-line mouse-1] #'superchat-changes-notices)
++    map)
++  "Keys of the mode line's mark.")
++
++(defun superchat-changes--notice-what (session run)
++  "Say what started RUN of SESSION, from SESSION's Tape."
++  (let (work timer)
++    (dolist (event (ignore-errors (superchat-tape-replay-events session)))
++      (let ((payload (plist-get event :payload)))
++        (pcase (plist-get event :type)
++          ("work.woken" (setq work (plist-get payload :work-id)))
++          ("timer.started"
++           (when (equal run (plist-get payload :run-id))
++             (setq timer (plist-get payload :timer-id)))))))
++    (cond (timer (format "scheduled task %s" timer))
++          (work (format "work record %s" work))
++          (t "scheduled work"))))
++
++(defun superchat-changes--notices-refresh ()
++  "Make the mode line's mark and the open notices list say what is pending."
++  (let ((count (length superchat-changes--notices)))
++    (setq superchat-changes-notice-mode-line
++          (and (> count 0)
++               (propertize
++                (format " [Superchat: %d]" count)
++                'face 'warning
++                'mouse-face 'mode-line-highlight
++                'help-echo
++                "Work Superchat did by itself has ended: mouse-1 or \
++M-x superchat-changes-notices"
++                'local-map superchat-changes-notice-mode-line-map)))
++    (unless (memq 'superchat-changes-notice-mode-line global-mode-string)
++      (setq global-mode-string
++            (append (or global-mode-string '(""))
++                    '(superchat-changes-notice-mode-line))))
++    (when-let* ((buffer (get-buffer superchat-changes-notices-buffer-name)))
++      (with-current-buffer buffer
++        (when (derived-mode-p 'superchat-changes-notices-mode)
++          (tabulated-list-print t))))
++    (force-mode-line-update t)))
++
++(defun superchat-changes--note-unattended (_run status)
++  "At the end of an execution Superchat started by itself, leave a notice.
++Every way of ending counts: one that failed is the one most easily missed."
++  (when (and (listp status)
++             (fboundp 'superchat-runtime--terminal-p)
++             (superchat-runtime--terminal-p (plist-get status :status)))
++    (when-let* ((session (plist-get status :session-id))
++                (run (plist-get status :run-id))
++                ((superchat-changes--unattended-run-p session run))
++                ((not (cl-some (lambda (notice)
++                                 (equal run (plist-get notice :run)))
++                               superchat-changes--notices))))
++      (push (list :run run :session session
++                  :what (superchat-changes--notice-what session run)
++                  :status (plist-get status :status)
++                  :unsaved (length (ignore-errors
++                                     (superchat-changes-candidates session run)))
++                  :time (current-time))
++            superchat-changes--notices)
++      (superchat-changes--notices-refresh))))
++
++(defun superchat-changes-notice-dismiss (run)
++  "Forget the notice of the execution RUN."
++  (setq superchat-changes--notices
++        (cl-remove-if (lambda (notice) (equal run (plist-get notice :run)))
++                      superchat-changes--notices))
++  (superchat-changes--notices-refresh))
++
++(defun superchat-changes--notices-entries ()
++  "Rows of the notices list, newest first."
++  (mapcar (lambda (notice)
++            (list (plist-get notice :run)
++                  (vector (format-time-string "%m-%d %H:%M" (plist-get notice :time))
++                          (plist-get notice :what)
++                          (format "%s" (plist-get notice :status))
++                          (let ((n (plist-get notice :unsaved)))
++                            (if (> n 0) (format "%d unsaved" n) ""))
++                          (plist-get notice :session))))
++          superchat-changes--notices))
++
++(defun superchat-changes-notices-open (run)
++  "Go to the conversation of the execution RUN and forget its notice."
++  (interactive (list (tabulated-list-get-id)))
++  (when-let* ((notice (cl-find run superchat-changes--notices
++                               :key (lambda (n) (plist-get n :run))
++                               :test #'equal))
++              (session (plist-get notice :session)))
++    (let ((view (or (and (fboundp 'superchat-editor-workspace-buffer)
++                         (let ((buffer (superchat-editor-workspace-buffer
++                                        session 'session-view)))
++                           (and (buffer-live-p buffer) buffer)))
++                    (superchat--render-session-view session))))
++      (superchat-changes-notice-dismiss run)
++      (pop-to-buffer view))))
++
++(defun superchat-changes-notices-dismiss (run)
++  "Forget the notice at point without going anywhere."
++  (interactive (list (tabulated-list-get-id)))
++  (when run (superchat-changes-notice-dismiss run)))
++
++(defun superchat-changes-notices-dismiss-all ()
++  "Forget every notice."
++  (interactive)
++  (setq superchat-changes--notices nil)
++  (superchat-changes--notices-refresh))
++
++(defvar superchat-changes-notices-mode-map
++  (let ((map (make-sparse-keymap)))
++    (define-key map (kbd "RET") #'superchat-changes-notices-open)
++    (define-key map (kbd "d") #'superchat-changes-notices-dismiss)
++    (define-key map (kbd "D") #'superchat-changes-notices-dismiss-all)
++    map)
++  "Keys of the notices list.")
++
++(define-derived-mode superchat-changes-notices-mode tabulated-list-mode
++  "Superchat-Notices"
++  "Executions Superchat started by itself that have ended.
++RET goes to the conversation and forgets the notice, d forgets it,
++D forgets all."
++  (setq tabulated-list-format [("Ended" 12 t) ("Started by" 40 t) ("Outcome" 12 t)
++                               ("Left" 10 t) ("Conversation" 0 t)])
++  (setq tabulated-list-entries #'superchat-changes--notices-entries)
++  (tabulated-list-init-header))
++
++;;;###autoload
++(defun superchat-changes-notices ()
++  "List the executions Superchat started by itself that have ended.
++A scheduled task or a Work Record that woke leaves one notice when its
++execution ends, however it ended; the mode line shows how many are pending."
++  (interactive)
++  (let ((buffer (get-buffer-create superchat-changes-notices-buffer-name)))
++    (with-current-buffer buffer
++      (superchat-changes-notices-mode)
++      (tabulated-list-print))
++    (pop-to-buffer buffer)
++    buffer))
++
+ (superchat-define-plugin changes
+-  :doc "The unsaved-changes outlet's Run-end notice and review screen.  The
+-/changes command is registered with the other built-in commands by
+-`chat-commands'."
++  :doc "The unsaved-changes outlet's Run-end notice and review screen, and the
++notices of work Superchat started by itself.  The /changes command is
++registered with the other built-in commands by `chat-commands'."
+   :apply
+   (lambda (scope _)
+     (superchat-on scope 'turn-completed 'changes-notice
+-                  #'superchat-changes--on-turn-completed)))
++                  #'superchat-changes--on-turn-completed)
++    (superchat-on scope 'turn-completed 'changes-unattended-notice
++                  #'superchat-changes--note-unattended)))
+ 
+ (provide 'superchat-changes)
+ 

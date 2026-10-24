@@ -1,0 +1,105 @@
+75e8337004d8f13971b70712d8e288a8d7cb123c
+.claude/settings.local.json
+docs/reports/2026-10-07-hands-on-checklist.md
+reports/architecture-review-2026-10-10/build-report.py
+reports/architecture-review-2026-10-10/html-qa.json
+reports/architecture-review-2026-10-10/kernel.log
+reports/architecture-review-2026-10-10/m3.log
+reports/architecture-review-2026-10-10/permissions.log
+reports/architecture-review-2026-10-10/probes.el
+reports/architecture-review-2026-10-10/probes.log
+reports/architecture-review-2026-10-10/report.template.html
+reports/architecture-review-2026-10-10/smoke.log
+reports/architecture-review-2026-10-10/source-manifest.json
+reports/architecture-review-2026-10-10/superchat-architecture-review.html
+reports/architecture-review-2026-10-10/timer.log
+reports/architecture-review-2026-10-10/work-record.log
+reports/architecture-review-main-2026-10-10/evidence/baseline-probes.el
+reports/architecture-review-main-2026-10-10/evidence/baseline-probes.log
+reports/architecture-review-main-2026-10-10/evidence/beside-user.log
+reports/architecture-review-main-2026-10-10/evidence/build-report.py
+reports/architecture-review-main-2026-10-10/evidence/checks.json
+reports/architecture-review-main-2026-10-10/evidence/delta-probes.el
+reports/architecture-review-main-2026-10-10/evidence/delta-probes.log
+reports/architecture-review-main-2026-10-10/evidence/entry-rules-isolated.log
+reports/architecture-review-main-2026-10-10/evidence/entry-rules.log
+reports/architecture-review-main-2026-10-10/evidence/html-browser-qa.json
+reports/architecture-review-main-2026-10-10/evidence/html-static-qa.json
+reports/architecture-review-main-2026-10-10/evidence/input-syntax.log
+reports/architecture-review-main-2026-10-10/evidence/kernel.log
+reports/architecture-review-main-2026-10-10/evidence/m3.log
+reports/architecture-review-main-2026-10-10/evidence/main-initial-hashes.json
+reports/architecture-review-main-2026-10-10/evidence/notice-probe.el
+reports/architecture-review-main-2026-10-10/evidence/notice-probe.log
+reports/architecture-review-main-2026-10-10/evidence/review-manifest.json
+reports/architecture-review-main-2026-10-10/evidence/run-checks.py
+reports/architecture-review-main-2026-10-10/evidence/skill-context.log
+reports/architecture-review-main-2026-10-10/evidence/skill-once.log
+reports/architecture-review-main-2026-10-10/evidence/smoke.log
+reports/architecture-review-main-2026-10-10/evidence/snapshot-check.json
+reports/architecture-review-main-2026-10-10/evidence/superchat-changes.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-core.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-dispatcher.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-llm.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-models.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-prompt-hooks.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-runtime.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-subagent.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-tape.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-timer.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-tool-execution.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-tools.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-work.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat-workspace.diff
+reports/architecture-review-main-2026-10-10/evidence/superchat.diff
+reports/architecture-review-main-2026-10-10/evidence/timer-start-fault.log
+reports/architecture-review-main-2026-10-10/evidence/unattended-notice.log
+reports/architecture-review-main-2026-10-10/evidence/work-wake-fault.log
+reports/architecture-review-main-2026-10-10/evidence/workspace-scope.log
+reports/architecture-review-main-2026-10-10/index.html
+ CHANGELOG.md                                       |  87 +++
+ CONTEXT.md                                         |   4 +-
+ README.md                                          |   1 +
+ README_cn.md                                       |   3 +-
+ docs/architecture.md                               |  13 +-
+ .../2026-10-10-a-notice-for-work-nobody-watched.md |  48 ++
+ ...0-10-annotations-asked-for-in-a-conversation.md | 100 ++++
+ .../2026-10-10-remarks-hung-on-the-text.md         | 145 +++++
+ .../2026-10-10-the-timer-tool-sets-or-refuses.md   |  49 ++
+ ...-10-10-the-work-record-tool-keeps-or-refuses.md |  54 ++
+ ...ork-records-and-timers-belong-to-a-workspace.md |  75 +++
+ .../proposed/2026-10-10-source-turn-destination.md |   4 +-
+ docs/roadmap.md                                    |  12 +
+ scripts/annotate-chat-regression.el                | 403 ++++++++++++++
+ scripts/annotate-regression.el                     | 385 +++++++++++++
+ scripts/object-scope-regression.el                 | 341 ++++++++++++
+ scripts/smoke-expected/V.txt                       |   4 +-
+ scripts/timer-regression.el                        |  14 +-
+ scripts/timer-start-fault-regression.el            |  87 +++
+ scripts/timer-tool-regression.el                   | 128 +++++
+ scripts/unattended-notice-regression.el            | 237 ++++++++
+ scripts/work-tool-regression.el                    | 218 ++++++++
+ superchat-annotate.el                              | 616 +++++++++++++++++++++
+ superchat-changes.el                               | 196 ++++++-
+ superchat-core.el                                  |  47 ++
+ superchat-default-plugins.el                       |   7 +-
+ superchat-dispatcher.el                            |  86 ++-
+ superchat-llm.el                                   |   6 +-
+ superchat-prompt-hooks.el                          |  71 ++-
+ superchat-select-tools.el                          |   2 +-
+ superchat-timer.el                                 | 166 ++++--
+ superchat-tools.el                                 |   2 +-
+ superchat-work.el                                  |  98 +++-
+ 33 files changed, 3630 insertions(+), 79 deletions(-)
+75e83370 A timer the tool sets will fire, or it is refused
+3a34db85 The work record tool keeps what it is given, or refuses
+498d0239 Documents: four statements that described history
+a14ec1df A task that ended inside its own send still leaves its notice
+72d9a3e8 A scheduled task's retry limit and wait are checked before it is tried
+b768713e Work records and timers belong to a workspace
+992104fb Annotations in a conversation: "it was hung" only when it was
+844b264d Annotations asked for in a conversation
+a72ae118 A remark is shown as a block under its line
+b954094e Annotation record: asking again while the first answer is under way
+04e81358 Remarks hung on the text they are about
+589e6266 Work nobody watched leaves a notice on the mode line

@@ -1,0 +1,68 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 13 tests (2026-10-10 08:21:22-0700, selector ‘"^beside-user/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/bu-rzuJ42/list.txt changed on disk while buffer list.txt has unsaved changes; the agent edited the buffer
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- list.txt -> /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/bu-rzuJ42/list.txt
+Superchat session cached for next startup.
+   passed   1/13  beside-user/a-buffer-with-unsaved-changes-is-edited-and-the-model-told (0.671333 sec)
+Type q in help window to delete it
+   passed   2/13  beside-user/a-record-shown-to-the-user-names-its-executions (0.008187 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   3/13  beside-user/a-scheduled-execution-shows-no-review-screen (0.047364 sec)
+   passed   4/13  beside-user/a-server-error-that-is-plain-text-is-an-error-not-a-signal (0.000052 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   5/13  beside-user/a-task-that-came-due-is-nobodys-execution (0.044687 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082123-263202-bd65 completed (session 20261010-082123-7386)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082123-342557-158f completed (session 20261010-082123-7386)
+   passed   6/13  beside-user/a-woken-records-execution-is-nobodys (0.132121 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- list.txt -> /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/bu-1PHhKj/list.txt
+Superchat session cached for next startup.
+   passed   7/13  beside-user/an-edit-of-an-unchanged-file-says-nothing-of-the-disk (0.073585 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082123-470044-a2be completed (session 20261010-082123-abad)
+   passed   8/13  beside-user/an-execution-goes-on-when-its-view-is-killed (0.571420 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: /private/var/folders/ns/sfzfbcd16d19rky4mtm4gpbm0000gq/T/bu-Dd25rC/list.txt changed on disk; buffer list.txt was reloaded before the agent’s edit
+Superchat session cached for next startup.
+   passed   9/13  beside-user/an-unedited-buffer-is-reloaded-and-the-edit-sent-back (0.084442 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082124-154614-3c1c completed (session 20261010-082124-5431)
+   passed  10/13  beside-user/asking-the-user-without-a-view-fails-the-question-only (0.610689 sec)
+   passed  11/13  beside-user/reading-a-buffer-says-its-file-changed-on-disk (0.002087 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/13  beside-user/the-users-own-execution-still-shows-the-review-screen (0.053096 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  13/13  beside-user/which-executions-nobody-started (0.097954 sec)
+
+Ran 13 tests, 13 results as expected, 0 unexpected (2026-10-10 08:21:24-0700, 2.397624 sec)
+

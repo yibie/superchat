@@ -1,0 +1,12 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-10 08:25:40-0700, selector ‘"^delta-probe/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FAST RESULT: fired=(:id "timer-20261010082541-fc40" :session-id "20261010-082540-7c99" :kind task :text "FAST-TASK" :due 1800000060.0 :late nil :run-id "run-20261010-082541-339901-430b") started=1 terminal=1 notices=nil
+OBSERVED: synchronous completed scheduled Run has timer.started but no unattended notice.
+
+   passed  1/1  delta-probe/synchronous-provider-timer-notice (0.603005 sec)
+
+Ran 1 tests, 1 results as expected, 0 unexpected (2026-10-10 08:25:41-0700, 0.603246 sec)
+

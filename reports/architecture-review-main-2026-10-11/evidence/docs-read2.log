@@ -1,0 +1,360 @@
+# Decision: `timer_create` 设下的定时器会响，否则就明说拒绝
+
+Status: accepted — 用户，2026-10-10。F4 修完后我报告"定时器那一行卸下后 `timer_create` 会不会有同样的问题，我没有查"，并建议先查它："它和 F4 是同一类问题，查一下就知道有没有缺口，有的话修法可以照搬"。用户答："同意，继续"。"实现中定下的几点"是实现时定的，随本次向用户报告，用户可以改。
+
+## Problem
+
+查的结果是有缺口。把 `timers` 这一行卸下之后，三个定时器工具还在（它们登记在默认工具面里，不随这一行卸下）。探针里，模型调用 `timer_create`：
+
+- 提醒得到的回答是"the user will be reminded at …"，任务得到的是"the task will run at …"。
+- 记录里写下了这两个定时器。
+- 上弦的数量是 0。
+
+到点什么都不会发生；要等这一行重新挂上，错过的才会补触发一次。工具回答成功，实际没有兑现，和 F4 是同一种毛病。
+
+## Decision
+
+- **这一行卸下时，`timer_create` 被拒绝。** 回答说明这个 Emacs 里定时器关着、没有设下定时器、到点什么都不会发生，让模型告诉用户。什么都不写。提醒、任务、重复的、给钟点的，都一样。
+- **`timer_list` 照常列出，并多说一句**：定时器关着，下面列的在重新打开之前都不会响。
+- **`timer_cancel` 不变。** 之前设下的仍然可以取消。
+- **这一行重新挂上后**，`timer_create` 又能设下并上弦。
+
+## 实现中定下的几点
+
+- 检查放在工具入口（`superchat-timer-tool-create`），没有放进 `superchat-timer-create`。产品代码里只有工具这一处调用它，但测试里有二十多处直接调用，其中有的正是在这一行卸下时建、再挂上看补触发。
+- 给模型看的 `timer_create` 说明没有改。
+- 这一行卸下之前已经设下的定时器不动；重新挂上时照原有逻辑补触发和上弦。
+
+## Alternatives considered
+
+**这一行卸下时把三个工具一起撤掉。** 没选：和 F4 一样，这要在工具面和功能行之间建立依赖，是更大的改动；而且列出和取消在卸下时仍然有用。
+
+**照样写下，只在回答里提醒"要等重新打开才会响"。** 没选：模型很可能照旧告诉用户"到时提醒你"，用户等不到。
+
+## Acceptance criteria
+
+`scripts/timer-tool-regression.el`，5 个测试：
+
+- 这一行卸下，经真实的工具调用设提醒：模型在工具的回答里被告知定时器关着，记录里没有新建的定时器，没有上弦。
+- 这一行卸下：提醒、任务、重复的任务都被拒绝，回答里有"no timer was set"，什么都没写。
+- 这一行卸下：列表说明定时器关着，并仍然列出之前设下的；取消可用。
+- 这一行挂着：回答和以前一样，不提"关着"；写下一个定时器并上弦（护栏）。
+- 重新挂上：能设下并上弦。
+
+在旧代码上 4 个失败，1 个通过（护栏）。对新代码做了 6 处变异，全部被发现。
+
+## 没有解决的
+
+- 能力的工具、收集器、观察者、计时资源之间仍然没有明确的依赖；这次和 F4 一样，只保证不兑现的承诺会被拒绝。
+- 没有用真实模型验证，没有真人在键盘前验证。
+# Decision: 在对话里用 `>annotate` 让这一条的回答挂到 buffer 上
+
+Status: accepted — 用户，2026-10-10。用户要求"优化一下 annotation 的效果，以及它的目的"，并给了 gptel-annotate 的链接。上一份报告列了三件要定的事和建议：挂到叫出这段对话时所在的 buffer、也允许在标记后写文件名；带对话历史；这一步不给工具。用户答："1. 同意建议。2. 可以戴。3. 不给工具。""实现中定下的几点"是实现时定的，随本次向用户报告，用户可以改。
+
+## Problem
+
+[批注](2026-10-10-remarks-hung-on-the-text.md)只有一个单独的命令 `superchat-annotate`：它不带对话历史，模型只看得到那段文字和一句指令。gptel-annotate 的说明里写明，它最有用的用法是在一段已经有上下文的对话里叫出批注，单独当命令用是"盲的、一次性的"。例如先和模型讨论一份纪要哪里有问题，再说"把这些标到纪要上"。
+
+## Decision
+
+对话里的一条消息写了 `>annotate`，这一条就照常作为这段对话的一条消息发出（带历史、Workspace 规矩、你所在的位置），它的回答除了照常显示和记录在对话里，还按批注的规则挂到目标 buffer 上。
+
+- **目标**：`>annotate` 后面没有名字时，是叫出这段对话时所在的 buffer，取自这次请求冻结下来的来源，发出之后切窗口不会改变它。`>annotate 名字` 或 `>annotate "带空格的名字"` 指定一个 buffer 或文件；文件还没打开就打开它。
+- **历史**：带。这一条和别的对话消息走同一条路。
+- **工具**：不给，对话正处在某个代理技能的模式里时也不给。
+- **只管这一条**：下一条消息照常，对话的模式不变。挂上的批注留着。
+- **定位、显示、不改文件**：和命令完全一样，用的是同一段代码。对同一个 buffer 再要一次，旧的批注被换掉。
+
+## 实现中定下的几点
+
+- **`>annotate` 不是技能，是这一条回答的去向。** 解析点认出它，记在这一轮输入上（`:destination annotate`），在 `>技能` 之前解析。所以 `annotate` 这个名字被占用：同名的技能在对话里叫不出来。
+- **Superchat 自己发出的消息从不认它**，写在开头也不认。定时任务和被唤醒的工作记录发的文字是模型写的，不应该能往你的 buffer 上挂东西。这比 `/命令`"自动消息只认开头"更严。
+- **开头的命令优先**：消息以 `/命令` 开头时，后面的 `>annotate` 是普通文字。
+- **后面那个词算不算目标**：加了双引号的一律算，找不到就报错，不发请求。没加引号的只有在它正好是一个现有 buffer 的名字或一个存在的文件时才算，否则它是你要说的话的一部分。
+- **只写 `>annotate` 没有别的话**：用命令的默认指令（`superchat-annotate-default-instruction`）。
+- **去向是包一层**（[结构提案](../proposed/2026-10-10-source-turn-destination.md)的原则 3）：对话自己的 Sink 照常被调用，外面一层在回答到达时再挂批注。所以回答的原文（一行行 `行号 | 引用 | 意见`）仍然显示在对话里。
+- **格式要求放在系统提示的最后**，在人设和 Workspace 规矩之后，并说明前面关于"怎么回答"的要求不适用于这一条。带行号的原文作为附带内容放在这条用户消息里。两样都由一个新的收集器给出，没有第二条请求路径。
+- **批注整个 buffer**，不看当时有没有选区；超过 `superchat-annotate-warn-lines` 行时不另外提示。
+- **记录里留着 `>annotate`。** 发给模型的这一条不带标记，但对话记录里存的是带标记的文字（标记放在末尾，指定过的目标跟在后面）。所以之后各轮的历史里看得出这一条要的是批注，"重新生成"会重新批注，"编辑上一条"会把标记放回输入栏。
+- **之后的消息会被告知"那件事做完了"。** 这段对话发过批注消息之后，它后面的每条普通消息的系统提示末尾多一句：之前那条的回答已经由 Superchat 挂到某个 buffer 上，原文没改，不要再把意见写进 buffer。只有至少一条意见真的挂上之后才说：请求失败、被取消、或者回答里一条都没挂上，都不说。它按对话记：同一个窗口里换成另一段对话，那段对话不会被告知。没发过批注消息的对话没有这句话。这是真实模型跑出问题后加的，见下面。
+- **结果说在回显区**：挂上几条、没挂上几条、看不懂几行，以及是哪个 buffer。目标 buffer 在回答到达前被关掉时，说"要批注的 buffer 不在了"，不报错，回答仍在对话里。
+
+## Alternatives considered
+
+**flymake。** 用户明确说不用。
+
+**做成一个技能。** 没选：技能改的是"模型按什么身份回答"，这里改的是"回答去哪里"；做成技能会走切换对话模式那条路。
+
+**把回答从对话里隐藏，只留一行"已挂上 N 条"。** 没做：记录里无论如何存着模型的原文，没挂上的行留在对话里正好能看到。要不要隐藏是另一个界面上的决定。
+
+## Acceptance criteria
+
+`scripts/annotate-chat-regression.el`，19 个测试，都真的在一段对话里发消息，读脚本模型收到的请求和 buffer 上挂了什么：
+
+- 回答挂在叫出对话的 buffer 上；请求里有带行号的原文、上一轮的问答、你所在的位置，没有 `>annotate` 这个标记，没有工具；格式要求在系统提示的最后；原文和"已修改"状态不变；回答仍显示在对话里。
+- 下一条消息是普通消息：没有格式要求，没有带行号的原文，工具回来了。
+- 只写 `>annotate` 时用默认指令。
+- 后面写 buffer 名或加引号的文件名时，挂到那个 buffer 上；不是名字的词留在消息里；加了引号却找不到时不发请求。
+- Superchat 自己发的消息不认这个标记；标记必须独立成词；开头的命令优先。
+- 代理技能生效时：格式要求排在人设之后，没有工具，对话的模式没变。
+- 目标 buffer 被关掉时说出来、不报错；什么都没挂上时说出来；再要一次换掉旧的。
+- 下一条普通消息被告知之前的回答已经挂到哪个 buffer 上，历史里那一条带着标记和目标名；没批注过的对话没有这句话。
+- "重新生成"会重新批注；"编辑上一条"把带标记的文字放回输入栏。
+- 请求失败、或者一条都没挂上时，下一条消息不会被告知"已经挂上"；同一个窗口里的另一段对话也不会。
+- 批注这一条的请求能从记录里重建（和冒烟测试对普通消息用的是同一个检查，结果 `reproduced`，0 条违规）。
+
+
+Mechanism (`accepted`, implemented): pipeline order pre-policy → approval → monotonic guards (deny-only) → around → body → post → finalize, with the seven steps named at their boundaries in `superchat-tool-execute`; the approval prompt is a declared provider whose absence is a stated deny that the refusal reports as "no approver available" instead of "cancelled by user"; the named-policy monotonicity the record asked for already held and is a regression gate rather than new work.
+
+Delivered (`current`): the pipeline's order is marked in the source and each step keeps the behaviour it replaced; approval resolves through one declared provider over the three existing sources in their existing precedence; the four agent-loop probes are gone, replaced by declared contributions whose missing case is stated in the table rather than implied at the call site; the default tool surface is unchanged, name for name.
+
+Acceptance evidence: `.scratch/m1-verification/evidence-m2-acceptance.txt` records all three, and `scripts/smoke-expected/*` is byte-identical to the baseline M2 started from (`44153daa7ca8c4bc8064f5bb39f2a169f54e072feed59879655c490be57153be`). (a) An approved `read_buffer` on a real model (LM Studio, `qwen/qwen3.8-27b`) produces the Tape sequence smoke case B asserts, element for element, with one `request.header` and `superchat-tape-request-evidence` reporting `reproduced`. (b) A denied write and a denied read each reach the pipeline, run no tool body, record their own sequence (`tool.requested` then `tool.failed`, with no `tool.execution.started`) and deliver the refusal into the model's tool-result slot. (c) With a registered policy layer answering `allow` for everything, an `observer`-policy write is still refused with the policy's own text and its body still does not run, while a read in the same session still executes -- so the layer was consulted and could not loosen the inherited deny.
+
+Acceptance (a) failed on its first run and found a real defect in M1's evidence recorder: from the second attempt on, the recorder read the system text off a prompt whose `:context` llm.el had already folded into a system interaction and cleared, so it recorded an empty system and appended a second `request.header` whose only change was that erasure. The provider always received the system text; the record did not. The recorder now takes the sending layer's own provider-facing system text instead, so the recorded sequence stays one header per series.
+
+### M3 — One execution main line (`done`)
+
+Goal: replace the fixed Stage registry with a single driver loop.
+
+Removes: the Stage registry as an extension point, and the dispersed ownership of its eight names (`parse` is invoked only by the chat dispatcher over a preparation Turn, the six preparation Stages by the driver, `save-state` by Runtime); the dispersed ownership of pending input, so that follow-ups, steering and injection have one Runtime owner and steering and injection one ordered claim, over the three stores the [closing rulings](decisions/implemented/2026-09-15-m3-closing-rulings.md) keep. The count difference between declared and invoked names is not itself a defect; the dispersed ownership is what M3 ends.
+
+Mechanism: the [execution main line decision](decisions/implemented/2026-09-14-m3-execution-main-line-resolution.md), taken by the leader under user delegation, fixes a Runtime-owned handle and target-aware inbox, pre-step and request waterfalls, a closing serial notification, and explicit `step.started` / `step.ended` Tape facts. Runtime retains sole lifecycle ownership. Existing queue, cancellation, Authority and retire-before-dispose contracts remain binding; no graceful-stop API or restartable pending queue is added.
+
+Runtime owns the driver handle, Step boundaries, both waterfalls and the closing recheck; steer and inject have one ordered claim and audited pending-injection disposal. Earlier evidence is in `.scratch/m3-verification/evidence-m3-worker-round.txt`.
+
+Stage retirement slice 2 is delivered (2026-09-15): `save-state`, `load-state`, `resolve-session`, `assemble-prompt` and `select-tools` are absent from the Stage vocabulary. Core assembles the prompt and builds default tool candidates; request middleware replaces tool selection within the original explicit ceiling. First and subsequent native attempts validate the replacement, preserve trusted wrappers, and record actual provider evidence. Pure tool-guidance renderers refresh dependent system blocks without repeating collectors. The default plugins remain mounted. Evidence and the narrowly authorized structural assertion replacement in smoke V are in `.scratch/m3-verification/LEADER-SLICE2.md`.
+
+Stage retirement slice 3 (context, admission and parsing) is delivered (2026-09-15): `collect-context` is an Event whose listeners return fragment lists, and the driver's own direct call replaces the last Stage call site. `parse` is the chat surface's call to `superchat-core-prepare-turn`; submission admission and queueing live in Runtime (`superchat-runtime-admit-envelope`), with Step gating still in the pre-step waterfall. The Stage registry API (`superchat-stage-add`, `superchat-stage-call`, `superchat-stage-remove`, `superchat-stage-names`) no longer exists in the tree; the Event substrate, the two ordered-await waterfalls, the `collect-context` Event and the fault ring live in `superchat-event.el`. A required listener's execution or validation failure is reported as `context-error` by the pipeline's own collection error path and then re-signalled, so preparation still terminates. Fault records use `:site`; their recorded values are unchanged. Evidence is in `.scratch/m3-verification/LEADER-SLICE3.md`.
+
+The M3 regression set replaced the ad-hoc probes (2026-09-15): `scripts/m3-regression.el` is one file of ERT tests grouped by contract area, run by one command, with each test in its own isolated fixture; only the leader agent edits it. It asserts contracts a fixed event sequence cannot express (who may claim what, what a refusal leaves behind, which Step a fact belongs to, what a failure is recorded as), and it caught a real product defect: a derived source's `:inputs` is a list of property lists, which the Tape's JSON round trip rendered as one object with colliding `:id` keys, so a merge or split lost every input but the last. The Tape now owns a value codec for its META column that tags that shape, so the durable record carries both inputs' identities and original sources. That closes the "source relationships" gate. The set also found that a command or skill refused by the queue while a Run is busy lost the user's draft; the dispatcher gives it back, meeting the same nine criteria as plain input. Details, the ten-way mutation check and the commands are in `.scratch/m3-verification/REGRESSION-SET.md`.
+
+The [closing rulings](decisions/implemented/2026-09-15-m3-closing-rulings.md) are implemented (2026-09-15). The `chat-turn-recorder` plugin registers its two `run-sealing` observers with `:required t`, and a required recording failure seals an otherwise completed Run `audit-incomplete` through `run.failed`, leaving the Step ending and `response.completed` as recorded. `stage-error`, `:stage` and `superchat-stage.el` are `context-error`, `:site` and `superchat-event.el`. Injection and follow-up drops keep one event identity, so a drop whose append committed but lost its receipt is not recorded again, and an item whose drop is unconfirmed is never admitted or dispatched as input. Later Turns' Context View includes admitted material once, from the Tape; within a Run a later Step continues its provider prompt. A tool-protocol retry, and a provider failure on a later attempt, close that Step `failed`.
+
+The user accepted the slice 2 smoke V baseline replacement on 2026-09-15 as a bounded exception after the Stage exit and the move of parsing and assembly: `chat-parser-direct: t` and `assembler-works-without-its-plugin: t` replace lines that read the retired Stage registry. `chat-parser-direct` checks only that `superchat-core-prepare-turn` exists, so chat parsing behaviour is proven by the M3 regression set's `m3/parse/` tests (`@model`, `/command`, `>skill`, parsing before queueing, unknown commands, non-chat surfaces, `#file`) and smoke cases S, T and W. The acceptance authorizes no other baseline change and relaxes no Tape event order, Step disposition, queueing, cancellation or Authority constraint.
+
+The user accepted M3 on 2026-09-15, with the middleware interface narrowed by [closing ruling 5](decisions/implemented/2026-09-15-m3-closing-rulings.md): no cancellation context is passed, and after cancellation Runtime's execution boundaries keep a middleware result from opening a Step or entering the model transport, without stopping the middleware's own work. That follow-up is fixed (2026-09-16): a submission whose request middleware cancels the Run ends through the existing cancellation path with the single `cancelled` terminal, no new failure terminal and no resend, because the send boundary reports an ordinary cancellation only for this Run's own cancellation with its execution Scope still live and its recorded transport provider still current; a withdrawn transport, a missing provider or a retired Scope still errors. M3a is next.
+Acceptance: the complete canonical smoke set (every case in `scripts/smoke.el`, including R1 to R9) passes against the baselines in force when M3 starts with only the accepted insertion of `step.started` and `step.ended` facts and assertions for their identity, placement and disposition. Excluding only those two new types reproduces each old event sequence; the complete new sequence is also checked. Existing events retain their order and semantics (M1's `request.header` and `request.message-list` events remain part of the baseline); sending during a Run still queues; cancel still seals `run.cancelled`, and a Run with an entered external Effect still terminates `audit-incomplete` with the Effect open; a static check that a contract "passed" does not replace these behavioural assertions. Live evidence is kept as well: one normal turn and one cancelled turn against a real provider complete with the expected terminal facts, without demanding a fixed number of model events from a non-deterministic model.
+
+### M3a — Remove Closure and Claims, park Experience (`done`)
+
+Goal: superchat keeps only what DeepSeek Harness has a counterpart for, as [the M3a removal decision](decisions/implemented/2026-09-15-m3a-remove-closure-and-claims.md) rules, without changing how a cancelled Run ends.
+
+Removes: `superchat-closure.el`, the `closure` plugin row and Service, and the driver's `:inject` of `closure`; Runtime's terminal guard, shadow report and closure observation ring; the Tape's Closure role tags and opaque-row marking; `superchat-claims.el`; the Experience context collector with its prompt slot; the review of recovery needs, as `/review` and as `M-x superchat-review`.
+
+Mechanism: the record's. Runtime tracks each Run's open Effects and Approvals and seals `audit-incomplete` when any is open; reopening a saved Session seals each cut-off Run `abandoned` without a judgment; subagent handoff, workflow resume and artifact delivery decide from the Run terminal recorded on the Tape.
+
+Delivered (`current`, 2026-09-15), in four slices. Runtime tracks each Run's entered-but-unsettled Effects and requested-but-undecided Approvals by execution identity, reported by Authority before each fact is appended, and seals `audit-incomplete` when any of them is open, whatever ending was requested, while settled work keeps its ending and a late result still appends its one fact. Subagent handoff, workflow resume, cross-Run Artifact delivery and Experience evaluation decide from the Run terminal recorded on the Tape through the `tape` Service's `recorded-run-terminal`, which answers present, absent or unknown, never resolves two recorded terminals by picking one, and is refused rather than waited for when the record cannot be read. Reopening a Session repairs a cut-off Run without judging its record, inventing no tool result and no `step.ended`. Closure, Claims, the `experience` context collector and prompt slot, the `history` collector's `:experience-view` copy and `/review` in both forms are gone; Experience keeps its recovery view, Authority's gate over it, `M-x superchat-experience-monitor`, evaluation and its projection, and old `claim.recorded` and `feedback.recorded` rows stay readable. The current documents describe this.
+
+Verification: the M3 regression set's 31 `m3a/` tests, written before the implementation and each shown to fail at the gap it named, all pass; the whole set is 121 tests with one expected failure, the M3 middleware follow-up. The complete canonical smoke set passes, with one bounded baseline change the user approved for this removal: case V's `collectors-mounted`, `commands-remounted` and `collectors-after-remount` counts drop by one each, because the collector and the command they counted are gone; it authorises nothing else. The Kernel check passes, the package loads with no Closure or Claims feature, byte-compiling every changed module adds no warning, and against a real provider (LM Studio `qwen/qwen3.8-27b`) one normal turn and one cancelled turn end with the expected terminal facts. Experience's real recovery assembler, not a stub, is called once after a tool failure, returns no Candidate without Claim rows, signals nothing, and leaves the dependent tool unblocked (`.scratch/m3-verification/evidence-m3a-final.txt`).
+
+Acceptance:
+
+- A Run cancelled while a tool Effect is entered and unsettled seals `audit-incomplete` at once with the Effect open, and a genuine late result appends its one fact without reopening the Run. The same holds for an Approval requested and undecided. A Run whose Effects and Approvals are all settled seals with its requested status.
+- Reopening a Session whose Run was cut off writes one `abandoned` pair for that Run, nothing while a Run in the Session is live, and never a synthetic tool result or `step.ended`.
+- Subagent handoff, workflow resume and artifact delivery give the answers in the record's consumer table.
+- No loaded file refers to Closure, Claims or the removed Experience entries. The default set without `closure` loads, and one chat turn completes.
+- The complete canonical smoke set passes. Its R1, R5, R7 and R9 assertions that called `superchat-closure-judge` are rewritten against recorded facts, and any baseline file change is accepted by the user explicitly.
+- The M3 regression set's M3a tests are written by the leader before implementation starts, and they pass.
+- One normal turn and one cancelled turn against a real provider (LM Studio) end with the expected terminal facts.
+
+### M4 — Surfaces as plugins, composition by profile (`done`)
+
+Goal: the chat window, inline ask and rewrite, Org Babel, Magit and emacsclient are plugins that a profile row list assembles.
+
+The user approved this text on 2026-09-16, and the mechanism with it: [the M4 record](decisions/implemented/2026-09-16-m4-surfaces-as-plugins.md) fixes that a profile is layers over the default rows with an explicit disable, that `superchat-plugins` stays as the default profile's layer, that a row left pending is reported with the Services it waits for, and that a surface entry point refuses when its row is not mounted, because an Emacs autoload cannot be withdrawn.
+
+State (2026-09-16): delivered in three slices. A profile is a named list of layers over the `default` profile's rows, which are still `superchat-plugins`; a layer inherits with `(:inherit NAME)` and disables with `(NAME . :disabled)`, `(require 'superchat)` mounts `superchat-profile`, and mounting a profile makes the composition exactly its rows. `superchat-profile-report` names any row left pending with the Services it waits for. The two empty seats are gone and all five surfaces are rows: `chat`, `inline-ask`, `inline-rewrite`, `org-babel`, `magit` and `emacsclient`, each registering its own surface name, so the core seed keeps only `workflow`, `subagent`, `compaction`, `skills` and `external`. The chat row is the one that owns registration without owning loading: the chat code lives in `superchat.el`, which eager `require' pulls in, so the row owns the `chat` surface name and twelve entry points ask whether it is mounted before they open a View, build an envelope or reach the driver. An entry point whose row is not mounted refuses, naming the row and the active profile, and submits nothing; emacsclient returns that as a JSON error. Unmounting a row never touches work already running: a Run in flight keeps its Sink and reaches its terminal, because the chat Sink is built into the envelope rather than resolved from the row. The shipped `headless` profile disables every user-interface row and Telega, keeps `emacsclient`, and answers a prompt end to end; switching back to `default` restores the chat window, which can be used again. The default profile is 29 rows and the default experience is unchanged. Every one of the leader's `m4/` tests passes, with no known failure left in the regression set.
+
+Verification: the M3 regression set's `m4/` tests, written before the implementation and each shown to fail at the gap it named, all pass, and the whole set had no expected failure left for the first time since M3 opened. Two mutants pin the chat row specifically: with the entry guard removed the front-door refusal test fails, and with the row mounted but not registering its name the ownership test fails, each biting exactly one test. The complete canonical smoke set passes with its baselines untouched (`SMOKE OK (0 mismatches)`), the Kernel check passes, the package loads with every row active and `chat` registered by its row, and byte-compiling the four changed modules produces warnings identical to the baseline's. Against a real provider (LM Studio `qwen/qwen3.8-27b`) the two real-model M3 turns and every M4 test pass, including the front door opening and answering. End to end, with the row unmounted all eighteen chat entry points refuse without creating a View, a Run or a provider request, while pause, resume, cancel and the read-only inspector commands still work; a Run already in flight survives both unmounting the row and switching to `headless`, keeps rendering into its window and reaches `completed` with no `run.cancelled`.
+
+Two follow-ups found at M4's acceptance were fixed after it closed, each registered as its own issue first. The `view` Service's `sink-for` operation had no caller and is deleted; the chat Sink is built into the envelope, which is why an in-flight Run keeps rendering after its row leaves. And a chat Turn's attachment fact, which a seal-time row used to write, is now written when Runtime admits the request ([the record](decisions/accepted/2026-09-16-chat-attachments-recorded-at-admission.md)), so an image can no longer reach the model with nothing recording that it did. A third, that inline answers failed when `chat-view` was not in the profile because they reached its `markdown-to-org` through a Service while testing for the function, is fixed by making rendering a plain function ([the record](decisions/accepted/2026-09-16-rendering-is-a-function-not-a-service.md)): inline calls it directly as every other caller already did, the `view` Service has no consumers left and is deleted, and the `chat-view` row, which provided nothing else, goes with it. The default profile is 29 rows.
+
+Removes: nothing from the default set. `superchat-plugins` stays until a profile mechanism exists and the default profile reproduces it exactly.
+
+Acceptance: removing any row of the default profile leaves the rest loading; a `headless` profile answers one prompt with no UI plugin mounted.
+
+### M5 — Operating context and reference reading (`done` for the accepted scopes; slices 3–4 accepted as mechanisms and operating workflow, utility not established)
+
+Slices 3–4 closure (`accepted`, 2026-09-20): the user stopped further utility testing and accepted the implemented mechanisms and operating workflow, retaining their current defaults. The [closure report](reports/2026-09-20-m5-slices-3-4-closure.md) preserves the incomplete comparison and observed flaws. Slice 3 has three finished attempts (two declared valid and reviewed as failures despite passing state checks; one undeclared/unreviewed); slice 4 has no independent utility runs. This is not evidence of model-performance benefit, nor a waiver of product permission, approval, feedback or recording contracts. The earlier [bounded comparison plan](decisions/accepted/2026-09-20-m5-slices-3-4-utility-closure.md) is historical, not a remaining work queue.
+
+Goal: the model is told where it actually is and what it can already do, before any new capability is built. The user reframed the tool-surface question on 2026-09-16 after reading how Omarchy ships operating knowledge to each agent's native skill entry and how yayster.el gives Emacs the same treatment: what a model needs first is not more verbs but a map of the machine it is standing on. The direction is in [the AI-layer tool-surface proposal](decisions/proposed/2026-09-16-emacs-ai-layer-tool-surface.md) (`proposed`); the mechanism is in [the operating-context contract](decisions/proposed/2026-09-16-emacs-operating-context-and-reference-contract.md), whose first two slices the user accepted the same day while the last two wait.
+
+The contract's load-bearing finding is that superchat has no carrier for reference material. `superchat-skills-load` returns a Preset: invoking a skill applies its model, tools and pre-hook, and an agent or plan skill also switches the View's Capability and composition for the rest of the session. A skill is a mode switch, not something a model may read to inform one thought, so reference reading needs its own path that applies no Preset. Measured gaps behind the four slices: the default request offered no way to read what a symbol does; the chat entry carried no facts about the user's Emacs at all, while `superchat-act` carried them by appending an `[Emacs origin]` block to the user's own input text; and the skills directory is seeded once, so a guide shipped in a later version never reaches a user who already has any skill file.
+
+State (`current`, 2026-09-17): slices 1 and 2 are delivered. `describe-function` joins the default tool surface next to `apropos`, so the discovery loop — find a symbol, read what it does, then act — is whole without falling back to the approval-gated `eval_elisp`. Approval is unchanged: the name was already on the user-owned unprompted read list, which is why documentation may be read without a prompt while `describe-variable`, which returns a live value, still asks. The second hand-written copy of those names in the tool-selection fallback is updated with the constant and now says it must be. Slice 2 supplies one frozen source snapshot to chat and act through the shared collector. Queued requests, renamed or dead sources and edited inspection previews retain their stated identity and text. Slices 3 and 4 — bundled reference data with a reading entry point, and the operating guide itself — stay `proposed`: the task comparison does not yet establish a benefit for either.
+
+The reviewed comparison (`current`) gives strong task evidence for origin context: T1 succeeds 0/3 in A and 3/3 in both B and C. It does not isolate the benefit of documentation discovery, and it does not test on-demand reference reading. Product wait-clock behavior, tool budgets, model execution mistakes and an incomplete answer extractor confound broader claims; neither “knowledge is irrelevant” nor “the guide is useless” follows. The complete-answer extractor checks Runtime body identity against Tape byte size and SHA-256. The raw 27 trials remain unchanged; the corrected review is in `.scratch/abc-comparison/runs/auto-20260917-050939/REVIEW-20260917.md`.
+
+Execution reliability (`current`): per-attempt progress clocks, explicit compatible-provider reasoning mapping, and recorded tool-budget finalization follow the [implemented decision](decisions/implemented/2026-09-17-model-attempt-progress-and-budget-finalization.md). Their focused regression is `scripts/m5-execution-regression.el`. A final answer or a correctly closed Run does not itself meet the persistent-key-binding acceptance below; real task postconditions remain a separate check. The initial isolated task findings and observation limits are in `.scratch/m5-execution/LEADER-HANDOFF.md`.
+
+Missing final responses (`current`): the [native callback decision](decisions/implemented/2026-09-17-missing-provider-response.md) sends absent answer material through the existing failed path. Explicit empty strings, current-attempt visible text, tool continuation, pending steering and budget metadata keep their stated behavior; a prior tool preamble cannot stand in for a missing follow-up answer. `scripts/m5-response-regression.el` tests the real adapter and Runtime. This corrects recorded execution truth, not the model's configuration-task performance.
+
+Tool feedback (`current`): the [existing-tool decision](decisions/implemented/2026-09-17-emacs-tool-feedback.md) covers unique edits, no-change feedback, complete eval expressions, pre-reader effect classification and recognized evaluation errors. [Bounded diagnostic context](decisions/implemented/2026-09-17-bounded-tool-error-context.md) keeps a single compact error body instead of repeating large returned objects in corrective messages. `scripts/m5-tool-feedback-regression.el` verifies these contracts through direct observations and the real wrapped tool loop. A repaired-baseline T2 trial has the requested binding both live and after an independent restart; model assertions and independently observed results are kept separate. The remaining complete configuration acceptance, including both entry paths and undo, is tracked in `.scratch/m5-tool-feedback/LEADER-HANDOFF.md`; M5 stays in progress until that acceptance is met.
+
+Prepared request context (`current`): [act and inspected sends](decisions/implemented/2026-09-17-prepared-chat-request-context.md) keep the raw system configuration separate from its preview, reuse collected context, and submit the exact final body under the current budget. Deleted attachments and source selections are not restored; since 2026-09-25 earlier turns are not part of the editable body and go with an edited body as with an unedited one. `scripts/m5-request-context-regression.el` verifies the provider-facing text and the history selection sent.
+
+System contributions (`current`): [ordered system contributions](decisions/implemented/2026-09-17-ordered-system-contributions.md) carry identity from assembly through the Request to every attempt, so a tool rewrite refreshes a dynamic block in place and never edits an explicit base or static block whose text happens to match; a middleware that replaces the whole `:system` string owns it from then on. `scripts/m5-guidance-regression.el` verifies the provider-visible system text per attempt. The default chat and act configurations do not exercise the collision; custom collectors and non-default surfaces with renderers did.
+
+# Request and Run lifecycle
+
+This is the implemented cross-module contract for submission, cancellation and delivery. The [architecture map](../architecture.md) shows the call path; the [composition contract](../design/plugin-architecture.md) defines execution Scope lookup. The earlier [fixed-pipeline specification](../design/turn-pipeline-contract.md) is historical, not a second current contract.
+
+## Submission and preparation
+
+A public producer calls `(superchat-service-call scope 'driver 'submit envelope)`. An Envelope must contain nonempty string `:content`, a registered symbol `:surface` and a valid `:sink`. It may carry `:session-id`, `:tools`, `:media`, owner-specific `:context`, model and execution metadata. Validation and the accepted field forms are implemented by `superchat-pipeline-validate-envelope`.
+
+Top-level legacy buffer-routing, callback and prompt keys are rejected. `:runtime-extras` is a compatibility escape for admitted metadata, not a way to replace the Sink or bypass forbidden routing keys. Producers use the exact host object where a host is needed; a buffer name is not a delivery locator.
+
+`parse` acts on a chat preparation Turn before the Envelope, as the chat surface's own direct call to `superchat-core-prepare-turn`. The driver then resolves the Session, admits input through Runtime, merges core state, selects tools, collects fragments through the `collect-context` Event and assembles a prompt. A `:required t` context listener's execution or validation failure terminates preparation rather than silently omitting required input; an optional listener's failure is recorded in the fault ring and contributes nothing. Runtime, not the preparation Turn, owns acceptance and execution completion.
+
+The assembler produces one prompt and its receipt. Prepared producer text follows the prepared collector, rather than a second public submission API. Preserving prepared text does not prove complete prompt reconstruction: the receipt-append Invariant and provider evidence do not perform an independent end-to-end comparison.
+
+An act request and its optional inspector collect context during plan preparation. The original system configuration remains separate from the assembled display string; captured system/instruction fragments retain their pure tool renderers. Submission uses those fragments and the final body without collecting history, attachments or source context again. The final body is one required hard fragment and is checked against the current budget; an over-budget initial preview also fails rather than submitting placeholder text. Ordinary chat and prompt-skill combined input do not acquire this prepared status. The history selection is the one fixed after preview assembly, whether or not the body was edited: since the context contract's amendment of 2026-09-25 the earlier turns are their own messages, shown read-only in the inspector and never part of the editable body, so an edit cannot remove or change them. Actual provider request evidence still records the sent text. The [decision](../decisions/implemented/2026-09-17-prepared-chat-request-context.md) explains the alternatives.
+
+## Request rewriting and tool selection
+
+The fixed Stage registry is retired. `select-tools`, `assemble-prompt`,
+`resolve-session`, `admit`, `load-state` and `save-state` are core calls, and
+`collect-context` is an Event. Core builds the explicit or surface-baseline
+tool candidate and calls `superchat-prompt-assemble` directly. The default
+`tools-baseline` and `prompt-assembler` plugins remain mounted as those
+capabilities' declarations. Context contributors register through
+`superchat-context-register`, which validates the returned fragment list and
+reports a required listener's failure as `context-error` before re-signalling.
+The Event substrate is `superchat-event.el`; fault records use `:site`.
+
+The Runtime-owned `before-provider-request` waterfall accepts a candidate
+with `:prompt`, `:system` and `:tools` (unique tool names, nil or `none`).
+Middleware receives a private copy and a single-use continuation. Omitted
+fields retain their input values; explicit nil tools means no tools. Unknown
+fields, invalid text or tool names, and widening an explicit tool ceiling fail
+before dispatch. A refusal also prevents dispatch. Trusted prepared tools
+cannot be replaced. The middleware cannot set prepared status or execution
+identity. The original restriction stays with Runtime even after an earlier
+attempt narrowed or replaced the candidate.
+
+Initial and native continuation requests use this same validation. Only the
+final selection is materialized; ordinary tools still need the trusted
+Authority wrapper. Tools newly added on a continuation inherit the accepted
+execution context and the same wrapper accounting. Retained tools keep their
+existing installation-bound descriptors. Final-answer attempts cannot acquire
+tools again. Provider evidence records the final prompt and tool schemas.
+
+A system fragment may carry an internal `:render-tools` pure function of
+final tool names. `superchat-prompt-assemble` returns the ordered system
+contributions (id, owner, text, renderer) it materialized `:system` from,
+and `superchat-prompt-materialize-system` is the one definition of that
+join. When any contribution has a renderer, the Request carries the
+contributions and the exact materialized text as process-local guidance
+state; the Run keeps the latest state. After a tool rewrite Runtime rerenders
+each dynamic contribution in place from the accepted final names, keeps every
+static contribution's text, and materializes the system once in the original
+order, without invoking collectors again. A contribution that renders empty
+keeps its position and returns there when a later surface renders it again.
+Telega workflow guidance and existing tool-specific system instructions use
+this path. Middleware that returns a `:system` string other than the text
+Runtime last materialized takes that string over, on any attempt and whether
+or not the tools changed: automatic management of the previous contributions
+ends for the Run, Runtime does not search the replacement for familiar text,
+and no removed block returns on a later tool change. No identity-preserving
+edit operation exists for middleware; a whole-string replacement is the only
+way to edit or delete individual contributions, at the cost of automatic
+refresh. The assembly receipt describes initial assembly; provider evidence
+describes the rewritten request. The [decision](../decisions/implemented/2026-09-17-ordered-system-contributions.md) records the alternatives.
+
+## Execution and tools
+
+Runtime is the single owner of public Run status, model continuation, steering, parent/child admission and terminal handling. The model provider is the injected `model-transport` Service; unavailable transport is not permission to use a hidden LLM fallback.
+
+Every model-invoked tool crosses the execution pipeline (`superchat-tool-execute`), including request-local wrappers and internal prepared Subagent tools. Ordinary nonempty tool surfaces without a trusted wrapper fail before provider work. Exact invocation identity, current liveness, the Session's permission level (with any `tools/pre-execute` listener tightening it) and approval constrain execution; a tool list cached by the model does not grant execution rights. See [wrapper admission](../adr/0005-fail-closed-ordinary-llm-tool-admission.md) and [refusal delivery](../adr/0006-authority-refusal-consumer-delivery.md).
+
+Approval callbacks and observers can reenter Emacs. They cannot reopen a terminal or retired Run, admit work to an unavailable parent, or select a replacement installation for an already materialized tool. Effects already entered outside Emacs are not generically revocable.
+
+## Model progress and tool budgets
+
+The native llm.el adapter arms `superchat-response-timeout` at each actual provider dispatch, adjusted for the tool surface and existing context estimate. The wait measures silence in that attempt: new text, reasoning or tool progress refreshes it, while empty and duplicate cumulative blocks do not. A response or error cancels that attempt's wait; a continuation receives its own window. An early preamble does not disable protection for later requests. Changed, nonempty tool data reports the `tool-streaming` model phase rather than waiting for a first token; empty tool containers do not count as progress. Timer identity and attempt generation are checked after public callback reentry as well as at callback entry.
+
+By default nothing bounds the aggregate native transport conversation: `superchat-response-timeout-hard-limit` is nil (it was 600 seconds until 2026-09-19; [decision](../decisions/implemented/2026-09-19-no-cumulative-transport-limit-by-default.md)). Set to a positive integer it bounds that conversation independently of activity and tool continuations; explicit `ask_user` input then suspends and resumes the remaining balance, while an ordinary pause -- an approval question included -- removes the inactivity wait but keeps consuming the aggregate clock. Runtime's Run deadline remains a separate bound; it is stopped while a person is being asked -- an undecided approval question, or a published `ask_user` question -- and continues with what was left once nobody is ([approval](../decisions/implemented/2026-09-20-the-run-deadline-waits-for-an-open-question.md), [`ask_user`](../decisions/implemented/2026-09-20-ask-user-waits-for-the-user-too.md)). An approval question whose Run is ended by something else while it is open -- a cancel from elsewhere, a failure -- is dismissed ([decision](../decisions/implemented/2026-09-19-a-question-is-dismissed-when-its-run-ends.md)). Emacs timers require the event loop to run and do not preempt synchronous Lisp.
+
+`superchat-llm-max-tool-rounds` counts model responses invoking one or more tools, not individual tool calls. It is nil by default: no round limit ([decision](../decisions/accepted/2026-09-29-no-tool-round-limit-by-default.md)). When a number is set, at the limit `superchat-llm-round-limit-action` either asks to grant another full budget, finalizes without tools, or stops. Batch `ask` finalizes. The final request states that the budget is exhausted and asks for completed, incomplete and unverified work. It cannot regain tools through request rewriting or context recovery.
+
+The adapter's `tool-budget` notification retains the first finalization/stop decision as `(:rounds N :limit L :action finalize|stop)` on the active Runtime entry. Public status, `response.completed`, the Run terminal and final/error Sink payloads carry optional `:tool-budget` metadata. Cancellation has no `response.completed` but retains the decision on its terminal. The metadata describes an execution boundary, not task success, and does not change terminal statuses or model response bytes. The chat View displays its own persistent notice; Session rendering reads the recorded metadata. A literal tool call in the final text remains text, and a structured call after withdrawal fails without executing a tool.
+
+The [decision record](../decisions/implemented/2026-09-17-model-attempt-progress-and-budget-finalization.md) gives the alternatives and reasoning configuration boundary.
+
+## Cancellation and terminal truth
+
+At the native provider's final-response boundary, a missing result is a failure, not a completed answer. After context recovery, tool continuation and pending steering have been handled, the adapter requires a string response, a string `:text` value or visible text accumulated in the current attempt. Otherwise it reports `[Missing final response from llm]` through the existing `failed` path. Explicit empty strings retain their existing completion policy and empty-display fallback; current-attempt text may still supply the body when the final callback is nil. Earlier tool narration and reasoning progress cannot substitute for a final answer. The [decision](../decisions/implemented/2026-09-17-missing-provider-response.md) records this distinction. Tool-budget metadata and Runtime's unsettled-work rule remain applicable.
+
+Runtime cancellation prohibits continuation before callbacks can resume model or tool work. Transport withdrawal retires the matching provider epoch. Preset retirement follows exact Scope ancestry, not a Preset name or Session-wide buffer search. Only the relevant owner combines Runtime retirement with plugin disposal.
+
+Request middleware is a public reentry point.  When it cancels the exact Run and the Run's original execution Scope and recorded transport provider are both still current, the provider-send call ends through that existing cancellation path with no second terminal and no generic send error.  A withdrawn provider, a missing transport, or a retired Scope still reports its own error, because those paths also cancel a Run and must not be mistaken for an ordinary user cancellation.
+
+Runtime tracks each Run's entered-but-unsettled Effects and requested-but-undecided Approvals by execution identity. The execution pipeline and the approval seam record entry before the entered/requested append can reach user code, and clears only the corresponding mark after its settlement is durable. If any work remains open at sealing, a requested `completed`, `failed`, `timed-out` or `cancelled` outcome uses the `audit-incomplete` path. Otherwise the requested outcome is preserved, subject to required recording and storage failures; ordinary cancellation records `run.cancelled`. Runtime does not judge the full trace. A genuine late settlement may append its one fact without reopening the Run, changing its terminal outcome or starting another provider request; no tool result or approval decision is fabricated.
+
+The `chat-turn-recorder` plugin declares its `record-user-message` and `record-attachments` observers required at registration (`superchat-on ... :required t`). Every `run-sealing` observer still runs. Event emission records faults and returns only that invocation's required failures; Runtime never infers them from the global fault ring. If execution would complete but a required recording fails, Runtime preserves the Step ending and `response.completed`, then seals `run.failed` with `:status audit-incomplete`, `:audit-incomplete t` and reason `turn-recording-failed`. Other terminal statuses and ordinary observer failures retain their dispositions.
+
+Run and Turn appends carry stable event identities across SQLite insertion and receipt handling. A confirmed Run terminal survives a lost receipt or later delivery failure; it is not replaced by a competing audit terminal. Recovery can append only a causally matching missing Turn suffix when readable evidence supports it, including a Turn whose confirmed Run seal is `audit-incomplete` after recording failure. An unreadable lookup is `unknown`, not proof of absence and not permission to invent a terminal pair.
+
+### Reading a recorded Run outcome
+
+The `tape` Service's `recorded-run-terminal` method receives Session identity, Run identity and an already-read Tape-ordered snapshot. It returns `present` with one identified terminal, `absent` when there is none, or `unknown` for a conflicting or unusable terminal reading. It does not perform I/O or validate the full trace. Only `run.completed` with payload status `completed` is a successful Run outcome. Reading storage unsuccessfully is not an empty snapshot.
+
+| Recorded Run outcome | Subagent handoff | Workflow resume | Cross-Run Artifact delivery |
+|---|---|---|---|
+| No terminal recorded | `wait` | `wait` | `wait` |
+| Unique `run.completed` with status `completed` | `deliver` | `advance` | Apply the Artifact checks, then `deliver` |
+| Any other terminal | `reject` | `stop` | `reject` |
+| Conflicting terminal records | `reject` | `stop` | `reject` |
+| Record cannot be read | `reject` with reason | `stop` with reason | `manual-review` with the delivery-check reason |
+
+Artifact checks retain producer identity, expected revision, provenance and the requirement that the Artifact event precede its producing Run's terminal in Tape order. Unknown Artifact provenance keeps its own `manual-review` outcome. Subagent and ordinary workflow Run decisions contain `:terminal-state` rather than Closure judgments. Research workflow may still need manual review for an unavailable or undeliverable Artifact; that is not a Run-trace verdict.
+
+### Repair on Session reopen
+
+The chat reopen boundary skips restart repair while the Session has a live process-local Run. Reconcile first replays the Session, which may apply existing recovery journals, then uses raw persisted Run/Turn terminal queries to decide what it may append. These identity queries do not trigger another replay. For an identified `run.started` whose Run and matching Turn terminals are confirmed `absent`, Runtime appends `run.failed` and `turn.completed` with status `abandoned`. An existing `abandoned` Run seal with a confirmed missing Turn receives only that Turn suffix. Unknown storage state or conflicting seals do not authorize another pair. Repair never fabricates a tool outcome or `step.ended`, and does not resume the provider request.
+
+### Experience evidence and recovery
+
+Recording an Experience evaluation and reading it back as evidence both require the uniquely recorded successful Run terminal and its matching, later, non-`audit-incomplete` `turn.completed`. Existing identity, event order, terminal causation and evaluation-reference checks remain binding. A `failed`, `timed-out`, `cancelled`, `audit-incomplete` or `abandoned` Run is not accepted as successful evaluation evidence. Experience's `recovery` Service, request-time `:experience-view` and Authority restrictions remain available; the standalone context collector, history's copy from a preparation Turn, and the two review command forms are absent.
+
+## Sink delivery and synchronous adapters
+
+A Run retains the exact accepted Sink. Streaming, status and terminal callbacks belong to that Run and execute in its original execution Scope. Public Run status and the View's display status are different interfaces; a UI label is not another Runtime terminal.
+
+A dead target or callback failure cannot redirect output to another buffer. Terminal handling uses one delivery owner and quiesces; reentrant or late callbacks do not produce a second terminal outcome. Consumer errors and quits retain the applicable propagation contract rather than being relabelled as new model outcomes.
+
+`driver.submit-blocking` is reserved for Org Babel and Magit, whose host interfaces demand a synchronous result. These adapters use the same Envelope pipeline and accepted Sink. Timeout or caller quit cancels only the adapter's accepted Run; a queued request whose blocking capture has expired cannot execute later through it. Other integrations are asynchronous.
+
+## Queued and steered input
+
+Runtime owns the in-process Session FIFO, live Run steering, and the inbox's `inject` class. Queue and drop audit facts are durable; queued closures and borrowed Scope references are not a restartable queue. There is no second plugin queue for transport suspension or Scope retirement.
+
+- A queued item retains its original Envelope, Sink and borrowed execution Scope.
+- Transport absence pauses dispatch without busy retry or pretending the item was dropped; provider restoration resumes eligible input.
+- A retired Scope makes new enqueues non-accepted. Already queued items are auditably dropped as `scope-retired`, never retargeted to global or the next Preset.
+- A required queue/drop append failure cannot make the item execute without its evidence. An inert retained item can be handled by a later scheduling attempt.
+- Rejected queueing leaves the producer's draft available. Steering targets an eligible live Run rather than allocating a replacement Run.
+- `inject` carries identified model material rather than a task: it never wakes an idle driver and never starts a Turn. Material must state its source relationship and nonempty text, because that text is what reaches the provider; material the model could not receive is refused as `invalid-material` rather than recorded as admitted. Material whose attachment payload is already over `superchat-tape-max-inline-bytes`, counted through the same UTF-8/JSON shape codec append uses, is refused as `material-too-large`; the caller keeps the original text and can submit a normal request.
+- An injection belongs to the Scope that submitted it, and matching is exact: a Run claims an injection only when its borrowed execution Scope is the same Scope, never merely an ancestor or descendant. The global Scope is a valid Scope here, not a wildcard — a global injection can only be claimed by a Run that executes in the global Scope, so it cannot reach a Preset's Run. When a live matching Run exists at submission, the injection also carries that Run's identity, and a terminal Run can never acquire fresh material after releasing its borrowed Scope. An earlier revision instead refused a global-resolved injection as `unscoped-material`; that refusal is history, not the current rule.
+- The loop is the only claimant. It takes the whole eligible batch — steering and injection together — in one insertion order once, before the pre-step gate decides whether to open the Step; entries arriving after the claim stay pending. Contributors never drain independently: steering is queued with the same arrival sequence as an injection and reaches the model through that one claimed batch, so a steer that arrived first is delivered first even though injections are claimed last. Material a Run ends without consuming is not carried to a later Turn and is not dropped silently: each item lands one `queue.dropped` fact carrying its stable identity and the reason, and its removal is committed only once that fact exists.
+- Claim transfers custody rather than deleting the entry from the inbox.  A claimed entry stays held under its Run until every admitted attachment that names it is durably present, or a confirmed `queue.dropped` fact settles it.  Each attachment reserves a stable event ID before the write, so a lost receipt is recovered by identity as `present`/`absent`/`unknown`; only `present` may continue the admission, `absent` records one drop for the affected source, and `unknown` keeps the obligation and the Run `audit-incomplete`.  Split or merged outputs are checked individually, so one present attachment never releases a source whose other output is still unresolved.
+- Pending injections settle through the same audited `queue.dropped` path as the FIFO when their Scope retires or the Session's view closes, and their removal is committed only once that fact lands.
+
+- A model transport that is not the native llm.el loop reaches the same behaviour through two driver operations rather than through one adapter's callback protocol: `advance-step` closes the current Step, claims that batch, runs the pre-step gate and opens the next Step, returning the material the transport must append (or a refusal sentinel once the Run is settled as failed), and `turn-stopping` runs the natural-closing notification and returns how much eligible input is waiting, so the transport makes another attempt in the same Run instead of closing. Step brackets, admission and closing therefore do not depend on which transport drives the Run.
+
+Before a drop append, Runtime retains one complete drop event on the pending item. All injection and follow-up disposal paths reuse it. A lost receipt is recovered by its exact event identity, without another write; an unreadable lookup keeps the item pending rather than treating the event as absent. The first reason remains attached to that drop. While its receipt remains unresolved, the item is not eligible for injection admission or follow-up dispatch; later scheduling reconciles the drop instead of resubmitting the input.
+
+Admitted material is recorded once as Runtime's `attachment.added` event with topic `inject`, before dispatch. Within a Run, later Steps may continue the existing provider prompt. Later Turns read the recorded text through the Tape Context View as user material, with its storage/event identity and source relationship. The existing lineage, supersession, cancellation, anchor and budget selectors still apply. Ordinary attachment metadata and Runtime summaries are not prompt messages. An unavailable recorded payload produces an unknown View, not text reconstructed from live state.
+
+Any future inbox must preserve these observable distinctions before replacing this implementation.
+
+## Editor resources and source changes
+
+Runtime and registration Scope cleanup borrow editor resources; neither acquires general buffer-close authority. The [Session EditorWorkspace close protocol](session-editor-workspace-close.md) validates ownership on the exact live object. User buffers, files and Artifact buffers are not owned merely because a Run uses them.
+
+Inline rewrite keeps previews outside source text. Accepting a Change Set applies edits atomically and appends `edit.applied`; reject and cancellation do not apply the preview. This does not prohibit an independently authorized editing tool from changing a Resource through its own Authority-gated operation.
+
+## Verification
+
+Use [the canonical checks](../agents/development.md). R1–R9 cover withdrawal, submission, registration identity, terminal recovery and scoped lifecycle contracts alongside the product smoke journeys. A new architecture must preserve those contracts or name and obtain approval for a deliberate behavior change; passing an older static baseline alone does not prove a new interface.

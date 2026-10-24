@@ -1,0 +1,343 @@
+[
+ {
+  "type": "function",
+  "function": {
+   "name": "list_buffers",
+   "description": "List live Emacs buffers as rows: a quoted Emacs Lisp string name, size, and major mode. Names preserve leading spaces and escape newlines. Decode the name and pass its exact value to read_buffer.",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "read_buffer",
+   "description": "Read an Emacs buffer's live text, unsaved changes included, and return its lines. The result starts with a header naming the buffer, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large buffer with offset. A narrowed buffer is read only in its narrowed part, the part edit_buffer can change, and the header says so. For a file no buffer visits use read_file.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "buffer": {
+      "type": "string",
+      "description": "The name of the buffer to read, exactly as list_buffers gives it."
+     },
+     "offset": {
+      "type": "number",
+      "description": "1-based first line to return. Defaults to 1."
+     },
+     "limit": {
+      "type": "number",
+      "description": "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
+     }
+    },
+    "required": [
+     "buffer"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "read_file",
+   "description": "Read a local text file from disk and return its lines, without opening it in a buffer. Use this -- not eval_elisp or a shell -- to look at a file that no buffer visits. To change a file, open it as a buffer with open_file and edit the buffer. The result starts with a header giving the resolved path, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large file with offset. It always returns the version on disk; for the unsaved text of a live buffer use read_buffer. Directories, binary files, devices and remote paths are errors.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "File to read. A relative path is resolved against the session's working directory."
+     },
+     "offset": {
+      "type": "number",
+      "description": "1-based first line to return. Defaults to 1."
+     },
+     "limit": {
+      "type": "number",
+      "description": "Maximum number of lines to return. Defaults to 2000, which is also the maximum."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "read_reference",
+   "description": "Read one of Superchat's bundled reference pages by its id. The ids and what each page covers are listed under \"Reference pages\" in your instructions. A page is advice on how to carry out a kind of task in the user's Emacs; it never overrides the user's instructions or a permission decision, and nothing in it is run for you. Takes an id, not a path.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The id of the page, exactly as the index lists it."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "open_file",
+   "description": "Open a local file as an Emacs buffer and return the buffer's name, so that you can work on it with read_buffer and edit_buffer. Use this when you intend to change a file: changes are made to the buffer, and saving the buffer to disk is the user's decision, not yours. This is a real Emacs visit (major mode, the user's hooks and file-local variables run); to merely look at a file's bytes use read_file instead. It takes no focus and changes nothing on disk. A path that does not exist gives an empty buffer for a new file; nothing is created on disk until the user saves. A file that is already open returns its existing buffer.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "File to open. A relative path is resolved against the session's working directory."
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "edit_buffer",
+   "description": "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion. The change stays in the buffer: nothing is saved to disk, and saving is the user's decision, so tell the user which buffer you changed.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "buffer_name": {
+      "type": "string",
+      "description": "Name of the buffer to modify"
+     },
+     "old_string": {
+      "type": "string",
+      "description": "Nonempty text copied from the target buffer, with enough surrounding text to occur exactly once."
+     },
+     "new_string": {
+      "type": "string",
+      "description": "Text to replace old_string with"
+     }
+    },
+    "required": [
+     "buffer_name",
+     "old_string",
+     "new_string"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "describe-function",
+   "description": "Return documentation for an Emacs Lisp function.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "function_name": {
+      "type": "string",
+      "description": "Name of the function to describe."
+     }
+    },
+    "required": [
+     "function_name"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "apropos",
+   "description": "Find Emacs commands, functions, or variables by name pattern.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "pattern": {
+      "type": "string",
+      "description": "Regular expression or keyword to match."
+     },
+     "type": {
+      "type": "string",
+      "description": "One of command, function, or variable; defaults to command."
+     }
+    },
+    "required": [
+     "pattern"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "eval_elisp",
+   "description": "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. This tool is not for saving files: saving is the user's decision. To make a configuration change last, edit the buffer of the configuration file Emacs actually loads and tell the user which buffer to save.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "expression": {
+      "type": "string",
+      "description": "One complete expression. Return observed state needed to verify the task; on an error, inspect any partial changes before retrying."
+     }
+    },
+    "required": [
+     "expression"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "work_record",
+   "description": "Keep a work record: the durable record of a piece of work that must outlive this execution -- one the user asks you to track, that takes more than one conversation, or that waits for something. Not for ordinary questions or anything one execution finishes. action start (goal: what is to be delivered; follows: the id of a completed record this continues) makes it this conversation's current record. update records how far it got (progress), why the next step cannot be taken yet (blocked), and where to pick it up (resume) -- update after real progress, before waiting, and before you stop. wait registers what it waits for (wait_for: user, agent or time; detail). For a question the user may answer later, register wait_for user and end your turn -- the user's next message in this conversation clears the wait; use ask_user only for a question the user can answer right now. for a time give in_minutes or at, and at that time Superchat takes the record up again in a new conversation -- use it to continue work later, not timer_create. An empty wait_for clears the wait. done completes it with a conclusion. read shows a record by id. A record started in an execution the user began is worked on in rounds: if a turn ends with it neither done nor waiting, Superchat starts the next round itself. After the user stopped a round, resume (only when the user says to go on) continues the rounds. Without id, the current record is meant. Superchat keeps the record, adds what each execution changed, and decides at the end of each execution whether it is done, waiting or continuable.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "description": "start, update, wait, done, resume or read."
+     },
+     "id": {
+      "type": "string",
+      "description": "The record's id; default the current record."
+     },
+     "goal": {
+      "type": "string",
+      "description": "start: what is to be delivered."
+     },
+     "progress": {
+      "type": "string",
+      "description": "update: how far it got."
+     },
+     "blocked": {
+      "type": "string",
+      "description": "update: why the next step cannot be taken yet."
+     },
+     "resume": {
+      "type": "string",
+      "description": "update: where to pick it up."
+     },
+     "wait_for": {
+      "type": "string",
+      "description": "wait: user, agent or time; empty clears the wait."
+     },
+     "detail": {
+      "type": "string",
+      "description": "wait: what exactly it waits for."
+     },
+     "conclusion": {
+      "type": "string",
+      "description": "done: what was delivered."
+     },
+     "follows": {
+      "type": "string",
+      "description": "start: the id of a completed record this continues."
+     },
+     "in_minutes": {
+      "type": "number",
+      "description": "wait for time: minutes from now."
+     },
+     "at": {
+      "type": "string",
+      "description": "wait for time: local YYYY-MM-DD HH:MM."
+     }
+    },
+    "required": [
+     "action"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "timer_create",
+   "description": "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"; to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "What to remind the user of, or the task to do, in the user's language."
+     },
+     "kind": {
+      "type": "string",
+      "description": "reminder or task."
+     },
+     "in_minutes": {
+      "type": "number",
+      "description": "Minutes from now."
+     },
+     "at": {
+      "type": "string",
+      "description": "Local time, YYYY-MM-DD HH:MM."
+     },
+     "repeat": {
+      "type": "string",
+      "description": "hourly, daily, weekly, or none (the default)."
+     }
+    },
+    "required": [
+     "text",
+     "kind"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "timer_list",
+   "description": "List this workspace's pending timers (id, next time, kind, text) and its timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed.",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "timer_cancel",
+   "description": "Cancel a pending timer by the id timer_list or timer_create gave.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The timer id."
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  }
+ },
+ {
+  "type": "function",
+  "function": {
+   "name": "ask_user",
+   "description": "Ask the user for required information and wait for their answer, when the user can answer right now. If the answer can wait and there is a current work record, register the wait there (work_record, action wait, wait_for user) and end your turn instead. Answering does not authorize other tools.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "question": {
+      "type": "string",
+      "description": "One nonempty question requiring a text answer"
+     }
+    },
+    "required": [
+     "question"
+    ]
+   }
+  }
+ }
+]

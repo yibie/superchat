@@ -1,0 +1,33 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 9 tests (2026-10-10 08:21:14-0700, selector ‘"^workspace-scope/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082115-193877-f328 completed (session 20261010-082114-41da)
+   passed  1/9  workspace-scope/a-search-follows-the-run-not-the-current-buffer (0.630794 sec)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+   passed  2/9  workspace-scope/every-built-in-tool-does-not-include-sql (0.004107 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082115-265624-adbe completed (session 20261010-082115-fb17)
+   passed  3/9  workspace-scope/memory-search-and-recall-keep-their-scopes (0.043157 sec)
+   passed  4/9  workspace-scope/no-built-in-preset-offers-sql (0.000144 sec)
+   passed  5/9  workspace-scope/sql-is-not-on-the-default-surface (0.000011 sec)
+   passed  6/9  workspace-scope/sql-named-by-the-user-is-still-there (0.002198 sec)
+   passed  7/9  workspace-scope/sql-says-what-it-reaches (0.001803 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261010-082115-312692-61a7 completed (session 20261010-082115-ef58)
+   passed  8/9  workspace-scope/tool-history-is-the-conversations-own (0.067605 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  9/9  workspace-scope/with-no-conversation-nothing-is-searched (0.039266 sec)
+
+Ran 9 tests, 9 results as expected, 0 unexpected (2026-10-10 08:21:15-0700, 0.789471 sec)
+

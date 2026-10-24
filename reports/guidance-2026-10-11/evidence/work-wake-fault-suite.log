@@ -1,0 +1,81 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 17 tests (2026-10-11 07:21:54-0700, selector ‘"^work-wake-fault/"’)
+   passed   1/17  work-wake-fault/a-cut-off-wake-is-left-alone-once-the-record-moved-on (0.412663 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072154-772611-606d failed (session 20261011-072154-b6f5)
+   passed   2/17  work-wake-fault/a-failed-execution-is-recorded-as-failed (0.050581 sec)
+superchat: work record work-20261011072154-9ab7 was not taken up: WWF injected: first send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072154-825602-831b completed (session 20261011-072154-5a7f)
+   passed   3/17  work-wake-fault/a-failed-wake-is-tried-again-without-a-restart (0.051431 sec)
+superchat: work record work-20261011072154-a240 was not taken up: WWF injected: send fails
+superchat: work record work-20261011072154-a240 was not taken up: WWF injected: send fails
+   passed   4/17  work-wake-fault/a-failed-wake-waits-out-its-time-across-a-remount (0.012264 sec)
+superchat: work record work-20261011072154-1499 was not taken up: WWF injected: send fails
+   passed   5/17  work-wake-fault/a-record-out-of-tries-is-not-woken-by-another-sweep (0.011163 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072154-897787-0b12 completed (session 20261011-072154-cc3f)
+   passed   6/17  work-wake-fault/a-running-execution-is-not-taken-for-a-cut-off-one (0.050806 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072154-971301-90d9 completed (session 20261011-072154-8f1c)
+   passed   7/17  work-wake-fault/a-scan-during-the-execution-starts-nothing-more (0.073995 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072155-026439-0b05 completed (session 20261011-072155-0a34)
+   passed   8/17  work-wake-fault/a-wake-cut-off-by-emacs-quitting-is-taken-up-on-the-next-start (0.054522 sec)
+superchat: work record work-20261011072155-23fb was not taken up: WWF injected: nothing accepted the wake
+   passed   9/17  work-wake-fault/a-wake-nothing-accepted-is-not-shown-as-settled (0.007653 sec)
+superchat: work record work-20261011072155-ca53 was not taken up: WWF injected: nothing accepted the wake
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072155-088884-8f83 completed (session 20261011-072155-635a)
+   passed  10/17  work-wake-fault/a-wake-nothing-accepted-is-taken-up-on-the-next-start (0.051525 sec)
+superchat: work record work-20261011072155-2a24 was not taken up: WWF injected: send always fails
+superchat: work record work-20261011072155-2a24 was not taken up: WWF injected: send always fails
+superchat: work record work-20261011072155-2a24 was not taken up: WWF injected: send always fails
+   passed  11/17  work-wake-fault/a-wake-that-keeps-failing-stops-being-retried (1.047131 sec)
+superchat: work record work-20261011072156-7c35 was not taken up: WWF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-199302-a75c completed (session 20261011-072156-d6bb)
+   passed  12/17  work-wake-fault/a-wake-that-works-forgets-the-failures (0.096050 sec)
+   passed  13/17  work-wake-fault/an-execution-cut-off-by-emacs-quitting-is-reported-as-interrupted (0.013144 sec)
+superchat: work record work-20261011072156-dfa6 was not taken up: WWF injected: first wake fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-297352-d239 completed (session 20261011-072156-e340)
+   passed  14/17  work-wake-fault/one-failed-wake-does-not-stop-the-others (0.052828 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-345904-ec1c completed (session 20261011-072156-e065)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-401169-5a32 completed (session 20261011-072156-e065)
+   passed  15/17  work-wake-fault/the-main-conversation-is-told-once (0.128977 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-474572-9f40 completed (session 20261011-072156-dd63)
+   passed  16/17  work-wake-fault/the-report-survives-losing-the-in-memory-link (0.047519 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072156-522958-8c30 completed (session 20261011-072156-b0c4)
+   passed  17/17  work-wake-fault/the-woken-execution-is-not-told-the-record-still-waits (0.047278 sec)
+
+Ran 17 tests, 17 results as expected, 0 unexpected (2026-10-11 07:21:56-0700, 2.210085 sec)
+

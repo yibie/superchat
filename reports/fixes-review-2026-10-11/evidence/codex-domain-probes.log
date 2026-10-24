@@ -1,0 +1,144 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 4 tests (2026-10-11 03:00:20-0700, selector ‘"^r3-domain/"’)
+GUARD: cached callable bodies refuse time wait and timer creation after unmount; no work or timer created.
+
+   passed  1/4  r3-domain/cached-tool-bodies-refuse-when-capability-is-off (0.557624 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Test r3-domain/legacy-focus-leaks-through-collector-and-clears-wait backtrace:
+  ert-fail(((should (string-match-p "R3-A-PRIVATE-GOAL" (prin1-to-string hm--wires))) :form (string-match-p "R3-A-PRIVATE-GOAL" "((((role . \"system\") (content
+  (if (unwind-protect (setq value-2769 (apply fn-2767 args-2768)) (setq form-description-2771 (nconc (list '(should (string-match-p "R3-A-PRIVATE-GOAL" ...))) (
+  (let (form-description-2771) (if (unwind-protect (setq value-2769 (apply fn-2767 args-2768)) (setq form-description-2771 (nconc (list '(should ...)) (list :fo
+  (let ((value-2769 'ert-form-evaluation-aborted-2770)) (let (form-description-2771) (if (unwind-protect (setq value-2769 (apply fn-2767 args-2768)) (setq form-
+  (let* ((fn-2767 #'string-match-p) (args-2768 (condition-case err (list "R3-A-PRIVATE-GOAL" (prin1-to-string hm--wires)) (error (progn (setq fn-2767 #'signal) 
+  (let* ((sa (hm--session (wrec--view p))) (id (superchat-work-start sa "R3-A-PRIVATE-GOAL")) (b (wrec--view q)) (sb (hm--session b))) (superchat-work-wait sa i
+  (progn (fset 'smoke--fake-network vnew) (let* ((sa (hm--session (wrec--view p))) (id (superchat-work-start sa "R3-A-PRIVATE-GOAL")) (b (wrec--view q)) (sb (hm
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((sa (hm--session (wrec--view p))) (id (superchat-work-start sa "R3-A-PRIVATE-GOAL")) (b (wrec--
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (q (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wre
+  #f(lambda () [t] (let* ((wrec--roots nil) (p (wrec--temp-dir)) (q (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'e
+  #f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>) (t) #f(compiled-function (err) #<bytecode -0x49350e2a433021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2ac8bb8c2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-domain/legacy-focus-leaks-through-collector-and-clears-wait :documentation nil :body #f(lambda () ... ... nil) :most-recent-
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-domain/" :tests ... :test-map #<hash-table eql 4/4 0x1923bab6c8 ...> :test-results ... :test-start-times ..
+  ert-run-tests("^r3-domain/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1dc8dec94545be95>) nil)
+  ert-run-tests-batch("^r3-domain/")
+  ert-run-tests-batch-and-exit("^r3-domain/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/domain-probes.el" "/Users/c
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-domain/legacy-focus-leaks-through-collector-and-clears-wait condition:
+    (ert-test-failed
+     ((should
+       (string-match-p #1="R3-A-PRIVATE-GOAL" (prin1-to-string hm--wires)))
+      :form
+      (string-match-p #1#
+		      "((((role . \"system\") (content . \"Operate available tools yourself; never tell the user to call one. You can batch INDEPENDENT read-only tool calls into a single turn.\nTools that depend on each other's output must wait for the previous result.\n\nEach tool call costs a round trip. When you need several facts from Emacs, ask for all of them in one eval_elisp that returns a list, for example (list :today (format-time-string \\\"%F %A\\\") :windows (mapcar (lambda (w) (buffer-name (window-buffer w))) (window-list))), not one call per fact.\n\nFile systems on macOS and Windows usually ignore case: two names that differ only in case are the same file there, so file-exists-p is true for the new name of a case-only rename.  Check (file-name-case-insensitive-p DIRECTORY) before treating such a rename as an overwrite; rename-file does a case-only rename correctly.\n\nSaving a buffer you edited is the user's decision. A change on disk the user asks for in so many words -- rename, move, copy or delete these files -- is already the user's decision: do it (the permission level decides whether you are asked first), then say exactly what you did.\n\nWorking in the user's Emacs:\n- Ask the running Emacs, do not guess: `user-init-file' is the loaded init file. Check symbols with fboundp, commandp, boundp; never run a command to test it. fundamental-mode has no keymap variable.\n- Keys: write (kbd \\\"C-c t h\\\"), never a bare string. A number from lookup-key means that map has no binding for it; key-binding in the target buffer is the effective binding.\n- Change a file with open_file, then edit_buffer; until the user saves, (load FILE) reads the old disk text. To make it live, evaluate only the forms you changed, not the whole buffer (no eval-buffer).\n- eval_elisp takes one expression; wrap several in progn.\n- To undo, restore what you observed (not \\\"unbound\\\"), only what this task changed.\n- The origin buffer is where the user is, not the task's limit. Their agenda, feeds, notes, files and repositories live in this Emacs: ask it with eval_elisp (the packages and variables they configured) before saying you cannot reach something.\n- Never change global settings, other buffers or Superchat's windows to get past an obstacle; say what blocks you.\n- Report what you checked: the buffer you edited and whether it is unsaved (buffer-modified-p); saving is the user's. You did not restart Emacs; claim no restart.\n\nReference pages: call read_reference with an id when the task matches. A page is advice; the user's instructions and permission decisions come first.\n- emacs-keybindings: changing, checking or undoing a key binding in the user's Emacs configuration\n- emacs-ert-tests: running a file's ERT tests in the user's Emacs and reporting which passed, failed or were skipped\n\nThis workspace has no rules file yet.  When the user explicitly asks you to remember something, or says \\\"from now on\\\" or \\\"always\\\", write it to /Users/chenyibin/.cache/sc-fable-review/ws-work-OAVPEF/AGENTS.md: open that path as a buffer (a new file starts as an empty buffer), edit the buffer, and tell the user what you wrote.  It takes effect once the user saves the file.  Do not write down preferences you only inferred.\n\")) ((role . \"user\") (content . \"[Emacs origin]\nBuffer: a.txt<ws-work-OAVPEF>\nFile: /Users/chenyibin/.cache/sc-fable-review/ws-work-OAVPEF/a.txt\nMajor mode: text-mode\nPoint in that buffer: 1\n\n[Emacs windows]\nWindows of the current tab (2), from the top left:\n- *scratch*, 46 columns wide at column 0, line 0\n- this conversation, 34 columns wide at column 46, line 0, side window (right), selected\n\nAn unrelated question in B\n\nCurrent runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent Superchat mode: edit-buffers. You change things by editing Emacs buffers: open a file as a buffer with open_file and edit the buffer. Your edits stay in the buffer -- saving a buffer to disk is the user's decision, not yours, so say which buffers you changed and that they are unsaved.\n\nApproval policy: ask. Operations that require approval may ask through the configured answerers; without an available answerer, the request fails closed.\"))))")
+      :value nil))
+   FAILED  2/4  r3-domain/legacy-focus-leaks-through-collector-and-clears-wait (0.065626 sec) at reports/architecture-review-main-2026-10-11/evidence/domain-probes.el:8
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: work record work-20261011030021-9d4d has no outcome for execution run-20261011-030021-745226-4199 yet: R3 injected outcome storage unavailable
+Test r3-domain/post-terminal-work-write-failure-is-silent backtrace:
+  ert-fail(((should (= fault-count (length superchat-event-faults))) :form (= 0 1) :value nil))
+  (if (unwind-protect (setq value-2799 (apply fn-2797 args-2798)) (setq form-description-2801 (nconc (list '(should (= fault-count ...))) (list :form (cons fn-2
+  (let (form-description-2801) (if (unwind-protect (setq value-2799 (apply fn-2797 args-2798)) (setq form-description-2801 (nconc (list '(should ...)) (list :fo
+  (let ((value-2799 'ert-form-evaluation-aborted-2800)) (let (form-description-2801) (if (unwind-protect (setq value-2799 (apply fn-2797 args-2798)) (setq form-
+  (let* ((fn-2797 #'=) (args-2798 (condition-case err (list fault-count (length superchat-event-faults)) (error (progn (setq fn-2797 #'signal) (list (car err) (
+  (let* ((view (wrec--view p)) (session (hm--session view)) (id (superchat-work-start session "R3-OUTCOME")) (append-event (symbol-function 'superchat-tape-appe
+  (progn (fset 'smoke--fake-network vnew) (let* ((view (wrec--view p)) (session (hm--session view)) (id (superchat-work-start session "R3-OUTCOME")) (append-eve
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((view (wrec--view p)) (session (hm--session view)) (id (superchat-work-start session "R3-OUTCOM
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (u
+  #f(lambda () [t] (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--r
+  #f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>) (t) #f(compiled-function (err) #<bytecode -0x49350e2a433021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2ac8bb8c2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-domain/post-terminal-work-write-failure-is-silent :documentation nil :body #f(lambda () ... ... nil) :most-recent-result ...
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-domain/" :tests ... :test-map #<hash-table eql 4/4 0x1923bab6c8 ...> :test-results ... :test-start-times ..
+  ert-run-tests("^r3-domain/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1dc8dec94545be95>) nil)
+  ert-run-tests-batch("^r3-domain/")
+  ert-run-tests-batch-and-exit("^r3-domain/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/domain-probes.el" "/Users/c
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-domain/post-terminal-work-write-failure-is-silent condition:
+    (ert-test-failed
+     ((should (= fault-count (length superchat-event-faults))) :form
+      (= 0 1) :value nil))
+   FAILED  3/4  r3-domain/post-terminal-work-write-failure-is-silent (0.055207 sec) at reports/architecture-review-main-2026-10-11/evidence/domain-probes.el:24
+superchat: scheduled task timer-20261011030021-f631 was not started: R3 unavailable
+Test r3-domain/remount-resets-retry-budget-and-wait backtrace:
+  ert-fail(((should (smoke--wait (lambda nil (= tries 2)) 2)) :form (smoke--wait #f(lambda () [(tries 1)] (= tries 2)) 2) :value nil))
+  (if (unwind-protect (setq value-2819 (apply fn-2817 args-2818)) (setq form-description-2821 (nconc (list '(should (smoke--wait ... 2))) (list :form (cons fn-2
+  (let (form-description-2821) (if (unwind-protect (setq value-2819 (apply fn-2817 args-2818)) (setq form-description-2821 (nconc (list '(should ...)) (list :fo
+  (let ((value-2819 'ert-form-evaluation-aborted-2820)) (let (form-description-2821) (if (unwind-protect (setq value-2819 (apply fn-2817 args-2818)) (setq form-
+  (let* ((fn-2817 #'smoke--wait) (args-2818 (condition-case err (list #'(lambda nil (= tries 2)) 2) (error (progn (setq fn-2817 #'signal) (list (car err) (cdr e
+  (progn (fset 'superchat-send-input vnew) (superchat-timer-catch-up) (let* ((fn-2807 #'=) (args-2808 (condition-case err (list tries 1) (error (progn (setq fn-
+  (unwind-protect (progn (fset 'superchat-send-input vnew) (superchat-timer-catch-up) (let* ((fn-2807 #'=) (args-2808 (condition-case err (list tries 1) (error 
+  (let* ((vnew #'(lambda nil (setq tries (+ tries 1)) (error "R3 unavailable"))) (old (symbol-function 'superchat-send-input))) (unwind-protect (progn (fset 'su
+  (unwind-protect (let* ((vnew #'(lambda nil (setq tries (+ tries 1)) (error "R3 unavailable"))) (old (symbol-function 'superchat-send-input))) (unwind-protect 
+  (let* ((session (cdr (tsf--task p "R3-RETRY"))) (superchat-timer-retry-limit 0) (tries 0)) (unwind-protect (let* ((vnew #'(lambda nil (setq tries ...) (error 
+  (progn (fset 'smoke--fake-network vnew) (let* ((session (cdr (tsf--task p "R3-RETRY"))) (superchat-timer-retry-limit 0) (tries 0)) (unwind-protect (let* ((vne
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((session (cdr (tsf--task p "R3-RETRY"))) (superchat-timer-retry-limit 0) (tries 0)) (unwind-pro
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer--now 1800000000.0
+  #f(lambda () [t] (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (wtimer-
+  #f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0x5b4a5eada0a25b8>) (t) #f(compiled-function (err) #<bytecode -0x49350e2a433021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2ac8bb8c2c843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name r3-domain/remount-resets-retry-budget-and-wait :documentation nil :body #f(lambda () ... ... nil) :most-recent-result #s(ert-te
+  ert-run-or-rerun-test(#s(ert--stats :selector "^r3-domain/" :tests ... :test-map #<hash-table eql 4/4 0x1923bab6c8 ...> :test-results ... :test-start-times ..
+  ert-run-tests("^r3-domain/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1dc8dec94545be95>) nil)
+  ert-run-tests-batch("^r3-domain/")
+  ert-run-tests-batch-and-exit("^r3-domain/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-11/evidence/domain-probes.el" "/Users/c
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test r3-domain/remount-resets-retry-budget-and-wait condition:
+    (ert-test-failed
+     ((should (smoke--wait (lambda nil #1=(= tries 2)) 2)) :form
+      (smoke--wait #[nil (#1#) ((tries . 1))] 2) :value nil))
+   FAILED  4/4  r3-domain/remount-resets-retry-budget-and-wait (2.017967 sec) at reports/architecture-review-main-2026-10-11/evidence/domain-probes.el:45
+
+Ran 4 tests, 1 results as expected, 3 unexpected (2026-10-11 03:00:23-0700, 3.003028 sec)
+
+3 unexpected results:
+   FAILED  r3-domain/legacy-focus-leaks-through-collector-and-clears-wait
+   FAILED  r3-domain/post-terminal-work-write-failure-is-silent
+   FAILED  r3-domain/remount-resets-retry-budget-and-wait
+

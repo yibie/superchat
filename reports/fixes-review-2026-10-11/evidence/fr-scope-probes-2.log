@@ -1,0 +1,32 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 7 tests (2026-10-11 03:11:39-0700, selector ‘"^fr-scope/"’)
+FR-SCOPE OBSERVED: acquire signalled once; count stays 1 with no undo; next holder counted as 2nd, acquire never called; dispose leaves 1.
+
+   passed  1/7  fr-scope/an-acquire-that-signals-leaves-a-holder-nobody-owns (0.000170 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+FR-SCOPE DOUBLED changes: announced=1 review-screen calls=1 notices=0 listeners visible from global=6
+
+   passed  2/7  fr-scope/guard-a-doubled-changes-row-announces-and-reviews-once (1.215534 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  3/7  fr-scope/guard-a-doubled-work-records-row-writes-one-outcome (0.100297 sec)
+superchat-plugin: fr-failing-row failed: FR injected: apply fails after holding
+   passed  4/7  fr-scope/guard-an-apply-that-fails-after-holding-lets-go (0.000287 sec)
+superchat: scheduled task timer-20261011031140-ca43 was not started: FR start unavailable
+   passed  5/7  fr-scope/guard-the-timer-row-keeps-its-count-across-a-remount (0.551293 sec)
+superchat: work record work-20261011031141-87c7 was not taken up: FR injected: send fails
+superchat: work record work-20261011031141-87c7 was not taken up: FR injected: send fails
+FR-SCOPE WAKE: retry-limit=0; first wake failed; unmount/remount at +0 s => 2 sends, work.woken facts=2 (each try opens a new conversation)
+
+   passed  6/7  fr-scope/remounting-work-records-grants-a-failed-wake-another-try-at-once (0.077781 sec)
+superchat: work record work-20261011031141-f072 was not taken up: FR injected: send fails
+superchat: work record work-20261011031141-f072 was not taken up: FR injected: send fails
+FR-SCOPE WAKE WAIT: limit=3, wait=300 s; remount at +0 s => 2 sends
+
+   passed  7/7  fr-scope/remounting-work-records-skips-the-wake-wait (0.074131 sec)
+
+Ran 7 tests, 7 results as expected, 0 unexpected (2026-10-11 03:11:41-0700, 2.019905 sec)
+

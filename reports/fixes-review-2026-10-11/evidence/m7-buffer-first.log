@@ -1,0 +1,145 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 22 tests (2026-10-11 02:59:41-0700, selector ‘"^m7/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- owned.el -> /Users/chenyibin/.cache/sc-fable-review/m7-KoBbXu/owned.el
+Superchat session cached for next startup.
+   passed   1/22  m7/changes/a-buffer-that-took-the-old-name-is-not-the-edited-one (0.788258 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025942-322787-4523 completed (session m7-child-a3853c)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- delegated.el -> /Users/chenyibin/.cache/sc-fable-review/m7-vjmJXF/delegated.el
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- delegated.el -> /Users/chenyibin/.cache/sc-fable-review/m7-vjmJXF/delegated.el
+   passed   2/22  m7/changes/a-delegated-runs-edit-belongs-to-the-run-that-started-it (0.100326 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 buffers edited by this Run are unsaved -- saving is yours; /changes to review:
+- again.el -> /Users/chenyibin/.cache/sc-fable-review/m7-LIRMuy/again.el
+- *m7-scratch-notes* (not visiting a file)
+Superchat session cached for next startup.
+   passed   3/22  m7/changes/a-reopened-buffer-is-a-different-buffer (0.189332 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- conf.el -> /Users/chenyibin/.cache/sc-fable-review/m7-0ZqKIW/conf.el
+Superchat session cached for next startup.
+   passed   4/22  m7/changes/are-derived-from-the-tape-and-the-modified-mark (0.140896 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- first.el -> /Users/chenyibin/.cache/sc-fable-review/m7-Qd9wHA/first.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025942-866541-9fde completed (session 20261011-025942-97a3)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- second.el -> /Users/chenyibin/.cache/sc-fable-review/m7-Qd9wHA/second.el
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-025942-950901-0c14 completed (session m7-foreign-38685a)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- foreign.el -> /Users/chenyibin/.cache/sc-fable-review/m7-Qd9wHA/foreign.el
+Superchat session cached for next startup.
+   passed   5/22  m7/changes/each-run-lists-its-own-buffers (0.317522 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- r.el -> /Users/chenyibin/.cache/sc-fable-review/m7-LlgSEB/r.el
+Superchat session cached for next startup.
+   passed   6/22  m7/changes/revert-is-the-users-operation-too (0.112268 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed   7/22  m7/changes/the-command-and-the-run-end-notice-are-installed (0.088955 sec)
+   passed   8/22  m7/changes/the-delegations-of-many-runs-are-read-once (0.002399 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 2 buffers edited by this Run are unsaved -- saving is yours; /changes to review:
+- mode.el -> /Users/chenyibin/.cache/sc-fable-review/m7-nK8T3W/mode.el
+- *m7-clone-source* (not visiting a file)
+Superchat session cached for next startup.
+   passed   9/22  m7/changes/the-mark-stays-with-the-buffer-and-with-nothing-else (0.162802 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- base.el -> /Users/chenyibin/.cache/sc-fable-review/m7-pz07OY/base.el
+Superchat session cached for next startup.
+   passed  10/22  m7/changes/the-tape-names-the-base-buffer-and-the-list-reads-the-live-one (0.090680 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/22  m7/levels/the-default-is-edit-buffers-and-the-old-name-still-reads (0.047802 sec)
+   passed  12/22  m7/open-file/a-path-that-does-not-exist-gives-a-buffer-and-no-file (0.002644 sec)
+   passed  13/22  m7/open-file/brings-the-file-into-emacs-without-taking-focus (0.001718 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  14/22  m7/open-file/every-level-allows-it-and-nobody-is-asked (0.298473 sec)
+   passed  15/22  m7/open-file/is-on-the-default-surface-after-read-file (0.000071 sec)
+   passed  16/22  m7/open-file/what-it-refuses (0.190814 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- away.el -> /Users/chenyibin/.cache/sc-fable-review/m7-q1p0vG/far/away.el
+Superchat session cached for next startup.
+   passed  17/22  m7/write-path/an-ordinary-buffer-is-editable-wherever-its-file-lives (0.095888 sec)
+   passed  18/22  m7/write-path/no-default-tool-tells-the-model-to-persist (0.003093 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  19/22  m7/write-path/save-buffer-composes-with-the-approval-policy (0.348204 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  20/22  m7/write-path/the-default-surface-has-no-persisting-tool (0.168694 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Superchat session cached for next startup.
+   passed  21/22  m7/write-path/the-users-environment-may-persist-and-is-not-fought (0.097621 sec)
+   passed  22/22  m7/write-path/write-file-is-gone-and-nothing-offers-escalation (0.001134 sec)
+
+Ran 22 tests, 22 results as expected, 0 unexpected (2026-10-11 02:59:44-0700, 3.250827 sec)
+

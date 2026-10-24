@@ -1,0 +1,29 @@
+{
+  "changed": [
+    "CHANGELOG.md",
+    "docs/architecture.md",
+    "docs/decisions/accepted/2026-10-11-a-run-records-who-started-it.md",
+    "docs/decisions/accepted/2026-10-11-a-stopped-execution-is-not-a-failed-one.md",
+    "docs/decisions/accepted/2026-10-11-giving-up-and-looking-are-facts.md",
+    "docs/decisions/accepted/2026-10-11-my-execution-that-ended-with-the-conversation-closed.md",
+    "docs/decisions/accepted/2026-10-11-what-a-row-of-the-pending-list-says.md",
+    "docs/roadmap.md",
+    "scripts/annotate-chat-regression.el",
+    "scripts/pending-regression.el",
+    "scripts/run-actor-regression.el",
+    "scripts/seen-regression.el",
+    "scripts/shared-resource-regression.el",
+    "scripts/unattended-notice-regression.el",
+    "scripts/window-arrangement-regression.el",
+    "scripts/work-outcome-regression.el",
+    "superchat-changes.el",
+    "superchat-dispatcher.el",
+    "superchat-pending.el",
+    "superchat-plugin.el",
+    "superchat-prompt-hooks.el",
+    "superchat-tape.el",
+    "superchat-timer.el",
+    "superchat-work.el"
+  ],
+  "files": 698
+}

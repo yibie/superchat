@@ -1,0 +1,47 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 15 tests (2026-10-11 02:59:47-0700, selector ‘"^timer-fault/"’)
+superchat: scheduled task timer-20261011025947-c7c0 was not started: start unavailable
+superchat: scheduled task timer-20261011025947-c7c0 was not started: start unavailable
+superchat: scheduled task timer-20261011025947-c7c0 was not started: start unavailable
+   passed   1/15  timer-fault/a-busy-task-does-not-carry-a-failing-one-past-its-limit (0.596568 sec)
+   passed   2/15  timer-fault/a-cancelled-task-is-not-started-later (0.009092 sec)
+superchat: scheduled task timer-20261011025948-c377 was not started: TSF injected: send fails
+superchat: scheduled task timer-20261011025948-c377 was not started: TSF injected: send fails
+superchat: scheduled task timer-20261011025948-c377 was not started: TSF injected: send fails
+   passed   3/15  timer-fault/a-failing-start-is-retried-a-limited-number-of-times (0.010254 sec)
+   passed   4/15  timer-fault/a-reminder-is-never-an-unstarted-task (0.007679 sec)
+superchat: Scheduled task (due 2027-01-15 00:01): TSF-F do the thing -- Superchat cannot tell whether it started: Emacs exited while it was being sent. It was not started again.
+   passed   5/15  timer-fault/a-send-cut-off-by-an-exit-is-reported-not-repeated (0.009374 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   6/15  timer-fault/a-send-that-never-reached-a-run-is-started-again (0.069946 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   7/15  timer-fault/a-started-task-records-its-run (0.058662 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   8/15  timer-fault/a-task-fired-before-emacs-exited-starts-on-restart (0.053197 sec)
+   passed   9/15  timer-fault/a-task-fired-before-this-was-recorded-is-left-alone (0.007858 sec)
+superchat: scheduled task timer-20261011025948-9f6a was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/15  timer-fault/a-task-that-started-has-no-wait-left (0.057279 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  11/15  timer-fault/a-task-waits-while-its-conversation-is-busy (0.090330 sec)
+superchat: scheduled task timer-20261011025948-8e1a was not started: TSF injected: send fails
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  12/15  timer-fault/a-task-whose-send-failed-is-started-later-once (0.061831 sec)
+   passed  13/15  timer-fault/the-busy-check-sees-a-real-running-execution (0.006921 sec)
+   passed  14/15  timer-fault/the-new-facts-are-known-tape-events (0.000051 sec)
+   passed  15/15  timer-fault/the-retry-timer-is-due-at-the-soonest-time-asked (0.002803 sec)
+
+Ran 15 tests, 15 results as expected, 0 unexpected (2026-10-11 02:59:48-0700, 1.042518 sec)
+

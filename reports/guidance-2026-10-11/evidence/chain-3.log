@@ -1,0 +1,4 @@
+kernel: exit=0; 0.3s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/kernel.log
+smoke: exit=0; 4.3s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/smoke.log
+m3: exit=0; 20.6s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/m3.log
+CHAIN-3-DONE

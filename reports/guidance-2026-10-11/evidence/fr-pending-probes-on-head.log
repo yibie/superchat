@@ -1,0 +1,344 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 10 tests (2026-10-11 07:21:45-0700, selector ‘"^fr-pending/"’)
+superchat: scheduled task timer-20261011072145-474c was not started: TSF injected: send fails
+retry armed (300 s from now): detail="scheduled task, due 2027-01-15 00:01, not started"
+
+superchat: scheduled task timer-20261011072145-474c was not started: TSF injected: send fails
+out of tries (retry timer=nil): detail="scheduled task, due 2027-01-15 00:01, not started"
+
+===== a scheduled task that came due, whose send failed, and that this Emacs has given up on =====
+
+ Due, not started       FR-TASK whose send fails                     scheduled task, due 2027-01-15 00:01, not started    20261011-072145-e1f5
+=====
+
+   passed   1/10  fr-pending/a-failed-task-reads-the-same-whether-a-retry-is-armed-or-not (0.409278 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== a sub-agent's execution under way (two Runs active) =====
+
+ Running                started by execution run-20261011-072145-727252-b757 execution run-20261011-072145-751768-2529            subagent-researcher-20261011-072145-eb9f
+ Running                started by you                               execution run-20261011-072145-727252-b757            20261011-072145-44b4
+=====
+running rows: (("started by execution run-20261011-072145-727252-b757" "execution run-20261011-072145-751768-2529" "subagent-researcher-20261011-072145-eb9f") ("started by you" "execution run-20261011-072145-727252-b757" "20261011-072145-44b4"))
+
+Superchat Run run-20261011-072145-727252-b757 audit incomplete: Open Runtime tool work at cancelled: 1 execution(s), 1 effect(s), 0 approval(s)
+superchat: run run-20261011-072145-727252-b757 audit-incomplete (session 20261011-072145-44b4)
+superchat: run run-20261011-072145-751768-2529 cancelled (session subagent-researcher-20261011-072145-eb9f)
+Test fr-pending/a-running-sub-agent-is-started-by-you backtrace:
+  ert-fail(((should (cl-every (lambda (i) (equal "started by you" (plist-get i :what))) items)) :form (cl-every #f(lambda (i) [t] (equal "started by you" (plist
+  (if (unwind-protect (setq value-3326 (apply fn-3324 args-3325)) (setq form-description-3328 (nconc (list '(should (cl-every ... items))) (list :form (cons fn-
+  (let (form-description-3328) (if (unwind-protect (setq value-3326 (apply fn-3324 args-3325)) (setq form-description-3328 (nconc (list '(should ...)) (list :fo
+  (let ((value-3326 'ert-form-evaluation-aborted-3327)) (let (form-description-3328) (if (unwind-protect (setq value-3326 (apply fn-3324 args-3325)) (setq form-
+  (let* ((fn-3324 #'cl-every) (args-3325 (condition-case err (list #'(lambda (i) (equal "started by you" ...)) items) (error (progn (setq fn-3324 #'signal) (lis
+  (let ((items (pend--of 'running))) (fr-pend--show "a sub-agent's execution under way (two Runs active)") (princ (format "running rows: %S\n" (mapcar #'(lambda
+  (let* ((view (wrec--view p)) (run (smoke--send view "delegate the research"))) (let* ((fn-3314 #'smoke--wait) (args-3315 (condition-case err (list #'(lambda n
+  (progn (fset 'smoke--fake-network vnew) (setq superchat-llm-tool-names (append superchat-llm-tool-names '("delegate_to_subagent"))) (let* ((view (wrec--view p
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (setq superchat-llm-tool-names (append superchat-llm-tool-names '("delegate_to_subagent"))) (let* ((vi
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (i
+  (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list
+  (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq w
+  (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) 
+  (unwind-protect (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list ...)) (superchat-display-style 'edit
+  (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unwind-protect (prog
+  #f(lambda () [t] (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unw
+  #f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>) (t) #f(compiled-function (err) #<bytecode -0x7921a6ccec021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a276ab0ac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name fr-pending/a-running-sub-agent-is-started-by-you :documentation nil :body #f(lambda () ... ... nil) :most-recent-result ... :ex
+  ert-run-or-rerun-test(#s(ert--stats :selector "^fr-pending/" :tests ... :test-map #<hash-table eql 10/10 0x19011776dd ...> :test-results ... :test-start-times
+  ert-run-tests("^fr-pending/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1ebcc431086de1db>) nil)
+  ert-run-tests-batch("^fr-pending/")
+  ert-run-tests-batch-and-exit("^fr-pending/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el" "/Users/chenyibin
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test fr-pending/a-running-sub-agent-is-started-by-you condition:
+    (ert-test-failed
+     ((should
+       (cl-every (lambda #1=(i) #2=(equal "started by you" ...)) items))
+      :form
+      (cl-every #[#1# (#2#) (t)]
+		((:kind running :key "run-20261011-072145-751768-2529"
+			:what
+			"started by execution run-20261011-072145-727252-b757"
+			:detail
+			"execution run-20261011-072145-751768-2529"
+			:session
+			"subagent-researcher-20261011-072145-eb9f" :buffer
+			nil)
+		 (:kind running :key "run-20261011-072145-727252-b757"
+			:what "started by you" :detail
+			"execution run-20261011-072145-727252-b757"
+			:session "20261011-072145-44b4" :buffer nil)))
+      :value nil))
+   FAILED   2/10  fr-pending/a-running-sub-agent-is-started-by-you (0.061556 sec) at reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el:155
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072145-906973-5777 completed (session 20261011-072145-ddc7)
+run status after its View was killed: completed; pending items=nil; notices=nil
+
+   passed   3/10  fr-pending/a-users-execution-that-ended-while-its-view-was-killed-is-listed-nowhere (0.442631 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072146-390539-8096 completed (session 20261011-072146-1b66)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt<ws-work-yKHswo> -> /Users/chenyibin/.cache/sc-guide/ws-work-yKHswo/a.txt
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072146-463298-c67f completed (session 20261011-072146-fa41)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt<ws-work-yKHswo> -> /Users/chenyibin/.cache/sc-guide/ws-work-yKHswo/a.txt [outside this workspace, /Users/chenyibin/.cache/sc-guide/ws-work-ZYGEr5/]
+marks newest first=(("20261011-072146-fa41" . "run-20261011-072146-463298-c67f") ("20261011-072146-1b66" . "run-20261011-072146-390539-8096"))
+row's conversation="20261011-072146-1b66" (first editor="20261011-072146-1b66", latest editor="20261011-072146-fa41")
+
+   passed   4/10  fr-pending/an-unsaved-buffer-two-conversations-edited-names-the-first (0.189560 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat-changes-notices-open signalled: FR injected: the View cannot be rebuilt
+
+   passed   5/10  fr-pending/guard-the-notices-list-keeps-the-notice-when-the-conversation-cannot-be-shown (0.044184 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat-pending-open signalled: FR injected: the View cannot be rebuilt
+notices left after RET failed to show the conversation: 1
+
+Test fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown backtrace:
+  ert-fail(((should (= 0 (length superchat-changes--notices))) :form (= 0 1) :value nil))
+  (if (unwind-protect (setq value-3360 (apply fn-3358 args-3359)) (setq form-description-3362 (nconc (list '(should (= 0 ...))) (list :form (cons fn-3358 args-3
+  (let (form-description-3362) (if (unwind-protect (setq value-3360 (apply fn-3358 args-3359)) (setq form-description-3362 (nconc (list '(should ...)) (list :fo
+  (let ((value-3360 'ert-form-evaluation-aborted-3361)) (let (form-description-3362) (if (unwind-protect (setq value-3360 (apply fn-3358 args-3359)) (setq form-
+  (let* ((fn-3358 #'=) (args-3359 (condition-case err (list 0 (length superchat-changes--notices)) (error (progn (setq fn-3358 #'signal) (list (car err) (cdr er
+  (let ((item (car (pend--of 'unseen)))) (let ((value-3356 (gensym "ert-form-evaluation-aborted-"))) (let (form-description-3357) (if (unwind-protect (setq valu
+  (let ((fired (car (superchat-timer-catch-up)))) (wrec--settled) (let* ((fn-3351 #'=) (args-3352 (condition-case err (list 1 (length superchat-changes--notices
+  (progn (superchat-timer-create session 'task "UN-TASK do the thing" (+ now 60)) (setq now (+ now 60)) (let ((fired (car (superchat-timer-catch-up)))) (wrec--s
+  (unwind-protect (progn (superchat-timer-create session 'task "UN-TASK do the thing" (+ now 60)) (setq now (+ now 60)) (let ((fired (car (superchat-timer-catch
+  (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-function #'ignore) (session (hm--session (wrec--view p))))
+  (progn (fset 'smoke--fake-network vnew) (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-function #'ignore)
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((now 1800000000.0) (superchat-timer-now-function #'(lambda nil now)) (superchat-timer-notify-fu
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (i
+  (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list
+  (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq w
+  (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) 
+  (unwind-protect (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list ...)) (superchat-display-style 'edit
+  (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unwind-protect (prog
+  #f(lambda () [t] (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unw
+  #f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>) (t) #f(compiled-function (err) #<bytecode -0x7921a6ccec021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a276ab0ac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown :documentation "superchat-pending.el:257-259 dismis
+  ert-run-or-rerun-test(#s(ert--stats :selector "^fr-pending/" :tests ... :test-map #<hash-table eql 10/10 0x19011776dd ...> :test-results ... :test-start-times
+  ert-run-tests("^fr-pending/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1ebcc431086de1db>) nil)
+  ert-run-tests-batch("^fr-pending/")
+  ert-run-tests-batch-and-exit("^fr-pending/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el" "/Users/chenyibin
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown condition:
+    (ert-test-failed
+     ((should (= 0 (length superchat-changes--notices))) :form (= 0 1)
+      :value nil))
+   FAILED   6/10  fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown (0.044938 sec) at reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el:193
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 12, before stopping: running, a.txt edited =====
+
+ Running                started by you                               execution run-20261011-072146-702061-0f73            20261011-072146-eeae
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-guide/ws-work-H3iaWV/a.txt 20261011-072146-eeae
+=====
+
+superchat: run run-20261011-072146-702061-0f73 cancelled (session 20261011-072146-eeae)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-guide/ws-work-H3iaWV/a.txt
+
+===== step 12, after k (stop) on the list =====
+
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-guide/ws-work-H3iaWV/a.txt 20261011-072146-eeae
+ Can be continued       Step 12: add three lines to log.org          add 甲2 and 甲3                                      20261011-072146-eeae
+=====
+run status=cancelled outcomes=("failed") view's active run="run-20261011-072146-702061-0f73"
+
+   passed   7/10  fr-pending/step-12-stopped-from-the-list (0.057905 sec)
+
+===== step 13, Emacs started and nothing took the record up yet =====
+
+ Due, not started       Step 13: add '- 重启后' after the restart    work record, due 2027-01-15 00:01, not taken up      20261011-072146-784b
+=====
+
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-072146-761793-c00e completed (session 20261011-072146-9b26)
+
+===== step 13, after the row mounted and the wake ran =====
+
+ Ended, not looked at   work record work-20261011072146-7937         completed                                            20261011-072146-9b26
+ Can be continued       Step 13: add '- 重启后' after the restart                                                         20261011-072146-9b26
+=====
+kinds: (unseen continuable) outcomes=("continuable")
+
+   passed   8/10  fr-pending/step-13-due-but-not-started-then-the-row-mounts (0.050411 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 5, just after the wake was sent: execution running, nothing edited yet =====
+
+ Running                started by Superchat: work record work-20261011072146-0cb2 execution run-20261011-072146-812257-0678            20261011-072146-924a
+=====
+kinds: (running)
+
+===== step 5, the woken execution still running, a.txt edited and unsaved =====
+
+ Running                started by Superchat: work record work-20261011072146-0cb2 execution run-20261011-072146-812257-0678            20261011-072146-924a
+ Unsaved                a.txt                                        /Users/chenyibin/.cache/sc-guide/ws-work-EAPY6j/a.txt 20261011-072146-924a
+=====
+kinds: (running unsaved)
+
+superchat: run run-20261011-072146-812257-0678 cancelled (session 20261011-072146-924a)
+superchat: 1 buffer edited by this Run is unsaved -- saving is yours; /changes to review:
+- a.txt -> /Users/chenyibin/.cache/sc-guide/ws-work-EAPY6j/a.txt
+Test fr-pending/step-5-and-6-a-record-woken-at-its-time backtrace:
+  ert-fail(((should (memq 'continuable kinds)) :form (memq continuable (running unsaved)) :value nil))
+  (if (unwind-protect (setq value-3222 (apply fn-3220 args-3221)) (setq form-description-3224 (nconc (list '(should (memq ... kinds))) (list :form (cons fn-3220
+  (let (form-description-3224) (if (unwind-protect (setq value-3222 (apply fn-3220 args-3221)) (setq form-description-3224 (nconc (list '(should ...)) (list :fo
+  (let ((value-3222 'ert-form-evaluation-aborted-3223)) (let (form-description-3224) (if (unwind-protect (setq value-3222 (apply fn-3220 args-3221)) (setq form-
+  (let* ((fn-3220 #'memq) (args-3221 (condition-case err (list 'continuable kinds) (error (progn (setq fn-3220 #'signal) (list (car err) (cdr err))))))) (let ((
+  (let ((kinds (pend--kinds))) (princ (format "kinds: %S\n" kinds)) (let* ((fn-3215 #'memq) (args-3216 (condition-case err (list 'running kinds) (error (progn (
+  (let ((views (superchat-work-wake-due))) (let* ((fn-3205 #'=) (args-3206 (condition-case err (list 1 (length views)) (error (progn (setq fn-3205 ...) (list ..
+  (let* ((pair (wwf--due-record p "Step 5: add '- 检查完毕' to log.org two minutes later")) (main (car pair)) (id (cdr pair)) (buffer (get-file-buffer (expand-file-
+  (progn (let* ((pair (wwf--due-record p "Step 5: add '- 检查完毕' to log.org two minutes later")) (main (car pair)) (id (cdr pair)) (buffer (get-file-buffer (expan
+  (unwind-protect (progn (let* ((pair (wwf--due-record p "Step 5: add '- 检查完毕' to log.org two minutes later")) (main (car pair)) (id (cdr pair)) (buffer (get-fi
+  (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let* ((pair (wwf--due-record p "Step 5: add '- 检查完毕' to log.org two minu
+  (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let* ((pair (wwf--due-record p "Step 5: add
+  (progn (fset 'smoke--fake-network vnew) (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-protect (progn (let
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let ((wrec--now wrec--now)) (let ((superchat-work-now-function #'(lambda nil wrec--now))) (unwind-pro
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (i
+  (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list
+  (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq w
+  (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) 
+  (unwind-protect (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list ...)) (superchat-display-style 'edit
+  (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unwind-protect (prog
+  #f(lambda () [t] (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unw
+  #f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>) (t) #f(compiled-function (err) #<bytecode -0x7921a6ccec021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a276ab0ac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name fr-pending/step-5-and-6-a-record-woken-at-its-time :documentation nil :body #f(lambda () ... ... nil) :most-recent-result ... :
+  ert-run-or-rerun-test(#s(ert--stats :selector "^fr-pending/" :tests ... :test-map #<hash-table eql 10/10 0x19011776dd ...> :test-results ... :test-start-times
+  ert-run-tests("^fr-pending/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1ebcc431086de1db>) nil)
+  ert-run-tests-batch("^fr-pending/")
+  ert-run-tests-batch-and-exit("^fr-pending/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el" "/Users/chenyibin
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test fr-pending/step-5-and-6-a-record-woken-at-its-time condition:
+    (ert-test-failed
+     ((should (memq 'continuable kinds)) :form
+      (memq continuable (running unsaved)) :value nil))
+   FAILED   9/10  fr-pending/step-5-and-6-a-record-woken-at-its-time (0.468967 sec) at reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el:38
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+
+===== step 9, while the approval question is open =====
+
+ Asks you now           started by you                               execution run-20261011-072147-360606-f1da waits for your answer 20261011-072147-c9dc
+=====
+items=((asking "started by you" "execution run-20261011-072147-360606-f1da waits for your answer"))
+runtime asking-p=t  approval.requested on Tape=1
+
+Test fr-pending/step-9-an-open-approval-shows-as-running-only backtrace:
+  ert-fail(((should (equal '(running) (delete-dups (mapcar (lambda (i) (plist-get i :kind)) items)))) :form (equal (running) (asking)) :value nil :explanation (
+  (if (unwind-protect (setq value-3259 (apply fn-3257 args-3258)) (setq form-description-3261 (nconc (list '(should (equal ... ...))) (list :form (cons fn-3257 
+  (let (form-description-3261) (if (unwind-protect (setq value-3259 (apply fn-3257 args-3258)) (setq form-description-3261 (nconc (list '(should ...)) (list :fo
+  (let ((value-3259 'ert-form-evaluation-aborted-3260)) (let (form-description-3261) (if (unwind-protect (setq value-3259 (apply fn-3257 args-3258)) (setq form-
+  (let* ((fn-3257 #'equal) (args-3258 (condition-case err (list '(running) (delete-dups (mapcar #'... items))) (error (progn (setq fn-3257 #'signal) (list (car 
+  (let* ((view (wrec--view p)) (session (hm--session view)) snapshot items asking requested) (if (member "eval_elisp" superchat-llm-tool-names) nil (setq superc
+  (progn (fset 'smoke--fake-network vnew) (let* ((view (wrec--view p)) (session (hm--session view)) snapshot items asking requested) (if (member "eval_elisp" su
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((view (wrec--view p)) (session (hm--session view)) snapshot items asking requested) (if (member
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list p)) (i
+  (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq wrec--roots (list
+  (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) (setq w
+  (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list #'wrec--finder)) (superchat-display-style 'editor)) 
+  (unwind-protect (progn (unwind-protect (progn (let* ((wrec--roots nil) (p (wrec--temp-dir)) (project-find-functions (list ...)) (superchat-display-style 'edit
+  (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unwind-protect (prog
+  #f(lambda () [t] (let ((superchat-changes--notices nil) (superchat-changes-notice-mode-line nil) (global-mode-string (copy-sequence global-mode-string))) (unw
+  #f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>)()
+  handler-bind-1(#f(compiled-function () #<bytecode -0x7d0c9ac97b8936e>) (t) #f(compiled-function (err) #<bytecode -0x7921a6ccec021a>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a276ab0ac843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name fr-pending/step-9-an-open-approval-shows-as-running-only :documentation "While a tool waits for the user's yes or no, the Runti
+  ert-run-or-rerun-test(#s(ert--stats :selector "^fr-pending/" :tests ... :test-map #<hash-table eql 10/10 0x19011776dd ...> :test-results ... :test-start-times
+  ert-run-tests("^fr-pending/" #f(compiled-function (event-type &rest event-args) #<bytecode 0x1ebcc431086de1db>) nil)
+  ert-run-tests-batch("^fr-pending/")
+  ert-run-tests-batch-and-exit("^fr-pending/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el" "/Users/chenyibin
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test fr-pending/step-9-an-open-approval-shows-as-running-only condition:
+    (ert-test-failed
+     ((should (equal '#1=(running) (delete-dups (mapcar ... items))))
+      :form (equal #1# (asking)) :value nil :explanation
+      (list-elt 0 (different-atoms running asking))))
+   FAILED  10/10  fr-pending/step-9-an-open-approval-shows-as-running-only (0.066450 sec) at reports/fixes-review-2026-10-11/evidence/fr-pending-probes.el:73
+
+Ran 10 tests, 6 results as expected, 4 unexpected (2026-10-11 07:21:47-0700, 2.164358 sec)
+
+4 unexpected results:
+   FAILED  fr-pending/a-running-sub-agent-is-started-by-you
+   FAILED  fr-pending/opening-an-ended-row-forgets-it-before-the-conversation-is-shown
+   FAILED  fr-pending/step-5-and-6-a-record-woken-at-its-time
+   FAILED  fr-pending/step-9-an-open-approval-shows-as-running-only
+

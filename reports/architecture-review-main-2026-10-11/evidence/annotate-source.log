@@ -1,0 +1,330 @@
+     1	;;; superchat-annotate.el --- Remarks hung on the text they are about -*- lexical-binding: t; -*-
+     2	
+     3	;;; Commentary:
+     4	;; Annotating: take the region (else the whole buffer) → ask the model →
+     5	;; each of its remarks is hung on the text it is about, as an overlay.  The
+     6	;; buffer's text is never changed and nothing is saved.  No tool-calling.
+     7	;;
+     8	;; The model sees the text with line numbers and answers one remark per row,
+     9	;; "LINE | QUOTE | REMARK".  A remark is placed where its quote is found on
+    10	;; that line, else within `superchat-annotate--near-lines' lines of it; a
+    11	;; remark whose quote is found in neither place is not placed anywhere, and
+    12	;; is listed as such (docs/decisions/accepted/2026-10-10-remarks-hung-on-the-text.md).
+    13	
+    14	;;; Code:
+    15	
+    16	(require 'cl-lib)
+    17	(require 'superchat-plugin)
+    18	(require 'superchat-service)
+    19	(require 'superchat-sink)
+    20	(require 'superchat-inline)
+    21	
+    22	;; ── Forward declarations ──
+    23	(defvar superchat-llm-backend)
+    24	(defvar superchat-llm-empty-response-text)
+    25	(declare-function superchat-conversation-show-turn "superchat"
+    26	                  (session-id run-id source))
+    27	
+    28	(defgroup superchat-annotate nil
+    29	  "Remarks hung on the text they are about."
+    30	  :group 'superchat)
+    31	
+    32	(defcustom superchat-annotate-default-instruction
+    33	  "Point out what is worth noticing: likely mistakes, unclear places, risks."
+    34	  "What `superchat-annotate' asks for when the user gives no instruction."
+    35	  :type 'string
+    36	  :group 'superchat-annotate)
+    37	
+    38	(defcustom superchat-annotate-warn-lines 300
+    39	  "Above this many lines `superchat-annotate' says placement is untested.
+    40	Placement by line number was measured on texts of up to 87 lines."
+    41	  :type 'integer
+    42	  :group 'superchat-annotate)
+    43	
+    44	(defconst superchat-annotate--near-lines 2
+    45	  "How many lines from the stated line a remark's quote may be found.")
+    46	
+    47	(defconst superchat-annotate--list-buffer "*superchat annotations*"
+    48	  "Name of the buffer `superchat-annotate-list' shows.")
+    49	
+    50	(defface superchat-annotate-quote
+    51	  '((t :underline (:style wave) :inherit warning))
+    52	  "Face of the text a remark is about."
+    53	  :group 'superchat-annotate)
+    54	
+    55	(defcustom superchat-annotate-remark-style 'below
+    56	  "Where a remark is shown.
+    57	`below' shows it as a block under the line it is about; `eol' shows it
+    58	at the end of that line."
+    59	  :type '(choice (const :tag "Under the line" below)
+    60	                 (const :tag "At the end of the line" eol))
+    61	  :group 'superchat-annotate)
+    62	
+    63	(defcustom superchat-annotate-remark-width 72
+    64	  "Columns a remark shown under its line may reach before it is wrapped."
+    65	  :type 'integer
+    66	  :group 'superchat-annotate)
+    67	
+    68	(defface superchat-annotate-remark
+    69	  '((t :inherit (italic secondary-selection)))
+    70	  "Face of a remark."
+    71	  :group 'superchat-annotate)
+    72	
+    73	(defface superchat-annotate-marker
+    74	  '((t :inherit warning))
+    75	  "Face of the mark leading from a line to a remark shown under it."
+    76	  :group 'superchat-annotate)
+    77	
+    78	(defvar superchat-annotate-instruction-history nil
+    79	  "Minibuffer history of `superchat-annotate' instructions.")
+    80	
+    81	(defvar-local superchat-annotate--report nil
+    82	  "What the last annotation of this buffer gave, a plist.
+    83	:placed COUNT, :unplaced ROWS, :unparsed LINES, :empty BOOLEAN; a ROW is
+    84	\(:line N :quote TEXT :remark TEXT).")
+    85	
+    86	;;;; What the model is asked ------------------------------------------------------
+    87	
+    88	(defun superchat-annotate--system-text ()
+    89	  "Return the system text of an annotation request."
+    90	  "You annotate a text the user gives you.  The text is shown with a line \
+    91	number and a bar at the start of every line; those are not part of the text.
+    92	
+    93	Answer with one remark per row and nothing else, each row in exactly this form:
+    94	LINE | QUOTE | REMARK
+    95	
+    96	LINE is the number of the line the remark is about.  QUOTE is a short piece \
+    97	copied exactly from that line (at most 40 characters, without the line \
+    98	number), showing which part you mean.  REMARK is what you have to say about \
+    99	it, in one line.  No heading, no introduction, no closing sentence, no blank \
+   100	rows, no code fence.")
+   101	
+   102	(defun superchat-annotate--numbered (text)
+   103	  "Return TEXT with a line number and a bar before each of its lines."
+   104	  (let ((n 0))
+   105	    (mapconcat (lambda (line) (format "%d| %s" (cl-incf n) line))
+   106	               (split-string text "\n")
+   107	               "\n")))
+   108	
+   109	(defun superchat-annotate--content (text instruction)
+   110	  "Return the model input for annotating TEXT under INSTRUCTION."
+   111	  (concat "Instruction: " instruction "\n\n"
+   112	          "The text, with line numbers:\n<<<TEXT>>>\n"
+   113	          (superchat-annotate--numbered text)
+   114	          "\n<<<END TEXT>>>\n\n"
+   115	          "Reply with rows of the form LINE | QUOTE | REMARK only."))
+   116	
+   117	;;;; Reading the answer -----------------------------------------------------------
+   118	
+   119	(defun superchat-annotate--empty-answer-p (answer)
+   120	  "Return non-nil when ANSWER is the model saying nothing at all.
+   121	The transport hands an empty answer on as `superchat-llm-empty-response-text'."
+   122	  (let ((text (string-trim (or answer ""))))
+   123	    (or (string-empty-p text)
+   124	        (equal text (bound-and-true-p superchat-llm-empty-response-text)))))
+   125	
+   126	(defun superchat-annotate--parse (answer)
+   127	  "Return (ROWS . UNPARSED) read from ANSWER.
+   128	ROWS are (:line N :quote TEXT :remark TEXT) in the answer's order; UNPARSED
+   129	are the non-blank lines of ANSWER that are not such a row."
+   130	  (let (rows unparsed)
+   131	    (dolist (line (split-string (or answer "") "\n"))
+   132	      (let ((row (string-trim line)))
+   133	        (cond
+   134	         ((string-empty-p row))
+   135	         ((string-match "\\`\\([0-9]+\\)[ \t]*|[ \t]*\\(.*?\\)[ \t]*|[ \t]*\\(.+\\)\\'" row)
+   136	          ;; All three are read before trimming, which matches again.
+   137	          (let ((line (match-string 1 row))
+   138	                (quote (match-string 2 row))
+   139	                (remark (match-string 3 row)))
+   140	            (push (list :line (string-to-number line)
+   141	                        :quote (string-trim quote "[\"“”`]+" "[\"“”`]+")
+   142	                        :remark (string-trim remark))
+   143	                  rows)))
+   144	         (t (push row unparsed)))))
+   145	    (cons (nreverse rows) (nreverse unparsed))))
+   146	
+   147	(defun superchat-annotate--line-count (beg end)
+   148	  "Return how many lines BEG..END holds, as `superchat-annotate--numbered' counts.
+   149	BEG is at the start of a line; END is on the last one, wherever in it."
+   150	  (1+ (- (line-number-at-pos end) (line-number-at-pos beg))))
+   151	
+   152	(defun superchat-annotate--quote-on-line (quote)
+   153	  "Return (BEG . END) of QUOTE on the current line, or nil."
+   154	  (save-excursion
+   155	    (let ((eol (line-end-position)))
+   156	      (beginning-of-line)
+   157	      (when (search-forward quote eol t)
+   158	        (cons (match-beginning 0) (match-end 0))))))
+   159	
+   160	(defun superchat-annotate--without-ellipsis (quote)
+   161	  "Return QUOTE without the dots a model puts where it cut the quote short.
+   162	\"some text...\" and \"…some text\" give \"some text\"."
+   163	  (string-trim quote "\\(?:\\.\\.\\.+\\|…\\|[ \t]\\)+" "\\(?:\\.\\.\\.+\\|…\\|[ \t]\\)+"))
+   164	
+   165	(defun superchat-annotate--locate-exactly (beg end line quote)
+   166	  "Return (QBEG . QEND) of QUOTE near LINE of BEG..END, or nil.
+   167	The stated line is tried first, then the lines one away, then two away, up
+   168	to `superchat-annotate--near-lines'; a line outside BEG..END is never tried."
+   169	  (unless (string-empty-p quote)
+   170	    (save-excursion
+   171	      (let ((last-line (superchat-annotate--line-count beg end))
+   172	            found)
+   173	        (dolist (offset (cons 0 (cl-loop for d from 1 to superchat-annotate--near-lines
+   174	                                         append (list d (- d)))))
+   175	          (let ((n (+ line offset)))
+   176	            ;; BEG..END are whole lines, so a line 1..LAST-LINE is inside them.
+   177	            (when (and (not found) (>= n 1) (<= n last-line))
+   178	              (goto-char beg)
+   179	              (forward-line (1- n))
+   180	              (setq found (superchat-annotate--quote-on-line quote)))))
+   181	        found))))
+   182	
+   183	(defun superchat-annotate--locate (beg end line quote)
+   184	  "Return (QBEG . QEND) of QUOTE for a remark about LINE of BEG..END, or nil.
+   185	LINE counts from 1 at BEG.  QUOTE is looked for as written; when it is not
+   186	found and it starts or ends with the dots of a quote cut short, what is
+   187	left of it is looked for.  Either way the text found is in the buffer."
+   188	  (or (superchat-annotate--locate-exactly beg end line quote)
+   189	      (let ((cut (superchat-annotate--without-ellipsis quote)))
+   190	        (unless (equal cut quote)
+   191	          (superchat-annotate--locate-exactly beg end line cut)))))
+   192	
+   193	;;;; Overlays ---------------------------------------------------------------------
+   194	
+   195	(defvar superchat-annotate--overlay-keymap
+   196	  (let ((map (make-sparse-keymap)))
+   197	    (define-key map (kbd "M-n") #'superchat-annotate-next)
+   198	    (define-key map (kbd "M-p") #'superchat-annotate-previous)
+   199	    map)
+   200	  "Keys active with point on an annotated piece of text.")
+   201	
+   202	(defun superchat-annotate--wrapped (remark width)
+   203	  "Return REMARK as a list of lines, wrapped at WIDTH columns."
+   204	  (with-temp-buffer
+   205	    (insert remark)
+   206	    (let ((fill-column (max 20 width))
+   207	          (fill-prefix nil)
+   208	          (adaptive-fill-mode nil)
+   209	          (sentence-end-double-space nil))
+   210	      (fill-region (point-min) (point-max)))
+   211	    (split-string (buffer-string) "\n" t)))
+   212	
+   213	(defun superchat-annotate--remark-string (remark indent)
+   214	  "Return the text that shows REMARK for a line indented by INDENT columns."
+   215	  (if (eq superchat-annotate-remark-style 'eol)
+   216	      (propertize (concat "  ⟵ " remark) 'face 'superchat-annotate-remark)
+   217	    (let ((pad (make-string indent ?\s))
+   218	          (lead "└─▶ "))
+   219	      (mapconcat
+   220	       (lambda (line)
+   221	         (prog1 (concat "\n" pad
+   222	                        (propertize lead 'face 'superchat-annotate-marker)
+   223	                        (propertize (concat " " line " ")
+   224	                                    'face 'superchat-annotate-remark))
+   225	           (setq lead "    ")))
+   226	       (superchat-annotate--wrapped
+   227	        remark (- superchat-annotate-remark-width indent 6))
+   228	       ""))))
+   229	
+   230	(defun superchat-annotate--render (tail)
+   231	  "Show on TAIL the remarks of the annotations of its line, in text order.
+   232	TAIL is deleted when none of them is left."
+   233	  (when (overlay-buffer tail)
+   234	    (let ((heads (sort (cl-remove-if-not
+   235	                        #'overlay-buffer
+   236	                        (overlay-get tail 'superchat-annotate-heads))
+   237	                       (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+   238	      (overlay-put tail 'superchat-annotate-heads heads)
+   239	      (if (null heads)
+   240	          (delete-overlay tail)
+   241	        (with-current-buffer (overlay-buffer tail)
+   242	          (let* ((indent (save-excursion (goto-char (overlay-start tail))
+   243	                                         (min (current-indentation) 16)))
+   244	                 (string
+   245	                  (mapconcat
+   246	                   (lambda (head)
+   247	                     (superchat-annotate--remark-string
+   248	                      (plist-get (overlay-get head 'superchat-annotate) :remark)
+   249	                      indent))
+   250	                   heads "")))
+   251	            ;; Keep the cursor at the end of the line, not after the block.
+   252	            (unless (eq superchat-annotate-remark-style 'eol)
+   253	              (put-text-property 0 1 'cursor t string))
+   254	            (overlay-put tail 'after-string string)))))))
+   255	
+   256	(defun superchat-annotate--line-tail (position)
+   257	  "Return the overlay holding the remarks of POSITION's line, making it."
+   258	  (let ((eol (save-excursion (goto-char position) (line-end-position))))
+   259	    (or (cl-find-if (lambda (overlay)
+   260	                      (and (overlay-get overlay 'superchat-annotate-tail-p)
+   261	                           (= (overlay-start overlay) eol)))
+   262	                    (overlays-in eol eol))
+   263	        (let ((tail (make-overlay eol eol nil t t)))
+   264	          (overlay-put tail 'superchat-annotate-tail-p t)
+   265	          tail))))
+   266	
+   267	(defun superchat-annotate--make (qbeg qend row run-id)
+   268	  "Hang ROW's remark on QBEG..QEND; RUN-ID is the Run that gave it."
+   269	  (let* ((remark (plist-get row :remark))
+   270	         (head (make-overlay qbeg qend nil t nil))
+   271	         (tail (superchat-annotate--line-tail qend)))
+   272	    (overlay-put head 'superchat-annotate (append row (list :run-id run-id)))
+   273	    (overlay-put head 'superchat-annotate-tail tail)
+   274	    (overlay-put head 'face 'superchat-annotate-quote)
+   275	    (overlay-put head 'help-echo remark)
+   276	    (overlay-put head 'keymap superchat-annotate--overlay-keymap)
+   277	    (overlay-put head 'evaporate t)
+   278	    (overlay-put tail 'superchat-annotate-heads
+   279	                 (cons head (overlay-get tail 'superchat-annotate-heads)))
+   280	    (superchat-annotate--render tail)
+   281	    head))
+   282	
+   283	(defun superchat-annotate-overlays (&optional buffer)
+   284	  "Return BUFFER's annotations ordered by position (default: current buffer).
+   285	A remark whose text was deleted is dropped here, with its end-of-line text."
+   286	  (with-current-buffer (or buffer (current-buffer))
+   287	    (let (heads)
+   288	      (dolist (overlay (overlays-in (point-min) (point-max)))
+   289	        (cond
+   290	         ((overlay-get overlay 'superchat-annotate) (push overlay heads))
+   291	         ((overlay-get overlay 'superchat-annotate-tail-p)
+   292	          (unless (cl-every #'overlay-buffer
+   293	                            (overlay-get overlay 'superchat-annotate-heads))
+   294	            (superchat-annotate--render overlay)))))
+   295	      (sort heads (lambda (a b) (< (overlay-start a) (overlay-start b)))))))
+   296	
+   297	(defun superchat-annotate--delete (overlay)
+   298	  "Remove the annotation OVERLAY and its end-of-line text."
+   299	  (when (overlayp overlay)
+   300	    (let ((tail (overlay-get overlay 'superchat-annotate-tail)))
+   301	      (delete-overlay overlay)
+   302	      (when (overlayp tail) (superchat-annotate--render tail)))))
+   303	
+   304	;;;###autoload
+   305	(defun superchat-annotate-clear (&optional buffer)
+   306	  "Remove every annotation from BUFFER (default: the current buffer)."
+   307	  (interactive)
+   308	  (with-current-buffer (or buffer (current-buffer))
+   309	    (mapc #'superchat-annotate--delete (superchat-annotate-overlays))
+   310	    (remove-overlays (point-min) (point-max) 'superchat-annotate-pending t)
+   311	    (setq superchat-annotate--report nil)))
+   312	
+   313	;;;###autoload
+   314	(defun superchat-annotate-next ()
+   315	  "Move point to the next annotation in the buffer, wrapping around."
+   316	  (interactive)
+   317	  (let* ((overlays (superchat-annotate-overlays))
+   318	         (next (or (cl-find-if (lambda (o) (> (overlay-start o) (point))) overlays)
+   319	                   (car overlays))))
+   320	    (unless next (user-error "No annotations in this buffer"))
+   321	    (goto-char (overlay-start next))
+   322	    (message "%s" (plist-get (overlay-get next 'superchat-annotate) :remark))
+   323	    next))
+   324	
+   325	;;;###autoload
+   326	(defun superchat-annotate-previous ()
+   327	  "Move point to the previous annotation in the buffer, wrapping around."
+   328	  (interactive)
+   329	  (let* ((overlays (superchat-annotate-overlays))
+   330	         (previous (or (cl-find-if (lambda (o) (< (overlay-start o) (point)))

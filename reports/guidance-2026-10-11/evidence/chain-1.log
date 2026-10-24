@@ -1,0 +1,10 @@
+pending-suite-on-981719f4: exit=1; 2.4s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/pending-suite-on-981719f4.log
+fr-pending-probes-on-981719f4: exit=0; 3.5s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/fr-pending-probes-on-981719f4.log
+fr-pending-probes-on-head: exit=1; 2.9s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/fr-pending-probes-on-head.log
+pending-suite: exit=0; 3.7s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/pending-suite.log
+work-outcome-suite: exit=0; 2.4s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/work-outcome-suite.log
+work-wake-fault-suite: exit=0; 2.9s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/work-wake-fault-suite.log
+command-load-suite: exit=0; 0.6s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/command-load-suite.log
+long-history-suite: exit=0; 55.5s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/long-history-suite.log
+fr-scope-probes-on-head: exit=1; 4.7s; /Users/chenyibin/Documents/emacs/package/superchat/reports/guidance-2026-10-11/evidence/fr-scope-probes-on-head.log
+CHAIN-1-DONE

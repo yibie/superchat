@@ -1,0 +1,48 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 1 tests (2026-10-11 00:11:33-0700, selector ‘"^delta-probe/"’)
+superchat: scheduled task timer-20261011001134-cd1b was not started: AUDIT start unavailable
+Test delta-probe/exhausted-task-retried-by-another-busy-task backtrace:
+  ert-fail(((should (= tries 6)) :form (= 1 6) :value nil))
+  (if (unwind-protect (setq value-1328 (apply fn-1326 args-1327)) (setq form-description-1330 (nconc (list '(should (= tries 6))) (list :form (cons fn-1326 args
+  (let (form-description-1330) (if (unwind-protect (setq value-1328 (apply fn-1326 args-1327)) (setq form-description-1330 (nconc (list '(should ...)) (list :fo
+  (let ((value-1328 'ert-form-evaluation-aborted-1329)) (let (form-description-1330) (if (unwind-protect (setq value-1328 (apply fn-1326 args-1327)) (setq form-
+  (let* ((fn-1326 #'=) (args-1327 (condition-case err (list tries 6) (error (progn (setq fn-1326 #'signal) (list (car err) (cdr err))))))) (let ((value-1328 'er
+  (progn (fset 'superchat-send-input vnew) (fset 'superchat-timer--session-busy-p vnew) (superchat-timer-catch-up) (let ((upper-bound 5) (counter 0)) (while (< 
+  (unwind-protect (progn (fset 'superchat-send-input vnew) (fset 'superchat-timer--session-busy-p vnew) (superchat-timer-catch-up) (let ((upper-bound 5) (counte
+  (let* ((vnew #'(lambda (session) (equal session b))) (vnew #'(lambda nil (setq tries (+ tries 1)) (error "AUDIT start unavailable"))) (old (symbol-function 's
+  (let* ((a (cdr (tsf--task p "FAIL-A"))) (b (cdr (tsf--task q "BUSY-B"))) (superchat-timer-retry-limit 2) (tries 0)) (let* ((vnew #'(lambda (session) (equal se
+  (progn (fset 'smoke--fake-network vnew) (let* ((a (cdr (tsf--task p "FAIL-A"))) (b (cdr (tsf--task q "BUSY-B"))) (superchat-timer-retry-limit 2) (tries 0)) (l
+  (unwind-protect (progn (fset 'smoke--fake-network vnew) (let* ((a (cdr (tsf--task p "FAIL-A"))) (b (cdr (tsf--task q "BUSY-B"))) (superchat-timer-retry-limit 
+  (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons (hm--wire-of provider prompt) hm--wires)) (funcall network mo
+  (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provider prompt partial response error multi) (setq hm--wires (cons ... h
+  (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lambda (mode provid
+  (unwind-protect (progn (fset 'llm-chat-async vnew) (fset 'llm-chat-streaming vnew) (let ((network (symbol-function 'smoke--fake-network))) (let* ((vnew #'(lam
+  (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-network 'streaming
+  (unwind-protect (let* ((vnew (if real (symbol-function 'llm-chat-streaming) #'(lambda (provider prompt partial response error &optional multi) (smoke--fake-ne
+  (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (getenv "SMOKE_REAL"
+  (unwind-protect (let* ((home (make-temp-file "superchat-smoke-home-" t)) (data (file-name-as-directory (make-temp-file "superchat-smoke-data-" t))) (real (get
+  (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (superchat-event-f
+  (unwind-protect (let ((superchat-runtime--session-queues (make-hash-table :test #'equal)) (superchat-runtime--queue-timers (make-hash-table :test #'equal)) (s
+  (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (q (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-style 'editor) (w
+  #f(lambda () [t] (let* ((wtimer--roots nil) (p (wtimer--temp-dir)) (q (wtimer--temp-dir)) (project-find-functions (list #'wtimer--finder)) (superchat-display-
+  #f(compiled-function () #<bytecode 0xcdcd7a009ab31d>)()
+  handler-bind-1(#f(compiled-function () #<bytecode 0xcdcd7a009ab31d>) (t) #f(compiled-function (err) #<bytecode 0x93e2a61e1bffde6>))
+  ert--run-test-internal(#s(ert--test-execution-info :test ... :result ... :exit-continuation #f(compiled-function () #<bytecode 0x2a8c15fcec843>) :ert-debug-on
+  ert-run-test(#s(ert-test :name delta-probe/exhausted-task-retried-by-another-busy-task :documentation nil :body #f(lambda () ... ... nil) :most-recent-result 
+  ert-run-or-rerun-test(#s(ert--stats :selector "^delta-probe/" :tests ... :test-map #<hash-table eql 1/1 0x19bf8e27c7 ...> :test-results ... :test-start-times 
+  ert-run-tests("^delta-probe/" #f(compiled-function (event-type &rest event-args) #<bytecode 0xea9aec395b21ec0>) nil)
+  ert-run-tests-batch("^delta-probe/")
+  ert-run-tests-batch-and-exit("^delta-probe/")
+  load-with-code-conversion("/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-review-main-2026-10-10/evidence/delta-probes.el" "/Users/ch
+  command-line-1(("--eval" "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-
+  command-line()
+  normal-top-level()
+Test delta-probe/exhausted-task-retried-by-another-busy-task condition:
+    (ert-test-failed ((should (= tries 6)) :form (= 1 6) :value nil))
+   FAILED  1/1  delta-probe/exhausted-task-retried-by-another-busy-task (0.821251 sec) at reports/architecture-review-main-2026-10-10/evidence/delta-probes.el:6
+
+Ran 1 tests, 0 results as expected, 1 unexpected (2026-10-11 00:11:34-0700, 1.021915 sec)
+
+1 unexpected results:
+   FAILED  delta-probe/exhausted-task-retried-by-another-busy-task
+

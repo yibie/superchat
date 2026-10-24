@@ -1,0 +1,5 @@
+fr-scope-probes-2: exit=0; 2.9s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-scope-probes-2.log
+fr-settle-probes-2: exit=0; 64.5s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-settle-probes-2.log
+fr-pending-probes-2: exit=0; 3.9s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/fr-pending-probes-2.log
+p3-fold-cost-2: exit=1; 37.4s; /Users/chenyibin/Documents/emacs/package/superchat/reports/fixes-review-2026-10-11/evidence/p3-fold-cost-2.log
+CHAIN2-DONE

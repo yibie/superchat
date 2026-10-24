@@ -1,0 +1,17 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 6 tests (2026-10-11 02:59:28-0700, selector ‘"^shared-resource/"’)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  1/6  shared-resource/a-second-changes-installation-leaves-the-notice-hook (0.749023 sec)
+   passed  2/6  shared-resource/a-second-timing-installation-leaves-what-is-armed (0.045212 sec)
+superchat: scheduled task timer-20261011025928-c48e was not started: SHRES start unavailable
+   passed  3/6  shared-resource/remounting-does-not-grant-another-try (0.549552 sec)
+superchat: scheduled task timer-20261011025929-6f79 was not started: SHRES start unavailable
+superchat: scheduled task timer-20261011025929-6f79 was not started: SHRES start unavailable
+   passed  4/6  shared-resource/remounting-does-not-skip-the-wait (0.554214 sec)
+   passed  5/6  shared-resource/the-first-holder-acquires-and-the-last-releases (0.000099 sec)
+   passed  6/6  shared-resource/the-last-installation-out-takes-everything-down (0.043090 sec)
+
+Ran 6 tests, 6 results as expected, 0 unexpected (2026-10-11 02:59:30-0700, 1.941619 sec)
+

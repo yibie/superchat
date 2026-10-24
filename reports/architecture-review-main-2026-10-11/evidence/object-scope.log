@@ -1,0 +1,41 @@
+Loading /Users/chenyibin/Documents/emacs/package/superchat/scripts/smoke-architecture.el (source)...
+Running 15 tests (2026-10-11 00:12:47-0700, selector ‘"^object-scope/"’)
+Superchat session cached for next startup.
+   passed   1/15  object-scope/a-conversation-of-no-workspace-has-only-its-own-timers (0.912906 sec)
+Superchat session cached for next startup.
+   passed   2/15  object-scope/a-conversation-of-no-workspace-reaches-no-record (0.013107 sec)
+   passed   3/15  object-scope/a-fired-task-not-yet-started-is-its-workspaces-to-cancel (0.017966 sec)
+   passed   4/15  object-scope/a-record-focused-before-the-check-is-refused-the-same-way (0.017915 sec)
+superchat: installed default skill code-review.md
+superchat: installed default skill planning.md
+superchat: installed default skill refactor.md
+superchat: installed default skill render-ui.md
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001248-940944-2b19 completed (session subagent-researcher-20261011-001248-75dd)
+   passed   5/15  object-scope/a-sub-agent-is-told-of-its-record-and-cannot-change-it (0.149253 sec)
+   passed   6/15  object-scope/a-timer-that-does-not-exist-is-said-not-to-exist (0.008982 sec)
+   passed   7/15  object-scope/a-workspaces-conversations-share-its-timers (0.014285 sec)
+   passed   8/15  object-scope/another-conversation-of-the-workspace-reaches-the-record (0.016633 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed   9/15  object-scope/another-workspaces-model-cannot-see-or-cancel-a-timer (0.106163 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+   passed  10/15  object-scope/another-workspaces-model-cannot-touch-a-record (0.179292 sec)
+   passed  11/15  object-scope/every-action-on-another-workspaces-record-is-refused (0.017163 sec)
+   passed  12/15  object-scope/fired-timers-are-listed-for-their-workspace-only (0.020825 sec)
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+Warning (emacs): No model predefined for model smoke-model, using restrictive defaults
+superchat: run run-20261011-001249-402806-5aec completed (session 20261011-001249-3523)
+   passed  13/15  object-scope/the-conversation-a-record-wakes-in-reaches-it (0.140682 sec)
+   passed  14/15  object-scope/the-users-list-still-shows-every-workspaces-records (0.015771 sec)
+   passed  15/15  object-scope/the-users-own-cancel-reaches-any-timer (0.014857 sec)
+
+Ran 15 tests, 15 results as expected, 0 unexpected (2026-10-11 00:12:49-0700, 1.646800 sec)
+

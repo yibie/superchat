@@ -1,0 +1,184 @@
+{
+  "snapshot_commit": "75e8337004d8f13971b70712d8e288a8d7cb123c",
+  "snapshot_dir": "/Users/chenyibin/.cache/sc-arch-research/src",
+  "live_root": "/Users/chenyibin/Documents/emacs/package/superchat",
+  "model": "scripted transport only; no real provider",
+  "commands": [
+    {
+      "name": "p1-request-size",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p1-request-size.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 1,
+      "seconds": 1.51,
+      "log": "p1-request-size.log"
+    },
+    {
+      "name": "p3-fold-cost",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p3-fold-cost.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 0,
+      "seconds": 174.49,
+      "log": "p3-fold-cost.log"
+    },
+    {
+      "name": "p1-request-size-2",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p1-request-size.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 0,
+      "seconds": 1.61,
+      "log": "p1-request-size-2.log"
+    },
+    {
+      "name": "p4-view-dependency",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 1,
+      "seconds": 11.27,
+      "log": "p4-view-dependency.log"
+    },
+    {
+      "name": "p4-view-dependency-2",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 255,
+      "seconds": 0.72,
+      "log": "p4-view-dependency-2.log"
+    },
+    {
+      "name": "p4-view-dependency-3",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 1,
+      "seconds": 13.44,
+      "log": "p4-view-dependency-3.log"
+    },
+    {
+      "name": "p4-view-dependency-4",
+      "command": [
+        "emacs",
+        "-Q",
+        "--batch",
+        "--eval",
+        "(progn (require (quote package)) (setq package-user-dir (expand-file-name \"~/.cache/superchat-test-elpa\") native-comp-enable-subr-trampolines nil) (package-initialize))",
+        "--eval",
+        "(setq temporary-file-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/\" superchat-workflow-directory \"/Users/chenyibin/.cache/sc-arch-research/tmp/workflow/\")",
+        "-L",
+        ".",
+        "-L",
+        "plugins/superchat-cowork-telega",
+        "-l",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/p4-view-dependency.el"
+      ],
+      "cwd": "/Users/chenyibin/.cache/sc-arch-research/src",
+      "exit_status": 0,
+      "seconds": 3.38,
+      "log": "p4-view-dependency-4.log"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/run-probes.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.1,
+      "log": "unchanged.json"
+    },
+    {
+      "name": "verify-unchanged",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/Users/chenyibin/Documents/emacs/package/superchat/reports/architecture-options-2026-10-11/evidence/run-probes.py",
+        "verify-unchanged"
+      ],
+      "exit_status": 0,
+      "seconds": 0.03,
+      "log": "unchanged.json"
+    }
+  ]
+}
