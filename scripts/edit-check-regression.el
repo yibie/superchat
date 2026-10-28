@@ -100,16 +100,19 @@
         (should-not superchat-tool-mutation-target)))))
 
 (ert-deftest edit-check/the-correct-edit-answers-exactly-as-before ()
-  "Guard: reads before, reads after -- not one word is added."
+  "Guard: reads before, reads after -- the check adds not one word.  The
+lines after the change follow the layer line (2026-10-27)."
   (ec--with-dir dir
     (ec--fixture '((:text "unused"))
       (let* ((buffer (ec--visit dir "init.el" ec--init))
-             (result (superchat-tool-edit-buffer "init.el" ec--old ec--good)))
+             (result (superchat-tool-edit-buffer "init.el" ec--old ec--good))
+             (report (car (split-string result "\nNow, lines "))))
         (should (string-prefix-p
                  "Replaced 1 occurrence in buffer init.el. This tool does not save or evaluate the buffer.\nTarget: buffer init.el"
                  result))
-        (should (string-suffix-p "Layer: in memory only; the buffer was not saved or evaluated" result))
-        (should-not (string-match-p "read\\|balanc\\|parenthes" (downcase result)))
+        (should (string-suffix-p "Layer: in memory only; the buffer was not saved or evaluated" report))
+        (should (string-match-p (regexp-quote "#'describe-function))") result))
+        (should-not (string-match-p "read\\|balanc\\|parenthes" (downcase report)))
         (should (buffer-modified-p buffer))
         (should (string-match-p (regexp-quote "#'describe-function))\n") (ec--text buffer)))))))
 
@@ -250,6 +253,31 @@ request, submits the right one.  Only the second call is a change."
             (should (equal '("init.el") targets)))
           (should (= 1 (length (superchat-changes-candidates session run))))
           (should (equal ec--init (with-temp-buffer (insert-file-contents file) (buffer-string)))))))))
+
+(ert-deftest edit-check/the-answer-shows-the-lines-after-the-change ()
+  "Measured on 2026-10-27, the model sent one more request after each edit
+to look at it.  The answer shows the changed lines, numbered, one more on
+each side; a long change keeps both ends."
+  (let ((buffer (get-buffer-create "ec-shown")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (erase-buffer)
+            (insert "one\ntwo\nthree\nfour\nfive\n"))
+          (let ((result (superchat-tool-edit-buffer "ec-shown" "three" "THREE\nthree-and-a-half")))
+            (should (string-match-p
+                     (regexp-quote "\nNow, lines 2-5:\n2: two\n3: THREE\n4: three-and-a-half\n5: four")
+                     result)))
+          (let ((result (superchat-tool-edit-buffer
+                         "ec-shown" "one"
+                         (mapconcat #'number-to-string (number-sequence 1 30) "\n"))))
+            (should (string-match-p (regexp-quote "\n1: 1\n") result))
+            (should (string-match-p "\\[\\.\\.\\. [0-9]+ lines \\.\\.\\.\\]" result))
+            (should (string-match-p (regexp-quote "31: two") result)))
+          (let ((result (superchat-tool-edit-buffer "ec-shown" "no-such-text" "x")))
+            (should-not (string-match-p "Now, lines" result))))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer))))
 
 (provide 'edit-check-regression)
 

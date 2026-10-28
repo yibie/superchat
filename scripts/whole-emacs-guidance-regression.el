@@ -41,7 +41,11 @@
                  (superchat-prompt-hook--ask-once (superchat-turn-new ""))))))
     (should (string-match-p "Each tool call costs a round trip\\." text))
     (should (string-match-p "in one eval_elisp that returns a list" text))
-    (should (string-match-p "not one call per fact\\.\\'" text))
+    (should (string-match-p "not one call per fact\\." text))
+    ;; Acting in one call follows it (2026-10-27).
+    (should (string-suffix-p (concat "not one call per fact.\n"
+                                     superchat-prompt-act-once-text)
+                             text))
     ;; The example in it is Lisp that reads, and it parses.
     (should (read (substring superchat-prompt-ask-once-text
                              (string-match "(list" superchat-prompt-ask-once-text))))

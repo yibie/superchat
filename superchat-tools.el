@@ -565,14 +565,44 @@ is modified."
           (list :final (format "No change: old_string and new_string are identical in buffer %s." buffer-name)))
          (t (list :ready t)))))))
 
+(defconst superchat-tools--edit-shown-max-lines 12
+  "Most lines of the changed text an `edit_buffer' answer shows.")
+
+(defun superchat-tools--edit-shown-lines (start end)
+  "The lines from START to END of the current buffer, one more each side.
+Numbered, as an `edit_buffer' answer shows the text after its change, so
+the model sees the result without reading the buffer again (2026-10-27:
+measured, the model sent one more request after each edit to look)."
+  (save-excursion
+    (let* ((first (progn (goto-char start) (forward-line -1) (point)))
+           (first-line (line-number-at-pos first))
+           (last (progn (goto-char end) (forward-line 1) (line-end-position)))
+           (lines (split-string (buffer-substring-no-properties first last) "\n"))
+           (max superchat-tools--edit-shown-max-lines)
+           (numbered (cl-loop for line in lines for n from first-line
+                              collect (format "%d: %s" n (truncate-string-to-width line 200))))
+           (shown (if (<= (length numbered) max)
+                      numbered
+                    (append (seq-take numbered (/ max 2))
+                            (list (format "[... %d lines ...]" (- (length numbered) max)))
+                            (last numbered (/ max 2))))))
+      (format "\nNow, lines %d-%d:\n%s" first-line (+ first-line (length lines) -1)
+              (string-join shown "\n")))))
+
+(defvar superchat-tools--edit-shown nil
+  "Set by `superchat-tools--edit-buffer-apply' to the lines it changed.")
+
 (defun superchat-tools--edit-buffer-apply (buffer-name old-string new-string)
-  "Replace the one OLD-STRING in BUFFER-NAME by NEW-STRING; return the answer."
+  "Replace the one OLD-STRING in BUFFER-NAME by NEW-STRING; return the answer.
+The changed lines are left in `superchat-tools--edit-shown'."
   (with-current-buffer buffer-name
     (let ((case-fold-search nil))
       (save-excursion
         (goto-char (point-min))
         (search-forward old-string)
-        (replace-match new-string t t))))
+        (replace-match new-string t t)
+        (setq superchat-tools--edit-shown
+              (superchat-tools--edit-shown-lines (match-beginning 0) (match-end 0))))))
   (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name))
 
 (defun superchat-tool-append-to-buffer (buffer text)
@@ -880,22 +910,30 @@ what it did before."
         (all (superchat-tools--true-p all))
         (count-only (superchat-tools--true-p count-only)))
     (if (not (or regexp all count-only))
-        (superchat-sandbox-run-buffer-edit
-         :args (list buffer-name old-string new-string)
-         :resolve (lambda (args)
-                    (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
-                      (if (plist-get plan :final)
-                          plan
-                        (list :target (superchat-sandbox-buffer-target (nth 0 args))))))
-         :perform (lambda (args resolved)
-                    (superchat-tools--checked-edit
-                     (nth 0 args)
-                     (lambda (name)
-                       (superchat-tools--edit-buffer-apply name (nth 1 args) (nth 2 args)))
-                     (lambda ()
-                       (superchat-tools--write-evidence
-                        (plist-get resolved :target)
-                        "in memory only; the buffer was not saved or evaluated")))))
+        (let* ((superchat-tools--edit-shown nil)
+               (answer
+		(superchat-sandbox-run-buffer-edit
+		 :args (list buffer-name old-string new-string)
+		 :resolve (lambda (args)
+			    (let ((plan (apply #'superchat-tools--edit-buffer-plan args)))
+			      (if (plist-get plan :final)
+				  plan
+				(list :target (superchat-sandbox-buffer-target (nth 0 args))))))
+		 :perform (lambda (args resolved)
+			    (superchat-tools--checked-edit
+			     (nth 0 args)
+			     (lambda (name)
+			       (superchat-tools--edit-buffer-apply name (nth 1 args) (nth 2 args)))
+			     (lambda ()
+			       (superchat-tools--write-evidence
+				(plist-get resolved :target)
+				"in memory only; the buffer was not saved or evaluated")))))))
+          ;; The lines after the change, once it was made in the buffer
+          ;; itself and not refused.
+          (if (and (stringp answer) (string-prefix-p "Replaced " answer)
+                   superchat-tools--edit-shown)
+              (concat answer superchat-tools--edit-shown)
+            answer))
       (let (replaced)
         (prog1
             (superchat-sandbox-run-buffer-edit
@@ -1264,6 +1302,46 @@ tests on belong in these directories."
                 (file-name-as-directory (superchat-sandbox-canonical-path dir))))
              superchat-tool-eval-writable-directories)))
 
+;; G32 (2026-10-27): `rename-file', `copy-file' and `delete-file' change
+;; files on disk without `write-region', so the G28 shadow did not hold
+;; them -- a rename with a relative target moved a user's photos out of
+;; their directory.  A person who asked for files to be renamed has asked
+;; for exactly these calls, so they are not refused like a save: outside
+;; the temporary directories they run only at a level of full control
+;; (`auto' and above), and the result lists each one (the user's choice,
+;; 2026-10-27).
+
+(defun superchat-tools--eval-file-change-refusal (verb file)
+  "The `eval_elisp' result when its expression tried to VERB FILE."
+  (format (concat "Error: evaluating expression: it tried to %s the file %s.  At "
+                  "this permission level eval_elisp does not rename, copy or delete "
+                  "files outside %s.  If the user asked for it, tell them it needs "
+                  "the level auto (/permissions auto) and do not work around it.  "
+                  "What the expression did before that point was not undone.")
+          verb file
+          (mapconcat #'identity superchat-tool-eval-writable-directories " or ")))
+
+(defun superchat-tools--eval-file-changes-allowed-p ()
+  "Non-nil when this call's Session has full control of Emacs."
+  (eq 'danger-full-access
+      (superchat-sandbox-effective-mode
+       (plist-get superchat--tool-execution-context :session-id))))
+
+(defun superchat-tools--eval-file-report (result changes)
+  "RESULT with the list of file CHANGES appended, newest last.
+When the call failed, the text the model is given is changed too."
+  (if (not (and changes (stringp result)))
+      result
+    (let ((text (concat result
+                        "\nFiles changed on disk outside the temporary directories "
+                        "(not undone; they are not on the review screen):\n"
+                        (mapconcat (lambda (line) (concat "- " line))
+                                   (reverse changes) "\n"))))
+      (when (car-safe superchat-tool-execution--body-failure)
+        (setcar superchat-tool-execution--body-failure
+                (cons text (cdar superchat-tool-execution--body-failure))))
+      text)))
+
 (defcustom superchat-tool-eval-time-limit 30
   "Seconds an `eval_elisp' expression may run before it is stopped.
 At the limit the call ends as a failure that tells the model to start long
@@ -1423,8 +1501,9 @@ A file write outside `superchat-tool-eval-writable-directories' ends the
 expression at once as a failed call, whatever the permission level: saving
 is the user's decision, made on the review screen, not a matter of trust
 (decision of 2026-10-23, G28).  The buffer a `save-buffer' meant to save
-stays modified.  `copy-file', `rename-file' and `delete-file' are not held
-back.
+stays modified.  `rename-file', `copy-file' and `delete-file' outside
+those directories run only at a level of full control, and the result
+lists each (G32, 2026-10-27).
 
 The expression can call other tools with `superchat-tool', which sends
 each call through `superchat-tool-execute' numbered under this one, so it
@@ -1439,6 +1518,21 @@ could not be answered while the expression runs."
          (superchat-tools--eval-watches (cons watch superchat-tools--eval-watches))
          (outer-hook signal-hook-function)
          (original-write-region (symbol-function 'write-region))
+         (original-rename-file (symbol-function 'rename-file))
+         (original-copy-file (symbol-function 'copy-file))
+         (original-delete-file (symbol-function 'delete-file))
+         (file-changes nil)
+         (file-change
+          ;; Run ORIGINAL on ARGS when TARGETS may change; else leave the call.
+          (lambda (verb targets describe original args)
+            (let ((outside (cl-remove-if #'superchat-tools--eval-writable-p
+                                         (mapcar #'expand-file-name targets))))
+              (when (and outside (not (superchat-tools--eval-file-changes-allowed-p)))
+                (throw asked (superchat-tool-execution-failed
+                              (superchat-tools--eval-file-change-refusal verb (car outside))
+                              "file-change")))
+              (prog1 (apply original args)
+                (when outside (push describe file-changes))))))
          (leave-on-prompt
           (lambda (symbol data)
             (cond
@@ -1486,7 +1580,30 @@ could not be answered while the expression runs."
                                                               (expand-file-name filename))
                                                              "file-write")))
                                                    (apply original-write-region
-                                                          start end filename more))))
+                                                          start end filename more)))
+                                                ((symbol-function 'rename-file)
+                                                 (lambda (file newname &rest more)
+                                                   (funcall file-change "rename" (list file newname)
+                                                            (format "renamed %s to %s"
+                                                                    (expand-file-name file)
+                                                                    (expand-file-name newname))
+                                                            original-rename-file
+                                                            (cons file (cons newname more)))))
+                                                ((symbol-function 'copy-file)
+                                                 (lambda (file newname &rest more)
+                                                   (funcall file-change "copy to" (list newname)
+                                                            (format "copied %s to %s"
+                                                                    (expand-file-name file)
+                                                                    (expand-file-name newname))
+                                                            original-copy-file
+                                                            (cons file (cons newname more)))))
+                                                ((symbol-function 'delete-file)
+                                                 (lambda (filename &rest more)
+                                                   (funcall file-change "delete" (list filename)
+                                                            (format "deleted %s"
+                                                                    (expand-file-name filename))
+                                                            original-delete-file
+                                                            (cons filename more)))))
                                         (eval (superchat-tools--read-one-expression expression) t)))))
                         (superchat-tools--eval-value-result result))
                     (inhibited-interaction
@@ -1501,15 +1618,17 @@ could not be answered while the expression runs."
                                            'user-quit)))
                     (error (superchat-tools--eval-error-result err)))))
         (superchat-tools--eval-end-watchdog watchdog watch)))
-    (pcase outcome
-      (`(:stopped time-limit)
-       (superchat-tool-execution-failed (superchat-tools--eval-stopped-result limit)
-                                        "time-limit"))
-      (`(:stopped user-quit)
-       (setq quit-flag nil)
-       (superchat-tool-execution-failed superchat-tools--eval-quit-by-user
-                                        "user-quit"))
-      (_ outcome))))
+    (superchat-tools--eval-file-report
+     (pcase outcome
+       (`(:stopped time-limit)
+	(superchat-tool-execution-failed (superchat-tools--eval-stopped-result limit)
+                                         "time-limit"))
+       (`(:stopped user-quit)
+	(setq quit-flag nil)
+	(superchat-tool-execution-failed superchat-tools--eval-quit-by-user
+                                         "user-quit"))
+       (_ outcome))
+     file-changes)))
 
 (defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
   "Asynchronously delegate TASK to sub-agent PRESET.
