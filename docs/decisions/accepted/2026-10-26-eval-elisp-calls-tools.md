@@ -110,3 +110,21 @@ DeepSeek，C1、C2、E2、A2、T6 各 3 次；shown 是 13 个工具，shown5 �
 代价（用户已知）：在 `edit-buffers` 级别，列 buffer、打开文件、查文档都要经过 eval，每次都问；`read-only` 级别下这些都做不了。
 
 未改：`scripts/m5-regression.el` 归 leader，其中 3 个测试断言 `describe-function`、`apropos` 在默认清单里（`m5/discovery/the-default-request-offers-the-documentation-tool`、`the-documentation-tool-reads-without-a-prompt`、`a-stricter-read-policy-still-prompts`），现在失败，等 leader 决定。其余回归套件和冒烟测试全部通过。
+
+### 6 个工具的实测（2026-10-28，DeepSeek，`runs/batch-codemode-six`）
+
+C1、C2、E2、A1、A2、T6、P3T 各 3 次，共 21 次，通过 20 次。请求里实际带的工具是 6 个默认工具加 `ask_user`。
+
+| 组 | C1 | C2 | E2 | A2 | T6 | 合计 | 请求总数 | 首次请求大小中位数 |
+|---|---|---|---|---|---|---|---|---|
+| shown（13 个工具） | 3/3 | 2/3 | 3/3 | 3/3 | 2/3 | 13/15 | 120 | 17025 B |
+| shown5（5 个工具） | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 | 15/15 | 118 | 12513 B |
+| six（6 个工具） | 2/3 | 3/3 | 3/3 | 3/3 | 3/3 | 14/15 | 157 | 13708 B |
+
+另外 A1 3/3，P3T（提醒）3/3，每次 2 个请求、1 次 `timer_create`。
+
+- 首次请求比 13 个工具小约 19%（比 5 个工具多出的部分主要是 `timer_create`）。
+- 唯一的失败（C1 第 3 次）：模型自己写的跑测试表达式连续 3 次报错（`Wrong type argument: stringp, t`、`Apparently circular structure being printed`、`ert-test-result-type` 未定义），被刹车停下。这些错误没有命中参考页，所以没有附页。与工具数量无关，和前几批的失败同类。
+- 请求总数 157 偏高，主要来自 C2 第 3 次（50 个请求，48 次 eval，最后通过）：同样是反复写错跑测试的表达式，其中 2 次是写项目目录被 G28 拦下。
+- 用 `superchat-tool` 的 eval 共 10 次。
+- 每格 3 次，13/15、14/15、15/15 之间的差别不能当作结论。
