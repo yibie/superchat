@@ -2120,22 +2120,25 @@ Refreshed by `superchat-llm-tools-reload'.")
 (defvar superchat--llm-tool-names-signature nil
   "Snapshot of `superchat-llm-tool-names' used for the cached tool list.")
 
-;; Keep `apropos' and `describe-function' in the default surface: both are
-;; read-only (apropos is capped at 40 matches, describe-function returns
-;; documentation rather than a live value), and without them the default agent
-;; cannot find out what exists or what it does.  `describe-variable' stays out
-;; of the default surface because it returns a variable's current value.
+;; Six tools since 2026-10-27 (the user: "改成 5 个", then keeping
+;; timer_create).  What eval_elisp does as well in one line -- listing
+;; buffers, opening a file, apropos, documentation -- is left to it; what
+;; it cannot do as well stays: edit_buffer's checks and layer report,
+;; read_buffer and read_file's paging and their buffer/disk names,
+;; work_record's run bookkeeping, timer_create's timer facts.  Measured on
+;; DeepSeek the six-tool surface passed as often as the thirteen and its
+;; requests were a quarter smaller
+;; (docs/decisions/accepted/2026-10-26-eval-elisp-calls-tools.md).
 (defconst superchat-llm-default-tool-names
-  '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-    "read_reference" "open_file" "edit_buffer" "eval_elisp"
-    "timer_create" "timer_list" "timer_cancel" "work_record")
+  '("read_buffer" "read_file" "edit_buffer" "eval_elisp" "work_record"
+    "timer_create")
   "The default tool surface, in its one home.
 Buffer-first: the model reads, opens files as buffers and edits buffers.
 `save_buffer' is deliberately absent -- persisting is offered only by an
 explicit Preset or Request tool list, never by this default or by a level.
 `superchat-llm-tool-names' defaults to this list and the `select-tools'
 surface baseline reads it, so the two can no longer drift apart the way two
-hand-written copies of the same names did.  The timer tools write timer
+hand-written copies of the same names did.  `timer_create' writes timer
 facts to the Tape and nothing else (`superchat-timer.el').  `elisp_script'
 is not here: measured on real tasks it made the model slower and less
 reliable (M11 slice 6.5, docs/research/round-trips-first-principles.md); add
@@ -2297,7 +2300,7 @@ Useful after editing tool functions or adding new ones."
           :description "Read an Emacs buffer's live text, unsaved changes included, and return its lines. The result starts with a header naming the buffer, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large buffer with offset. A narrowed buffer is read only in its narrowed part, the part edit_buffer can change, and the header says so. For a file no buffer visits use read_file."
           :args (list (list :name "buffer"
                             :type 'string
-                            :description "The name of the buffer to read, exactly as list_buffers gives it.")
+                            :description "The name of the buffer to read, exactly as (buffer-name) gives it.")
                       (list :name "offset"
                             :type 'number
                             :description "1-based first line to return. Defaults to 1."
@@ -2312,7 +2315,7 @@ Useful after editing tool functions or adding new ones."
          ;; approval under any level.
          (superchat--maybe-make-llm-tool
           "read_file"
-          :description "Read a local text file from disk and return its lines, without opening it in a buffer. Use this -- not eval_elisp or a shell -- to look at a file that no buffer visits. To change a file, open it as a buffer with open_file and edit the buffer. The result starts with a header giving the resolved path, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large file with offset. It always returns the version on disk; for the unsaved text of a live buffer use read_buffer. Directories, binary files, devices and remote paths are errors."
+          :description "Read a local text file from disk and return its lines, without opening it in a buffer. Use this -- not eval_elisp or a shell -- to look at a file that no buffer visits. To change a file, open it as a buffer -- (find-file-noselect FILE) in eval_elisp -- and edit the buffer. The result starts with a header giving the resolved path, which lines were returned out of how many, and any truncation; the text follows the line `Content:' and has no line numbers. At most 2000 lines per call (a line longer than 2000 characters and output beyond 50 KiB are cut and said to be cut): continue a large file with offset. It always returns the version on disk; for the unsaved text of a live buffer use read_buffer. Directories, binary files, devices and remote paths are errors."
           :args (list (list :name "path"
                             :type 'string
                             :description "File to read. A relative path is resolved against the session's working directory.")

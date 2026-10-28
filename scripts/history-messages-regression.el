@@ -65,6 +65,11 @@ Serialized and parsed back, so it is plain data taken at request time."
                        :object-type 'alist :array-type 'list
                        :null-object nil :false-object nil)))
 
+(defvar hm--extra-tool-names nil
+  "Tools a fixture offers besides the default surface.
+`open_file' left the default surface on 2026-10-27; a test whose scripted
+model opens a file names it here.")
+
 (defmacro hm--fixture (script &rest body)
   "Run BODY with SCRIPT in the canonical fixture, capturing wire messages."
   (declare (indent 1) (debug t))
@@ -72,7 +77,8 @@ Serialized and parsed back, so it is plain data taken at request time."
          (superchat-runtime--queue-timers (make-hash-table :test #'equal))
          (superchat-event-faults nil)
          (superchat-llm-reasoning nil)
-         (superchat-llm-tool-names superchat-llm-default-tool-names)
+         (superchat-llm-tool-names (append superchat-llm-default-tool-names
+                                           hm--extra-tool-names))
          (superchat-llm-tools-list nil)
          (hm--wires nil)
          (target (get-buffer-create "hm-target")))

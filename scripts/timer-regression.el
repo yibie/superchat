@@ -286,8 +286,12 @@
 ;;;; The tools --------------------------------------------------------------------------
 
 (ert-deftest timer/the-tools-are-on-the-default-surface-and-built-in ()
+  "Since 2026-10-27 only `timer_create' is on the default surface; listing
+and cancelling are built-ins a tool list can offer."
+  (should (member "timer_create" superchat-llm-default-tool-names))
+  (dolist (name '("timer_list" "timer_cancel"))
+    (should-not (member name superchat-llm-default-tool-names)))
   (dolist (name '("timer_create" "timer_list" "timer_cancel"))
-    (should (member name superchat-llm-default-tool-names))
     (should (eq 'builtin (superchat-sandbox-tool-class name)))))
 
 (ert-deftest timer/the-create-tool-sets-a-timer-in-the-asking-conversation ()

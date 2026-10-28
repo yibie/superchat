@@ -88,7 +88,7 @@
          (superchat-approval-default-policy 'ask)
          (superchat-sandbox-default-mode 'edit-buffers)
          (superchat-llm-tool-names
-          (append superchat-llm-default-tool-names '("append_to_buffer")))
+          (append superchat-llm-default-tool-names '("append_to_buffer" "open_file")))
          (superchat-llm-tools-list nil))
      (unwind-protect (smoke--with-fixture ,script ,@body)
        (setq superchat-llm-tools-list nil))))

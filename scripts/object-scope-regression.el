@@ -59,28 +59,28 @@
 (ert-deftest object-scope/another-workspaces-model-cannot-touch-a-record ()
   "The review's F1, through the real tool loop."
   (wrec--with nil (p q)
-    (let* ((a (wrec--view p))
-           (sa (hm--session a))
-           (id (superchat-work-start sa "OSCOPE-PRIVATE-GOAL"))
-           (b (wrec--view q))
-           (rows (oscope--work-rows)))
-      (setq smoke--script
-            (list (wrec--call '(action . "read") (cons 'id id))
-                  (wrec--call '(action . "update") (cons 'id id)
-                              '(progress . "WRITTEN-FROM-Q"))
-                  (wrec--call '(action . "done") (cons 'id id)
-                              '(conclusion . "COMPLETED-FROM-Q"))
-                  '(:text "finished")))
-      (hm--turn b "use the supplied record id")
-      (let ((seen (prin1-to-string hm--wires)))
-        (should (string-match-p oscope--refusal seen))
-        ;; The refusal says nothing of what the record holds.
-        (should-not (string-match-p "OSCOPE-PRIVATE-GOAL" seen)))
-      (let ((record (superchat-work-get id)))
-        (should-not (plist-get record :progress))
-        (should-not (plist-get record :conclusion)))
-      ;; Nothing was written anywhere.
-      (should (= rows (oscope--work-rows))))))
+	      (let* ((a (wrec--view p))
+		     (sa (hm--session a))
+		     (id (superchat-work-start sa "OSCOPE-PRIVATE-GOAL"))
+		     (b (wrec--view q))
+		     (rows (oscope--work-rows)))
+		(setq smoke--script
+		      (list (wrec--call '(action . "read") (cons 'id id))
+			    (wrec--call '(action . "update") (cons 'id id)
+					'(progress . "WRITTEN-FROM-Q"))
+			    (wrec--call '(action . "done") (cons 'id id)
+					'(conclusion . "COMPLETED-FROM-Q"))
+			    '(:text "finished")))
+		(hm--turn b "use the supplied record id")
+		(let ((seen (prin1-to-string hm--wires)))
+		  (should (string-match-p oscope--refusal seen))
+		  ;; The refusal says nothing of what the record holds.
+		  (should-not (string-match-p "OSCOPE-PRIVATE-GOAL" seen)))
+		(let ((record (superchat-work-get id)))
+		  (should-not (plist-get record :progress))
+		  (should-not (plist-get record :conclusion)))
+		;; Nothing was written anywhere.
+		(should (= rows (oscope--work-rows))))))
 
 (ert-deftest object-scope/every-action-on-another-workspaces-record-is-refused ()
   (wrec--with nil (p q)
@@ -247,6 +247,7 @@ the product writes when the sub-agent hands back is not the model's way in."
 
 (ert-deftest object-scope/another-workspaces-model-cannot-see-or-cancel-a-timer ()
   "The review's F2, through the real tool loop."
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
   (wrec--with nil (p q)
     (let* ((a (wrec--view p))
            (id (plist-get (superchat-timer-create (hm--session a) 'reminder
@@ -268,7 +269,7 @@ the product writes when the sub-agent hands back is not the model's way in."
               (should (string-match-p oscope--refusal seen)))
             (should (oscope--pending-p id))
             (should (= rows (oscope--timer-rows))))
-        (superchat-timer-disarm-all)))))
+        (superchat-timer-disarm-all))))))
 
 (ert-deftest object-scope/a-workspaces-conversations-share-its-timers ()
   "Guard: the Workspace is the boundary, not the conversation."

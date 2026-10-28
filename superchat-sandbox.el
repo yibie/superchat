@@ -408,9 +408,9 @@ with each request instead and supersedes the ones before it."
    "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n"
    (pcase (superchat-sandbox-effective-mode session-id)
      ('read-only
-      "Current Superchat mode: read-only. You can read buffers and files and open files as buffers; buffers are not edited in this mode.")
+      "Current Superchat mode: read-only. You can read buffers and files; buffers are not edited in this mode.")
      ('edit-buffers
-      "Current Superchat mode: edit-buffers. You change things by editing Emacs buffers: open a file as a buffer with open_file and edit the buffer. Your edits stay in the buffer -- saving a buffer to disk is the user's decision, not yours, so say which buffers you changed and that they are unsaved.")
+      "Current Superchat mode: edit-buffers. You change things by editing Emacs buffers: open a file as a buffer (find-file-noselect in eval_elisp) and edit the buffer. Your edits stay in the buffer -- saving a buffer to disk is the user's decision, not yours, so say which buffers you changed and that they are unsaved.")
      (_
       "Current Superchat mode: danger-full-access. Tools run without approval prompts. You still change files by editing their buffers; saving a buffer to disk is the user's decision."))
    "\n\n"

@@ -45,7 +45,8 @@ DIR/note.txt, which holds three lines, point on the third."
   (let ((view (nth 0 bindings)) (buffer (nth 1 bindings)))
     `(let* ((dir (file-name-as-directory (make-temp-file "shared-conversation-" t)))
             (file (expand-file-name "note.txt" dir))
-            (superchat-changes-review-after-run nil))
+            (superchat-changes-review-after-run nil)
+            (hm--extra-tool-names '("open_file")))
        (with-temp-file file (insert "first line\nsecond line\nthird line\n"))
        (unwind-protect
            (hm--fixture ,script

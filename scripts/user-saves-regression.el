@@ -37,7 +37,8 @@ BINDINGS is (VIEW FILE BUFFER).  Turn 2's answer is scripted too."
   (let ((view (nth 0 bindings)) (file (nth 1 bindings)) (buffer (nth 2 bindings)))
     `(let* ((dir (file-name-as-directory (make-temp-file "user-saves-" t)))
             (,file (expand-file-name "note.txt" dir))
-            (superchat-changes-review-after-run nil))
+            (superchat-changes-review-after-run nil)
+            (hm--extra-tool-names '("open_file")))
        (with-temp-file ,file (insert "two\n"))
        (unwind-protect
            (hm--fixture (list `(:tool-uses (("open_file" (path . ,,file))))

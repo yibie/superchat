@@ -30,6 +30,11 @@
 (defconst ref--pointer "read_reference"
   "What a pointer sentence names; the page id stands next to it.")
 
+(defvar ref--offered nil
+  "The tool list of the fixture: the default surface and the reading tool.
+`read_reference' left the default surface on 2026-10-27; these tests are
+about a request that offers it, except where they say otherwise.")
+
 (defvar ref--systems nil)
 (defvar ref--asked nil
   "Every approval request of the fixture.  Reading a page must add none.")
@@ -50,7 +55,10 @@
                                           (push (plist-get request :tool) ref--asked)
                                           t))
            (superchat-sandbox-default-mode 'edit-buffers)
-           (superchat-llm-tool-names superchat-llm-default-tool-names)
+           (superchat-llm-tool-names
+            (or ref--offered
+                (append superchat-llm-default-tool-names
+                        '("read_reference" "list_buffers"))))
            (superchat-llm-tools-list nil))
        (unwind-protect
            (smoke--with-fixture ,script
@@ -283,14 +291,33 @@ names the page; a second identical failure in the same loop is not nagged."
         (should (string-match-p "Tool execution failed" second))
         (should (= 0 (ref--pointer-count second)))))))
 
-(ert-deftest reference/no-pointer-when-the-reading-tool-is-not-offered ()
-  "Guard: a pointer never names an entry the request does not have."
-  (ref--fixture (list (list :tool-uses (list ref--void-map-call)) '(:text "done"))
+(ert-deftest reference/without-the-reading-tool-the-page-itself-follows ()
+  "A pointer never names an entry the request does not have: without
+`read_reference', the default since 2026-10-27, the feedback carries the
+page, once."
+  (ref--fixture (list (list :tool-uses (list ref--void-map-call))
+                      (list :tool-uses (list ref--void-map-call))
+                      '(:text "done"))
     (let ((view (smoke--open-chat)))
       (ref--settle (ref--submit view '("eval_elisp") "bind a key"))
-      (let ((second (plist-get (ref--request 1) :prompt-text)))
+      (let ((second (plist-get (ref--request 1) :prompt-text))
+            (third (plist-get (ref--request 2) :prompt-text))
+            (page (regexp-quote (substring (superchat-reference-body ref--page) 0 60))))
         (should (string-match-p "Tool execution failed" second))
-        (should (= 0 (ref--pointer-count second)))))))
+        (should-not (string-match-p "read_reference can fetch" second))
+        (should (= 1 (ref--pointer-count second)))
+        (should (string-match-p page second))
+        ;; Once per tool loop: the third request repeats it, adds none.
+        (should (= 1 (ref--pointer-count third)))))))
+
+(ert-deftest reference/the-default-surface-has-no-reading-tool-and-no-index ()
+  "2026-10-27: six default tools; the index advertises an entry only where
+the request has it."
+  (should-not (member "read_reference" superchat-llm-default-tool-names))
+  (let ((ref--offered superchat-llm-default-tool-names))
+    (ref--fixture (list '(:text "done"))
+      (ref--settle (smoke--send (smoke--open-chat) "bind a key for me"))
+      (should (= 0 (ref--count ref--index-marker (car ref--systems)))))))
 
 (provide 'reference-regression)
 

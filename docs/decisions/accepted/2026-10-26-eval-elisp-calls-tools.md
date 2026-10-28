@@ -96,3 +96,17 @@ DeepSeek，C1、C2、E2、A2、T6 各 3 次；shown 是 13 个工具，shown5 �
 - 文件改动的报告出现了 7 次（shown 4 次，shown5 3 次），都在 A2 里，是用户要求的改名；没有一次因为 G32 被拒（实验用的级别是 danger-full-access）。
 - 来回多的地方是跑测试：shown 组 28 次跑测试的 eval 里失败 12 次，shown5 组 21 次里失败 9 次。原因：在进程里调用只能在 batch 里用的函数（3 次），用了不存在的 `ert-test-result-type`（2 次），想把文件写进项目目录再跑、被 G28 拦下（2 次），其余是语法错误。这就是"测 buffer 当前内容"没有正道的问题。
 - 每格 3 次；shown5 的 15/15 和 guide5 的 12/15 差 3 次，可能是波动，不能当作结论。
+
+## 默认工具改为 6 个（2026-10-27，用户："改成 5 个"，又选了保留 timer_create）
+
+`superchat-llm-default-tool-names` 现在是 `read_buffer`、`read_file`、`edit_buffer`、`eval_elisp`、`work_record`、`timer_create`。移出的七个（`list_buffers`、`apropos`、`describe-function`、`read_reference`、`open_file`、`timer_list`、`timer_cancel`）仍是内置工具，工具清单或 Preset 点名就能提供。
+
+实现时定的，用户可以改：
+
+- 参考页：默认不再提供 `read_reference`。报错命中某页时，失败反馈里直接附上那一页（每个工具循环一次）；请求里提供了 `read_reference` 时照旧只点名。平时的请求不多带字。
+- 提示词里"用 open_file 打开文件"都改成 `(find-file-noselect FILE)`；read-only 级别的说明去掉了"可以把文件打开成 buffer"。
+- 测试：场景测试里假模型要调 `open_file`、`timer_list`、`timer_cancel` 的，在测试的工具清单里把它们加回来（`hm--extra-tool-names` 等）；检查默认清单的测试改成新清单；冒烟基准 A 重新生成，差别只有上面两处提示词。
+
+代价（用户已知）：在 `edit-buffers` 级别，列 buffer、打开文件、查文档都要经过 eval，每次都问；`read-only` 级别下这些都做不了。
+
+未改：`scripts/m5-regression.el` 归 leader，其中 3 个测试断言 `describe-function`、`apropos` 在默认清单里（`m5/discovery/the-default-request-offers-the-documentation-tool`、`the-documentation-tool-reads-without-a-prompt`、`a-stricter-read-policy-still-prompts`），现在失败，等 leader 决定。其余回归套件和冒烟测试全部通过。

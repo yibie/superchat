@@ -2283,17 +2283,18 @@ left alone."
    (superchat--llm-tool-error-entries result)))
 
 (declare-function superchat-reference-pointer-for "superchat-reference")
+(declare-function superchat-reference-body "superchat-reference" (id))
 
 (defun superchat--llm-reference-pointer-ids (result offered already)
   "Return ids of reference pages that are the known answer to RESULT's failures.
-OFFERED is the tool names of the request the feedback is appended to: without
-`read_reference' among them there is no entry to point at, so there is no
-pointer.  ALREADY is the ids this tool loop has pointed at before; a page is
+OFFERED is the tool names of the request the feedback is appended to; it is
+not consulted since `read_reference' left the default surface (2026-10-27):
+without it the feedback carries the page itself.  ALREADY is the ids this tool loop has pointed at before; a page is
 named once, not at every repetition of the error.  Only an error some page
 claims gets a pointer; the error text itself stays in the tool result as it is.
 docs/decisions/accepted/2026-09-20-reference-reading-on-demand.md"
-  (when (and (member "read_reference" offered)
-             (fboundp 'superchat-reference-pointer-for))
+  (ignore offered)
+  (when (fboundp 'superchat-reference-pointer-for)
     (let (ids)
       (dolist (entry (superchat--llm-tool-error-entries result))
         (let ((id (superchat-reference-pointer-for (car entry) (cdr entry))))
@@ -2301,10 +2302,12 @@ docs/decisions/accepted/2026-09-20-reference-reading-on-demand.md"
             (push id ids))))
       (nreverse ids))))
 
-(defun superchat--llm-tool-error-feedback (result &optional pointer-ids)
+(defun superchat--llm-tool-error-feedback (result &optional pointer-ids offered)
   "Return corrective feedback when RESULT contains failed tool calls.
 POINTER-IDS, from `superchat--llm-reference-pointer-ids', are reference pages
-to name after the instruction.
+to name after the instruction.  When OFFERED, the request's tool names, has
+`read_reference' the page is named for it to fetch; otherwise the page itself
+follows, once per tool loop (2026-10-27).
 
 Add a short user-role instruction after tool results: providers otherwise
 tend to narrate a fallback instead of repairing and retrying the requested
@@ -2324,8 +2327,11 @@ copying their potentially large contents into another prompt message.
        "\nRead the error details in the preceding tool results. Failed tools:\n"
        (mapconcat (lambda (entry) (format "- %s" (car entry))) errors "\n")
        (mapconcat (lambda (id)
-                    (format "\nThe reference page `%s' covers this kind of error; read_reference can fetch it before you retry."
-                            id))
+                    (if (member "read_reference" offered)
+                        (format "\nThe reference page `%s' covers this kind of error; read_reference can fetch it before you retry."
+                                id)
+                      (format "\nThe reference page `%s' covers this kind of error; read it before you retry:\n\n%s"
+                              id (superchat-reference-body id))))
                   pointer-ids "")))))
 
 (defun superchat--llm-tool-protocol-error-p (type)
@@ -3630,16 +3636,16 @@ requests until it receives text, bounded by
                           ;; tools available so the model can choose an
                           ;; alternative; the feedback explicitly tells it
                           ;; not to retry the refused call.
-                          (let* ((pointer-ids
+                          (let* ((offered
+                                  (mapcar #'llm-tool-name
+                                          (ignore-errors
+                                            (llm-chat-prompt-tools real-prompt))))
+                                 (pointer-ids
                                   (superchat--llm-reference-pointer-ids
-                                   response
-                                   (mapcar #'llm-tool-name
-                                           (ignore-errors
-                                             (llm-chat-prompt-tools real-prompt)))
-                                   reference-pointed))
+                                   response offered reference-pointed))
                                  (feedback
                                   (superchat--llm-tool-error-feedback
-                                   response pointer-ids)))
+                                   response pointer-ids offered)))
                             (setq reference-pointed
                                   (append reference-pointed pointer-ids))
                             (when feedback

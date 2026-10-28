@@ -42,7 +42,7 @@ This page is advice. The user's instructions and the permission decisions of thi
 - Which file: `user-init-file' is the init file this Emacs loaded. The binding may belong in another file it loads; read before deciding.
 
 2. Three states; never assume they agree.
-- the buffer: the configuration file as open in Emacs (open_file, then edit_buffer). Your edit lands here.
+- the buffer: the configuration file as open in Emacs (find-file-noselect, then edit_buffer). Your edit lands here.
 - the file on disk: unchanged by your edit until the user saves it. (load FILE) reads the disk, so it does not see your edit.
 - the running session: changes only when a form is evaluated. Editing text changes nothing in it.
 Check each one you talk about: (buffer-modified-p) for the buffer, read_file for the disk, key-binding for the session.

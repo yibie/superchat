@@ -90,7 +90,10 @@ answers, is evaluated with DIR bound.  BODY runs in the canonical fixture."
            (superchat-llm-reasoning nil)
            (superchat-approval-default-policy 'ask)
            (superchat-sandbox-default-mode 'edit-buffers)
-           (superchat-llm-tool-names superchat-llm-default-tool-names)
+           (superchat-llm-tool-names
+            ;; The scripted model opens files; `open_file' left the default
+            ;; surface on 2026-10-27.
+            (append superchat-llm-default-tool-names '("open_file")))
            (superchat-llm-tools-list nil))
        (editor-mode--reset-frame)
        (unwind-protect

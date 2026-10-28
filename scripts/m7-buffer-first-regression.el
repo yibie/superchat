@@ -53,7 +53,10 @@
            (superchat-llm-reasoning nil)
            (superchat-approval-default-policy 'ask)
            (superchat-sandbox-default-mode 'edit-buffers)
-           (superchat-llm-tool-names superchat-llm-default-tool-names)
+           (superchat-llm-tool-names
+            ;; The scripted model opens files; `open_file' left the default
+            ;; surface on 2026-10-27.
+            (append superchat-llm-default-tool-names '("open_file")))
            (superchat-llm-tools-list nil))
        (unwind-protect (smoke--with-fixture ,script ,@body)
          (setq superchat-llm-tools-list nil)))))
@@ -152,12 +155,15 @@ window and the disk are left alone; the buffer is what later calls use."
               (should (= 0 (cl-count "approval.requested" (smoke--types session) :test #'equal)))
               (should (member "open_file" (plist-get (car (last smoke--requests)) :tools))))))))))
 
-(ert-deftest m7/open-file/is-on-the-default-surface-after-read-file ()
+(ert-deftest m7/open-file/is-a-built-in-off-the-default-surface ()
+  "Since 2026-10-27 the default surface leaves opening a file to eval_elisp
+\(find-file-noselect); `open_file' stays a built-in a tool list can offer."
   (skip-when (getenv "SMOKE_REAL"))
   (should (eq 'builtin (superchat-sandbox-tool-class "open_file")))
-  (should (equal '("read_buffer" "read_file" "open_file" "edit_buffer")
+  (should-not (member "open_file" superchat-llm-default-tool-names))
+  (should (equal '("read_buffer" "read_file" "edit_buffer")
                  (cl-remove-if-not
-                  (lambda (name) (member name '("read_buffer" "read_file" "open_file" "edit_buffer")))
+                  (lambda (name) (member name '("read_buffer" "read_file" "edit_buffer")))
                   superchat-llm-default-tool-names)))
   (should (equal superchat-llm-default-tool-names
                  (let (superchat-llm-default-tool-names)
@@ -318,7 +324,7 @@ for a buffer without a file."
                 '(:tool-uses (("append_to_buffer" (buffer . "*m7-scratch-notes*") (text . "by the tool"))))
                 '(:text "done"))
         (let* ((superchat-llm-tool-names (append superchat-llm-default-tool-names
-                                                 '("append_to_buffer")))
+                                                 '("append_to_buffer" "open_file")))
                (view (smoke--open-chat))
                (session (buffer-local-value 'superchat--session-id view))
                (run (m7--settle (smoke--send view "edit"))))
@@ -350,7 +356,7 @@ edit the tool sent back leaves none."
                 '(:tool-uses (("append_to_buffer" (buffer . "*m7-clone-source*") (text . "by the tool"))))
                 '(:text "done"))
         (let* ((superchat-llm-tool-names (append superchat-llm-default-tool-names
-                                                 '("append_to_buffer")))
+                                                 '("append_to_buffer" "open_file")))
                (view (smoke--open-chat))
                (session (buffer-local-value 'superchat--session-id view))
                (run (m7--settle (smoke--send view "edit")))
@@ -562,9 +568,9 @@ it, `danger-full-access' included."
   ;; Slice 6 added `elisp_script' and moved three tools into scripts; slice 6.5
   ;; took both back after real runs (docs/research/round-trips-first-principles.md).
   ;; Slice 7: `work_record', which writes Work Record facts to the Tape.
-  (should (equal '("list_buffers" "apropos" "describe-function" "read_buffer" "read_file"
-                   "read_reference" "open_file" "edit_buffer" "eval_elisp"
-                   "timer_create" "timer_list" "timer_cancel" "work_record")
+  ;; 2026-10-27: six tools; what eval_elisp does as well left the list.
+  (should (equal '("read_buffer" "read_file" "edit_buffer" "eval_elisp" "work_record"
+                   "timer_create")
                  superchat-llm-default-tool-names))
   (dolist (level '(read-only edit-buffers danger-full-access))
     (ert-info ((format "level: %s" level))
