@@ -41,3 +41,21 @@ Status: accepted 2026-10-26, implemented，待真实任务实测。用户的方�
 ## 待实测
 
 同第 6 片的 A1、A2、T6，各 5 次，同一模型：通过率不低于 14/15；数每个任务的请求次数、eval 里用 `superchat-tool` 的次数、被拒的嵌套调用次数。实测之前不改默认工具清单。
+
+## 实测（2026-10-27，DeepSeek）
+
+三组：base 是本片之前的提交 4019c6e8；new 是本片，默认 13 个工具；new5 是本片，只给 read_buffer、read_file、edit_buffer、eval_elisp、work_record（另有 ask_user）。运行目录在 `.scratch/task-sim/runs/batch-codemode-*`。
+
+第一轮全部作废：沙箱里编译不了 `write-region` 的 native-comp trampoline（Xcode 的 ld 要读沙箱外的文件），每个 eval 都报 `Native compiler error`。`harness-goals/launch.sh` 现在先把本机缓存里同一 Emacs 版本的 trampoline 复制进运行目录；沙箱配置没改。
+
+| 组 | A1 | A2 | T6 | C1 | C2 | E2 | K2C |
+|---|---|---|---|---|---|---|---|
+| base | 5/5 | 5/5 | 3/5 | 3/3 | 3/3 | 3/3 | 0/3 |
+| new | 4/5 | 5/5 | 3/5 | 3/3 | 3/3 | 3/3 | 0/3 |
+| new5 | 5/5 | 4/5 | 3/5 | 2/3 | 2/3 | 3/3 | 0/3 |
+
+- 模型几乎不用 `superchat-tool`：new 组 0 次；new5 组 3 次运行里共 6 次（C2 里经它调 `edit_buffer`，E2 里调了没提供的 `open_file`，得到 "No tool named open_file"）。说明在请求里，模型看得到。
+- 请求次数没有因此减少，这一片的目标（少来回）没有达到。
+- new5 第一条请求 12.1 KB，base 16.3 KB（少 26%）。new5 的 4 个失败里，3 个是连续 3 次 eval 报错被刹车停下，1 个是 C2 把测试文件读进一个不访问文件的 buffer 再改（结果写明了 "not visiting a file"），与 `superchat-tool` 无关。
+- K2C 三组都只差 `first-execution-left-it-continuable` 一项，base 也一样，是本片之外已有的问题。
+- 每格 3 到 5 次，通过率 1 次的差别分不出好坏。
