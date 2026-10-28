@@ -59,3 +59,22 @@ Status: accepted 2026-10-26, implemented，待真实任务实测。用户的方�
 - new5 第一条请求 12.1 KB，base 16.3 KB（少 26%）。new5 的 4 个失败里，3 个是连续 3 次 eval 报错被刹车停下，1 个是 C2 把测试文件读进一个不访问文件的 buffer 再改（结果写明了 "not visiting a file"），与 `superchat-tool` 无关。
 - K2C 三组都只差 `first-execution-left-it-continuable` 一项，base 也一样，是本片之外已有的问题。
 - 每格 3 到 5 次，通过率 1 次的差别分不出好坏。
+
+## 系统提示里的引导（2026-10-27，用户："添加系统提示看看"）
+
+在"一次问完"那段引导后面加了一句（`superchat-prompt-act-once-text`）：动手也一样，读、改、检查可以是一次 eval_elisp，改动用 `(superchat-tool "edit_buffer" ...)`。只在提供 `eval_elisp` 时发送。
+
+DeepSeek，C1、C2、E2、A2、T6 各 3 次；guide 是 13 个工具，guide5 是 5 个工具。对照组是上面没有这句引导的 new、new5。运行目录 `.scratch/task-sim/runs/batch-codemode-guide*`。
+
+| 组 | C1 | C2 | E2 | A2 | T6 | `superchat-tool` 次数 | 请求中位数 C1 / C2 / E2 |
+|---|---|---|---|---|---|---|---|
+| new | 3/3 | 3/3 | 3/3 | 5/5 | 3/5 | 0 | 7 / 9 / 9 |
+| guide | 3/3 | 3/3 | 2/3 | 3/3 | 2/3 | 9 | 8 / 8 / 8 |
+| new5 | 2/3 | 2/3 | 3/3 | 4/5 | 3/5 | 3 | 10 / 9 / 8 |
+| guide5 | 2/3 | 3/3 | 3/3 | 2/3 | 2/3 | 10 | 8 / 7 / 9 |
+
+- 引导让模型开始用：`superchat-tool` 从 0 次和 3 次升到 9 次和 10 次，几乎都是在 eval 里调 `edit_buffer`；guide5 的 C1 里 5 次改动全在 eval 里做。
+- 请求次数没有明显下降。模型把改动挪进 eval，但没有把"读、改、查"合成一次：改完以后照样另发一次请求去检查。
+- 带引导的 7 个失败里，没有一个是 `superchat-tool` 的调用出错：E2 和 C1 各一次是连续 3 次 eval 报错被刹车停下（这两次运行都没用 `superchat-tool`），两次 T6 是窗口没摆对，A2 一次见下条。
+- A2（guide5 第 2 次）：模型用 `(rename-file FILE (concat (file-name-sans-extension n) ".jpg"))` 改名，目标是相对路径，两个文件被搬到 `default-directory`，不在 `~/photos` 里了。文件没丢，只是被挪了位置。与引导无关；这正是 G32 的缺口：`rename-file` 不经过 `write-region`，eval 的写盘拦截管不到它。
+- 每格 3 次，通过率差 1 次分不出好坏。
