@@ -145,3 +145,5 @@ C1、C2、E2、A1、A2、T6、P3T 各 3 次，共 21 次，通过 20 次。请�
 - P1 两组都挂在 `title-in-english`：标题是中文。与工具无关。
 - P3 两组都挂在 `a-timer-for-the-call`：模型用 `timer_create` 设好了 20 分钟后的提醒，但这个检查找的是 `timer-list` 里参数含"妈妈"的 Emacs timer，`timer_create` 的 timer 不带这段文字。检查写法和 `timer_create` 不匹配，不是模型没做到；P3T 才是按 `timer_create` 写的检查（上一批 3/3）。
 - 没有一次失败和被移出的工具有关。
+
+P3 的检查已改成查 Superchat 自己的 timer（同 P3T，去掉 Workspace 一项），`.scratch/task-sim/harness-goals/tasks-goals.el`。改后 DeepSeek 3/3（`runs/batch-p3-fixed`）。
