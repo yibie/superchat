@@ -526,6 +526,35 @@ outside a tool body.")
 (define-error 'superchat-tool-execution-inner-refusal
   "A call this tool made was refused")
 
+(declare-function superchat-runtime--entry "superchat-runtime" (run-id))
+
+(defun superchat-tool-execution-settle-left (tool-name context)
+  "Record the call of CONTEXT to TOOL-NAME as cancelled if it is still open.
+For a call made from inside another tool's body that was left by `throw'
+-- the `eval_elisp' time limit or a C-g -- past this call's own
+accounting.  Without it the call stays open work of its Run, and the Run
+ends `audit-incomplete'.  A cancelled call does not count as a failure."
+  (let* ((run-id (plist-get context :run-id))
+         (execution-id (plist-get context :execution-id))
+         (entry (and (stringp run-id) (fboundp 'superchat-runtime--entry)
+                     (superchat-runtime--entry run-id)))
+         (work (plist-get entry :open-tool-work)))
+    (when (and (hash-table-p work)
+               (plist-get (gethash execution-id work) :effect))
+      (superchat-tool-execution--record-failure
+       tool-name context execution-id "cancelled"
+       "[Tool call interrupted: the code that made it was stopped]"
+       nil (list :interruption "caller-stopped")))))
+
+(defvar superchat-tool-execution-cannot-ask nil
+  "Non-nil while code runs that no approval question can interrupt.
+The name of the tool whose body that is, such as \"eval_elisp\": its
+expression runs with `inhibit-interaction' and a time limit, so a
+question published from inside it could never be answered and the wait
+would end only at the limit.  A call made there that the level would ask
+about is refused at once, with a result telling the model to make that
+call on its own (decision of 2026-10-26, eval_elisp as code mode).")
+
 (defvar superchat-tool-execution--body-failure nil
   "While a synchronous tool body runs: a cell for the failure it reports.
 `superchat-tool-execution-failed' fills it with (TEXT . ERROR-TYPE); the
@@ -1424,6 +1453,14 @@ that must be asked about goes to the approval seam."
             (let ((result (format "[Tool call denied: %s]"
                                   (or (plist-get level :reason)
                                       "the permission level does not grant it"))))
+              (superchat-tool-execution--record-failure
+               tool-name context execution-id "denied" result)
+              (funcall refuse result)))
+           ((and (eq decision 'ask) superchat-tool-execution-cannot-ask)
+            (let ((result (format "[Tool call refused: %s needs the user's approval (%s), which cannot be asked for a call made from inside %s; make it as a tool call of its own]"
+                                  tool-name
+                                  (or (plist-get level :reason) "the permission level asks about it")
+                                  superchat-tool-execution-cannot-ask)))
               (superchat-tool-execution--record-failure
                tool-name context execution-id "denied" result)
               (funcall refuse result)))

@@ -1367,6 +1367,16 @@ neither the debugger nor a quit reaches the user later."
           (quit nil))
         (setq quit-flag nil)))))
 
+(defvar superchat-script--calls)
+
+(defun superchat-tools--eval-calls ()
+  "The value `superchat-script--calls' takes while an expression runs.
+Nil outside a tool execution, where `superchat-tool' has no call to
+number its calls under."
+  (let ((context superchat--tool-execution-context))
+    (when (plist-get context :session-id)
+      (list 0 context (or (plist-get context :execution-id) "eval") "eval_elisp"))))
+
 (defun superchat-tools--eval-sit-for (seconds &optional nodisp)
   "`sit-for' inside `eval_elisp': redisplay unless NODISP, sleep SECONDS.
 No input can arrive while the expression runs, so the wait always runs to
@@ -1414,7 +1424,15 @@ expression at once as a failed call, whatever the permission level: saving
 is the user's decision, made on the review screen, not a matter of trust
 (decision of 2026-10-23, G28).  The buffer a `save-buffer' meant to save
 stays modified.  `copy-file', `rename-file' and `delete-file' are not held
-back."
+back.
+
+The expression can call other tools with `superchat-tool', which sends
+each call through `superchat-tool-execute' numbered under this one, so it
+can read, edit and check in one round trip (decision of 2026-10-26,
+eval_elisp as code mode).  A call there that the level would ask about is
+refused instead (`superchat-tool-execution-cannot-ask'): the question
+could not be answered while the expression runs."
+  (require 'superchat-script)
   (let* ((asked (make-symbol "asked"))
          (limit superchat-tool-eval-time-limit)
          (watch (list asked (and limit (> limit 0) (+ (float-time) limit))))
@@ -1451,7 +1469,11 @@ back."
                                           ;; still stop the model's code
                                           ;; (decision of 2026-09-30).
                                           (inhibit-quit nil)
-                                          (signal-hook-function leave-on-prompt))
+                                          (signal-hook-function leave-on-prompt)
+                                          (superchat-script--calls
+                                           (superchat-tools--eval-calls))
+                                          (superchat-tool-execution-cannot-ask
+                                           "eval_elisp"))
                                       (cl-letf (((symbol-function 'sit-for)
                                                  #'superchat-tools--eval-sit-for)
                                                 ((symbol-function 'write-region)
@@ -2296,7 +2318,7 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "eval_elisp"
-          :description "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. This tool is not for saving files: saving is the user's decision. To make a configuration change last, edit the buffer of the configuration file Emacs actually loads and tell the user which buffer to save."
+          :description "Evaluate one complete Emacs Lisp expression in the running Emacs and return its value. Use progn or let for multiple forms. For buffer operations, select the intended live buffer explicitly with with-current-buffer. Prefer edit_buffer for exact text replacements. After a change, read the effective value or key-binding in that buffer; a returned t or literal OK does not verify the change. This tool is not for saving files: saving is the user's decision. To make a configuration change last, edit the buffer of the configuration file Emacs actually loads and tell the user which buffer to save. Inside the expression, (superchat-tool \"NAME\" :ARG VALUE ...) calls another offered tool and returns its result text, such as (superchat-tool \"edit_buffer\" :buffer_name B :old_string OLD :new_string NEW): read, edit and check in one call, and return only what you need, since a long value is cut in the middle."
           :args (list (list :name "expression"
                             :type 'string
                             :description "One complete expression. Return observed state needed to verify the task; on an error, inspect any partial changes before retrying."))

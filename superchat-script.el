@@ -14,6 +14,11 @@
 ;; one tool pipeline, so the permission level, approval, the Tape facts and
 ;; the record of edited buffers apply to each exactly as to a direct call.
 ;; See docs/decisions/accepted/2026-10-02-m11-slice-6-elisp-script.md.
+;;
+;; The same entry, `superchat-tool', is open to an `eval_elisp' expression
+;; (decision of 2026-10-26, eval_elisp as code mode): there the language is
+;; all of Emacs Lisp, and the tools give it what plain Lisp does not -- the
+;; checks of `edit_buffer', the layer lines, the record of changes.
 
 ;;; Code:
 
@@ -105,6 +110,18 @@ Other macros are refused: one could expand into a loop with no end.")
   '("elisp_script" "ask_user" "delegate_to_subagent" "delegate_to_subagent_parallel")
   "Tools a script cannot call: itself, and tools that wait for an answer.")
 
+(defconst superchat-script-not-callable-from-eval
+  (cons "eval_elisp" superchat-script-not-callable)
+  "Tools an `eval_elisp' expression cannot call through `superchat-tool'.
+`eval_elisp' itself among them: the expression already is Emacs Lisp.")
+
+(defvar superchat-script--calls nil
+  "While a script or an `eval_elisp' expression runs: its nested calls so far.
+A list (COUNT PARENT-CONTEXT PARENT-ID CALLER): COUNT the calls made,
+PARENT-CONTEXT the calling tool's execution context, PARENT-ID its
+execution id, CALLER \"a script\" or \"eval_elisp\".  Nil elsewhere, where
+`superchat-tool' cannot be used.")
+
 (defconst superchat-script-max-calls 100
   "Most tool calls one script may make.")
 
@@ -159,14 +176,17 @@ and compute -- make changes through a tool, or use eval_elisp" (cadr unsafe)))
                (bound-and-true-p superchat-llm-script-only-tool-names)
                :test #'equal))))
 
-(defun superchat-script--callable-tool (name)
-  "The llm.el tool NAME a script may call, or signal why not."
-  (when (member name superchat-script-not-callable)
-    (error "%s cannot be called from a script" name))
+(defun superchat-script--callable-tool (name caller)
+  "The llm.el tool NAME a script or eval_elisp may call, or signal why not.
+CALLER is the fourth element of `superchat-script--calls'."
+  (when (member name (if (equal caller "eval_elisp")
+                         superchat-script-not-callable-from-eval
+                       superchat-script-not-callable))
+    (error "%s cannot be called from %s" name caller))
   (let ((tool (cl-find name (superchat-script--callable-tools)
                        :key #'llm-tool-name :test #'equal)))
     (cond ((null tool) (error "No tool named %s" name))
-          ((llm-tool-async tool) (error "%s cannot be called from a script" name))
+          ((llm-tool-async tool) (error "%s cannot be called from %s" name caller))
           (t tool))))
 
 (defun superchat-script--arguments (tool plist)
@@ -198,14 +218,45 @@ and compute -- make changes through a tool, or use eval_elisp" (cadr unsafe)))
                         (- (length text) max))
                 (substring text (- (length text) half)))))))
 
+(defun superchat-tool (name &rest arguments)
+  "Call the tool NAME with keyword ARGUMENTS and return its result text.
+For example (superchat-tool \"edit_buffer\" :buffer_name \"notes\"
+:old_string \"a\" :new_string \"b\").  Only inside an `elisp_script' script
+or an `eval_elisp' expression; the call goes through
+`superchat-tool-execute' like one the model makes, and a failed call
+returns its failure text."
+  (let ((calls superchat-script--calls))
+    (unless calls
+      (error "superchat-tool works only inside eval_elisp or elisp_script"))
+    (unless (stringp name) (error "A tool name must be a string"))
+    (pcase-let ((`(,count ,parent ,parent-id ,caller) calls))
+      (when (>= count superchat-script-max-calls)
+        (error "More than %d tool calls in one %s"
+               superchat-script-max-calls
+               (if (equal caller "eval_elisp") "expression" "script")))
+      (let* ((target (superchat-script--callable-tool name caller))
+             (args (superchat-script--arguments target arguments))
+             (context (plist-put (copy-sequence parent) :execution-id
+                                 (format "%s/%d" parent-id
+                                         (setcar calls (1+ count))))))
+        ;; A time limit or a C-g leaves by `throw', past the call's own
+        ;; accounting; the call must still end.
+        (let ((settled nil))
+          (unwind-protect
+              (prog1 (superchat-tool-execute name (llm-tool-function target) args
+                                             :context context)
+                (setq settled t))
+            (unless settled
+              (superchat-tool-execution-settle-left name context))))))))
+
 (defun superchat-script-run (code)
   "Run the script CODE and return what reaches the model.
 The result starts with \"Script completed.\", \"Script failed.\" or
 \"Script refused:\".  A failed script keeps the output it made before the
 error; calls it made are not undone."
   (let* ((parent superchat--tool-execution-context)
-         (parent-id (or (plist-get parent :execution-id) "script"))
-         (count 0)
+         (calls (list 0 parent (or (plist-get parent :execution-id) "script")
+                      "a script"))
          (output nil)
          (form (condition-case err
                    (superchat-script-read code)
@@ -216,16 +267,8 @@ error; calls it made are not undone."
     (if refusal
         (format "Script refused: %s.  Nothing was run." refusal)
       (cl-flet ((tool (name &rest plist)
-                  (unless (stringp name) (error "A tool name must be a string"))
-                  (when (>= count superchat-script-max-calls)
-                    (error "More than %d tool calls in one script"
-                           superchat-script-max-calls))
-                  (let* ((target (superchat-script--callable-tool name))
-                         (args (superchat-script--arguments target plist))
-                         (context (plist-put (copy-sequence parent) :execution-id
-                                             (format "%s/%d" parent-id (cl-incf count)))))
-                    (superchat-tool-execute name (llm-tool-function target) args
-                                            :context context)))
+                  (let ((superchat-script--calls calls))
+                    (apply #'superchat-tool name plist)))
                 ;; Returns nil, so a script ending in (out ...) does not
                 ;; report the same value twice.
                 (out (value)
@@ -242,7 +285,7 @@ error; calls it made are not undone."
           (when (and value (not error-text)) (out value))
           (superchat-script--clip
            (concat (if error-text "Script failed." "Script completed.")
-                   (format " %d tool call%s.\n" count (if (= count 1) "" "s"))
+                   (format " %d tool call%s.\n" (car calls) (if (= (car calls) 1) "" "s"))
                    (mapconcat #'identity (nreverse output) "\n")
                    (if error-text (format "\nScript error: %s" error-text) ""))))))))
 
