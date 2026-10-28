@@ -156,6 +156,16 @@ per fact."
 Most round trips in real runs were the model asking Emacs one question at a
 time (docs/research/round-trips-first-principles.md).")
 
+(defconst superchat-prompt-act-once-text
+  "The same goes for acting: reading a buffer, changing it and checking \
+the result can be one eval_elisp.  Make the change there with \
+(superchat-tool \"edit_buffer\" :buffer_name B :old_string OLD :new_string \
+NEW), which keeps edit_buffer's checks and its report, and return only \
+what you need to see."
+  "Guidance to act in one call through `superchat-tool' (decision of
+2026-10-26, eval_elisp as code mode): measured without it, the model
+almost never called a tool from an expression.")
+
 (defconst superchat-prompt-case-only-names-text
   "File systems on macOS and Windows usually ignore case: two names that \
 differ only in case are the same file there, so file-exists-p is true for \
@@ -195,12 +205,13 @@ Rendered only when `eval_elisp' is on the request's tools."
   turn)
 
 (defun superchat-prompt-hook--ask-once (turn)
-  "Add `superchat-prompt-ask-once-text' to TURN's system prompt.
+  "Add the ask-once and act-once texts to TURN's system prompt.
 Rendered only when `eval_elisp' is on the request's tools."
   (when superchat-llm-tools-enabled
     (setf (superchat-turn-system-prompt turn)
           (concat (superchat-turn-system-prompt turn) "\n"
-                  superchat-prompt-ask-once-text)))
+                  superchat-prompt-ask-once-text "\n"
+                  superchat-prompt-act-once-text)))
   turn)
 
 (defun superchat-prompt-hook--parallel-tool-calls (turn)

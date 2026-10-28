@@ -175,6 +175,21 @@ answered while the expression runs: it is refused at once."
                  "save_buffer needs the user's approval .*cannot be asked for a call made from inside eval_elisp; make it as a tool call of its own"
                  (ecm--result 2)))))))
 
+(ert-deftest eval-code-mode/the-model-is-told-to-act-in-one-call ()
+  "Measured without it, the model almost never called a tool from an
+expression.  The text goes with eval_elisp and only there."
+  (ecm--with 'edit-buffers
+    (setq smoke--script '((:text "ok") (:text "ok")))
+    (hm--turn (smoke--open-chat) "hello")
+    (should (string-match-p (regexp-quote superchat-prompt-act-once-text)
+                            (hm--text (car (hm--wire 1)))))
+    (let ((superchat-llm-tool-names '("read_buffer"))
+          (superchat-llm-tools-list nil))
+      (hm--turn (smoke--open-chat) "hello")
+      (should (= 2 (length hm--wires)))
+      (should-not (string-match-p (regexp-quote superchat-prompt-act-once-text)
+                                  (hm--text (car (hm--wire 2))))))))
+
 (defmacro ecm--guarded (seconds &rest body)
   "Run BODY; kill this Emacs from outside if it is still running after SECONDS."
   (declare (indent 1))
