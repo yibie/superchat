@@ -922,6 +922,7 @@ the slot, and a late answer must not bring anything back."
 (declare-function llm-chat-prompt-max-tokens "llm" (prompt))
 (declare-function llm-chat-prompt-response-format "llm" (prompt))
 (declare-function llm-chat-prompt-reasoning "llm" (prompt))
+(declare-function llm-deepseek-p "llm-deepseek" (object))
 (declare-function llm-chat-prompt-non-standard-params "llm" (prompt))
 (declare-function llm-chat-prompt-tool-options "llm" (prompt))
 (declare-function llm-multipart-p "llm" (value))
@@ -1462,6 +1463,115 @@ real run, slice 12b); `superchat--llm-unparsed-stop-reason' carries it there."
                            'llm-provider-populate-tool-uses)
     (advice-add 'llm-provider-populate-tool-uses :around
                 #'superchat--llm-capture-provider-tool-uses)))
+
+;; DeepSeek's thinking mode, on by default for its V4 models, refuses a
+;; request in which an assistant message after the last user message lacks
+;; `reasoning_content' (HTTP 400, "The `reasoning_content' in the thinking
+;; mode must be passed back to the API").  llm.el 0.32.1 reads a reply's
+;; reasoning but never sends it back, so every DeepSeek execution that called
+;; a tool failed at its second request (found by the ARC bench, 2026-10-28).
+;; A reply's reasoning is kept on the interactions llm.el appends for it and
+;; sent back with them; earlier turns rebuilt from the Tape carry none, which
+;; DeepSeek accepts.  Decision:
+;; docs/decisions/accepted/2026-10-28-deepseek-reasoning-is-sent-back.md.
+
+(defvar superchat--llm-deepseek-reply-reasoning nil
+  "While llm.el records a DeepSeek reply, (PROMPT . REASONING).
+REASONING is the reply's reasoning text until an interaction takes it, then
+\"\".")
+
+(defun superchat--llm-deepseek-p (provider)
+  "Non-nil when PROVIDER is llm.el's DeepSeek provider."
+  (and (fboundp 'llm-deepseek-p) (llm-deepseek-p provider)))
+
+(defun superchat--llm-deepseek-keep-reply-reasoning
+    (original provider prompt partial-result &rest rest)
+  "Call ORIGINAL; a DeepSeek PROVIDER's reply keeps its reasoning in PROMPT.
+PARTIAL-RESULT carries the reply's `:reasoning' whether it streamed or not;
+while ORIGINAL appends the reply to PROMPT, the assistant interactions take it
+\(`superchat--llm-deepseek-note-reasoning')."
+  (if (superchat--llm-deepseek-p provider)
+      (let ((superchat--llm-deepseek-reply-reasoning
+             (cons prompt (let ((reasoning (plist-get partial-result :reasoning)))
+                            (if (stringp reasoning) reasoning "")))))
+        (apply original provider prompt partial-result rest))
+    (apply original provider prompt partial-result rest)))
+
+(defun superchat--llm-deepseek-note-reasoning
+    (original prompt output &optional tool-results multi-turn role)
+  "Call ORIGINAL; an assistant interaction of a DeepSeek reply takes its reasoning.
+llm.el appends a reply's text and its tool calls to PROMPT as two assistant
+interactions, and DeepSeek wants the field on each message: the first one
+appended carries the reasoning, a later one \"\"."
+  (let ((reply superchat--llm-deepseek-reply-reasoning))
+    (when (and reply (eq (car reply) prompt)
+               (not tool-results)
+               (eq (or role 'assistant) 'assistant))
+      (setq multi-turn (plist-put (copy-sequence multi-turn)
+                                  :deepseek-reasoning-content (cdr reply)))
+      (setcdr reply ""))
+    (funcall original prompt output tool-results multi-turn role)))
+
+(defun superchat--llm-deepseek-message-reasoning (prompt count)
+  "The reasoning each of COUNT request messages built from PROMPT carries.
+Return a vector: an element is the reasoning its interaction keeps, or nil.
+llm.el builds one message per interaction and one per tool result; when the
+interactions do not account for COUNT messages, return nil."
+  (let (reasonings)
+    (dolist (interaction (llm-chat-prompt-interactions prompt))
+      (let ((results (llm-chat-prompt-interaction-tool-results interaction)))
+        (if results
+            (dotimes (_ (length results)) (push nil reasonings))
+          (push (plist-get (llm-chat-prompt-interaction-multi-turn-plist interaction)
+                           :deepseek-reasoning-content)
+                reasonings))))
+    (when (= (length reasonings) count)
+      (vconcat (nreverse reasonings)))))
+
+(defun superchat--llm-deepseek-send-reasoning (original provider prompt &rest rest)
+  "Return ORIGINAL's request for PROVIDER and PROMPT, reasoning sent back.
+For a DeepSeek PROVIDER whose thinking is not turned off (`none'), an
+assistant message carries `reasoning_content': the reasoning its interaction
+kept, and \"\" after the last user message when it kept none, where DeepSeek
+requires the field.  Any other request is ORIGINAL's, unchanged."
+  (let* ((request (apply original provider prompt rest))
+         (messages (and (superchat--llm-deepseek-p provider)
+                        (not (eq 'none (llm-chat-prompt-reasoning prompt)))
+                        (vectorp (plist-get request :messages))
+                        (plist-get request :messages))))
+    (if (not messages)
+        request
+      (let* ((reasonings (superchat--llm-deepseek-message-reasoning
+                          prompt (length messages)))
+             (last-user (cl-position "user" messages
+                                     :key (lambda (m) (plist-get m :role))
+                                     :test #'equal :from-end t))
+             (sent (vconcat
+                    (cl-loop for message across messages
+                             for index from 0
+                             for kept = (and reasonings (aref reasonings index))
+                             collect
+                             (if (and (equal (plist-get message :role) "assistant")
+                                      (or (stringp kept)
+                                          (> index (or last-user -1))))
+                                 (plist-put (copy-sequence message) :reasoning_content
+                                            (if (stringp kept) kept ""))
+                               message)))))
+        (plist-put (copy-sequence request) :messages sent)))))
+
+(with-eval-after-load 'llm-provider-utils
+  (unless (advice-member-p #'superchat--llm-deepseek-keep-reply-reasoning
+                           'llm-provider-utils-process-result)
+    (advice-add 'llm-provider-utils-process-result :around
+                #'superchat--llm-deepseek-keep-reply-reasoning))
+  (unless (advice-member-p #'superchat--llm-deepseek-note-reasoning
+                           'llm-provider-utils-append-to-prompt)
+    (advice-add 'llm-provider-utils-append-to-prompt :around
+                #'superchat--llm-deepseek-note-reasoning))
+  (unless (advice-member-p #'superchat--llm-deepseek-send-reasoning
+                           'llm-provider-chat-request)
+    (advice-add 'llm-provider-chat-request :around
+                #'superchat--llm-deepseek-send-reasoning)))
 
 (defun superchat--llm-require-accessors (names label)
   "Require every function in NAMES for exact evidence named LABEL."
