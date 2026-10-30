@@ -61,8 +61,10 @@ tool-call data, and ends when that attempt completes or fails.  Empty or
 repeated cumulative chunks do not count as progress.  Tool continuations and
 retries get a new interval even when an earlier attempt produced answer text.
 
-This timer does not declare partial work complete.  Expiration reports a
-timed-out response; the cumulative hard cap and Runtime deadline remain
+This timer does not declare partial work complete.  When it expires before the
+attempt produced any answer text, reasoning or tool-call data, the attempt is
+sent again (`superchat-llm-stall-retries'); otherwise expiration reports a
+timed-out response.  The cumulative hard cap and Runtime deadline remain
 independent.  Existing approval extensions affect only this inactivity wait.
 
 Set to nil to disable both transport timers."
@@ -155,6 +157,19 @@ fail immediately on a retryable transport or HTTP error."
   "Fixed delay in seconds before each transient provider retry.
 Every retry waits this interval; there is no backoff or jitter."
   :type 'number
+  :group 'superchat)
+
+(defcustom superchat-llm-stall-retries 2
+  "How many times in a row a provider attempt that stayed silent is sent again.
+An attempt stayed silent when `superchat-response-timeout' expired before it
+produced any answer text, reasoning or tool-call data.  The attempt is given
+up -- its request cancelled, anything it still delivers ignored -- and sent
+again after `superchat-llm-transient-retry-interval'.  The count starts over
+after a reply goes through.  Without streaming a reply that is only slow is
+silent too, so it is sent again rather than failed.  Set to zero to end the
+execution at the first silent attempt, as a timed-out response.  Decision:
+docs/decisions/accepted/2026-10-29-a-silent-attempt-is-sent-again.md."
+  :type 'natnum
   :group 'superchat)
 
 (defvar superchat--llm-http-status nil
@@ -904,6 +919,7 @@ the slot, and a late answer must not bring anything back."
 (declare-function llm-chat-streaming "llm"
                   (provider prompt partial-callback response-callback
                             error-callback &optional multi-output))
+(declare-function llm-cancel-request "llm" (request))
 (declare-function llm-chat-prompt-tools "llm" (prompt))
 (declare-function llm-chat-prompt-p "llm" (prompt))
 (declare-function llm-chat-prompt-interactions "llm" (prompt))
@@ -3144,6 +3160,14 @@ requests until it receives text, bounded by
            (stream-stop-reason nil)
            (note-cut-off nil)
            (transient-retries 0)
+           ;; Silent attempts sent again in a row; the generation of the last
+           ;; attempt that produced anything, of the one given up, and the
+           ;; request the current attempt runs on.
+           (stall-retries 0)
+           (progress-generation nil)
+           (abandoned-generation nil)
+           (attempt-request nil)
+           (retry-after-stall nil)
            (unknown-tool-retry-limit
             (or superchat--llm-unknown-tool-retry-limit
                 superchat-llm-unknown-tool-retries))
@@ -3198,6 +3222,8 @@ requests until it receives text, bounded by
                                     request-generation))
                     (timer (superchat-llm--transport-timer-owner-wait-timer
                             transport-timer-owner)))
+                (when (= generation request-generation)
+                  (setq progress-generation generation))
                 (when (and (not completed) (funcall run-active-p)
                            (= generation request-generation)
                            (or (null timer)
@@ -3396,15 +3422,18 @@ requests until it receives text, bounded by
                                     (eq timer
                                         (superchat-llm--transport-timer-owner-wait-timer
                                          transport-timer-owner)))
-                           (let ((notice
-                                  (format "[Response timeout: no progress for %ss; attempt: %s; last phase: %s]"
-                                          seconds generation last-model-phase)))
-                             (funcall finalize
-                                      (if response-parts
-                                          (concat (string-join (reverse response-parts) "")
-                                                  "\n\n" notice)
-                                        notice)
-                                      'timed-out)))))
+                           (if (and (not (eql progress-generation generation))
+                                    (< stall-retries superchat-llm-stall-retries))
+                               (funcall retry-after-stall generation seconds)
+                             (let ((notice
+                                    (format "[Response timeout: no progress for %ss; attempt: %s; last phase: %s]"
+                                            seconds generation last-model-phase)))
+                               (funcall finalize
+                                        (if response-parts
+                                            (concat (string-join (reverse response-parts) "")
+                                                    "\n\n" notice)
+                                          notice)
+                                        'timed-out))))))
                       (setf (superchat-llm--transport-timer-owner-wait-timer
                              transport-timer-owner) timer
                             (superchat-llm--transport-timer-owner-wait-generation
@@ -3422,6 +3451,39 @@ requests until it receives text, bounded by
                                          (superchat-llm--transport-timer-owner-wait-timer
                                           transport-timer-owner)))
                           (cancel-timer timer)))))))))
+      ;; An attempt that produced nothing in its inactivity window is given
+      ;; up and sent again (decision 2026-10-29).  Mark it first, so nothing
+      ;; its cancelled request still delivers is taken for the current
+      ;; attempt, then cancel it, then wait as a transient retry does.
+      (setq retry-after-stall
+            (lambda (generation seconds)
+              (setq abandoned-generation generation)
+              (cl-incf stall-retries)
+              (funcall cancel-wait-timeout)
+              (when attempt-request
+                (condition-case nil
+                    (llm-cancel-request attempt-request)
+                  ((error quit) nil)))
+              (let ((delay superchat-llm-transient-retry-interval))
+                (when (functionp runtime-observer)
+                  (funcall runtime-observer 'retry-scheduled
+                           (list :attempt stall-retries
+                                 :limit superchat-llm-stall-retries
+                                 :delay delay
+                                 :error (format "No response for %ss" seconds))))
+                (run-at-time
+                 delay nil
+                 (lambda ()
+                   (when (and (not completed) (funcall run-active-p))
+                     (condition-case e
+                         (funcall send-request 'transient-retry)
+                       (superchat-llm-evidence-recording-error
+                        (signal (car e) (cdr e)))
+                       (error
+                        (funcall finalize
+                                 (format "[llm-chat-streaming error: %s]"
+                                         (error-message-string e))
+                                 'failed)))))))))
       (when (and adjusted-timeout hard-timeout-limit)
         (let ((expire
                (lambda ()
@@ -3659,6 +3721,7 @@ requests until it receives text, bounded by
                 ;; Slips in tool calls count in a row, as cut-offs do: a long
                 ;; Run with good calls between three slips goes on (2026-10-23).
                 (setq transient-retries 0
+                      stall-retries 0
                       cut-off-streak 0
                       tool-error-retries 0)
                 (funcall record-usage response)
@@ -4291,6 +4354,7 @@ requests until it receives text, bounded by
                            :attempt-active-p
                            (lambda ()
                              (and (= generation request-generation)
+                                  (not (eql generation abandoned-generation))
                                   (not completed)
                                   (funcall run-active-p)))
                            :stale-observer
@@ -4335,12 +4399,14 @@ requests until it receives text, bounded by
                         (lambda (chunk)
                           (let ((superchat--llm-callback-attempt generation))
                             (when (and (= generation request-generation)
+                                       (not (eql generation abandoned-generation))
                                        (funcall run-active-p))
                               (funcall stream-cb chunk)))))
                        (attempt-response-cb
                         (lambda (response)
                           (let ((superchat--llm-callback-attempt generation))
                             (when (and (= generation request-generation)
+                                       (not (eql generation abandoned-generation))
                                        (funcall run-active-p))
                               (funcall cancel-wait-timeout)
                               (when (funcall callback-active-p)
@@ -4351,6 +4417,7 @@ requests until it receives text, bounded by
                         (lambda (type &rest more)
                           (let ((superchat--llm-callback-attempt generation))
                             (when (and (= generation request-generation)
+                                       (not (eql generation abandoned-generation))
                                        (funcall run-active-p))
                               (funcall cancel-wait-timeout)
                               (when (funcall callback-active-p)
@@ -4490,6 +4557,8 @@ requests until it receives text, bounded by
                             (when (eq 'exhausted (superchat-llm--transport-timer-owner-hard-state
                                                   transport-timer-owner))
                               (funcall runtime-observer 'input-clock-exhausted nil)))))))
+                (when (= generation request-generation)
+                  (setq attempt-request request))
                 (when (and (= generation request-generation)
                            (functionp runtime-observer))
                   (funcall runtime-observer 'request request))

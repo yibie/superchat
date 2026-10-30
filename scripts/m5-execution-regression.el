@@ -125,6 +125,10 @@
             (superchat-show-ttft-breakdown nil)
             (superchat-response-timeout 10)
             (superchat-response-timeout-hard-limit 60)
+            ;; These cases watch the inactivity clock through its timed-out
+            ;; ending; a silent attempt being sent again has its own set,
+            ;; scripts/stall-retry-regression.el.
+            (superchat-llm-stall-retries 0)
             (superchat-tool-timeout-multiplier 1)
             (superchat-llm-max-tool-rounds nil)
             (superchat--llm-tools-prepared-p t)
