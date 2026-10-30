@@ -12,6 +12,7 @@
 (defvar smoke-library-only)
 (setq smoke-library-only t)
 (load (expand-file-name "smoke.el" (file-name-directory load-file-name)) nil t)
+(require 'plz)
 
 (defmacro transient-retry--fixture (script &rest body)
   "Run BODY with scripted network SCRIPT in an isolated chat."
@@ -128,6 +129,32 @@
   (should-not (superchat--llm-transient-error-p
                'error "rate limit: retry later" nil)))
 
+(defun transient-retry--plz-unexpected-status (code)
+  "Return what plz 0.9.1 reports for a curl that exited with CODE above 90."
+  (format "Unexpected curl process status:%S code:%S.  Please report this bug to the `plz' maintainer."
+          (format "exited abnormally with code %d\n" code) code))
+
+(ert-deftest transient-retry/classifier-dropped-connection ()
+  "Over HTTP/2 a dropped connection makes curl exit 16, 18, 56 or 92.
+See docs/research/deepseek-drop-curl-codes.md."
+  (dolist (code '(16 18 92))
+    (should (superchat--llm-transient-error-p
+             'error (format "curl error code %d: sample" code))))
+  (should (superchat--llm-transient-error-p 'error "curl error code 16: nil"))
+  (should (superchat--llm-transient-error-p
+           'error (transient-retry--plz-unexpected-status 92)))
+  (dolist (message (list "curl process killed"
+                         "curl process interrupted"
+                         (transient-retry--plz-unexpected-status 93)
+                         "curl error code 93: sample"))
+    (should-not (superchat--llm-transient-error-p 'error message))))
+
+(ert-deftest transient-retry/dropped-connection-then-answer-completes ()
+  (dolist (message (list "curl error code 16: nil"
+                         "curl error code 18: Partial file. Only a part of the file was transferred."
+                         (transient-retry--plz-unexpected-status 92)))
+    (transient-retry--case message)))
+
 (ert-deftest transient-retry/defaults-are-ten-retries-thirty-seconds-apart ()
   (should (= 10 (default-value 'superchat-llm-transient-retries)))
   (should (= 30 (default-value 'superchat-llm-transient-retry-interval))))
@@ -240,6 +267,84 @@ Non-HTTP steps still use smoke's scripted network."
       (should-not superchat--llm-http-status)
       (should (string-match-p "rate limit: retry later"
                               (with-current-buffer view (buffer-string)))))))
+
+(defun transient-retry--fake-curl (code)
+  "Return a program that reads plz's curl config and exits with CODE."
+  (let ((program (make-temp-file "superchat-fake-curl-" nil ".sh"
+                                 (format "#!/bin/sh\ncat >/dev/null\nexit %d\n" code))))
+    (set-file-modes program #o700)
+    program))
+
+(defmacro transient-retry--curl-fixture (script &rest body)
+  "Run SCRIPT; a step (:curl-exit N) goes through the real llm.el and plz.
+That step's curl is a program that exits with N, so plz and llm.el word
+the failure themselves.  Other steps use smoke's scripted network."
+  (declare (indent 1) (debug t))
+  `(let ((real-streaming (symbol-function 'llm-chat-streaming))
+         (real-async (symbol-function 'llm-chat-async))
+         (programs nil))
+     (unwind-protect
+         (transient-retry--fixture ,script
+           (let ((streaming nil) (async nil) (through-plz nil))
+             (setq through-plz
+                   (lambda (mode real args)
+                     (let* ((step (pop smoke--script))
+                            (plz-curl-program
+                             (transient-retry--fake-curl (plist-get step :curl-exit))))
+                       (push plz-curl-program programs)
+                       (push (list :mode mode :curl-exit (plist-get step :curl-exit))
+                             smoke--requests)
+                       ;; Calling the real generic may restore its function
+                       ;; cell; keep dispatch in place for the next attempt.
+                       (unwind-protect (apply real args)
+                         (fset 'llm-chat-streaming streaming)
+                         (fset 'llm-chat-async async))))
+                   streaming
+                   (lambda (provider prompt partial response error &optional multi)
+                     (if (plist-get (car smoke--script) :curl-exit)
+                         (funcall through-plz 'streaming real-streaming
+                                  (list provider prompt partial response error multi))
+                       (smoke--fake-network 'streaming provider prompt
+                                            partial response error multi)))
+                   async
+                   (lambda (provider prompt response error &optional multi)
+                     (if (plist-get (car smoke--script) :curl-exit)
+                         (funcall through-plz 'async real-async
+                                  (list provider prompt response error multi))
+                       (smoke--fake-network 'async provider prompt
+                                            nil response error multi))))
+             (cl-letf (((symbol-function 'llm-chat-streaming) streaming)
+                       ((symbol-function 'llm-chat-async) async))
+               ,@body)))
+       (mapc #'delete-file programs))))
+
+(defun transient-retry--curl-case (code retry-p)
+  "Let curl exit with CODE under the real llm.el and plz; expect a retry when RETRY-P.
+Both the streaming and the non-streaming request are tried."
+  (dolist (streaming '(t nil))
+    (transient-retry--curl-fixture
+        (list (list :curl-exit code) '(:text "ok"))
+      (let* ((superchat-llm-streaming streaming)
+             (view (smoke--open-chat))
+             (run (smoke--send view "answer"))
+             (outcome (transient-retry--settle run)))
+        (should (eq (if streaming 'streaming 'async)
+                    (plist-get (car (last smoke--requests)) :mode)))
+        (should (eq (if retry-p 'completed 'failed) (plist-get outcome :status)))
+        (should (= (if retry-p 2 1) (length smoke--requests)))
+        (if retry-p
+            (should (eq 'transient-retry (plist-get outcome :attempt-reason)))
+          (should (string-match-p (format "code[: ]%d\\b" code)
+                                  (with-current-buffer view (buffer-string)))))))))
+
+(ert-deftest transient-retry/dropped-connection-through-plz ()
+  "curl's exit code reaches the classifier in llm.el's and plz's own words."
+  (dolist (code '(16 18 56 92))
+    (transient-retry--curl-case code t)))
+
+(ert-deftest transient-retry/other-curl-exits-through-plz-do-not-retry ()
+  (dolist (code '(3 93))
+    (transient-retry--curl-case code nil)))
 
 (defun transient-retry--notice-wait (run)
   "Wait until RUN has scheduled its first retry, then return its status."

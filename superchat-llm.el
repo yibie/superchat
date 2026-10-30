@@ -271,7 +271,9 @@ the time each listener's timer is set to."
 (defun superchat--llm-transient-error-p (type err &optional http-status)
   "Return non-nil when TYPE, ERR and HTTP-STATUS identify a retryable error.
 Only HTTP 429 and 5xx retry.  Without an HTTP status, recognize the pinned
-llm transport strings; never infer HTTP status from a response body."
+llm transport strings; never infer HTTP status from a response body.
+A connection dropped over HTTP/2 makes curl exit 16, 18, 56 or 92
+\(docs/research/deepseek-drop-curl-codes.md)."
   (and (eq type 'error)
        (if (numberp http-status)
            (or (= http-status 429)
@@ -279,7 +281,13 @@ llm transport strings; never infer HTTP status from a response body."
          (and (stringp err)
               (or (equal err "Operation timeout.")
                   (string-match-p
-                   "\\`curl error code \\(6\\|7\\|35\\|52\\|55\\|56\\): " err))))))
+                   "\\`curl error code \\(6\\|7\\|16\\|18\\|35\\|52\\|55\\|56\\|92\\): "
+                   err)
+                  ;; plz 0.9.1 takes only exit codes 1-90 for curl errors
+                  ;; (`plz.el:890'); 92, a reset HTTP/2 stream, comes as an
+                  ;; unexpected process status.
+                  (and (string-match-p "\\`Unexpected curl process status:" err)
+                       (string-match-p " code:92\\.  Please report" err)))))))
 
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
