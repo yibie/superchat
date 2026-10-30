@@ -2779,9 +2779,17 @@ Default: cannot override model on this provider type."
         (with-current-buffer buffer (let ((superchat-buffer-name (buffer-name buffer))) (apply callback args)))
       (when (functionp dead-callback) (let ((superchat-buffer-name nil)) (apply dead-callback args))))))
 
+(defvar superchat--llm-callback-error nil
+  "The condition a request's success callback raised, while it is reported.
+llm.el's `:on-error' reports every error as the condition `error' with its
+message, so a tool-call mistake found while parsing a reply without streaming
+reaches the error callback of `superchat--llm-generate-answer' without its
+`llm-tool-*' type; that callback reads the type here.")
+
 (defun superchat--llm-request-plz-propagate-callback-errors
     (original url &rest args)
   "Call ORIGINAL for URL, routing async success callback errors to `:on-error'.
+The condition is bound to `superchat--llm-callback-error' while it is reported.
 For a Superchat Ollama request, decode curl output as UTF-8 so Emacs carries
 incomplete characters across process-filter chunks."
   (let ((on-success (plist-get args :on-success))
@@ -2795,7 +2803,8 @@ incomplete characters across process-filter chunks."
                    (funcall on-success response)
                  (llm-error
                   (if (functionp on-error)
-                      (funcall on-error (car err) (error-message-string err))
+                      (let ((superchat--llm-callback-error err))
+                        (funcall on-error (car err) (error-message-string err)))
                     (signal (car err) (cdr err)))))))))
     (let ((process (apply original url args)))
       (when (and superchat--llm-ollama-response-p
@@ -3488,6 +3497,15 @@ requests until it receives text, bounded by
                   (remhash real-prompt superchat--llm-input-corrections)
                   (setq type 'superchat-llm-input-not-alone
                         err reason))
+                ;; Without streaming, a tool-call mistake is raised while
+                ;; llm.el parses the reply and arrives as a plain error; it
+                ;; gets its `llm-tool-*' type back so the repair below runs
+                ;; (docs/postmortems/0001-a-broken-tool-call-lost-its-type.md).
+                (when (and (eq type 'error)
+                           (consp superchat--llm-callback-error)
+                           (superchat--llm-tool-protocol-error-p
+                            (car superchat--llm-callback-error)))
+                  (setq type (car superchat--llm-callback-error)))
                 ;; Arguments that do not parse after the stream said `length'
                 ;; were cut off (slice 12b): say that, not "invalid JSON".
                 (when superchat--llm-unparsed-stop-reason

@@ -21,6 +21,8 @@
 (require 'superchat-inline)
 (require 'superchat-rewrite)
 
+(defvar superchat--llm-callback-error)
+
 (defvar smoke--script nil)
 (defvar smoke--requests nil)
 (defvar smoke--timers nil)
@@ -48,7 +50,11 @@
     ;; response's arguments fail to parse (slice 12b).
     (when (plist-get step :unparsed-stop-reason)
       (setq superchat--llm-unparsed-stop-reason (plist-get step :unparsed-stop-reason)))
-    (funcall error (car (plist-get step :error)) (cdr (plist-get step :error))))
+    ;; `:raised' is the condition a success callback raised.  llm.el reports
+    ;; it as `error' with its message, while
+    ;; `superchat--llm-request-plz-propagate-callback-errors' holds it.
+    (let ((superchat--llm-callback-error (plist-get step :raised)))
+      (funcall error (car (plist-get step :error)) (cdr (plist-get step :error)))))
    (t (let* ((uses (mapcar #'smoke--tool-use (plist-get step :tool-uses)))
              (result (append (when (plist-member step :text) (list :text (plist-get step :text)))
                              (when uses (list :tool-uses uses))
