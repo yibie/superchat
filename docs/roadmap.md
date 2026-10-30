@@ -540,7 +540,9 @@ From the user's GUI field test of 2026-10-22 (G17, G14), ruled by the user the s
 
 ### Providers — a DeepSeek stream without `[DONE]` did not finish (`implemented` 2026-10-30, scripted evidence, three real streams)
 
-[Fifth amendment of the retry decision](decisions/accepted/2026-09-23-retry-transient-provider-errors.md). A stream that ended without `[DONE]` was taken as the whole answer, or failed with `[Missing final response from llm]`. Now, for DeepSeek, it reaches the error callback as `Reply stream ended before [DONE]`: sent again if nothing was delivered; otherwise the execution fails and the chat keeps the text with that line under it. `scripts/transient-retry-regression.el`, a stand-in curl through llm.el and plz, five mutants caught. Not covered: other providers' streams; the reason of any other error after partial text.
+[Fifth amendment of the retry decision](decisions/accepted/2026-09-23-retry-transient-provider-errors.md). A stream that ended without `[DONE]` was taken as the whole answer, or failed with `[Missing final response from llm]`. Now, for DeepSeek, it reaches the error callback as `Reply stream ended before [DONE]`: sent again if nothing was delivered; otherwise the execution fails and the chat keeps the text with the reason under it. `scripts/transient-retry-regression.el`, a stand-in curl through llm.el and plz, five mutants caught. Not covered: other providers' streams.
+
+An error after partial text, from any provider, now shows `[API error: REASON]` under the text, not the text alone (sixth amendment; the model sees that line in the next request's history, as it already did for a failure without text). A stream of headers only, which reached no callback for any provider, is now sent again. Checked against real DeepSeek with curl's output cut on purpose, table in the decision.
 
 ### Open observation: a rewrite is seen by the model only in that execution (2026-10-20, recorded, not ruled)
 

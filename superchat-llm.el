@@ -295,6 +295,10 @@ A connection dropped over HTTP/2 makes curl exit 16, 18, 56 or 92
                   ;; A 200 whose body ended early or did not parse
                   ;; (`superchat--llm-plz-report-unparsed-body').
                   (string-match-p "\\`Unparsed response body: (json-" err)
+                  ;; A stream of headers only, the same way.
+                  (string-match-p
+                   "\\`Unparsed response body: (cl-no-applicable-method plz-event-source-close "
+                   err)
                   ;; A stream that stopped short
                   ;; (`superchat--llm-watch-stream-end').
                   (equal err superchat--llm-stream-cut-message))))))
@@ -2821,7 +2825,8 @@ reaches the error callback of `superchat--llm-generate-answer' without its
 `llm-tool-*' type; that callback reads the type here.")
 
 (defvar superchat--llm-plz-delivered nil
-  "While llm.el starts a request: a cons whose car turns t once it succeeded.
+  "While llm.el starts a request: a list whose car turns t once it succeeded.
+Its second element is the request's `:on-error'.
 `superchat--llm-plz-report-unparsed-body' reads it.")
 
 (defun superchat--llm-plz-report-unparsed-body (original method url &rest rest)
@@ -2831,8 +2836,10 @@ cut short -- curl exits 0 when an HTTP/2 stream is reset with NO_ERROR after
 the headers -- raised `json-end-of-file' in plz's timer and no callback ran
 \(docs/research/deepseek-drop-curl-codes.md).  For a request llm.el starts
 for Superchat, a `json-error' raised before the reply was handed over goes to
-plz's ELSE as \"Unparsed response body: CONDITION\".  Other requests are left
-alone."
+plz's ELSE as \"Unparsed response body: CONDITION\".  So does a stream of
+headers only: plz-event-source opens its source at the first body chunk, and
+closing none raises `cl-no-applicable-method' the same way.  Other requests
+are left alone."
   (let ((delivered superchat--llm-plz-delivered)
         (then (plist-get rest :then))
         (else (plist-get rest :else)))
@@ -2848,7 +2855,14 @@ alone."
                       (signal (car err) (cdr err))
                     (funcall else (make-plz-error
                                    :message (format "Unparsed response body: %S"
-                                                    err))))))))))
+                                                    err)))))
+                 (cl-no-applicable-method
+                  ;; plz's ELSE would close the missing source again.
+                  (if (and (eq (cadr err) 'plz-event-source-close)
+                           (functionp (cadr delivered)))
+                      (funcall (cadr delivered) 'error
+                               (format "Unparsed response body: %S" err))
+                    (signal (car err) (cdr err)))))))))
     (apply original method url rest)))
 
 (with-eval-after-load 'plz
@@ -2896,7 +2910,7 @@ For a Superchat Ollama request, decode curl output as UTF-8 so Emacs carries
 incomplete characters across process-filter chunks."
   (let* ((on-success (plist-get args :on-success))
          (on-error (plist-get args :on-error))
-         (delivered (list nil))
+         (delivered (list nil on-error))
          (finished (and superchat--llm-stream-needs-done
                         (functionp on-error)
                         (superchat--llm-watch-stream-end
@@ -3801,20 +3815,16 @@ requests until it receives text, bounded by
                                      'failed))))))))
                  (t
                   (funcall finalize
-                           (cond
-                            ((and response-parts
-                                  (equal err superchat--llm-stream-cut-message))
-                             ;; It reads like a whole answer otherwise.
-                             (format "%s\n\n[%s]"
-                                     (string-join (nreverse response-parts) "")
-                                     err))
-                            (response-parts
-                             (string-join (nreverse response-parts) ""))
-                            (t
-                             (format "[API error: %s]"
-                                     (or (and (stringp err) err)
-                                         (and (consp err) (format "%S" err))
-                                         "unknown"))))
+                           (let ((reason (format "[API error: %s]"
+                                                 (or (and (stringp err) err)
+                                                     (and (consp err) (format "%S" err))
+                                                     "unknown"))))
+                             (if response-parts
+                                 ;; The text alone reads like a whole answer.
+                                 (format "%s\n\n%s"
+                                         (string-join (nreverse response-parts) "")
+                                         reason)
+                               reason))
                            'failed))))))
       (setq response-cb
             (lambda (response)

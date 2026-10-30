@@ -109,7 +109,20 @@
            (run (smoke--send view "answer")))
       (should (eq 'failed (plist-get (transient-retry--settle run) :status)))
       (should (= 1 (length smoke--requests)))
-      (should (string-match-p "partial" (with-current-buffer view (buffer-string)))))))
+      (let ((text (with-current-buffer view (buffer-string))))
+        (should (string-match-p "partial" text))
+        (should (string-match-p "\\[API error: Operation timeout\\.\\]" text))))))
+
+(ert-deftest transient-retry/partial-then-unretried-error-says-why ()
+  "Text delivered, then an error that is not transient: the text and the reason."
+  (transient-retry--fixture
+      (list '(:chunks ("half an ans") :error (error . "curl error code 3: URL malformed")))
+    (let* ((view (smoke--open-chat))
+           (run (smoke--send view "answer")))
+      (should (eq 'failed (plist-get (transient-retry--settle run) :status)))
+      (let ((text (with-current-buffer view (buffer-string))))
+        (should (string-match-p "half an ans" text))
+        (should (string-match-p "\\[API error: curl error code 3" text))))))
 
 (ert-deftest transient-retry/classifier ()
   (should (superchat--llm-transient-error-p 'error "Operation timeout."))
@@ -446,10 +459,25 @@ EXPECTED-REQUESTS requests and return the chat's text."
                'completed 1)))
     (should (string-match-p "WHOLE" text))))
 
+(ert-deftest transient-retry/stream-of-headers-only-is-sent-again ()
+  "curl exits 0 before any body: plz-event-source has no source to close, and
+that error stayed in plz's timer with no callback.  Seen against real DeepSeek."
+  (dolist (backend (list (transient-retry--deepseek)
+                         (make-llm-openai-compatible :url "http://127.0.0.1:9/v1"
+                                                     :chat-model "smoke-model")))
+    (should (string-match-p "SECOND"
+                            (transient-retry--stream-case backend "" 'completed 2)))))
+
 (ert-deftest transient-retry/classifier-stream-cut ()
   (should (superchat--llm-transient-error-p 'error "Reply stream ended before [DONE]"))
   (should-not (superchat--llm-transient-error-p 'error "Reply stream ended"))
   (should-not (superchat--llm-transient-error-p 'error "Reply stream ended before [DONE]" 400)))
+
+(ert-deftest transient-retry/classifier-stream-of-headers-only ()
+  (should (superchat--llm-transient-error-p
+           'error "Unparsed response body: (cl-no-applicable-method plz-event-source-close nil)"))
+  (should-not (superchat--llm-transient-error-p
+               'error "Unparsed response body: (cl-no-applicable-method something-else nil)")))
 
 (defun transient-retry--unparsed-call (delivered raise)
   "Call the unparsed-body advice with DELIVERED bound; its THEN signals RAISE.

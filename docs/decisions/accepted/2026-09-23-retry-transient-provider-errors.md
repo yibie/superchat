@@ -75,3 +75,25 @@ The user took the recommendation ("按照建议"): a streamed reply that did not
 2. It is a transient error under the same rules: nothing delivered, it is sent again 30 seconds later, at most 10 times. Text delivered: nothing is sent again, the execution fails, and the chat keeps the text with `[Reply stream ended before [DONE]]` under it. Reasoning delivered without text: the execution fails, as for any transient error after reasoning.
 3. **Verified:** `scripts/transient-retry-regression.el`, a stand-in curl through llm.el's and plz's real chain: cut inside the first event (sent again), cut after a whole event (fails, text and line kept), 300 events and `[DONE]` in one chunk with curl gone at once (not a cut, 5 of 5 runs), another provider without `[DONE]` (unchanged). Five mutants of the change are caught. Three real DeepSeek streams through llm.el, plz and curl ended without an error.
 4. **Not covered:** another provider's stream cut short is still taken as complete. An error after partial text from any other cause (a curl exit code, say) still fails the execution with the text and without the reason in the chat. A streamed drop against the local TLS server was not run; the stand-in curl writes what curl writes.
+
+## Sixth amendment by the user (2026-10-30): the reason stays under partial text
+
+The user took the recommendation ("按照建议"). An error after partial text, from any provider and any cause, failed the execution and showed the text alone, which reads like a whole answer. The chat now shows the text with `[API error: REASON]` under it, the line a failure without text already shows; this replaces the `[Reply stream ended before [DONE]]` line of the fifth amendment, and point 4's "without the reason" no longer holds.
+
+The answer of a failed execution is part of the next request's history, so the model sees the same two parts as one assistant message; it already saw `[API error: REASON]` alone when no text had arrived. `scripts/transient-retry-regression.el`: two tests, red before the change.
+
+Real DeepSeek, asked by the user ("接真实服务商看看"), through Superchat's chat, llm.el, plz and curl, with tools off so the reply streams, and a wrapper that cuts curl's output after a set number of events and exits with a set code (`.scratch/arc-bench/runs/real-partial-20261030/`):
+
+| Provider type | Cut | Exit | What happened |
+|---|---|---|---|
+| `llm-deepseek` | none | 0 | Completed, whole answer |
+| `llm-deepseek` | after text | 92 | Failed; text with `[API error: …code:92…]` under it. Asked next turn, the model said its answer was cut off |
+| `llm-deepseek` | after text | 0 | Failed; text with `[API error: Reply stream ended before [DONE]]` under it |
+| `llm-deepseek` | after reasoning, default thinking | 0 | Failed with that line; not sent again, because reasoning was delivered |
+| `llm-deepseek` | before any event | 0 | Hung, then fixed as below: sent again, completed |
+| `llm-openai-compatible` | after text | 92 | Failed; text with the reason under it |
+| `llm-openai-compatible` | after text | 0 | Completed with 35 of the 60 numbers and no sign of the cut (the fifth amendment's limit) |
+| `llm-openai-compatible` | none | 0 | Completed, whole answer |
+
+The hung case is new. With headers and no body, plz-event-source has opened no source, so closing it raises `cl-no-applicable-method`, in plz's timer and again in plz-media-type's ELSE, and no callback runs, for any provider. `superchat--llm-plz-report-unparsed-body` now takes that one error and calls the request's `:on-error` with `Unparsed response body: (cl-no-applicable-method plz-event-source-close nil)`, which is transient. Two tests in `scripts/transient-retry-regression.el`, red before the change. The wrapper cuts on purpose; a drop by DeepSeek itself has still not been observed.
+
