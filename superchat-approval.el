@@ -63,6 +63,19 @@ the minibuffer and holds Emacs until it is answered."
                  (const :tag "Ask in the minibuffer" minibuffer))
   :group 'superchat)
 
+(defcustom superchat-approval-unheld-wait 30
+  "Seconds a published question waits when Emacs cannot hold a recursive edit.
+Normally `superchat-approval-publish' waits in a recursive edit, where the
+user goes on working and answers when ready.  When `recursive-edit' comes
+back at once without a command loop ever running (Emacs returns nil from it
+while input is blocked), the question cannot reach the keyboard; nothing
+above this wait can unwind until it returns, and the Run's deadline is
+stopped while somebody is asked.  So the wait polls for this many seconds
+instead -- an answer from emacsclient still decides it, timers and process
+output still run -- and then gives the question up as not allowed."
+  :type 'number
+  :group 'superchat)
+
 (define-error 'superchat-approval-outside-run
 	      "Approval was requested outside a live Run")
 
@@ -182,12 +195,13 @@ answered by input that came after it\")."
 ;; tool pipeline calls the approval seam and waits for its value, so the call
 ;; stack still waits here; what changes is that Emacs runs underneath it.
 
+(defvar superchat-approval--interruption)
+
 (defvar superchat-approval--open nil
   "The published questions nobody has answered yet, oldest first.
-Each is a plist (:handle :request :asked-at :decision :depth :overlay :panel),
-changed
-in place.  In memory only: a question does not outlive its Run, and a Run does
-not outlive its Emacs.")
+Each is a plist (:handle :request :asked-at :decision :depth
+:given-up :overlay :panel), changed in place.  In memory only: a question
+does not outlive its Run, and a Run does not outlive its Emacs.")
 
 (defun superchat-approval--record (handle)
   "The open question HANDLE names, or nil."
@@ -312,33 +326,76 @@ A panel stays in the transcript and says how the question ended."
                   "Allowed; this conversation no longer asks for tools; saving still asks")
                  ('allow "Allowed once")
                  ('deny "Denied")
+                 ((guard (plist-get record :given-up))
+                  "Not answered while Emacs could not take keys; nothing was allowed")
                  (_ "No longer open; nothing was allowed"))))))
   (when-let* ((overlay (plist-get record :overlay)))
     (when (overlayp overlay) (delete-overlay overlay))))
+
+(defun superchat-approval--wait-polling (record &optional seconds)
+  "Return once RECORD is decided, running timers and process output meanwhile.
+With SECONDS, give up after that long: the question is then marked as given
+up (`:given-up' set on RECORD, `superchat-approval--interruption' set to
+`no-edit') and left undecided, which its caller takes as not allowed."
+  (let ((until (and (numberp seconds) (+ (float-time) seconds))))
+    (while (and (null (plist-get record :decision))
+                (or (null until) (< (float-time) until)))
+      (accept-process-output nil 0.05))
+    (unless (plist-get record :decision)
+      (plist-put record :given-up t)
+      (setq superchat-approval--interruption 'no-edit))))
 
 (defun superchat-approval--wait (record)
   "Return once RECORD is decided, with Emacs running meanwhile.
 At a keyboard that is a recursive edit: the user goes on editing, and the
 edit is left when the question is decided.  A level the user entered on top of
 it is theirs and is not left for them; the decision then takes effect when
-they leave it.  Without a keyboard, timers and processes run."
+they leave it.  Without a keyboard, timers and processes run.
+
+When Emacs cannot hold a recursive edit here -- `recursive-edit' comes back
+at once, before any command loop ran at its level -- the wait does not go
+round again: that spins forever with no redisplay and no C-g (seen
+2026-10-29, Tape `approval.requested' at 15:52:12 and nothing after).  It
+polls for `superchat-approval-unheld-wait' seconds instead, then gives the
+question up as not allowed, so the Run goes on and whatever blocked input can
+unwind."
   ;; A tool call, and so this wait, usually runs from a timer or a process
   ;; filter, where `inhibit-quit' is t: C-g must work in the Emacs that goes on.
   (let ((inhibit-quit nil))
     (if noninteractive
-        (while (null (plist-get record :decision))
-          (accept-process-output nil 0.05))
+        (superchat-approval--wait-polling record)
       (let* ((depth (1+ (recursion-depth)))
+             ;; Set by the leave timer, which runs only from a command loop
+             ;; at DEPTH: proof that the edit was held.  Reset before each
+             ;; entry.  A C-M-c before the timer's first tick looks the same
+             ;; as an edit that was never held; it then takes the polling
+             ;; path, which still decides.
+             (held nil)
              (leave (run-with-timer
                      0.1 0.1
                      (lambda ()
-                       (when (and (plist-get record :decision)
-                                  (= depth (recursion-depth)))
-                         (throw 'exit nil))))))
+                       (when (= depth (recursion-depth))
+                         (setq held t)
+                         (when (plist-get record :decision)
+                           (throw 'exit nil)))))))
         (plist-put record :depth depth)
         (unwind-protect
-            (while (null (plist-get record :decision))
-              (recursive-edit))
+            (while (not (or (plist-get record :decision)
+                            (plist-get record :given-up)))
+              (setq held nil)
+              (recursive-edit)
+              (unless (or held (plist-get record :decision))
+                (superchat-approval--announce
+                 (format "Emacs cannot take keys here; `%s' waits %s s for an answer from emacsclient (superchat-approval-allow or superchat-approval-deny), then is refused"
+                         (plist-get (plist-get record :request) :tool-name)
+                         superchat-approval-unheld-wait))
+                (superchat-approval--wait-polling
+                 record superchat-approval-unheld-wait)
+                (when (plist-get record :given-up)
+                  (superchat-approval--announce
+                   (format "`%s' got no answer in %s s and was refused"
+                           (plist-get (plist-get record :request) :tool-name)
+                           superchat-approval-unheld-wait)))))
           (cancel-timer leave))))))
 
 (defun superchat-approval-publish (request)
@@ -348,7 +405,7 @@ An answerer for `superchat-approval-function'.  The question is listed by
 it or the wait is abandoned -- by a quit, or because its Run ended."
   (let ((record (list :handle (make-symbol "approval") :request request
                       :asked-at (float-time) :decision nil :depth nil
-                      :overlay nil :panel nil)))
+                      :given-up nil :overlay nil :panel nil)))
     (setq superchat-approval--open (append superchat-approval--open (list record)))
     (unwind-protect
         (progn
@@ -428,7 +485,9 @@ questions back."
 
 (defvar superchat-approval--interruption nil
   "Why the question being decided was given up, or nil.
-Bound around one decision; `run-ended' when its Run ended under it.")
+Bound around one decision; `run-ended' when its Run ended under it, `no-edit'
+when Emacs could not hold a recursive edit and nobody answered within
+`superchat-approval-unheld-wait'.")
 
 (defun superchat-approval--announce (text)
   "Tell the user TEXT."
@@ -665,9 +724,11 @@ outcome is `allowed-once'."
        (append
         (list :decision (if (eq outcome 'allowed-once) "allow" "deny")
               :outcome (symbol-name outcome))
-        ;; Given up because its Run ended: not the user's C-g (`user-quit').
-        (when (eq superchat-approval--interruption 'run-ended)
-          (list :reason "run-ended" :interruption "run-ended"))))
+        ;; Given up because its Run ended, or because Emacs could not hold
+        ;; the edit the question waits in: not the user's C-g (`user-quit').
+        (pcase superchat-approval--interruption
+          ('run-ended (list :reason "run-ended" :interruption "run-ended"))
+          ('no-edit (list :reason "no-edit" :interruption "no-edit")))))
       ;; The mark is cleared only after the decision is durable: a failed
       ;; append leaves it open, and the Run then seals `audit-incomplete'.
       (superchat-approval--note request 'approval-settled)
