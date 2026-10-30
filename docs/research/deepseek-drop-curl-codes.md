@@ -36,7 +36,7 @@ HTTP/1.1（`--http1.1`）作对照：回复头之前，先 close_notify 再 FIN 
 | 16 | `curl error code 16: nil` | 不重试 | 30 秒后重发 |
 | 18 | `curl error code 18: Partial file. Only a part of the file was transferred.` | 不重试 | 30 秒后重发 |
 | 56 | `curl error code 56: Failure in receiving network data.` | 30 秒后重发 | 不变 |
-| 0，正文不完整 | 没有回调：plz 解析正文时在自己的计时器里报 `json-end-of-file`（`Error running timer 'plz--respond'`），错误没有传出来 | 只能等无响应窗口到点 | 不变 |
+| 0，正文不完整 | 没有回调：plz 解析正文时在自己的计时器里报 `json-end-of-file`（`Error running timer 'plz--respond'`），错误没有传出来 | 只能等无响应窗口到点 | 2026-10-30 起报 `Unparsed response body: (json-end-of-file …)`，30 秒后重发 |
 
 改动后用三个 curl 经 llm.el 和 plz 重跑了 HTTP/2 的 16 种断开（`.scratch/arc-bench/runs/drop-retry-check-20261029-183252/emacs-check-joined.txt`）：48 次里 45 次判为重试，剩下 3 次都是回复头之后的 RST_STREAM NO_ERROR，没有回调。8.22.0 的"先 close_notify 再 FIN、回复头之前"这次报 16，前面直接用 curl 测时报 56，两个都重试。
 
@@ -58,10 +58,12 @@ HTTP/1.1（`--http1.1`）作对照：回复头之前，先 close_notify 再 FIN 
 
 1. 已做（2026-10-29，用户"同意"）：自动重试多认 16、18、92，也认 plz 0.9.1 对 92 的那句 `code:92`，沿用"没收到文字和推理才重试"。见[重试决定的第三次修订](../decisions/accepted/2026-09-23-retry-transient-provider-errors.md)。
 
-下面三项未决定。
+2026-10-30 用户说"继续断开研究里的 2 到 4"：
 
-2. 高峰时段再抓一次（北京时间 18:00 到 23:00），看 DeepSeek 在 HTTP/2 上到底怎么断。按这次的价钱，每 1000 次请求约 $1.1。
-3. 退出码 0、正文不完整时没有回调：在 superchat 一侧接住，或者报给 llm.el / plz 上游。
-4. 把"92 以上的退出码当成 bug"报给 plz（plz 的提示自己就这么要求）。
+2. 高峰时段再抓一次：北京时间 2026-10-30 20:55 开始（原定 18:00 那次因脚本错误一个请求都没发），4 个并发，上限 1000 次请求、$1.5、2.05 小时（到 23:00 为止），结果写到 `.scratch/arc-bench/runs/drop-capture-peak-20261030-2055/`。结果出来前不知道。
+3. 已做：在 superchat 一侧接住，见[重试决定的第四次修订](../decisions/accepted/2026-09-23-retry-transient-provider-errors.md)。改动后用本地服务器、三个 curl 重跑"回复头之后 RST_STREAM NO_ERROR"，三次都报 `Unparsed response body: (json-end-of-file 2 nil 1)` 并判为重试（`.scratch/arc-bench/runs/drop-unparsed-check-*/emacs-check.txt`）。
+4. 只写了草稿，没有发：plz 的 #70（"Exit code 92 is not handled"）2024 年已关闭，维护者说有更多信息再改，所以写的是在 #70 下的评论；plz-media-type 没找到有人报过，写的是新 issue。在 `.scratch/issues/2026-10-30-upstream-plz-exit-code-92.md` 和 `…-plz-media-type-parse-error.md`。plz-media-type 的问题在发布版 0.2.4 上用一个不依赖 superchat 的复现跑过；上游最新版（0.2.5-pre）那段代码相同，没有跑。
+
+流式请求另有一处没有处理（2026-10-30 用假 curl 测）：截断落在一个事件中间时，执行以 `[Missing final response from llm]` 失败、不重试；截断落在一个完整事件之后、`[DONE]` 之前时，执行算作完成，回答只有已经收到的那部分，没有任何提示。superchat 只在不带工具时对 DeepSeek 用流式。这一处未决定。
 
 用户自己的 Emacs 用哪个 curl：`~/.emacs.d` 里没有 `plz-curl-program` 和 `exec-path-from-shell`；`~/.config/nova-emacs` 用 `exec-path-from-shell` 导入登录 shell 的 PATH（`modules/nova-core.el:44-48`），按这个 PATH 找到的是 `/opt/local/bin/curl` 8.10.1（排在它前面的目录里都没有 curl）。平时用哪一套配置启动，没有核实。上面的表三个 curl 都覆盖了。

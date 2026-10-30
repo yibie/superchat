@@ -268,10 +268,14 @@ Non-HTTP steps still use smoke's scripted network."
       (should (string-match-p "rate limit: retry later"
                               (with-current-buffer view (buffer-string)))))))
 
-(defun transient-retry--fake-curl (code)
-  "Return a program that reads plz's curl config and exits with CODE."
-  (let ((program (make-temp-file "superchat-fake-curl-" nil ".sh"
-                                 (format "#!/bin/sh\ncat >/dev/null\nexit %d\n" code))))
+(defun transient-retry--fake-curl (code &optional output)
+  "Return a program that reads plz's curl config and exits with CODE.
+It first writes OUTPUT, a string, as curl would: headers, then body."
+  (let* ((data (and output (make-temp-file "superchat-fake-curl-out-" nil nil output)))
+         (program (make-temp-file "superchat-fake-curl-" nil ".sh"
+                                  (format "#!/bin/sh\ncat >/dev/null\n%sexit %d\n"
+                                          (if data (format "cat '%s'\nrm -f '%s'\n" data data) "")
+                                          code))))
     (set-file-modes program #o700)
     program))
 
@@ -290,7 +294,8 @@ the failure themselves.  Other steps use smoke's scripted network."
                    (lambda (mode real args)
                      (let* ((step (pop smoke--script))
                             (plz-curl-program
-                             (transient-retry--fake-curl (plist-get step :curl-exit))))
+                             (transient-retry--fake-curl (plist-get step :curl-exit)
+                                                         (plist-get step :curl-output))))
                        (push plz-curl-program programs)
                        (push (list :mode mode :curl-exit (plist-get step :curl-exit))
                              smoke--requests)
@@ -345,6 +350,70 @@ Both the streaming and the non-streaming request are tried."
 (ert-deftest transient-retry/other-curl-exits-through-plz-do-not-retry ()
   (dolist (code '(3 93))
     (transient-retry--curl-case code nil)))
+
+(defconst transient-retry--json-head
+  "HTTP/2 200 \r\ncontent-type: application/json\r\n\r\n"
+  "Response headers of a non-streaming reply, as curl writes them.")
+
+(defun transient-retry--body-case (body retry-p)
+  "Let curl exit 0 after a 200 whose JSON BODY is all there is, without streaming.
+Expect a retry when RETRY-P, else a failed execution naming the body."
+  (transient-retry--curl-fixture
+      (list (list :curl-exit 0 :curl-output (concat transient-retry--json-head body))
+            '(:text "ok"))
+    (let* ((superchat-llm-streaming nil)
+           (view (smoke--open-chat))
+           (run (smoke--send view "answer"))
+           (outcome (transient-retry--settle run)))
+      (should (eq 'async (plist-get (car (last smoke--requests)) :mode)))
+      (should (eq (if retry-p 'completed 'failed) (plist-get outcome :status)))
+      (should (= (if retry-p 2 1) (length smoke--requests)))
+      (when retry-p
+        (should (eq 'transient-retry (plist-get outcome :attempt-reason)))))))
+
+(ert-deftest transient-retry/cut-off-body-through-plz ()
+  "An HTTP/2 stream reset with NO_ERROR after the headers: curl exits 0 and
+the JSON stops short.  plz raised the parse error in its own timer and no
+callback ran (docs/research/deepseek-drop-curl-codes.md)."
+  (transient-retry--body-case "{\"id\":\"x\",\"choices\":[{" t))
+
+(defun transient-retry--unparsed-call (delivered raise)
+  "Call the unparsed-body advice with DELIVERED bound; its THEN signals RAISE.
+Return what ELSE received, or the condition that escaped."
+  (let ((received nil))
+    (condition-case err
+        (let ((superchat--llm-plz-delivered delivered))
+          (superchat--llm-plz-report-unparsed-body
+           (lambda (_method _url &rest rest)
+             (funcall (plist-get rest :then) 'response))
+           'post "http://127.0.0.1:9/v1"
+           :then (lambda (_) (signal (car raise) (cdr raise)))
+           :else (lambda (error) (setq received (plz-error-message error))))
+          received)
+      (error (list 'escaped (car err))))))
+
+(ert-deftest transient-retry/unparsed-body-goes-to-else-only-before-delivery ()
+  (should (equal "Unparsed response body: (json-end-of-file 1 nil 22)"
+                 (transient-retry--unparsed-call (list nil) '(json-end-of-file 1 nil 22))))
+  (should (equal "Unparsed response body: (json-parse-error 8 nil 8)"
+                 (transient-retry--unparsed-call (list nil) '(json-parse-error 8 nil 8))))
+  ;; After llm.el had the reply, a parse error is its own and stays raised.
+  (should (equal '(escaped json-end-of-file)
+                 (transient-retry--unparsed-call (list t) '(json-end-of-file 1 nil 22))))
+  ;; A request llm.el did not start for Superchat is left alone.
+  (should (equal '(escaped json-end-of-file)
+                 (transient-retry--unparsed-call nil '(json-end-of-file 1 nil 22))))
+  ;; Only JSON errors are taken.
+  (should (equal '(escaped wrong-type-argument)
+                 (transient-retry--unparsed-call (list nil) '(wrong-type-argument nil)))))
+
+(ert-deftest transient-retry/classifier-unparsed-body ()
+  (should (superchat--llm-transient-error-p
+           'error "Unparsed response body: (json-end-of-file 1 nil 22)"))
+  (should (superchat--llm-transient-error-p
+           'error "Unparsed response body: (json-parse-error 8 nil 8)"))
+  (should-not (superchat--llm-transient-error-p
+               'error "Failed to parse response, 12 bytes unprocessed")))
 
 (defun transient-retry--notice-wait (run)
   "Wait until RUN has scheduled its first retry, then return its status."

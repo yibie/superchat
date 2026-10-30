@@ -176,6 +176,7 @@ docs/decisions/accepted/2026-10-29-a-silent-attempt-is-sent-again.md."
   "HTTP status of the failed provider request being reported, or nil.")
 
 (declare-function plz-error-response "plz")
+(declare-function make-plz-error "plz")
 (declare-function plz-response-status "plz")
 
 (defun superchat--llm-capture-http-status (original error on-error)
@@ -287,7 +288,10 @@ A connection dropped over HTTP/2 makes curl exit 16, 18, 56 or 92
                   ;; (`plz.el:890'); 92, a reset HTTP/2 stream, comes as an
                   ;; unexpected process status.
                   (and (string-match-p "\\`Unexpected curl process status:" err)
-                       (string-match-p " code:92\\.  Please report" err)))))))
+                       (string-match-p " code:92\\.  Please report" err))
+                  ;; A 200 whose body ended early or did not parse
+                  ;; (`superchat--llm-plz-report-unparsed-body').
+                  (string-match-p "\\`Unparsed response body: (json-" err))))))
 
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
@@ -2810,19 +2814,58 @@ message, so a tool-call mistake found while parsing a reply without streaming
 reaches the error callback of `superchat--llm-generate-answer' without its
 `llm-tool-*' type; that callback reads the type here.")
 
+(defvar superchat--llm-plz-delivered nil
+  "While llm.el starts a request: a cons whose car turns t once it succeeded.
+`superchat--llm-plz-report-unparsed-body' reads it.")
+
+(defun superchat--llm-plz-report-unparsed-body (original method url &rest rest)
+  "Call ORIGINAL plz for METHOD and URL; a body that does not parse is an error.
+plz-media-type parses a JSON reply inside plz's success callback, so a body
+cut short -- curl exits 0 when an HTTP/2 stream is reset with NO_ERROR after
+the headers -- raised `json-end-of-file' in plz's timer and no callback ran
+\(docs/research/deepseek-drop-curl-codes.md).  For a request llm.el starts
+for Superchat, a `json-error' raised before the reply was handed over goes to
+plz's ELSE as \"Unparsed response body: CONDITION\".  Other requests are left
+alone."
+  (let ((delivered superchat--llm-plz-delivered)
+        (then (plist-get rest :then))
+        (else (plist-get rest :else)))
+    (when (and delivered (functionp then) (not (symbolp then)) (functionp else))
+      (setq rest
+            (plist-put
+             (copy-sequence rest) :then
+             (lambda (&rest args)
+               (condition-case err
+                   (apply then args)
+                 (json-error
+                  (if (car delivered)
+                      (signal (car err) (cdr err))
+                    (funcall else (make-plz-error
+                                   :message (format "Unparsed response body: %S"
+                                                    err))))))))))
+    (apply original method url rest)))
+
+(with-eval-after-load 'plz
+  (unless (advice-member-p #'superchat--llm-plz-report-unparsed-body 'plz)
+    (advice-add 'plz :around #'superchat--llm-plz-report-unparsed-body)))
+
 (defun superchat--llm-request-plz-propagate-callback-errors
     (original url &rest args)
   "Call ORIGINAL for URL, routing async success callback errors to `:on-error'.
 The condition is bound to `superchat--llm-callback-error' while it is reported.
+A reply body that does not parse reaches `:on-error' too
+\(`superchat--llm-plz-report-unparsed-body').
 For a Superchat Ollama request, decode curl output as UTF-8 so Emacs carries
 incomplete characters across process-filter chunks."
   (let ((on-success (plist-get args :on-success))
-        (on-error (plist-get args :on-error)))
+        (on-error (plist-get args :on-error))
+        (delivered (list nil)))
     (when (functionp on-success)
       (setq args
             (plist-put
              args :on-success
              (lambda (response)
+               (setcar delivered t)
                (condition-case err
                    (funcall on-success response)
                  (llm-error
@@ -2830,7 +2873,8 @@ incomplete characters across process-filter chunks."
                       (let ((superchat--llm-callback-error err))
                         (funcall on-error (car err) (error-message-string err)))
                     (signal (car err) (cdr err)))))))))
-    (let ((process (apply original url args)))
+    (let ((process (let ((superchat--llm-plz-delivered delivered))
+                     (apply original url args))))
       (when (and superchat--llm-ollama-response-p
                  (processp process))
         (set-process-coding-system process 'utf-8-unix 'binary))
