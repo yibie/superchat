@@ -269,6 +269,9 @@ the time each listener's timer is set to."
     (advice-add 'plz-event-source--dispatch-event :override
                 #'superchat--llm-dispatch-event-in-order)))
 
+(defconst superchat--llm-stream-cut-message "Reply stream ended before [DONE]"
+  "The error of a streamed reply that stopped before its last event.")
+
 (defun superchat--llm-transient-error-p (type err &optional http-status)
   "Return non-nil when TYPE, ERR and HTTP-STATUS identify a retryable error.
 Only HTTP 429 and 5xx retry.  Without an HTTP status, recognize the pinned
@@ -291,7 +294,10 @@ A connection dropped over HTTP/2 makes curl exit 16, 18, 56 or 92
                        (string-match-p " code:92\\.  Please report" err))
                   ;; A 200 whose body ended early or did not parse
                   ;; (`superchat--llm-plz-report-unparsed-body').
-                  (string-match-p "\\`Unparsed response body: (json-" err))))))
+                  (string-match-p "\\`Unparsed response body: (json-" err)
+                  ;; A stream that stopped short
+                  ;; (`superchat--llm-watch-stream-end').
+                  (equal err superchat--llm-stream-cut-message))))))
 
 (defcustom superchat-llm-round-limit-action 'ask
   "What to do when `superchat-llm-max-tool-rounds' is exhausted.
@@ -2849,30 +2855,67 @@ alone."
   (unless (advice-member-p #'superchat--llm-plz-report-unparsed-body 'plz)
     (advice-add 'plz :around #'superchat--llm-plz-report-unparsed-body)))
 
+(defvar superchat--llm-stream-needs-done nil
+  "Non-nil while llm.el starts a request whose stream must end in [DONE].")
+
+(defun superchat--llm-watch-stream-end (media-type)
+  "Have MEDIA-TYPE note the [DONE] event of a stream; return the note, or nil.
+The note is a cons whose car turns t at that event.  MEDIA-TYPE is the
+\(TYPE . HANDLER) llm.el gives for one request, so its handler is changed in
+place.  Nothing else marks a stream's end: curl exits 0 when an HTTP/2 stream
+is reset with NO_ERROR, and llm.el then takes what arrived as the whole reply
+\(docs/research/deepseek-drop-curl-codes.md)."
+  (when (eq (car-safe media-type) 'text/event-stream)
+    (let* ((handler (cdr media-type))
+           (finished (list nil)))
+      ;; The class is not loaded when this file compiles.
+      (with-no-warnings
+        (eieio-oset
+         handler 'events
+         (mapcar
+          (lambda (pair)
+            (if (eq (car pair) 'message)
+                (let ((listener (cdr pair)))
+                  (cons 'message
+                        (lambda (event)
+                          (when (equal (slot-value event 'data) "[DONE]")
+                            (setcar finished t))
+                          (funcall listener event))))
+              pair))
+          (eieio-oref handler 'events))))
+      finished)))
+
 (defun superchat--llm-request-plz-propagate-callback-errors
     (original url &rest args)
   "Call ORIGINAL for URL, routing async success callback errors to `:on-error'.
 The condition is bound to `superchat--llm-callback-error' while it is reported.
 A reply body that does not parse reaches `:on-error' too
-\(`superchat--llm-plz-report-unparsed-body').
+\(`superchat--llm-plz-report-unparsed-body'), and so does a stream that ended
+without the [DONE] `superchat--llm-stream-needs-done' asks for.
 For a Superchat Ollama request, decode curl output as UTF-8 so Emacs carries
 incomplete characters across process-filter chunks."
-  (let ((on-success (plist-get args :on-success))
-        (on-error (plist-get args :on-error))
-        (delivered (list nil)))
+  (let* ((on-success (plist-get args :on-success))
+         (on-error (plist-get args :on-error))
+         (delivered (list nil))
+         (finished (and superchat--llm-stream-needs-done
+                        (functionp on-error)
+                        (superchat--llm-watch-stream-end
+                         (plist-get args :media-type)))))
     (when (functionp on-success)
       (setq args
             (plist-put
              args :on-success
              (lambda (response)
                (setcar delivered t)
-               (condition-case err
-                   (funcall on-success response)
-                 (llm-error
-                  (if (functionp on-error)
-                      (let ((superchat--llm-callback-error err))
-                        (funcall on-error (car err) (error-message-string err)))
-                    (signal (car err) (cdr err)))))))))
+               (if (and finished (not (car finished)))
+                   (funcall on-error 'error superchat--llm-stream-cut-message)
+                 (condition-case err
+                     (funcall on-success response)
+                   (llm-error
+                    (if (functionp on-error)
+                        (let ((superchat--llm-callback-error err))
+                          (funcall on-error (car err) (error-message-string err)))
+                      (signal (car err) (cdr err))))))))))
     (let ((process (let ((superchat--llm-plz-delivered delivered))
                      (apply original url args))))
       (when (and superchat--llm-ollama-response-p
@@ -3759,6 +3802,12 @@ requests until it receives text, bounded by
                  (t
                   (funcall finalize
                            (cond
+                            ((and response-parts
+                                  (equal err superchat--llm-stream-cut-message))
+                             ;; It reads like a whole answer otherwise.
+                             (format "%s\n\n[%s]"
+                                     (string-join (nreverse response-parts) "")
+                                     err))
                             (response-parts
                              (string-join (nreverse response-parts) ""))
                             (t
@@ -4532,9 +4581,11 @@ requests until it receives text, bounded by
                                       (and superchat-llm-warning-message
                                            (bound-and-true-p llm-warn-on-nonfree))))
                                  (if streaming-request-p
-                                     (llm-chat-streaming effective-backend attempt-prompt
-                                                         attempt-stream-cb attempt-response-cb
-                                                         attempt-error-cb multi-output)
+                                     (let ((superchat--llm-stream-needs-done
+                                            (superchat--llm-deepseek-p effective-backend)))
+                                       (llm-chat-streaming effective-backend attempt-prompt
+                                                           attempt-stream-cb attempt-response-cb
+                                                           attempt-error-cb multi-output))
                                    (llm-chat-async effective-backend attempt-prompt
                                                    attempt-response-cb attempt-error-cb
                                                    multi-output))))

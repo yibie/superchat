@@ -13,6 +13,7 @@
 (setq smoke-library-only t)
 (load (expand-file-name "smoke.el" (file-name-directory load-file-name)) nil t)
 (require 'plz)
+(require 'llm-deepseek)
 
 (defmacro transient-retry--fixture (script &rest body)
   "Run BODY with scripted network SCRIPT in an isolated chat."
@@ -376,6 +377,79 @@ Expect a retry when RETRY-P, else a failed execution naming the body."
 the JSON stops short.  plz raised the parse error in its own timer and no
 callback ran (docs/research/deepseek-drop-curl-codes.md)."
   (transient-retry--body-case "{\"id\":\"x\",\"choices\":[{" t))
+
+(defconst transient-retry--sse-head
+  "HTTP/2 200 \r\ncontent-type: text/event-stream\r\n\r\n"
+  "Response headers of a streamed reply, as curl writes them.")
+
+(defun transient-retry--sse-event (text)
+  "Return one whole streamed event carrying TEXT."
+  (format "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"%s\"}}]}\n\n"
+          text))
+
+(defun transient-retry--stream-case (backend body expected-status expected-requests)
+  "Stream BODY from BACKEND under the real llm.el and plz; curl exits 0.
+A second request, if any, answers \"SECOND\".  Expect EXPECTED-STATUS after
+EXPECTED-REQUESTS requests and return the chat's text."
+  (transient-retry--curl-fixture
+      (list (list :curl-exit 0 :curl-output (concat transient-retry--sse-head body))
+            '(:text "SECOND"))
+    (let* ((superchat-llm-backend backend)
+           (superchat-llm-streaming t)
+           ;; DeepSeek streams only a request without tools.
+           (superchat-llm-tools-enabled nil)
+           (view (smoke--open-chat))
+           (run (smoke--send view "answer"))
+           (outcome (transient-retry--settle run)))
+      (should (eq 'streaming (plist-get (car (last smoke--requests)) :mode)))
+      (should (eq expected-status (plist-get outcome :status)))
+      (should (= expected-requests (length smoke--requests)))
+      (with-current-buffer view (buffer-string)))))
+
+(defun transient-retry--deepseek ()
+  "Return a DeepSeek provider for a stand-in curl."
+  (make-llm-deepseek :key "unused" :chat-model "deepseek-v4-flash"))
+
+(ert-deftest transient-retry/stream-whole-is-not-a-cut ()
+  "Many events and [DONE] in one chunk, curl gone at once: the worst ordering."
+  (let* ((n 300)
+         (text (transient-retry--stream-case
+                (transient-retry--deepseek)
+                (concat (mapconcat (lambda (i) (transient-retry--sse-event (format "w%d " i)))
+                                   (number-sequence 1 n) "")
+                        "data: [DONE]\n\n")
+                'completed 1)))
+    (should (string-match-p (format "w1 .*w%d " n) text))))
+
+(ert-deftest transient-retry/stream-cut-before-any-text-is-sent-again ()
+  (let ((text (transient-retry--stream-case
+               (transient-retry--deepseek)
+               "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"PA"
+               'completed 2)))
+    (should (string-match-p "SECOND" text))
+    (should-not (string-match-p "Missing final response" text))))
+
+(ert-deftest transient-retry/stream-cut-after-text-says-so ()
+  "The text that arrived stays, the execution fails, and nothing is sent again."
+  (let ((text (transient-retry--stream-case
+               (transient-retry--deepseek)
+               (transient-retry--sse-event "PARTIAL")
+               'failed 1)))
+    (should (string-match-p "PARTIAL" text))
+    (should (string-match-p "Reply stream ended before \\[DONE\\]" text))))
+
+(ert-deftest transient-retry/stream-end-is-asked-of-deepseek-only ()
+  "Another OpenAI-compatible server need not send [DONE]."
+  (let ((text (transient-retry--stream-case
+               (make-llm-openai-compatible :url "http://127.0.0.1:9/v1" :chat-model "smoke-model")
+               (transient-retry--sse-event "WHOLE")
+               'completed 1)))
+    (should (string-match-p "WHOLE" text))))
+
+(ert-deftest transient-retry/classifier-stream-cut ()
+  (should (superchat--llm-transient-error-p 'error "Reply stream ended before [DONE]"))
+  (should-not (superchat--llm-transient-error-p 'error "Reply stream ended"))
+  (should-not (superchat--llm-transient-error-p 'error "Reply stream ended before [DONE]" 400)))
 
 (defun transient-retry--unparsed-call (delivered raise)
   "Call the unparsed-body advice with DELIVERED bound; its THEN signals RAISE.

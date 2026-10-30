@@ -60,10 +60,10 @@ HTTP/1.1（`--http1.1`）作对照：回复头之前，先 close_notify 再 FIN 
 
 2026-10-30 用户说"继续断开研究里的 2 到 4"：
 
-2. 高峰时段再抓一次：北京时间 2026-10-30 20:55 开始（原定 18:00 那次因脚本错误一个请求都没发），4 个并发，上限 1000 次请求、$1.5、2.05 小时（到 23:00 为止），结果写到 `.scratch/arc-bench/runs/drop-capture-peak-20261030-2055/`。结果出来前不知道。
+2. 高峰时段再抓一次：北京时间 2026-10-30 20:53 到 21:36（原定 18:00 那次因脚本错误一个请求都没发），4 个并发。`/opt/local/bin/curl` 780 次、8.22.0 的 curl 134 次、`/usr/bin/curl` 86 次。1000 次全部退出码 0、HTTP 200、HTTP/2，一次断开也没有。花费 $1.23。请求用时中位数 4.6 秒，95% 在 33.7 秒内，最长 84 秒；991 次的第一个字节离请求结束不到 1 秒。结果在 `.scratch/arc-bench/runs/drop-capture-peak-20261030-2055/`。两次抓取合计 2000 次没有断开，DeepSeek 在 HTTP/2 上怎么断开仍然不知道；只覆盖了高峰时段里的 43 分钟。不再继续抓。
 3. 已做：在 superchat 一侧接住，见[重试决定的第四次修订](../decisions/accepted/2026-09-23-retry-transient-provider-errors.md)。改动后用本地服务器、三个 curl 重跑"回复头之后 RST_STREAM NO_ERROR"，三次都报 `Unparsed response body: (json-end-of-file 2 nil 1)` 并判为重试（`.scratch/arc-bench/runs/drop-unparsed-check-*/emacs-check.txt`）。
 4. 只写了草稿，没有发：plz 的 #70（"Exit code 92 is not handled"）2024 年已关闭，维护者说有更多信息再改，所以写的是在 #70 下的评论；plz-media-type 没找到有人报过，写的是新 issue。在 `.scratch/issues/2026-10-30-upstream-plz-exit-code-92.md` 和 `…-plz-media-type-parse-error.md`。plz-media-type 的问题在发布版 0.2.4 上用一个不依赖 superchat 的复现跑过；上游最新版（0.2.5-pre）那段代码相同，没有跑。
 
-流式请求另有一处没有处理（2026-10-30 用假 curl 测）：截断落在一个事件中间时，执行以 `[Missing final response from llm]` 失败、不重试；截断落在一个完整事件之后、`[DONE]` 之前时，执行算作完成，回答只有已经收到的那部分，没有任何提示。superchat 只在不带工具时对 DeepSeek 用流式。这一处未决定。
+流式请求另有一处（2026-10-30 用假 curl 测）：截断落在一个事件中间时，执行以 `[Missing final response from llm]` 失败、不重试；截断落在一个完整事件之后、`[DONE]` 之前时，执行算作完成，回答只有已经收到的那部分，没有任何提示。superchat 只在不带工具时对 DeepSeek 用流式。已修，只管 DeepSeek，见[重试决定的第五次修订](../decisions/accepted/2026-09-23-retry-transient-provider-errors.md)。
 
 用户自己的 Emacs 用哪个 curl：`~/.emacs.d` 里没有 `plz-curl-program` 和 `exec-path-from-shell`；`~/.config/nova-emacs` 用 `exec-path-from-shell` 导入登录 shell 的 PATH（`modules/nova-core.el:44-48`），按这个 PATH 找到的是 `/opt/local/bin/curl` 8.10.1（排在它前面的目录里都没有 curl）。平时用哪一套配置启动，没有核实。上面的表三个 curl 都覆盖了。
