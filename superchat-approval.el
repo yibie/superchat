@@ -197,6 +197,15 @@ answered by input that came after it\")."
 
 (defvar superchat-approval--interruption)
 
+(defvar superchat-approval-open-changed-hook nil
+  "Run after a question opened or closed.
+`superchat-approval-open-questions' says what is open then.")
+
+(defun superchat-approval--open-changed ()
+  "Say that the open questions changed; nothing here can stop an answer."
+  (with-demoted-errors "superchat: telling about an open question: %S"
+    (run-hooks 'superchat-approval-open-changed-hook)))
+
 (defvar superchat-approval--open nil
   "The published questions nobody has answered yet, oldest first.
 Each is a plist (:handle :request :asked-at :decision :depth
@@ -278,18 +287,24 @@ brings the questions back."
                                   (buffer-local-value 'superchat--session-id buffer))))
                     (buffer-list))))))
 
+(defun superchat-approval-question-text (request)
+  "What REQUEST asks, in words.
+A reason of several lines is one to read: it goes under the question."
+  (let ((tool (plist-get request :tool-name))
+        (reason (plist-get request :reason)))
+    (cond ((not (and (stringp reason) (not (string-empty-p reason))))
+           (format "Allow `%s' once?" tool))
+          ((string-search "\n" reason) (format "Allow `%s' once?\n%s" tool reason))
+          (t (format "Allow `%s' once? (%s)" tool reason)))))
+
 (defun superchat-approval--line (request)
   "What the conversation shows of the open question REQUEST."
-  (let ((reason (plist-get request :reason)))
-    (concat
-     "\n"
-     (propertize
-      (format "Allow `%s' once?%s\n  M-x superchat-approval-allow, superchat-approval-allow-all, superchat-approval-deny, superchat-approval-details; or answer it in M-x superchat-pending\n"
-              (plist-get request :tool-name)
-              (if (and (stringp reason) (not (string-empty-p reason)))
-                  (format " (%s)" reason)
-                ""))
-      'face 'warning))))
+  (concat
+   "\n"
+   (propertize
+    (format "%s\n  M-x superchat-approval-allow, superchat-approval-allow-all, superchat-approval-deny, superchat-approval-details; or answer it in M-x superchat-pending\n"
+            (superchat-approval-question-text request))
+    'face 'warning)))
 
 (defun superchat-approval--show (record)
   "Show RECORD's question in its conversation and in the echo area."
@@ -311,8 +326,12 @@ brings the questions back."
               (overlay-put overlay 'after-string (superchat-approval--line request))
               (plist-put record :overlay overlay))))))
     (superchat-approval--announce
-     (format "`%s' asks to be allowed once; answer with M-x superchat-approval-allow or superchat-approval-deny, or in M-x superchat-pending"
-             (plist-get request :tool-name)))))
+     (if (string-search "\n" (or (plist-get request :reason) ""))
+         ;; To be read, wherever the conversation is.
+         (format "%s\nAnswer with M-x superchat-approval-allow or superchat-approval-deny, or in M-x superchat-pending"
+                 (superchat-approval-question-text request))
+       (format "`%s' asks to be allowed once; answer with M-x superchat-approval-allow or superchat-approval-deny, or in M-x superchat-pending"
+               (plist-get request :tool-name))))))
 
 (defun superchat-approval--unshow (record)
   "Take RECORD's question out of its conversation.
@@ -407,13 +426,15 @@ it or the wait is abandoned -- by a quit, or because its Run ended."
                       :asked-at (float-time) :decision nil :depth nil
                       :given-up nil :overlay nil :panel nil)))
     (setq superchat-approval--open (append superchat-approval--open (list record)))
+    (superchat-approval--open-changed)
     (unwind-protect
         (progn
           (superchat-approval--show record)
           (superchat-approval--wait record)
           (eq 'allow (plist-get record :decision)))
       (setq superchat-approval--open (delq record superchat-approval--open))
-      (superchat-approval--unshow record))))
+      (superchat-approval--unshow record)
+      (superchat-approval--open-changed))))
 
 (defun superchat-approval-ask (request)
   "Ask the user to allow REQUEST once.  Return non-nil to allow.
@@ -427,17 +448,26 @@ running keyboard macro is not a person and is refused either way."
         (t (superchat-approval-publish request))))
 
 (defun superchat-approval--question-here ()
-  "The open question the user means: this conversation's, or the only one."
+  "The open question the user means: this conversation's, or the only one.
+A question of a conversation nobody opened does not make the user's own unclear."
   (let* ((open (superchat-approval-open-questions))
          (session (and (boundp 'superchat--session-id)
                        (symbol-value 'superchat--session-id)))
          (here (and (stringp session)
                     (cl-find session open
                              :key (lambda (q) (plist-get q :session-id))
-                             :test #'equal))))
+                             :test #'equal)))
+         (of-opened (cl-remove-if
+                     (lambda (q)
+                       (and (fboundp 'superchat-view-session-configuration)
+                            (plist-get (superchat-view-session-configuration
+                                        (plist-get q :session-id))
+                                       :background)))
+                     open)))
     (cond (here here)
           ((null open) (user-error "No approval question is open"))
           ((null (cdr open)) (car open))
+          ((and of-opened (null (cdr of-opened))) (car of-opened))
           (t (user-error "%d approval questions are open; answer them in M-x superchat-pending or from their conversations"
                          (length open))))))
 

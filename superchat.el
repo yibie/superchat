@@ -51,6 +51,7 @@
 (require 'superchat-workspace)
 (require 'superchat-timer)
 (require 'superchat-work)
+(require 'superchat-butler)
 (require 'superchat-editor-workspace)
 (require 'superchat-widgets)
 (require 'superchat-change-set)
@@ -1032,6 +1033,10 @@ buffer is compared against it."
                  (plist-get status :run-id)
                  undelivered
                  (if (= undelivered 1) "" "s")))
+       ;; What runs on the butler's Session says what it has to say by itself,
+       ;; and has nothing to say more often than not.
+       ((equal (plist-get status :session-id)
+               (bound-and-true-p superchat-butler-session-id)))
        ((not (eq view-buffer run-buffer))
         (message "superchat: run %s %s (session %s)"
                  (plist-get status :run-id)
@@ -1263,6 +1268,29 @@ Minibuffer errors and quit propagate.  They neither answer nor stop a Run."
 (declare-function superchat-approval-open-questions "superchat-approval" ())
 (declare-function superchat-approval--details "superchat-approval" (request))
 
+(defun superchat--approval-panel-protect (panel)
+  "Make PANEL's text read-only.
+Nothing typed belongs in a question; its buttons are pressed all the same."
+  (let ((from (widget-get panel :from))
+        (to (widget-get panel :to)))
+    (when (and (markerp from) (markerp to) (buffer-live-p (marker-buffer from)))
+      (with-current-buffer (marker-buffer from)
+        (let ((inhibit-read-only t))
+          (with-silent-modifications
+            (add-text-properties from to '(read-only t front-sticky (read-only)
+                                                 rear-nonsticky t))))))))
+
+(defun superchat--approval-panel-leave (panel)
+  "A cursor on the answered PANEL goes to the end of what the user is writing.
+Measured 2026-11-01: after a button was pressed by key, the next words went into
+the panel.  A cursor anywhere else is the user's and stays."
+  (let ((from (widget-get panel :from))
+        (to (widget-get panel :to)))
+    (when (and (markerp from) (markerp to) (buffer-live-p (marker-buffer from)))
+      (with-current-buffer (marker-buffer from)
+        (when (<= from (point) to)
+          (goto-char (point-max)))))))
+
 (defun superchat--approval-panel-settle (panel label)
   "Say LABEL on PANEL and take its three answering buttons out of use."
   (let ((from (and panel (widget-get panel :from))))
@@ -1273,7 +1301,41 @@ Minibuffer errors and quit propagate.  They neither answer nor stop a Run."
           (save-excursion
             (widget-value-set (nth 1 children) label)
             (dolist (control (cl-subseq children 2 5))
-              (widget-apply control :deactivate))))))))
+              (widget-apply control :deactivate)))))
+      (superchat--approval-panel-protect panel)
+      (superchat--approval-panel-leave panel))))
+
+(defun superchat--break-line (line width)
+  "LINE as a list of lines at most WIDTH wide, nothing left out.
+A line breaks after a space when it has one, else where it reaches WIDTH."
+  (let (out)
+    (while (> (string-width line) width)
+      (let* ((piece (truncate-string-to-width line width))
+             (space (string-match-p " [^ ]*\\'" piece))
+             (cut (if (and space (> space 0)) (1+ space) (length piece))))
+        (push (substring line 0 cut) out)
+        (setq line (substring line cut))))
+    (nreverse (cons line out))))
+
+(defun superchat--fit-window (text buffer)
+  "TEXT with its lines broken to fit BUFFER's window.
+A chat View may truncate its lines, and what a question says must all be read."
+  (let ((width (max 20 (1- (if-let* ((window (get-buffer-window buffer t)))
+                               (window-body-width window)
+                             fill-column)))))
+    (mapconcat (lambda (line) (string-join (superchat--break-line line width) "\n"))
+               (split-string text "\n")
+               "\n")))
+
+(defun superchat--literal-lines (text)
+  "TEXT for a chat View, to show exactly as it is, whatever Org is set to.
+A View is Org: `[[a][b]]' shows as \"b\", and by the user's settings markers go
+and entities change.  A question is the one time a command is read, so each
+line here is one space that shows the line: Org has nothing to read.
+What that costs: it cannot be copied or searched for here; Details shows it too."
+  (mapconcat (lambda (line) (propertize " " 'display line))
+             (split-string text "\n")
+             "\n"))
 
 (defun superchat--approval-panel-show (handle request)
   "Show the approval question HANDLE of REQUEST as a panel in its conversation.
@@ -1285,7 +1347,6 @@ View, or an execution with no transcript of its own there."
                     (superchat-editor-workspace-buffer session 'session-view)))
          (owner (and run (plist-get (superchat-runtime-status run)
                                     :transcript-owner)))
-         (reason (plist-get request :reason))
          panel)
     (when (and owner (superchat--input-view-p view session))
       (require 'superchat-widgets)
@@ -1299,12 +1360,14 @@ View, or an execution with no transcript of its own there."
                    (widget-create
                     'group :format "%v" :approval-handle handle
                     `(item :format "%v\n"
-                           ,(format "*** Approval needed\nAllow `%s' once?%s"
-                                    (plist-get request :tool-name)
-                                    (if (and (stringp reason)
-                                             (not (string-empty-p reason)))
-                                        (format " (%s)" reason)
-                                      "")))
+                           ;; `princ', the default, would drop the properties.
+                           :value-create
+                           ,(lambda (_widget)
+                              (insert "*** Approval needed\n"
+                                      (superchat--literal-lines
+                                       (superchat--fit-window
+                                        (superchat-approval-question-text request)
+                                        view)))))
                     '(item :format "%v\n" "Waiting for your answer")
                     `(superchat-inline-button
                       :tag "Allow once" :format "%[%t%]  "
@@ -1330,7 +1393,9 @@ View, or an execution with no transcript of its own there."
                       :superchat-action
                       ,(lambda ()
                          (with-help-window "*superchat approval*"
-                           (princ (superchat-approval--details request))))))))))))
+                           (princ (superchat-approval--details request)))))))))
+          (when panel
+            (superchat--approval-panel-protect panel)))))
     panel))
 
 (defun superchat--approval-asked-at (run-id)
@@ -4045,11 +4110,15 @@ of its own here, so it gives nil."
 
 (defun superchat--view-temporary-p (view)
   "Return non-nil when VIEW is a live chat View bound to no Workspace.
-Such a conversation is the temporary Workspace's one conversation."
+Such a conversation is the temporary Workspace's one conversation, unless it
+is one nobody opened."
   (and (buffer-live-p view)
        (buffer-local-value 'superchat-mode view)
        (buffer-local-value 'superchat--session-id view)
-       (not (buffer-local-value 'superchat--workspace-binding view))))
+       (not (buffer-local-value 'superchat--workspace-binding view))
+       (not (plist-get (superchat-view-session-configuration
+                        (buffer-local-value 'superchat--session-id view))
+                       :background))))
 
 (defun superchat--visible-temporary-view ()
   "Return the first buffer in this frame's windows showing a temporary View."
@@ -4083,18 +4152,26 @@ selects no window."
             (superchat--render-session-view id))
       (superchat-workspace-new-conversation workspace))))
 
-(defun superchat-workspace-new-conversation (workspace)
+(defun superchat-workspace-new-conversation (workspace &optional background)
   "Start a new conversation bound to WORKSPACE (:id :root) and return its View.
-Shows nothing and selects no window."
+Shows nothing and selects no window.
+With BACKGROUND it is a conversation nobody opened: it is not WORKSPACE's main
+one and is not recalled from (`superchat-view-workspace-session-ids').  Then
+WORKSPACE may be nil: bound to nothing, it is still not the temporary one."
   (let* ((session-id (superchat--new-session-id))
-         (view (let ((default-directory (plist-get workspace :root)))
+         (view (let ((default-directory (or (plist-get workspace :root)
+                                            default-directory)))
                  (superchat--ensure-chat-view
                   (superchat--session-buffer-name session-id)
                   session-id))))
     (with-current-buffer view
-      (superchat--apply-workspace-binding
-       (list :id (plist-get workspace :id)
-             :root (plist-get workspace :root))))
+      ;; First, so that it never counts as the main one.
+      (when background
+        (superchat--configuration-event "conversation.background" nil))
+      (when workspace
+        (superchat--apply-workspace-binding
+         (list :id (plist-get workspace :id)
+               :root (plist-get workspace :root)))))
     view))
 
 (defun superchat--open-workspace-conversation (workspace &optional from-session)
@@ -4737,6 +4814,7 @@ Returns the prepared Request Plan in both cases."
                   input superchat--session-id origin))))
     (if inspect
         (superchat--display-request-plan plan)
+      (superchat--note-asked-from (buffer-local-value 'superchat--session-id buffer))
       (superchat--execute-plan-in-chat plan))
     plan))
 
@@ -4773,6 +4851,11 @@ accepted send, as before."
   (superchat-plugin-require-active-row 'chat)
   (let ((plan (superchat--request-plan-with-edited-prompt))
         (inspector (current-buffer)))
+    ;; The inspector closes on an accepted send, so it says nothing about
+    ;; whether the user stays: this send is not judged by where it came from.
+    (remhash (buffer-local-value 'superchat--session-id
+                                 (superchat--ensure-request-chat-buffer))
+             superchat--asked-from)
     (superchat--execute-plan-in-chat plan)
     (unless (superchat--send-refusal-p (plist-get plan :run-handle))
       (when (buffer-live-p inspector)

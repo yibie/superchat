@@ -51,17 +51,18 @@ Then the plugin's mount reads the Tape."
 (ert-deftest seen/a-task-out-of-tries-leaves-one-fact ()
   (pend--fresh
     (wtimer--with nil (p)
-      (let ((session (cdr (tsf--task p "SEEN gave up")))
+      (let ((_task (tsf--task p "SEEN gave up"))
             (superchat-timer-retry-limit 1))
         (clrhash superchat-timer--retries) (clrhash superchat-timer--not-before)
         (unwind-protect
             (tsf--send-failing
               (superchat-timer-catch-up)
               ;; One failure: it is tried again, nothing is given up yet.
-              (should (= 0 (length (seen--facts session "timer.gave-up"))))
+              (should (= 0 (length (seen--facts (wtimer--home "SEEN gave up")
+                                                "timer.gave-up"))))
               (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds 1))
               (superchat-timer-retry-tasks)
-              (let ((facts (seen--facts session "timer.gave-up")))
+              (let ((facts (seen--facts (wtimer--home "SEEN gave up") "timer.gave-up")))
                 (should (= 1 (length facts)))
                 (should (= 2 (plist-get (plist-get (car facts) :payload) :tries)))
                 (should (equal "timers" (plist-get (car facts) :actor-id))))
@@ -69,7 +70,8 @@ Then the plugin's mount reads the Tape."
               (superchat-timer-retry-tasks)
               (setq wtimer--now (+ wtimer--now 100000))
               (superchat-timer-retry-tasks)
-              (should (= 1 (length (seen--facts session "timer.gave-up")))))
+              (should (= 1 (length (seen--facts (wtimer--home "SEEN gave up")
+                                                "timer.gave-up")))))
           (clrhash superchat-timer--retries)
           (clrhash superchat-timer--not-before))))))
 

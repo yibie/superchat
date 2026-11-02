@@ -103,7 +103,7 @@
 (ert-deftest pending/a-timer-to-come-and-a-task-that-did-not-start ()
   (pend--fresh
     (wtimer--with nil (p)
-      (let* ((session (cdr (tsf--task p "PEND-TASK do the thing")))
+      (let* ((_task (tsf--task p "PEND-TASK do the thing"))
              (id (plist-get (car (superchat-timer-list)) :id)))
         (let ((item (car (pend--of 'timer))))
           (should (equal '(timer) (pend--kinds)))
@@ -115,7 +115,8 @@
           (should (equal '(due) (pend--kinds)))
           (should (equal id (car (plist-get item :key))))
           (should (string-match-p "not started" (plist-get item :detail)))
-          (should (equal session (plist-get item :session))))))))
+          (should (equal (wtimer--home "PEND-TASK do the thing")
+                         (plist-get item :session))))))))
 
 (ert-deftest pending/a-task-that-may-have-started-says-so ()
   "The fact the product writes when it cannot tell is what the row reads."
@@ -143,10 +144,12 @@
     (wtimer--with '((:text "AN ANSWER TO THE USER")) (p)
       (let* ((pair (tsf--task p "PEND-MID-SEND"))
              (view (car pair)))
+        (ignore view)
         (tsf--send-failing (superchat-timer-catch-up))
         ;; A send that only failed is plainly not started.
         (should (equal '(due) (pend--kinds)))
-        (hm--turn view "Something else, typed by the user")
+        (hm--turn (superchat-timer--live-view (wtimer--home "PEND-MID-SEND"))
+                  "Something else, typed by the user")
         (let ((item (car (pend--of 'unconfirmed))))
           (should item)
           (should-not (pend--of 'due))

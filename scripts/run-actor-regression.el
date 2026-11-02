@@ -68,16 +68,21 @@ model; its Run says who started it all the same."
              (superchat-timer-now-function (lambda () now))
              (superchat-timer-notify-function #'ignore)
              (session (hm--session (wrec--view p))))
-        (puthash "ractcmd" "RACT-TEMPLATE: $input" superchat--user-commands)
-        (unwind-protect
-            (progn
-              (superchat-timer-create session 'task "/ractcmd fill me" (+ now 60))
-              (setq now (+ now 60))
-              (superchat-timer-catch-up)
-              (wrec--settled)
-              (should (equal '("timers") (ract--started session))))
-          (remhash "ractcmd" superchat--user-commands)
-          (superchat-timer-disarm-all))))))
+        ;; On disk: the View the task opens reads the commands from there again.
+        (superchat--ensure-directories)
+        (let ((file (expand-file-name "ractcmd-test.prompt" (superchat--command-dir))))
+          (with-temp-file file (insert "RACT-TEMPLATE: $input"))
+          (unwind-protect
+              (progn
+                (superchat--load-user-commands)
+                (superchat-timer-create session 'task "/ractcmd fill me" (+ now 60))
+                (setq now (+ now 60))
+                (let ((home (plist-get (car (superchat-timer-catch-up)) :session-id)))
+                  (wrec--settled)
+                  (should (equal '("timers") (ract--started home)))))
+            (delete-file file)
+            (superchat--load-user-commands)
+            (superchat-timer-disarm-all)))))))
 
 (ert-deftest ract/a-message-built-for-later-says-who-started-it ()
   "The request composed for the queue carries the same name."

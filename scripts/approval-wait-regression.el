@@ -75,9 +75,19 @@
                (superchat-tape-replay-events session)))
 
 (defun aw--shown (view)
-  "Return everything VIEW shows the user."
+  "Return everything VIEW shows the user.
+A `display' string stands for the text under it, as a question's lines do."
   (with-current-buffer view
-    (buffer-substring-no-properties (point-min) (point-max))))
+    (let ((pos (point-min)) (out nil))
+      (while (< pos (point-max))
+        (let ((display (get-char-property pos 'display))
+              (next (next-single-char-property-change pos 'display)))
+          (push (if (stringp display)
+                    display
+                  (buffer-substring-no-properties pos next))
+                out)
+          (setq pos next)))
+      (apply #'concat (nreverse out)))))
 
 (defun aw--clock (run)
   "Return (ARMED-P . SECONDS-LEFT) of RUN's inactivity timer."

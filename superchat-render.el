@@ -1476,73 +1476,86 @@ When TAPE-ID is non-nil, reuse that Runtime event for history."
      :independent-turn)
     (superchat--refresh-prompt)))
 
+(defun superchat--response-region--insert-notice
+    (content owned-response-marker transcript-owner)
+  "Insert the notice CONTENT in the current View, leaving point after it."
+  (let* ((state (superchat--response-region--state-for-owner transcript-owner transcript-owner))
+         (inhibit-read-only t))
+    (superchat--response-region--publish-state state transcript-owner)
+    (when (and (markerp owned-response-marker)
+               (eq owned-response-marker (plist-get state :status-marker))
+               (marker-position owned-response-marker))
+      (superchat--response-region-clear-status (plist-get state :owner)))
+    (let* ((assistant-active
+            (superchat--response-region--state-active-p state))
+           (response-active
+            (or assistant-active
+                (superchat--response-region--state-marker-position
+                 state :status-marker)))
+         (persistent-marker
+          (plist-get state :persistent-marker))
+           (prompt-line-position
+            (superchat--response-region--prompt-line-position state))
+           (insert-marker
+            (and response-active
+                 (null persistent-marker)
+                 (copy-marker
+                  (if assistant-active
+                      (superchat--response-region--assistant-tail-position
+                       state)
+                    (or prompt-line-position (point-max)))
+                  nil)))
+           (system-text
+            (propertize (format "* System: %s" content)
+                        'face 'italic)))
+      ;; The first notice during a Run establishes the boundary.  Later
+      ;; notices are appended immediately before the prompt, after the
+      ;; already-recorded notice block, while the boundary remains before
+      ;; all of them.
+      (when insert-marker
+        (plist-put state :persistent-marker insert-marker)
+        (setq persistent-marker insert-marker)
+        (when assistant-active
+          ;; The assistant region and notice boundary start at the same
+          ;; position.  Keep a separate moving end marker for stream
+          ;; writes; the notice boundary itself stays before the notice
+          ;; text until the round is closed.
+          (plist-put state :assistant-end
+                     (copy-marker (marker-position insert-marker) nil))))
+      (when persistent-marker
+        (set-marker-insertion-type persistent-marker nil))
+      (goto-char (if insert-marker
+                     insert-marker
+                     (or prompt-line-position (point-max))))
+      (unless (bolp) (insert "\n"))
+      (insert system-text "\n")
+      (unless (superchat--response-region--state-marker-position
+               state :prompt-marker)
+        (superchat--response-region-ensure-view-prompt))
+      (superchat--response-region--publish-state state transcript-owner))))
+
 (defun superchat--response-region-insert-persistent
     (content &optional owned-response-marker transcript-owner)
   "Insert persistent system CONTENT before the current prompt.
 When an assistant region is active, keep a boundary before the notice block so
 later chunks and tool records remain in that Run's transcript.  Only
 OWNED-RESPONSE-MARKER may consume a transient status line, and only when it is
-still the buffer's current response marker."
+still the buffer's current response marker.
+
+Once the View has an input area the cursor stays on the text it was on, so
+someone typing or reading further up goes on where they were."
   (let* ((target-name (and (stringp superchat-buffer-name)
                            superchat-buffer-name))
          (buffer (if target-name
                      (get-buffer-create target-name)
                    (current-buffer))))
     (with-current-buffer buffer
-      (let* ((state (superchat--response-region--state-for-owner transcript-owner transcript-owner))
-             (inhibit-read-only t))
-        (superchat--response-region--publish-state state transcript-owner)
-        (when (and (markerp owned-response-marker)
-                   (eq owned-response-marker (plist-get state :status-marker))
-                   (marker-position owned-response-marker))
-          (superchat--response-region-clear-status (plist-get state :owner)))
-        (let* ((assistant-active
-                (superchat--response-region--state-active-p state))
-               (response-active
-                (or assistant-active
-                    (superchat--response-region--state-marker-position
-                     state :status-marker)))
-             (persistent-marker
-              (plist-get state :persistent-marker))
-               (prompt-line-position
-                (superchat--response-region--prompt-line-position state))
-               (insert-marker
-                (and response-active
-                     (null persistent-marker)
-                     (copy-marker
-                      (if assistant-active
-                          (superchat--response-region--assistant-tail-position
-                           state)
-                        (or prompt-line-position (point-max)))
-                      nil)))
-               (system-text
-                (propertize (format "* System: %s" content)
-                            'face 'italic)))
-          ;; The first notice during a Run establishes the boundary.  Later
-          ;; notices are appended immediately before the prompt, after the
-          ;; already-recorded notice block, while the boundary remains before
-          ;; all of them.
-          (when insert-marker
-            (plist-put state :persistent-marker insert-marker)
-            (setq persistent-marker insert-marker)
-            (when assistant-active
-              ;; The assistant region and notice boundary start at the same
-              ;; position.  Keep a separate moving end marker for stream
-              ;; writes; the notice boundary itself stays before the notice
-              ;; text until the round is closed.
-              (plist-put state :assistant-end
-                         (copy-marker (marker-position insert-marker) nil))))
-          (when persistent-marker
-            (set-marker-insertion-type persistent-marker nil))
-          (goto-char (if insert-marker
-                         insert-marker
-                         (or prompt-line-position (point-max))))
-          (unless (bolp) (insert "\n"))
-          (insert system-text "\n")
-          (unless (superchat--response-region--state-marker-position
-                   state :prompt-marker)
-            (superchat--response-region-ensure-view-prompt))
-          (superchat--response-region--publish-state state transcript-owner))))))
+      (if (superchat--response-region--view-prompt)
+          (save-excursion
+            (superchat--response-region--insert-notice
+             content owned-response-marker transcript-owner))
+        (superchat--response-region--insert-notice
+         content owned-response-marker transcript-owner)))))
 
 (defun superchat--insert-persistent-system-message
     (content &optional owned-response-marker)

@@ -31,6 +31,18 @@
 (declare-function superchat--agent-wrap-tools "superchat-agent-loop" (tools &optional preset))
 (declare-function superchat-get-llm-tools "superchat-tools" ())
 (declare-function superchat--collect-llm-tools "superchat-llm" (&optional input tool-names))
+(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace" (session role))
+(declare-function superchat--render-session-view "superchat" (session-id))
+(declare-function superchat-runtime-enqueue-follow-up "superchat-runtime" (session-id request))
+(declare-function superchat-runtime--schedule-dispatch-next "superchat-runtime" (session-id))
+(declare-function superchat--build-chat-request "superchat-dispatcher" (input))
+(declare-function superchat--chat-envelope "superchat-dispatcher" (request))
+(declare-function superchat--chat-execution-scope "superchat-dispatcher" (&optional a b))
+(declare-function superchat--response-region-insert-transcript "superchat-render"
+                  (text owner &optional transcript-owner insert-controls))
+(defvar superchat-automated-input)
+(defvar superchat-execution-scope)
+(defvar superchat--tool-execution-context)
 (defvar superchat--conversation-history)
 (defvar superchat--active-preset)
 (defvar superchat--workspace-binding)
@@ -828,6 +840,11 @@ timer is resumed with less than its original delay."
    (plist-get ctx :actor-id)
    (or (plist-get ctx :task-id) "untracked")))
 
+(defvar superchat--subagent-background nil
+  "Non-nil while a sub-agent that works in the background is being started.
+Such a sub-agent has no parent Run: Runtime cancels a Run's children when the
+Run ends, and this sub-agent is meant to outlive the Run that asked for it.")
+
 (defun superchat--subagent-make-context (preset depth)
   "Create an explicit execution context for PRESET at DEPTH.
 The context replaces the dynamic bindings of the sync runner: async
@@ -850,7 +867,8 @@ call counter survive across the event loop."
                  (plist-get parent-context :session-id))
              t)
             (superchat-approval-set-policy id 'never t)))
-         (parent-run-id (plist-get parent-context :run-id))
+         (parent-run-id (and (not superchat--subagent-background)
+                             (plist-get parent-context :run-id)))
          (workspace
           (or (and parent-context
                    (plist-get parent-context :workspace-id)
@@ -1011,7 +1029,9 @@ they degrade to a sync stub returning a denial string."
            (blocked (lambda (&rest _args) blocked))
            ((not delegate-p) (llm-tool-function tool))
            ((string= name "delegate_to_subagent")
-            (lambda (callback preset task &optional context)
+            ;; A nested delegation stays inside its sub-agent: it has no
+            ;; conversation a background report could come back to.
+            (lambda (callback preset task &optional context _background)
               (let ((superchat--team-id (plist-get ctx :team-id)))
                 (superchat--subagent-run-async
                  preset task context callback (1+ depth)))))
@@ -1212,6 +1232,7 @@ bindings, and Emacs stays interactive while the sub-agent runs."
                                  :work-record (plist-get ctx :work-record)
                                  :parent-session-id
                                  (plist-get ctx :parent-session-id)
+                                 :background superchat--subagent-background
                                  :task task
                                  :callback callback))
                   superchat--subagent-running)
@@ -1486,6 +1507,118 @@ sub-agents are cancelled and their slots read \"[Error: ...]\"."
               (unless (aref results idx)
                 (aset results idx "[Error: superchat-subagent-map timed out]")))))
         (append results nil)))))
+
+;; ── Working in the background ──
+
+(defconst superchat-subagent-report-actor "subagent-report"
+  "The Actor recorded on an execution a background sub-agent's report started.
+The user's conversation asked for the work, so this is not one of the Actors
+whose executions are announced as work nobody watched.")
+
+(defun superchat-subagent-background-entries ()
+  "The running sub-agents that work in the background."
+  (cl-remove-if-not (lambda (entry) (plist-get entry :background))
+                    (superchat-subagent-running)))
+
+(defun superchat-subagent-background-for (session)
+  "The conversation the background sub-agent of SESSION works for, or nil."
+  (let ((entry (superchat--subagent-entry session)))
+    (and (plist-get entry :background)
+         (or (plist-get entry :report-to) "unknown"))))
+
+(defun superchat--subagent-report-view (session)
+  "The conversation buffer of SESSION, opened when it is closed; or nil."
+  (let ((view (or (and (fboundp 'superchat-editor-workspace-buffer)
+                       (ignore-errors
+                         (superchat-editor-workspace-buffer session 'session-view)))
+                  (and (fboundp 'superchat--render-session-view)
+                       (ignore-errors (superchat--render-session-view session))))))
+    (and (buffer-live-p view)
+         (equal session (buffer-local-value 'superchat--session-id view))
+         view)))
+
+(defun superchat--subagent-report-prompt (id preset task report)
+  "The message that hands background sub-agent ID's REPORT to the model."
+  (format "Sub-agent %s (%s), which you started in the background, has finished. Nobody typed this message.
+Task: %s
+
+Report:
+%s
+
+Act on the report as the task requires, and tell the user what matters."
+          id preset task report))
+
+(defun superchat--subagent-queue-report (session id preset task report)
+  "Queue background sub-agent ID's REPORT as a new execution in SESSION.
+It is a follow-up of the conversation: Runtime starts it once the conversation
+is quiet, so it never joins an execution already under way.  Return the queue
+id, or nil when no execution can come of it, which the user is told."
+  (let* ((view (superchat--subagent-report-view session))
+         (queue
+          (when view
+            (with-current-buffer view
+              (let* ((superchat-buffer-name (buffer-name view))
+                     (superchat-execution-scope
+                      (superchat--chat-execution-scope nil view))
+                     (superchat-automated-input
+                      (intern superchat-subagent-report-actor)))
+                (superchat-runtime-enqueue-follow-up
+                 session
+                 (superchat--chat-envelope
+                  (superchat--build-chat-request
+                   (superchat--subagent-report-prompt
+                    id preset task report)))))))))
+    (if (not (stringp queue))
+        (progn
+          (message "superchat: background sub-agent %s finished, but its report could not reach conversation %s"
+                   id session)
+          nil)
+      (ignore-errors
+        (with-current-buffer view
+          (let ((superchat-buffer-name (buffer-name view)))
+            (superchat--response-region-insert-transcript
+             (format "\n* Sub-agent %s reported\n" id)
+             :independent-turn))))
+      (superchat-runtime--schedule-dispatch-next session)
+      queue)))
+
+(defun superchat-subagent-start-background (callback preset task &optional context)
+  "Start sub-agent PRESET on TASK in the background and answer CALLBACK at once.
+CALLBACK is the tool call's own: it gets the sub-agent's id, or the reason
+nothing was started.  The report later starts a new execution in the
+conversation that asked (`superchat--subagent-queue-report')."
+  (let ((session (or (plist-get (bound-and-true-p superchat--tool-execution-context)
+                                :session-id)
+                     (bound-and-true-p superchat--session-id)))
+        (limit (max 1 superchat-subagent-parallel-max)))
+    (cond
+     ((not (stringp session))
+      (funcall callback "[Error: a background sub-agent needs a conversation to report to]"))
+     ((>= (length (superchat-subagent-background-entries)) limit)
+      (funcall callback
+               (format "[Error: %d background sub-agents are already running, the limit; wait for a report or delegate without background]"
+                       limit)))
+     (t
+      (let* (id returned early-report
+                (superchat--subagent-background t))
+        (setq id
+              (superchat--subagent-run-async
+               preset task context
+               (lambda (report)
+                 (if returned
+                     (superchat--subagent-queue-report
+                      session id preset task report)
+                   ;; Over before the call returned: it is the call's result.
+                   (setq early-report report)))))
+        (setq returned t)
+        (when (stringp id)
+          (when-let* ((entry (superchat--subagent-entry id)))
+            (setcdr (assoc id superchat--subagent-running)
+                    (plist-put entry :report-to session))))
+        (funcall callback
+                 (or early-report
+                     (format "Started sub-agent %s in the background. Its report arrives later as a new message in this conversation; do not wait for it and do not poll. Go on with whatever else there is, or end your turn."
+                             id))))))))
 
 ;; ── Progress placeholders (async delegation) ──
 

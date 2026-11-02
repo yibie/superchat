@@ -460,15 +460,28 @@ Nil unless ROOT holds a `.jj' directory and jj answers; never signals."
 work again unless the user's message or the current work record asks for it."
   "What a request with a current record says about the turns before it (K9).")
 
+(defun superchat-work--of-another-background-p (record session-id)
+  "Non-nil when RECORD began in a conversation nobody opened, not SESSION-ID.
+What such work wrote down does not reach the other conversations' requests."
+  (let ((origin (plist-get record :session-id)))
+    (and (stringp origin)
+         (not (equal origin session-id))
+         (fboundp 'superchat-view-session-configuration)
+         (plist-get (superchat-view-session-configuration origin) :background))))
+
 (defun superchat-work-request-text (session-id)
   "The Work Record text of a request from SESSION-ID, or nil.
 The current record in full, then this Workspace's other open and recently
-completed records by status, one line each; never another Workspace's (K8)."
+completed records by status, one line each; never another Workspace's (K8), and
+none that began in a conversation nobody opened."
   (when-let* ((workspace (superchat-work--workspace session-id)))
     (let* ((records (superchat-work-records (car workspace)))
            (current (superchat-work-current session-id workspace))
-           (others (cl-remove current records
-                              :key (lambda (r) (plist-get r :id)) :test #'equal))
+           (others (cl-remove-if
+                    (lambda (r)
+                      (or (equal current (plist-get r :id))
+                          (superchat-work--of-another-background-p r session-id)))
+                    records))
            (week-ago (- (float-time) (* 7 86400)))
            (groups
             (list (cons "Continuable" (cl-remove-if-not
@@ -743,11 +756,12 @@ by itself (`Tries'); everywhere else the user reads only how it stands."
 
 ;;;; Waking a record whose time has come (K10, T4) ------------------------------------
 
-(declare-function superchat-workspace-new-conversation "superchat" (workspace))
+(declare-function superchat-workspace-new-conversation "superchat"
+                  (workspace &optional background))
 (declare-function superchat-view-workspace-session-ids "superchat-tape-view" (workspace-id))
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
                   (session-id role &optional create))
-(declare-function superchat--insert-persistent-system-message "superchat-render" (text))
+(declare-function superchat-butler-cut-off "superchat-butler" (session run))
 (declare-function superchat-send-input "superchat-dispatcher" ())
 (declare-function superchat-runtime-status "superchat-runtime" (run-id))
 (defvar superchat-buffer-name)
@@ -913,10 +927,11 @@ most `superchat-work-wake-retry-limit' times in one Emacs."
 
 (defun superchat-work-wake (record)
   "Take RECORD up again in a new conversation of its Workspace; return the View.
-Records `work.woken' first, naming the Workspace's main conversation; clears
-the wait; makes RECORD the new conversation's current record; sends the wake
+Nobody opened that conversation, so it is not the Workspace's main one and is
+not recalled from.  Records `work.woken' first, naming the main conversation;
+clears the wait; makes RECORD the new conversation's current record; sends the wake
 message.  When sending signals, the wait is put back, so the record is due
-again.  When that execution ends, a line is left in the main conversation."
+again.  When that execution ends, the butler says so."
   (let* ((id (plist-get record :id))
          (waiting (plist-get record :waiting))
          (until (plist-get waiting :until))
@@ -925,7 +940,7 @@ again.  When that execution ends, a line is left in the main conversation."
                           :root (plist-get record :workspace-root)))
          (main (or (car (superchat-view-workspace-session-ids (plist-get workspace :id)))
                    (plist-get record :session-id)))
-         (view (superchat-workspace-new-conversation workspace))
+         (view (superchat-workspace-new-conversation workspace t))
          (session (buffer-local-value 'superchat--session-id view))
          (sent nil))
     (superchat-work--append session "work.woken"
@@ -969,9 +984,9 @@ A Run sealed as abandoned after a restart did not end; it was cut off."
 
 (defun superchat-work--report-cut-off (record)
   "Report RECORD's wakes whose execution an earlier Emacs never finished.
-Such an execution is on the Tape, this Emacs does not know it, and the main
-conversation was never told.  It is recorded as interrupted and not started
-again; return non-nil when something was reported."
+Such an execution is on the Tape, this Emacs does not know it, and nobody was
+told.  It is recorded as interrupted and not started again, and the butler says
+so; return non-nil when something was reported."
   (let (reported)
     (dolist (wake (plist-get record :wakes))
       (let* ((session (plist-get wake :session))
@@ -991,15 +1006,11 @@ again; return non-nil when something was reported."
               (superchat-work--append
                session "work.outcome" (format "Work record %s: interrupted" id)
                (list :work-id id :run-id run :outcome "interrupted")))
-            (superchat-work--append main "work.reported" line
+            (superchat-work--append session "work.reported" line
                                     (list :work-id id :run-id run :conversation session))
-            (when-let* ((view (and (fboundp 'superchat-editor-workspace-buffer)
-                                   (superchat-editor-workspace-buffer main 'session-view)))
-                        ((buffer-live-p view)))
-              (ignore-errors
-                (let ((superchat-buffer-name (buffer-name view)))
-                  (with-current-buffer view
-                    (superchat--insert-persistent-system-message line)))))
+            (unless ended
+              (when (fboundp 'superchat-butler-cut-off)
+                (ignore-errors (superchat-butler-cut-off session run))))
             (setq reported t)))))
     reported))
 
@@ -1038,27 +1049,21 @@ armed for it."
 
 
 (defun superchat-work--report-woken (run status)
-  "When the execution RUN of a woken record ends, note it in the main conversation.
-Which record RUN took up, and where to say so, is read from the `work.woken'
-fact of RUN's conversation, so it holds across an Emacs restart."
+  "When the execution RUN of a woken record ends, note it on its own Tape.
+Which record RUN took up is read from the `work.woken' fact of RUN's
+conversation, so it holds across an Emacs restart.  What the user is told is the
+butler's line and doorbell; nothing is written in the main conversation."
   (let ((session (plist-get status :session-id)))
     (dolist (record (superchat-work-records))
-      (when-let* ((wake (cl-find session (plist-get record :wakes)
-                                 :key (lambda (w) (plist-get w :session)) :test #'equal))
-                  (main (plist-get wake :main))
+      (when-let* (((cl-find session (plist-get record :wakes)
+                            :key (lambda (w) (plist-get w :session)) :test #'equal))
                   ((not (member session (plist-get record :reported)))))
-        (let* ((id (plist-get record :id))
-               (line (format "Work record %s was taken up at its time in conversation %s: %s."
-                             id session (superchat-work-status-text record))))
-          (superchat-work--append main "work.reported" line
-                                  (list :work-id id :run-id run :conversation session))
-          (when-let* ((view (and (fboundp 'superchat-editor-workspace-buffer)
-                                 (superchat-editor-workspace-buffer main 'session-view)))
-                      ((buffer-live-p view)))
-            (ignore-errors
-              (let ((superchat-buffer-name (buffer-name view)))
-                (with-current-buffer view
-                  (superchat--insert-persistent-system-message line))))))))))
+        (let ((id (plist-get record :id)))
+          (superchat-work--append
+           session "work.reported"
+           (format "Work record %s was taken up at its time in conversation %s: %s."
+                   id session (superchat-work-status-text record))
+           (list :work-id id :run-id run :conversation session)))))))
 
 ;;;; The user's answer (slice 9) ------------------------------------------------------
 

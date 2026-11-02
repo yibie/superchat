@@ -51,10 +51,22 @@
    :clean-input (string-trim (or inbound ""))
    :state nil))
 
+(defun superchat-core--quoted-at-p (text position)
+  "Non-nil when POSITION of TEXT lies on a line that starts with `> '.
+Such a line is somebody else's words in the message: a conclusion brought in
+(docs/decisions/accepted/2026-10-31-bringing-a-conclusion-into-your-message.md),
+a mail pasted.  What stands in it triggers nothing."
+  (let* ((newline (cl-position ?\n text :end position :from-end t))
+         (start (if newline (1+ newline) 0))
+         (end (+ start 2)))
+    (and (<= end (length text))
+         (equal "> " (substring text start end)))))
+
 (defun superchat-core--body-token (text sigil name-regexp known-p)
   "Return (NAME . REST) for the first SIGIL token in TEXT that KNOWN-P accepts.
 The token stands alone: the start of TEXT or whitespace before it, whitespace
-or the end of TEXT after it.  NAME-REGEXP matches a name; KNOWN-P is called
+or the end of TEXT after it, and not on a quoted line
+\(`superchat-core--quoted-at-p').  NAME-REGEXP matches a name; KNOWN-P is called
 with one.  A name KNOWN-P refuses stays ordinary text.  REST is TEXT without
 the token."
   (let ((regexp (concat "\\(?:\\`\\|[[:space:]]\\)\\(" (regexp-quote sigil)
@@ -66,7 +78,8 @@ the token."
       (let ((name (match-string 2 text))
             (token-start (match-beginning 1))
             (token-end (match-end 1)))
-        (if (funcall known-p name)
+        (if (and (not (superchat-core--quoted-at-p text token-start))
+                 (funcall known-p name))
             (let ((before (substring text 0 token-start))
                   (after (substring text token-end)))
               (setq found
@@ -108,16 +121,22 @@ That is the name of a live buffer or of an existing file."
 
 (defun superchat-core--annotate-token (text)
   "Return (REST . TARGET) when TEXT holds a `>annotate' standing alone.
+Not on a quoted line (`superchat-core--quoted-at-p').
 REST is TEXT without it.  TARGET is what follows it when that names what to
 annotate: anything in double quotes, or a bare word that is a live buffer's
 name or an existing file's; else nil, and the word stays in REST."
-  (let ((case-fold-search nil))
-    (when (and (stringp text)
-               (string-match
-                (concat "\\(?:\\`\\|[[:space:]]\\)\\(>annotate\\)"
+  (let ((case-fold-search nil)
+        (regexp (concat "\\(?:\\`\\|[[:space:]]\\)\\(>annotate\\)"
                         "\\(?:[ \t]+\\(\"[^\"\n]+\"\\|[^[:space:]]+\\)\\)?"
-                        "\\(?:[[:space:]]\\|\\'\\)")
-                text))
+                        "\\(?:[[:space:]]\\|\\'\\)"))
+        (start 0)
+        found)
+    (when (stringp text)
+      (while (and (not found) (string-match regexp text start))
+        (if (superchat-core--quoted-at-p text (match-beginning 1))
+            (setq start (match-end 1))
+          (setq found t))))
+    (when found
       (let* ((token-start (match-beginning 1))
              (word (match-string 2 text))
              (target (cond ((null word) nil)
@@ -179,6 +198,9 @@ docs/decisions/proposed/2026-10-10-triggers-anywhere-in-the-message.md."
     (unless (superchat-turn-skill turn)
       (let ((ci (superchat-turn-clean-input turn)))
         (if-let* ((parsed (and (fboundp 'superchat-skills-parse-input)
+                               ;; A message opening with a quote is not a skill.
+                               (not (and (stringp ci)
+                                         (superchat-core--quoted-at-p ci 0)))
                                (superchat-skills-parse-input ci))))
             (progn
               (setf (superchat-turn-skill turn) (car parsed))

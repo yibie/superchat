@@ -189,9 +189,10 @@ window and moves the cursor into it, with no key needed (M10 record, amended
       (should (buffer-modified-p (get-file-buffer a)))
       (should (equal "one\n" (review--disk a))))))
 
-(ert-deftest review/after-run/waits-while-the-minibuffer-is-in-use ()
-  "When the screen appears while the minibuffer is in use, it is shown but
-not selected; the cursor goes to it once the minibuffer is done."
+(ert-deftest review/after-run/leaves-the-cursor-while-the-minibuffer-is-in-use ()
+  "When the screen appears while the minibuffer is in use, it is shown but not
+selected, and stays so when the minibuffer is done: the user's hands are busy
+(docs/decisions/accepted/2026-10-31-what-you-type-lands-where-you-type.md)."
   (let* ((busy t)
          (real (symbol-function 'active-minibuffer-window)))
     (cl-letf (((symbol-function 'active-minibuffer-window)
@@ -201,9 +202,8 @@ not selected; the cursor goes to it once the minibuffer is done."
         (should (eq selected (selected-window)))
         (setq busy nil)
         (run-hooks 'minibuffer-exit-hook)
-        (should (smoke--wait (lambda () (eq (window-buffer (selected-window))
-                                            (review--buffer)))
-                             5))))))
+        (sit-for 0.05)
+        (should (eq selected (selected-window)))))))
 
 (ert-deftest review/after-run/q-gives-the-cursor-back ()
   "When the review ends, the cursor is back in the window it was in before

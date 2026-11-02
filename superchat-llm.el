@@ -2425,6 +2425,10 @@ left alone."
         ;; separate [Tool call ...] markers, even for eval_elisp.
         (not (and (equal (car entry) "eval_elisp")
                   (string-prefix-p "Error: evaluating expression:" message)))
+        ;; Nor is what a command printed: "Permission denied" from the first run
+        ;; of a timer's command is the model's to correct (measured 2026-11-01).
+        (not (and (equal (car entry) "timer_create")
+                  (string-prefix-p "Error: Its first run failed:" message)))
         (string-match-p
          "\\b\\(?:refused\\|declined\\|cancelled\\|canceled\\|denied\\|blocked\\)\\b"
          message))))

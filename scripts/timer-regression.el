@@ -90,6 +90,15 @@
 
 (defun wtimer--session (view) (hm--session view))
 
+(defun wtimer--home (text)
+  "The conversation the task with TEXT runs in, once it has fired."
+  (cl-some (lambda (row)
+             (cl-destructuring-bind (session type payload) row
+               (and (equal type "timer.fired")
+                    (equal text (alist-get 'text payload))
+                    session)))
+           (superchat-timer--rows)))
+
 (defvar superchat--tool-execution-context)
 
 (defmacro wtimer--as (session &rest body)
@@ -189,21 +198,25 @@
       (superchat-timer-catch-up)
       (should (equal '("stretch") (wtimer--fired-in session))))))
 
-(ert-deftest timer/a-task-starts-the-model-in-the-main-conversation ()
+(ert-deftest timer/a-task-starts-the-model-in-its-own-conversation ()
   (wtimer--with '((:text "TASK-ANSWER")) (p)
     (let* ((view (with-current-buffer (wtimer--file p) (superchat)))
            (session (wtimer--session view)))
       (superchat-timer-create session 'task "TASK-MARKER list today's agenda"
                               (+ wtimer--now 60))
       (setq wtimer--now (+ wtimer--now 60))
-      (let ((fired (car (superchat-timer-catch-up))))
+      (let* ((fired (car (superchat-timer-catch-up)))
+             (home (plist-get fired :session-id)))
         (should (stringp (plist-get fired :run-id)))
-        (wtimer--settled))
-      (should (= 1 (length hm--wires)))
-      (should (string-match-p "TASK-MARKER"
-                              (mapconcat #'hm--text (hm--wire 1) "\n")))
-      (should (= 1 (length (hm--events session "intent.received"))))
-      (should (equal '("TASK-MARKER list today's agenda") (wtimer--fired-in session))))))
+        (wtimer--settled)
+        (should (= 1 (length hm--wires)))
+        (should (string-match-p "TASK-MARKER"
+                                (mapconcat #'hm--text (hm--wire 1) "\n")))
+        (should-not (equal session home))
+        (should (= 1 (length (hm--events home "intent.received"))))
+        (should (equal '("TASK-MARKER list today's agenda") (wtimer--fired-in home)))
+        (should-not (hm--events session "intent.received"))
+        (should-not (wtimer--fired-in session))))))
 
 (ert-deftest timer/the-notes-never-reach-the-model ()
   (wtimer--with '((:text "ok")) (p)

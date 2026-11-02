@@ -150,7 +150,7 @@
 
 (ert-deftest shared-resource/remounting-does-not-grant-another-try ()
   (wtimer--with nil (p)
-    (let ((session (cdr (tsf--task p "SHRES-RETRY")))
+    (let ((_task (tsf--task p "SHRES-RETRY"))
           (superchat-timer-retry-limit 0)
           (tries 0))
       (clrhash superchat-timer--retries)
@@ -161,11 +161,11 @@
         (superchat-plugin-unmount 'timers)
         (superchat-plugin-mount 'timers)
         (should-not (smoke--wait (lambda () (> tries 1)) 0.5))
-        (should (= 1 (tsf--count session "timer.sending")))))))
+        (should (= 1 (tsf--count (wtimer--home "SHRES-RETRY") "timer.sending")))))))
 
 (ert-deftest shared-resource/remounting-does-not-skip-the-wait ()
   (wtimer--with nil (p)
-    (let ((session (cdr (tsf--task p "SHRES-WAIT")))
+    (let ((_task (tsf--task p "SHRES-WAIT"))
           (superchat-timer-retry-limit 2)
           (tries 0))
       (clrhash superchat-timer--retries)
@@ -180,7 +180,7 @@
         (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
         (superchat-timer-retry-tasks)
         (should (= tries 2))
-        (should (= 2 (tsf--count session "timer.sending")))))))
+        (should (= 2 (tsf--count (wtimer--home "SHRES-WAIT") "timer.sending")))))))
 
 ;;;; FR-08: an acquire that fails holds nothing -------------------------------
 

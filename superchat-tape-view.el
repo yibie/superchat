@@ -59,6 +59,10 @@ MAX-ID signals, as the Lisp-side id comparison it replaces did."
   "Return the latest anchor entry for SESSION-ID, or nil."
   (superchat-db-tape-last-anchor session-id))
 
+(defconst superchat-butler-session-id "butler"
+  "The Session holding the butler's lines.
+It has no conversation to open, so it is not among the known Sessions.")
+
 (defun superchat-view-session-ids ()
   "Return known Tape session ids, most recently active first."
   (mapcar
@@ -66,25 +70,30 @@ MAX-ID signals, as the Lisp-side id comparison it replaces did."
    (superchat-db-tape-select
     "SELECT session_id, MAX(id) AS last_id
      FROM tape
+     WHERE session_id <> ?
      GROUP BY session_id
-     ORDER BY last_id DESC")))
+     ORDER BY last_id DESC"
+    (list superchat-butler-session-id))))
 
 (defun superchat-view-workspace-session-ids (workspace-id)
   "Return the Sessions bound to WORKSPACE-ID, most recently active first.
 A Session counts when the last `workspace.bound' or `workspace.unbound' fact
 on its Tape binds it to exactly WORKSPACE-ID; the id is compared whole.
+A conversation nobody opened (`conversation.background') does not count.
 Activity is the Session's newest Tape row of any kind, so a Workspace's
 main conversation is the first element and no pointer to it is stored.
 Nil when WORKSPACE-ID is not a non-empty string."
   (when (and (stringp workspace-id) (not (string-empty-p workspace-id)))
     (let ((bound-to (make-hash-table :test #'equal))
+          (background (make-hash-table :test #'equal))
           sessions)
       (dolist (row (superchat-db-tape-select
                     "SELECT session_id, meta
                      FROM tape
                      WHERE kind = 'system'
                        AND (meta LIKE '%workspace.bound%'
-                            OR meta LIKE '%workspace.unbound%')
+                            OR meta LIKE '%workspace.unbound%'
+                            OR meta LIKE '%conversation.background%')
                      ORDER BY id ASC"))
         (let* ((meta (ignore-errors
                        (superchat-tape-read-json-alist (or (nth 1 row) "")
@@ -98,9 +107,12 @@ Nil when WORKSPACE-ID is not a non-empty string."
                        payload '(workspace_id workspace-id id))
                       bound-to))
             ("workspace.unbound"
-             (puthash (nth 0 row) nil bound-to)))))
+             (puthash (nth 0 row) nil bound-to))
+            ("conversation.background"
+             (puthash (nth 0 row) t background)))))
       (maphash (lambda (session id)
-                 (when (equal id workspace-id)
+                 (when (and (equal id workspace-id)
+                            (not (gethash session background)))
                    (push session sessions)))
                bound-to)
       (when sessions
@@ -315,6 +327,8 @@ rebuilt View hides replaced turns."
       ("workspace.unbound"
        (setq config (plist-put config :workspace-id nil))
        (setq config (plist-put config :workspace-root nil)))
+      ("conversation.background"
+       (setq config (plist-put config :background t)))
       ;; Permission levels.  The keys are absent until a Session selects a
       ;; value, so the effective value falls back to the configured default.
       ("permission.level"

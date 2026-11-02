@@ -403,6 +403,7 @@ The operation never rewrites a terminal entry, calls finish, or appends Tape."
                      :context-used :context-limit :context-limit-source
                      :context-estimated-p
                      :input-tokens :output-tokens
+                     :total-input-tokens :total-output-tokens
                      :runtime-selected-tools :runtime-tool-decision))
         (when (plist-member entry key)
           (setq status (plist-put status key (plist-get entry key)))))
@@ -4006,6 +4007,14 @@ Absent options preserve legacy behavior; result delivery retains three args."
                              run-id
                              :input-tokens input
                              :output-tokens output
+                             ;; Each is of one request: an execution of many
+                             ;; steps pays for them all.
+                             :total-input-tokens
+                             (+ (or (plist-get current :total-input-tokens) 0)
+                                (or input 0))
+                             :total-output-tokens
+                             (+ (or (plist-get current :total-output-tokens) 0)
+                                (or output 0))
                              :context-used
                              (+ (or input 0) (or output 0))
                              :context-estimated-p

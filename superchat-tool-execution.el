@@ -22,6 +22,9 @@
 (require 'subr-x)
 (require 'superchat-tape)
 
+(declare-function superchat-view-session-configuration "superchat-tape-view" (session-id))
+(declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
+                  (session-id role &optional create))
 (declare-function superchat--agent-run-tool-hooks
                   "superchat-agent-loop" (hooks &rest args))
 (declare-function superchat--extend-timeout "superchat"
@@ -1166,6 +1169,20 @@ path."
               (funcall refuse result)
             (superchat-tool-execution--deliver async callback result)))))))
 
+
+(defun superchat-tool-execution--nobody-there-p (context)
+  "Non-nil when CONTEXT's conversation is one nobody opened and no window shows it.
+A question there would wait for someone who cannot see it, and every later
+occurrence of its task would wait behind it."
+  (let ((session (plist-get context :session-id)))
+    (and (stringp session)
+         (fboundp 'superchat-view-session-configuration)
+         (plist-get (superchat-view-session-configuration session) :background)
+         (not (when-let* ((view (and (fboundp 'superchat-editor-workspace-buffer)
+                                     (superchat-editor-workspace-buffer session 'session-view)))
+                          ((buffer-live-p view)))
+                (get-buffer-window view t))))))
+
 (defun superchat-tool-execution--invoke-body
     (tool-name original-fn args context execution-id
                async callback &optional refuse)
@@ -1345,6 +1362,9 @@ that must be asked about goes to the approval seam."
                                         (plist-get context :run-id))))
                              "The user cannot be asked: this conversation's window is closed. Go on without the answer, or end by saying what you need to know"
                            "Untrusted human input operation"))
+                    (and trusted-input
+                         (superchat-tool-execution--nobody-there-p context)
+                         "The user cannot be asked: nobody has this conversation open. Go on without the answer, or end by saying what you need to know")
                     (and trusted-input
                          (not (and (= (length args) 1) (stringp (car args))
                                    (not (string-empty-p (string-trim (car args))))))

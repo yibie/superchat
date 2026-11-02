@@ -33,6 +33,12 @@ Return (MAIN-SESSION . RECORD-ID)."
     (setq wrec--now (+ wrec--now 120))
     (cons main id)))
 
+(defun wwf--reported ()
+  "The `work.reported' facts of every record: they lie on the woken conversation."
+  (cl-loop for record in (superchat-work-records)
+           append (cl-loop for session in (plist-get record :reported)
+                           append (wrec--facts session "work.reported"))))
+
 (defun wwf--wake-prompts (id)
   "How many provider requests so far carry the wake message of record ID."
   (cl-count-if
@@ -149,7 +155,7 @@ must still be taken up in the same scan."
 
 (ert-deftest work-wake-fault/the-report-survives-losing-the-in-memory-link ()
   "The execution was accepted, then the table linking it to its record was
-lost (Emacs restarted while it ran).  The main conversation is still told."
+lost (Emacs restarted while it ran).  It is still reported."
   (wrec--with '((:text "ok")) (p)
     (let ((wrec--now wrec--now))
       (wrec--with-clock
@@ -160,11 +166,11 @@ lost (Emacs restarted while it ran).  The main conversation is still told."
           (when (boundp 'superchat-work--woken-runs)
             (clrhash (symbol-value 'superchat-work--woken-runs)))
           (wrec--settled)
-          (should (= 1 (length (wrec--facts main "work.reported")))))))))
+          (should (= 1 (length (wwf--reported)))))))))
 
 (ert-deftest work-wake-fault/a-failed-execution-is-recorded-as-failed ()
-  "The execution starts and the provider fails: the record says so, and the
-main conversation is told; nothing is started again by itself."
+  "The execution starts and the provider fails: the record says so, and it is
+reported; nothing is started again by itself."
   (wrec--with '((:error (error . "WWF provider down"))) (p)
     (let ((wrec--now wrec--now))
       (wrec--with-clock
@@ -174,10 +180,10 @@ main conversation is told; nothing is started again by itself."
           (should (= 1 (length (superchat-work-wake-due))))
           (wrec--settled)
           (should (equal "failed" (car (last (wrec--outcomes id)))))
-          (should (= 1 (length (wrec--facts main "work.reported"))))
+          (should (= 1 (length (wwf--reported))))
           (should-not (superchat-work-wake-due)))))))
 
-(ert-deftest work-wake-fault/the-main-conversation-is-told-once ()
+(ert-deftest work-wake-fault/a-wake-is-reported-once-and-not-in-the-main-conversation ()
   "A later turn in the woken conversation does not report the wake again."
   (wrec--with '((:text "ok") (:text "ok again")) (p)
     (let ((wrec--now wrec--now))
@@ -186,9 +192,10 @@ main conversation is told; nothing is started again by itself."
                (main (car pair))
                (view (car (superchat-work-wake-due))))
           (wrec--settled)
-          (should (= 1 (length (wrec--facts main "work.reported"))))
+          (should (= 1 (length (wwf--reported))))
+          (should-not (wrec--facts main "work.reported"))
           (hm--turn view "and one more thing")
-          (should (= 1 (length (wrec--facts main "work.reported")))))))))
+          (should (= 1 (length (wwf--reported)))))))))
 
 (ert-deftest work-wake-fault/a-cut-off-wake-is-left-alone-once-the-record-moved-on ()
   "After a wake was cut off, the record was written to from elsewhere.  The
@@ -254,7 +261,7 @@ product does not put the old wait back over that."
 
 (ert-deftest work-wake-fault/an-execution-cut-off-by-emacs-quitting-is-reported-as-interrupted ()
   "The woken execution started and Emacs quit before it ended: its Run is on
-the Tape and this Emacs does not know it.  The main conversation is told, the
+the Tape and this Emacs does not know it.  It is reported, the
 record says its last execution was cut off, and nothing is started again."
   (wrec--with nil (p)
     (let ((wrec--now wrec--now))
@@ -271,10 +278,10 @@ record says its last execution was cut off, and nothing is started again."
                               :actor-id "runtime"
                               :summary "run.started: run-wwf-cut-off")))))
             (should (= 1 (length (superchat-work-wake-due)))))
-          (should (= 0 (length (wrec--facts main "work.reported"))))
+          (should (= 0 (length (wwf--reported))))
           ;; Emacs starts again.
           (superchat-work-arm-all)
-          (let ((reported (wrec--facts main "work.reported")))
+          (let ((reported (wwf--reported)))
             (should (= 1 (length reported)))
             (should (equal "run-wwf-cut-off" (plist-get (car reported) :run-id))))
           (should (equal "interrupted" (car (last (wrec--outcomes id)))))
@@ -283,7 +290,7 @@ record says its last execution was cut off, and nothing is started again."
           (should (= 0 (wwf--wake-prompts id)))
           ;; Told once.
           (superchat-work-arm-all)
-          (should (= 1 (length (wrec--facts main "work.reported")))))))))
+          (should (= 1 (length (wwf--reported)))))))))
 
 (ert-deftest work-wake-fault/a-running-execution-is-not-taken-for-a-cut-off-one ()
   "A scan while the woken execution runs in this Emacs reports nothing."
@@ -295,9 +302,9 @@ record says its last execution was cut off, and nothing is started again."
                (id (cdr pair)))
           (should (= 1 (length (superchat-work-wake-due))))
           (superchat-work-arm-all)
-          (should (= 0 (length (wrec--facts main "work.reported"))))
+          (should (= 0 (length (wwf--reported))))
           (wrec--settled)
-          (should (= 1 (length (wrec--facts main "work.reported"))))
+          (should (= 1 (length (wwf--reported))))
           (should (equal "continuable" (car (last (wrec--outcomes id))))))))))
 
 ;;;; The count and the wait are read before a wake is tried (FR-02) -------------

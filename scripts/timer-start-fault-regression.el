@@ -42,8 +42,9 @@ The clock is then moved to the due time."
 
 (ert-deftest timer-fault/a-started-task-records-its-run ()
   (wtimer--with '((:text "ANSWER")) (p)
-    (let* ((session (cdr (tsf--task p "TSF-A do the thing")))
-           (fired (car (superchat-timer-catch-up))))
+    (let* ((_task (tsf--task p "TSF-A do the thing"))
+           (fired (car (superchat-timer-catch-up)))
+           (session (plist-get fired :session-id)))
       (wtimer--settled)
       (should (stringp (plist-get fired :run-id)))
       (let ((started (hm--events session "timer.started")))
@@ -57,11 +58,11 @@ The clock is then moved to the due time."
 
 (ert-deftest timer-fault/a-task-whose-send-failed-is-started-later-once ()
   (wtimer--with '((:text "ANSWER")) (p)
-    (let* ((pair (tsf--task p "TSF-B do the thing"))
-           (view (car pair)) (session (cdr pair)))
-      (tsf--send-failing
-       (let ((fired (car (superchat-timer-catch-up))))
-         (should-not (plist-get fired :run-id))))
+    (let* ((_pair (tsf--task p "TSF-B do the thing"))
+           (fired (tsf--send-failing (car (superchat-timer-catch-up))))
+           (session (plist-get fired :session-id))
+           (view (superchat-timer--live-view session)))
+      (should-not (plist-get fired :run-id))
       (should (= 0 (length hm--wires)))
       (should (= 1 (length (superchat-timer-unstarted-tasks))))
       ;; The failed send left nothing in the input area.
@@ -91,22 +92,23 @@ The clock is then moved to the due time."
 
 (ert-deftest timer-fault/a-task-fired-before-emacs-exited-starts-on-restart ()
   (wtimer--with '((:text "ANSWER")) (p)
-    (let ((session (cdr (tsf--task p "TSF-C do the thing"))))
+    (let ((_task (tsf--task p "TSF-C do the thing")))
       ;; Emacs exits right after `timer.fired' is written.
       (cl-letf (((symbol-function 'superchat-timer--try-task) #'ignore))
         (superchat-timer-catch-up))
-      (should (= 0 (length hm--wires)))
-      (should (= 0 (tsf--count session "timer.sending")))
-      ;; The restart.
-      (superchat-timer-disarm-all)
-      (should-not (superchat-timer-catch-up))
-      (wtimer--settled)
-      (should (= 1 (length hm--wires)))
-      (should (= 1 (tsf--count session "timer.fired")))
-      (should (= 1 (tsf--count session "timer.started")))
-      (should-not (superchat-timer-catch-up))
-      (wtimer--settled)
-      (should (= 1 (length hm--wires))))))
+      (let ((session (wtimer--home "TSF-C do the thing")))
+        (should (= 0 (length hm--wires)))
+        (should (= 0 (tsf--count session "timer.sending")))
+        ;; The restart.
+        (superchat-timer-disarm-all)
+        (should-not (superchat-timer-catch-up))
+        (wtimer--settled)
+        (should (= 1 (length hm--wires)))
+        (should (= 1 (tsf--count session "timer.fired")))
+        (should (= 1 (tsf--count session "timer.started")))
+        (should-not (superchat-timer-catch-up))
+        (wtimer--settled)
+        (should (= 1 (length hm--wires)))))))
 
 (ert-deftest timer-fault/a-task-waits-while-its-conversation-is-busy ()
   (wtimer--with '((:text "ANSWER")) (p)
@@ -140,7 +142,7 @@ The clock is then moved to the due time."
 
 (ert-deftest timer-fault/a-failing-start-is-retried-a-limited-number-of-times ()
   (wtimer--with nil (p)
-    (let ((session (cdr (tsf--task p "TSF-E do the thing")))
+    (let ((_task (tsf--task p "TSF-E do the thing"))
           (superchat-timer-retry-limit 2))
       (tsf--send-failing
        (superchat-timer-catch-up)
@@ -152,22 +154,24 @@ The clock is then moved to the due time."
          (superchat-timer-retry-tasks))
        ;; The third failure is past the limit: nothing more is scheduled.
        (should-not superchat-timer--retry-timer)
-       (should (= 3 (tsf--count session "timer.sending")))
+       (should (= 3 (tsf--count (wtimer--home "TSF-E do the thing") "timer.sending")))
        ;; And a later retry, whatever caused it, does not try it again.
        (setq wtimer--now (+ wtimer--now (* 10 superchat-timer-retry-seconds)))
        (superchat-timer-retry-tasks)
-       (should (= 3 (tsf--count session "timer.sending")))
+       (should (= 3 (tsf--count (wtimer--home "TSF-E do the thing") "timer.sending")))
        (should-not superchat-timer--retry-timer))
       ;; It is still on record as not started, for the next start of Emacs.
       (should (= 1 (length (superchat-timer-unstarted-tasks))))
-      (should (= 1 (tsf--count session "timer.fired"))))))
+      (should (= 1 (tsf--count (wtimer--home "TSF-E do the thing") "timer.fired"))))))
 
 (ert-deftest timer-fault/a-send-cut-off-by-an-exit-is-reported-not-repeated ()
   (wtimer--with '((:text "ANSWER")) (p)
-    (let* ((pair (tsf--task p "TSF-F do the thing"))
-           (view (car pair)) (session (cdr pair)))
-      (cl-letf (((symbol-function 'superchat-timer--try-task) #'ignore))
-        (superchat-timer-catch-up))
+    (let* ((_pair (tsf--task p "TSF-F do the thing"))
+           (session (progn
+                      (cl-letf (((symbol-function 'superchat-timer--try-task) #'ignore))
+                        (superchat-timer-catch-up))
+                      (wtimer--home "TSF-F do the thing")))
+           (view (superchat-timer--live-view session)))
       ;; Emacs exited inside the send: `timer.sending' is on record, a Run
       ;; started in the conversation, and no `timer.started' says whose.
       (let* ((timer-id (plist-get (plist-get (car (hm--events session "timer.fired"))
@@ -265,12 +269,12 @@ The clock is then moved to the due time."
 (ert-deftest timer-fault/a-busy-task-does-not-carry-a-failing-one-past-its-limit ()
   "The review's N1: one task keeps failing, another's conversation stays busy."
   (wtimer--with nil (p q)
-    (let* ((failing (cdr (tsf--task p "TSF-N1-FAILING")))
-           (busy (cdr (tsf--task q "TSF-N1-BUSY")))
+    (let* ((_failing (tsf--task p "TSF-N1-FAILING"))
+           (_busy (tsf--task q "TSF-N1-BUSY"))
            (superchat-timer-retry-limit 2)
            (tries 0))
       (cl-letf (((symbol-function 'superchat-timer--session-busy-p)
-                 (lambda (session) (equal session busy)))
+                 (lambda (session) (equal session (wtimer--home "TSF-N1-BUSY"))))
                 ((symbol-function 'superchat-send-input)
                  (lambda () (cl-incf tries) (error "start unavailable"))))
         (superchat-timer-catch-up)
@@ -286,9 +290,9 @@ The clock is then moved to the due time."
           (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
           (tsf--fire-retry))
         (should (= 3 tries))
-        (should (= 3 (tsf--count failing "timer.sending")))
+        (should (= 3 (tsf--count (wtimer--home "TSF-N1-FAILING") "timer.sending")))
         ;; The busy task was never sent, and still waits for its conversation.
-        (should (= 0 (tsf--count busy "timer.sending")))
+        (should (= 0 (tsf--count (wtimer--home "TSF-N1-BUSY") "timer.sending")))
         (should (timerp superchat-timer--retry-timer))
         (should (= 2 (length (superchat-timer-unstarted-tasks))))))))
 
@@ -312,13 +316,13 @@ The clock is then moved to the due time."
 (ert-deftest timer-fault/a-task-that-started-has-no-wait-left ()
   "Guard: what a failure set is cleared once the task starts."
   (wtimer--with '((:text "ANSWER")) (p)
-    (let ((session (cdr (tsf--task p "TSF-N1-RECOVERS"))))
+    (let ((_task (tsf--task p "TSF-N1-RECOVERS")))
       (tsf--send-failing (superchat-timer-catch-up))
       (should (= 1 (hash-table-count superchat-timer--not-before)))
       (setq wtimer--now (+ wtimer--now superchat-timer-retry-seconds))
       (superchat-timer-retry-tasks)
       (wtimer--settled)
-      (should (= 1 (tsf--count session "timer.started")))
+      (should (= 1 (tsf--count (wtimer--home "TSF-N1-RECOVERS") "timer.started")))
       (should (= 0 (hash-table-count superchat-timer--not-before)))
       (should (= 0 (hash-table-count superchat-timer--retries))))))
 

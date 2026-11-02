@@ -42,19 +42,20 @@
 
 (defmacro un--with-task (script vars &rest body)
   "Run BODY after a scheduled task came due and its execution ended.
-SCRIPT is the model's; VARS is (SESSION FIRED), bound for BODY."
+SCRIPT is the model's; VARS is (SESSION FIRED), bound for BODY, SESSION to the
+conversation the task ran in."
   (declare (indent 2) (debug t))
   `(wrec--with ,script (p)
      (let* ((now 1800000000.0)
             (superchat-timer-now-function (lambda () now))
-            (superchat-timer-notify-function #'ignore)
-            (,(car vars) (hm--session (wrec--view p))))
+            (superchat-timer-notify-function #'ignore))
        (unwind-protect
            (progn
-             (superchat-timer-create ,(car vars) 'task "UN-TASK do the thing"
-                                     (+ now 60))
+             (superchat-timer-create (hm--session (wrec--view p)) 'task
+                                     "UN-TASK do the thing" (+ now 60))
              (setq now (+ now 60))
-             (let ((,(cadr vars) (car (superchat-timer-catch-up))))
+             (let* ((,(cadr vars) (car (superchat-timer-catch-up)))
+                    (,(car vars) (plist-get ,(cadr vars) :session-id)))
                (wrec--settled)
                ,@body))
          (superchat-timer-disarm-all)))))

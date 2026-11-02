@@ -21,7 +21,9 @@
 (require 'superchat-work)
 (require 'superchat-timer)
 (require 'superchat-changes)
+(require 'superchat-butler)
 
+(declare-function superchat-subagent-background-for "superchat-subagent" (session))
 (declare-function superchat-runtime-active-runs "superchat-runtime" ())
 (declare-function superchat-runtime-status "superchat-runtime" (run-id))
 (declare-function superchat-runtime-cancel "superchat-runtime" (run-id &optional response))
@@ -131,16 +133,32 @@ One that waits for an answer (an approval, a question) is listed as that."
      (let* ((run (plist-get status :run-id))
             (session (plist-get status :session-id))
             (parent (plist-get status :parent-run-id))
-            (asking (superchat-pending--asking-p run)))
+            (asking (superchat-pending--asking-p run))
+            (note (equal "brief" (plist-get status :actor-id)))
+            (look (equal "watch" (plist-get status :actor-id))))
        (superchat-pending--item
         (if asking 'asking 'running) run
         (cond (parent (format "started by execution %s" parent))
+              ;; A rule at work: nobody started it, and nobody waits for it.
+              (look (format "a model looks into %s"
+                            (or (superchat-timer-note-of run) "a compilation that failed")))
+              ;; A model writing what a timer's command is to say: there is no
+              ;; conversation, and no answer it can wait for.
+              (note (format "a model writes the line of %s"
+                            (or (superchat-timer-note-of run) "a timer's command")))
               ;; A goal round: the user's conversation going on by itself.
               ((equal superchat-work-round-actor (plist-get status :actor-id))
                (let ((id (ignore-errors (superchat-work-current session))))
                  (if id
                      (format "going on with work record %s" id)
                    "going on with a work record")))
+              ;; A sub-agent's report: the user's conversation going on.
+              ((equal "subagent-report" (plist-get status :actor-id))
+               "going on with a sub-agent's report")
+              ((and (fboundp 'superchat-subagent-background-for)
+                    (superchat-subagent-background-for session))
+               (format "working in the background for conversation %s"
+                       (superchat-subagent-background-for session)))
               ((superchat-changes--unattended-run-p session run)
                (format "started by Superchat: %s"
                        (superchat-changes--started-by session run nil)))
@@ -151,7 +169,7 @@ One that waits for an answer (an approval, a question) is listed as that."
                         (concat ": " asked)
                       ""))
           (format "execution %s" run))
-        session)))
+        (unless note session))))
    (superchat-pending--live-runs)))
 
 (defun superchat-pending--records-under-way ()
@@ -281,17 +299,38 @@ in `superchat-work-list-show')."
                (* superchat-pending-unconfirmed-days 86400))))))
 
 (defun superchat-pending--timers ()
-  "The timers still to come."
-  (mapcar (lambda (timer)
-            (superchat-pending--item
-             'timer (plist-get timer :id)
-             (superchat-pending--one-line (plist-get timer :text))
-             (format "%s at %s%s"
-                     (plist-get timer :kind)
-                     (superchat-timer-format-time (plist-get timer :next-due))
-                     (if (plist-get timer :repeat) ", repeating" ""))
-             (plist-get timer :session-id)))
-          (superchat-timer-list)))
+  "The timers still to come.
+Of one that runs a command, how it has been going comes first, before what the
+column cuts off: no news must not look like nothing having been checked."
+  (let ((stats (superchat-timer-command-stats)))
+    (append
+     (mapcar (lambda (timer)
+               (superchat-pending--item
+                'timer (plist-get timer :id)
+                (superchat-pending--one-line (plist-get timer :text))
+                (if (plist-get timer :command)
+                    (format "%s; next %s%s: %s"
+                            (superchat-timer-command-stats-words
+                             (gethash (plist-get timer :id) stats))
+                            (superchat-timer-format-time (plist-get timer :next-due))
+                            (if (plist-get timer :repeat) ", repeating" "")
+                            (plist-get timer :command))
+                  (format "%s at %s%s"
+                          (plist-get timer :kind)
+                          (superchat-timer-format-time (plist-get timer :next-due))
+                          (if (plist-get timer :repeat) ", repeating" "")))
+                (plist-get timer :session-id)))
+             (superchat-timer-list))
+     (mapcar (lambda (rule)
+               (superchat-pending--item
+                'timer (plist-get rule :id)
+                (superchat-pending--one-line (plist-get rule :text))
+                (format "%s; when a compilation fails in %s"
+                        (superchat-timer-command-stats-words
+                         (gethash (plist-get rule :id) stats) t)
+                        (plist-get rule :workspace-root))
+                (plist-get rule :session-id)))
+             (superchat-timer-rules)))))
 
 (defun superchat-pending--unseen ()
   "Executions that ended and were not looked at.
@@ -301,7 +340,7 @@ with their conversation closed."
             (superchat-pending--item
              'unseen (plist-get notice :run)
              (plist-get notice :what)
-             (format "%s%s"
+             (format "%s%s%s"
                      (pcase (plist-get notice :status)
                        ((guard (or (plist-get notice :calls-cut-off)
                                    (plist-get notice :calls-stopped)))
@@ -312,7 +351,11 @@ with their conversation closed."
                      (let ((n (plist-get notice :unsaved)))
                        (if (and (numberp n) (> n 0))
                            (format ", %d unsaved when it ended" n)
-                         "")))
+                         ""))
+                     (if-let* ((text (superchat-butler-text-of (plist-get notice :run)))
+                               ((not (string-empty-p text))))
+                         (concat ": " text)
+                       ""))
              (plist-get notice :session)))
           (reverse superchat-changes--notices)))
 
@@ -408,11 +451,19 @@ leaves the list."
        (let ((session (plist-get item :session)))
          (unless (stringp session)
            (user-error "This row has no conversation to go to"))
-         ;; The conversation is shown first: a notice is only forgotten
-         ;; once what it points at was actually reached.
-         (pop-to-buffer (superchat-pending--view session))
-         (when (eq kind 'unseen)
-           (superchat-changes-notice-dismiss (plist-get item :key)))
+         (cond
+          ;; A timer's command has no conversation.
+          ((equal session superchat-butler-session-id)
+           (superchat-butler-show (plist-get item :key)))
+          ;; Nor does the timer that runs it, once there is something to show.
+          ((and (eq kind 'timer) (superchat-timer-last-shown (plist-get item :key)))
+           (superchat-butler-show (superchat-timer-last-shown (plist-get item :key))))
+          (t
+           ;; The conversation is shown first: a notice is only forgotten
+           ;; once what it points at was actually reached.
+           (pop-to-buffer (superchat-pending--view session))
+           (when (eq kind 'unseen)
+             (superchat-changes-notice-dismiss (plist-get item :key)))))
          ;; What was gone to may have left the list: read it again.
          (superchat-pending-refresh))))))
 
@@ -426,13 +477,18 @@ leaves the list."
     (user-error "The row at point is not a work record")))
 
 (defun superchat-pending-stop (item)
-  "Stop the execution of the row at point."
+  "Stop the execution of the row at point, or cancel the timer of the row."
   (interactive (list (tabulated-list-get-id)))
-  (unless (and item (memq (plist-get item :kind) '(running asking)))
-    (user-error "The row at point is not a running execution"))
-  (when (yes-or-no-p (format "Stop execution %s? " (plist-get item :key)))
-    (superchat-runtime-cancel (plist-get item :key))
-    (superchat-pending-refresh)))
+  (pcase (and item (plist-get item :kind))
+    ((or 'running 'asking)
+     (when (yes-or-no-p (format "Stop execution %s? " (plist-get item :key)))
+       (superchat-runtime-cancel (plist-get item :key))
+       (superchat-pending-refresh)))
+    ('timer
+     (when (yes-or-no-p (format "Cancel the timer \"%s\"? " (plist-get item :what)))
+       (superchat-timer-cancel (plist-get item :key))
+       (superchat-pending-refresh)))
+    (_ (user-error "The row at point is neither a running execution nor a timer"))))
 
 (declare-function superchat-approval-open-questions "superchat-approval" ())
 (declare-function superchat-approval-answer "superchat-approval" (handle allow))
@@ -455,6 +511,11 @@ put is answered in its conversation."
                                 :test #'equal))))
     (unless question
       (user-error "This row has no approval to answer here; go to its conversation with RET"))
+    ;; The row cannot hold what would run by itself from now on.
+    (when (and allow
+               (equal "timer_create" (plist-get question :tool-name))
+               (not (yes-or-no-p (format "%s\nAllow it? " (plist-get question :reason)))))
+      (user-error "Nothing was allowed"))
     (prog1 (if (eq allow 'all)
                (superchat-approval-answer-all (plist-get question :handle))
              (superchat-approval-answer (plist-get question :handle) allow))
@@ -484,6 +545,21 @@ Its conversation is switched to the permission level `auto'."
   (superchat-changes-notice-dismiss (plist-get item :key))
   (superchat-pending-refresh))
 
+(defun superchat-pending-bring (item)
+  "Put what the ended work of the row at point concluded in your message.
+Nothing is sent (`superchat-butler-bring')."
+  (interactive (list (tabulated-list-get-id)))
+  (unless (and item (eq 'unseen (plist-get item :kind)))
+    (user-error "Only work that ended has a conclusion to bring in"))
+  (superchat-butler-bring-from-here
+   (or (superchat-butler-line-of (plist-get item :key))
+       ;; An execution of your own, ended with its conversation closed, has no line.
+       (list :run (plist-get item :key)
+             :session (plist-get item :session)
+             :what (plist-get item :what)
+             :ending (plist-get item :detail))))
+  (superchat-pending-refresh))
+
 (defun superchat-pending-refresh ()
   "Read everything again."
   (interactive)
@@ -505,17 +581,21 @@ Its conversation is switched to the permission level `auto'."
     (define-key map (kbd "a") #'superchat-pending-allow-all)
     (define-key map (kbd "d") #'superchat-pending-dismiss)
     (define-key map (kbd "g") #'superchat-pending-refresh)
+    (define-key map (kbd "b") #'superchat-butler)
+    (define-key map (kbd "t") #'superchat-pending-bring)
     map)
   "Keys of the pending list.")
 
 (define-derived-mode superchat-pending-mode tabulated-list-mode "Superchat-Pending"
   "What Superchat is doing and what it waits for, in one list.
 RET goes to the conversation (or the unsaved buffer; for a tool the
-agent wrote that nobody looked at, to its review), v shows a work
-record, k stops a running execution, y and n answer the approval a row
+agent wrote that nobody looked at, to its review; for a timer's command, what it
+printed), v shows a work
+record, k stops a running execution or cancels a timer, y and n answer the approval a row
 asks for, a allows it and stops asking for tools in that conversation, d
 forgets an
-ended one, g reads everything again."
+ended one, t puts what an ended one concluded in your message, g reads everything
+again, b shows what work nobody asked for concluded."
   (setq tabulated-list-format
         [("State" 22 nil) ("What" 44 nil) ("Detail" 52 nil) ("Conversation" 0 nil)])
   (setq tabulated-list-entries #'superchat-pending--entries)

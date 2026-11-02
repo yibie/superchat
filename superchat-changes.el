@@ -349,23 +349,56 @@ has not seen (G27 of the field test, 2026-10-23).")
   "Non-nil in the review buffer; enables its keys in
 `minor-mode-overriding-map-alist'.")
 
-(defvar superchat-changes-review-keys
+(defun superchat-changes-review-narrow (&optional whole-file)
+  "Show only the change at point; \\`W' or \\`g' shows them all again.
+With a prefix argument WHOLE-FILE, show the changes of the whole file.
+`diff-restrict-view' itself ships disabled.  Its question takes the keys that
+come next, and a phrase landing on the screen can answer yes and write to the
+user's init file (measured 2026-10-31)."
+  (interactive "P")
+  (diff-restrict-view whole-file))
+
+(defun superchat-changes--review-keymap ()
+  "Make the keymap of the review screen."
   (let ((map (make-sparse-keymap)))
+    ;; Every printable key does nothing unless it is listed below.  A list of
+    ;; the keys to refuse goes out of date: Emacs 32's `diff-mode' added `u',
+    ;; which reverts a hunk, and someone typing a sentence presses it.
+    (dotimes (i 94)
+      (define-key map (vector (+ 33 i)) #'superchat-changes-review-unavailable))
     (define-key map (kbd "s") #'superchat-changes-review-save)
     (define-key map (kbd "n") #'superchat-changes-review-next)
     (define-key map (kbd "q") #'superchat-changes-review-quit)
     (define-key map (kbd "g") #'superchat-changes-review-refresh)
     (define-key map (kbd "SPC") #'scroll-up-command)
     (define-key map (kbd "DEL") #'scroll-down-command)
-    ;; Keys that would change the source buffer, edit this view, or start a
-    ;; per-block flow the review does not offer: `diff-mode''s hunk
-    ;; application, ediff patching and hunk kills; diffs.el's accept, reject,
-    ;; reset, apply and annotation keys.
-    (dolist (key '("a" "A" "R" "U" "v" "x" "c" "E" "k" "K" "M-k"
+    ;; `diff-mode''s keys that only look or copy: a slip costs a window or a
+    ;; narrowed view, not text.  Named here rather than left to fall through, so
+    ;; that a later meaning of the letter is not reached, and only where this
+    ;; Emacs has the command (`diff-kill-ring-save' is new in Emacs 31).  Its `o'
+    ;; stays refused: it takes the cursor to the source, and the next letters
+    ;; land in the code.
+    (dolist (binding '(("p" . diff-hunk-prev)
+                       ("N" . diff-file-next) ("}" . diff-file-next)
+                       ("P" . diff-file-prev) ("{" . diff-file-prev)
+                       ("<" . beginning-of-buffer) (">" . end-of-buffer)
+                       ("r" . superchat-changes-review-narrow) ("W" . widen)
+                       ("w" . diff-kill-ring-save)
+                       ("h" . describe-mode) ("?" . describe-mode)))
+      (when (commandp (cdr binding))
+        (define-key map (kbd (car binding)) (cdr binding))))
+    ;; The keys that are not typed by accident and would change the source
+    ;; buffer, edit this view, or start a per-block flow the review does not
+    ;; offer: `diff-mode''s and diffs.el's.
+    (dolist (key '("M-k" "M-K"
                    "C-c C-a" "C-c C-c" "C-c C-e" "C-c C-s" "C-c C-r"
-                   "C-c C-d" "C-c C-u" "C-c C-w" "C-c C-n"))
+                   "C-c C-d" "C-c C-u" "C-c C-w" "C-c C-n" "C-c C-l"
+                   "C-c RET a" "C-c RET n" "C-c M-u" "C-x 4 A"))
       (define-key map (kbd key) #'superchat-changes-review-unavailable))
-    map)
+    map))
+
+(defvar superchat-changes-review-keys
+  (superchat-changes--review-keymap)
   "Keys of the review screen.  They take precedence over `diff-mode''s and
 diffs.el's through `minor-mode-overriding-map-alist'.")
 
@@ -500,20 +533,6 @@ The window selected before is where the cursor returns when the review ends."
     (select-window window)
     (discard-input)))
 
-(defun superchat-changes--review-select-after-minibuffer ()
-  "Once the minibuffer in use is done, move the cursor to the review screen."
-  (remove-hook 'minibuffer-exit-hook
-               #'superchat-changes--review-select-after-minibuffer)
-  ;; The exit hook runs while the minibuffer is still up; select just after.
-  (run-at-time 0 nil
-               (lambda ()
-                 (when-let* ((review (get-buffer superchat-changes-review-buffer-name))
-                             (window (get-buffer-window review t)))
-                   (if (active-minibuffer-window)
-                       (add-hook 'minibuffer-exit-hook
-                                 #'superchat-changes--review-select-after-minibuffer)
-                     (superchat-changes--review-select window))))))
-
 (defconst superchat-changes--unattended-actors '("timers" "work-records")
   "The Actors a Run records when Superchat started it at a time.")
 
@@ -540,33 +559,82 @@ holds `work.woken'."
            (setq started t)))))
     (or started (and woken (equal run first)))))
 
-(defun superchat-changes--review-after-run (session run)
-  "Show the review screen for what RUN of SESSION left unsaved and select it.
-While the minibuffer is in use it is shown unselected and selected after.
-An execution Superchat started at a time shows no screen: the user is doing
-something else, and the echo area has already said what is unsaved."
-  (when-let* ((rows (superchat-changes-review-due session run)))
-    (let* ((busy (active-minibuffer-window))
-           (review (superchat-changes-review rows (not busy))))
-      (when review
-        (with-current-buffer review
-          (setq superchat-changes-review--session session)))
-      (when (and review busy)
-        (add-hook 'minibuffer-exit-hook
-                  #'superchat-changes--review-select-after-minibuffer)))))
+(defconst superchat-changes--nobody-waits-actors '("subagent-report")
+  "Actors of executions the user's conversation starts by itself.
+The user asked for the work, so they are not work nobody watched; but nobody
+is waiting for this answer at this moment.")
+
+(declare-function superchat-asker-left-p "superchat-dispatcher" (session))
+
+(defun superchat-changes--conversation-run-p (run)
+  "Non-nil when RUN was started from a conversation.
+One asked from a buffer in place, or run by a workflow, has no place the user
+asked from."
+  (when-let* ((status (and (fboundp 'superchat-runtime-status)
+                           (superchat-runtime-status run))))
+    (eq 'chat (plist-get status :surface))))
+
+(defun superchat-changes--nobody-waits-p (session run)
+  "Non-nil when nobody is waiting for the end of RUN of SESSION.
+Only an execution started from a conversation is judged: one asked from a
+buffer in place, or run by a workflow, is left as it was.  The user waits while
+they can see where they asked from."
+  (when (superchat-changes--conversation-run-p run)
+    (or (member (plist-get (superchat-runtime-status run) :actor-id)
+                superchat-changes--nobody-waits-actors)
+        (and (fboundp 'superchat-asker-left-p)
+             (superchat-asker-left-p session)))))
 
 (defun superchat-changes-review-due (session run)
   "The rows the review screen comes up with after RUN of SESSION ended, or nil.
 Nil when the screen does not come up by itself: it is turned off, Superchat
-started RUN at a time, or RUN left nothing unsaved in a buffer that visits a
-file."
+started RUN at a time, nobody is waiting for RUN any more, or RUN left nothing
+unsaved in a buffer that visits a file."
   (and superchat-changes-review-after-run
        (not (superchat-changes--unattended-run-p session run))
+       (not (superchat-changes--nobody-waits-p session run))
        (cl-remove-if-not
         (lambda (row)
           (let ((buffer (plist-get row :buffer)))
             (and (buffer-live-p buffer) (buffer-file-name buffer))))
         (ignore-errors (superchat-changes-candidates session run)))))
+
+(defcustom superchat-changes-review-quiet-seconds 2
+  "How long no key must have been pressed for the review screen to take the cursor.
+A key typed just after the cursor moved would be a command of the screen."
+  :type 'number
+  :group 'superchat)
+
+(defun superchat-changes--keys-quiet-p ()
+  "Non-nil when nobody pressed a key for `superchat-changes-review-quiet-seconds'.
+A batch Emacs has nobody at the keyboard."
+  (or noninteractive
+      (when-let* ((idle (current-idle-time)))
+        (>= (float-time idle) superchat-changes-review-quiet-seconds))))
+
+(declare-function superchat-asker-busy-p "superchat-dispatcher" (session))
+
+(defun superchat-changes--review-takes-cursor-p (session run)
+  "Non-nil when the review screen for RUN of SESSION may take the cursor.
+Only someone with their hands off the keys gives it up: no key lately, no
+minibuffer in use, and, for an execution started from a conversation, still in
+the buffer they asked from with nothing written in its input area."
+  (and (not (active-minibuffer-window))
+       (superchat-changes--keys-quiet-p)
+       (not (and (superchat-changes--conversation-run-p run)
+                 (fboundp 'superchat-asker-busy-p)
+                 (superchat-asker-busy-p session)))))
+
+(defun superchat-changes--review-after-run (session run)
+  "Show the review screen for what RUN of SESSION left unsaved.
+It takes the cursor only as `superchat-changes--review-takes-cursor-p' says.
+An execution Superchat started at a time shows no screen: the user is doing
+something else, and the echo area has already said what is unsaved."
+  (when-let* ((rows (superchat-changes-review-due session run))
+              (review (superchat-changes-review
+                       rows (superchat-changes--review-takes-cursor-p session run))))
+    (with-current-buffer review
+      (setq superchat-changes-review--session session))))
 
 (defun superchat-changes--review-ended (review how)
   "Tell `superchat-changes-review-ended-functions' that REVIEW ended HOW."
@@ -753,6 +821,8 @@ Besides the list, it opens the review screen once the command has returned."
 (declare-function superchat--render-session-view "superchat" (session-id))
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
                   (session-id role))
+(declare-function superchat-butler-show "superchat-butler" (id))
+(defvar superchat-butler-session-id)
 
 (defvar superchat-changes--notices nil
   "Notices of ended executions Superchat started by itself, newest first.
@@ -786,9 +856,11 @@ Of this Emacs only: the marks on buffers do not outlive it.")
 
 (defconst superchat-changes-notices-buffer-name "*superchat notices*")
 
+(autoload 'superchat-pending "superchat-pending" nil t)
+
 (defvar superchat-changes-notice-mode-line-map
   (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'superchat-changes-notices)
+    (define-key map [mode-line mouse-1] #'superchat-pending)
     map)
   "Keys of the mode line's mark.")
 
@@ -798,18 +870,29 @@ These are what the mode line counts and the notices list shows."
   (cl-remove-if-not (lambda (notice) (eq 'unattended (plist-get notice :origin)))
                     superchat-changes--notices))
 
+(declare-function superchat-approval-open-questions "superchat-approval" ())
+
 (defun superchat-changes--notices-refresh ()
-  "Make the mode line's mark and the open notices list say what is pending."
-  (let ((count (length (superchat-changes--own-notices))))
+  "Make the mode line's mark and the open notices list say what is pending.
+The mark counts the open questions too: one of a conversation nobody is looking
+at is said nowhere else that stays."
+  (let ((count (length (superchat-changes--own-notices)))
+        (asking (if (fboundp 'superchat-approval-open-questions)
+                    (length (superchat-approval-open-questions))
+                  0)))
     (setq superchat-changes-notice-mode-line
-          (and (> count 0)
+          (and (or (> count 0) (> asking 0))
                (propertize
-                (format " [Superchat: %d]" count)
+                (cond ((= asking 0) (format " [Superchat: %d]" count))
+                      ((= count 0) (format " [Superchat: %d asking]" asking))
+                      (t (format " [Superchat: %d asking, %d]" asking count)))
                 'face 'warning
                 'mouse-face 'mode-line-highlight
                 'help-echo
-                "Work Superchat did by itself has ended: mouse-1 or \
-M-x superchat-changes-notices"
+                (if (> asking 0)
+                    "A question waits for your answer: mouse-1 or M-x superchat-pending"
+                  "Work Superchat did by itself has ended: mouse-1 or \
+M-x superchat-pending")
                 'local-map superchat-changes-notice-mode-line-map)))
     (unless (memq 'superchat-changes-notice-mode-line global-mode-string)
       (setq global-mode-string
@@ -820,6 +903,8 @@ M-x superchat-changes-notices"
         (when (derived-mode-p 'superchat-changes-notices-mode)
           (tabulated-list-print t))))
     (force-mode-line-update t)))
+
+(add-hook 'superchat-approval-open-changed-hook #'superchat-changes--notices-refresh)
 
 (defun superchat-changes--unseen-bound ()
   "The storage id below which no execution is left to look at."
@@ -897,12 +982,15 @@ off."
                         created_at,
                         json_extract(meta, '$.payload.\"tool-budget\".action'),
                         json_extract(meta, '$.payload.\"tool-budget\".limit'),
-                        json_extract(meta, '$.payload.\"tool-budget\".reason')
+                        json_extract(meta, '$.payload.\"tool-budget\".reason'),
+                        json_extract(meta, '$.payload.notice'),
+                        json_extract(meta, '$.payload.what')
                  FROM tape
                  WHERE id > ?
                    AND json_extract(meta, '$.event_type') IN
                        ('run.started', 'run.completed', 'run.failed',
-                        'run.cancelled', 'run.seen', 'run.ended-unwatched')
+                        'run.cancelled', 'run.seen', 'run.ended-unwatched',
+                        'command.result')
                  ORDER BY id ASC"
                 (list bound)))
          (runs (make-hash-table :test #'equal))
@@ -911,7 +999,7 @@ off."
          order last unsettled notices)
     (dolist (row rows)
       (cl-destructuring-bind (id session type run actor abandoned ended created
-                                 budget-action budget-limit budget-reason)
+                                 budget-action budget-limit budget-reason notice what)
           row
         (setq last id)
         (pcase type
@@ -935,6 +1023,15 @@ off."
              (superchat-changes--note-calls-cut-off
               run runs budget-action budget-limit budget-reason)))
           ("run.seen" (puthash run t seen))
+          ;; A timer's command has no Run; its result is left to look at when
+          ;; it says so.
+          ("command.result"
+           (when (memq notice '(1 t))
+             (push run order)
+             (puthash run (list :run run :session session :actor actor :began id
+                                :status (and (stringp ended) (intern ended))
+                                :what what :time created)
+                      runs)))
           ;; It says how the Run ended itself: the Run's own rows may lie
           ;; below the bound, which a Run the user started does not hold.
           ("run.ended-unwatched"
@@ -971,10 +1068,11 @@ off."
                                               superchat-changes--unattended-actors)
                                       'unattended
                                     'user)
-                          :what (if (member actor
-                                            superchat-changes--unattended-actors)
-                                    (superchat-changes--started-by session run actor)
-                                  "started by you")
+                          :what (cond
+                                 ((plist-get entry :what))
+                                 ((member actor superchat-changes--unattended-actors)
+                                  (superchat-changes--started-by session run actor))
+                                 (t "started by you"))
                           :status status
                           :calls-cut-off (plist-get entry :calls-cut-off)
                           :calls-stopped (plist-get entry :calls-stopped)
@@ -1120,19 +1218,22 @@ non-nil when the notice is gone."
           (superchat-changes--own-notices)))
 
 (defun superchat-changes-notices-open (run)
-  "Go to the conversation of the execution RUN and forget its notice."
+  "Go to the conversation of the execution RUN and forget its notice.
+A timer's command has no conversation: what it printed is shown."
   (interactive (list (tabulated-list-get-id)))
   (when-let* ((notice (cl-find run superchat-changes--notices
                                :key (lambda (n) (plist-get n :run))
                                :test #'equal))
               (session (plist-get notice :session)))
-    (let ((view (or (and (fboundp 'superchat-editor-workspace-buffer)
-                         (let ((buffer (superchat-editor-workspace-buffer
-                                        session 'session-view)))
-                           (and (buffer-live-p buffer) buffer)))
-                    (superchat--render-session-view session))))
-      (superchat-changes-notice-dismiss run)
-      (pop-to-buffer view))))
+    (if (equal session superchat-butler-session-id)
+        (superchat-butler-show run)
+      (let ((view (or (and (fboundp 'superchat-editor-workspace-buffer)
+                           (let ((buffer (superchat-editor-workspace-buffer
+                                          session 'session-view)))
+                             (and (buffer-live-p buffer) buffer)))
+                      (superchat--render-session-view session))))
+        (superchat-changes-notice-dismiss run)
+        (pop-to-buffer view)))))
 
 (defun superchat-changes-notices-dismiss (run)
   "Forget the notice at point without going anywhere."

@@ -377,14 +377,14 @@
             (should (= 1 (length (plist-get record :woken))))
             (should-not (plist-get record :waiting))
             (should (equal "continuable" (car (last (plist-get record :outcomes))))))
-          ;; The main conversation has a line saying so; the model's words are not in it.
-          (let ((reported (wrec--facts main "work.reported")))
+          ;; It is noted on its own conversation; the main one's Tape and View are
+          ;; left alone, and the butler tells the user.
+          (should-not (wrec--facts main "work.reported"))
+          (let ((reported (wrec--facts session "work.reported")))
             (should (= 1 (length reported)))
             (should (equal session (plist-get (car reported) :conversation))))
-          (should (string-match-p (concat "Work record " (regexp-quote id)
-                                          " was taken up at its time in conversation "
-                                          (regexp-quote session) ": continuable\\.")
-                                  (with-current-buffer main-view (buffer-string))))
+          (should-not (string-match-p "was taken up at its time"
+                                      (with-current-buffer main-view (buffer-string))))
           (should-not (superchat-work-wake-due)))))))
 
 (ert-deftest work-record/a-wait-missed-while-emacs-was-closed-wakes-once-after-loading ()

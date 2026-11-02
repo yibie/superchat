@@ -1424,6 +1424,41 @@ A timer's task and a woken Work Record send their own text through
 the user speaking.  Each binds it to its own name, a symbol, and the Run
 that message starts records that name as the Actor that started it.")
 
+(defvar superchat--asked-from (make-hash-table :test #'equal)
+  "Session id to the buffer the user was in when they last asked in that conversation.
+In memory only: an Emacs that restarted has nobody waiting for an answer.")
+
+(defun superchat--note-asked-from (session)
+  "Remember the buffer the user is in now, as where they asked SESSION from."
+  (puthash session (window-buffer (selected-window)) superchat--asked-from))
+
+(defun superchat-asker-left-p (session)
+  "Non-nil when the user asked in SESSION and can no longer see where they asked.
+That buffer is shown in no window of the selected frame, which also means not
+in this tab.  Going to the code window beside the chat is not leaving, and
+coming back is being there again."
+  (when-let* ((place (gethash session superchat--asked-from)))
+    (not (get-buffer-window place))))
+
+(defun superchat-view-draft-p (view)
+  "Non-nil when the conversation VIEW holds text the user has not sent."
+  (with-current-buffer view
+    (and (markerp superchat--prompt-start)
+         (eq (marker-buffer superchat--prompt-start) view)
+         (not (string-empty-p
+               (string-trim
+                (superchat--strip-leading-user-label
+                 (buffer-substring-no-properties
+                  superchat--prompt-start (point-max)))))))))
+
+(defun superchat-asker-busy-p (session)
+  "Non-nil when the user asked in SESSION and has gone on with something else.
+That is another buffer in the selected window, or a next message being written
+where they asked from."
+  (when-let* ((place (gethash session superchat--asked-from)))
+    (or (not (eq (window-buffer (selected-window)) place))
+        (superchat-view-draft-p place))))
+
 (defun superchat--plan-say-who-started (plan)
   "Have PLAN's Run record which part of Superchat started it, if one did.
 A Run the user started is left with the Actor it always had."
@@ -1487,6 +1522,8 @@ is non-nil.  An error in one does not stop the message.")
                            (not (eq (plist-get status :topology) 'workflow))))
                     (plist-get (superchat-runtime-status-projection) :active-runs))))
              (queue-p (and active-status t)))
+        (unless superchat-automated-input
+          (superchat--note-asked-from session))
         (when (and (null command) (not superchat-automated-input))
           (dolist (fn superchat-user-input-functions)
             (ignore-errors (funcall fn session input))))

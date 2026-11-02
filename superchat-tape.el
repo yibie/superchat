@@ -105,6 +105,9 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
            '("capability.activated" "topology.changed"
              "workspace.bound"
              "workspace.unbound" "extension.activated"
+             ;; A conversation nobody opened: not a Workspace's main one, and
+             ;; not recalled from.
+             "conversation.background"
              ;; Permission levels: the selection and its two knobs.
              "permission.level" "sandbox.mode" "approval.policy"))
    (mapcar (lambda (type) (list :type type :relevance 'session-annotation))
@@ -135,6 +138,14 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "workspace.artifact.removed"
              ;; Timers (M11 slice 4): a timer is these facts.
              "timer.created" "timer.fired" "timer.cancelled"
+             ;; The conversation a timer's task runs in.
+             "timer.home"
+             ;; What work nobody asked for concluded.
+             "butler.line"
+             ;; A conclusion the user put in a message, and which conversation.
+             "butler.brought"
+             ;; What a timer's fixed command printed.
+             "command.result"
              ;; A fired task being sent, its Run, or a start that cannot
              ;; be told after a restart.
              "timer.sending" "timer.started" "timer.unconfirmed"

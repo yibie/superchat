@@ -33,6 +33,7 @@
 (declare-function superchat--subagent-run-async "superchat-subagent" (preset-name task context callback &optional depth))
 (declare-function superchat--subagent-run-parallel-async "superchat-subagent" (specs callback &optional depth placeholder))
 (declare-function superchat--subagent-parse-specs "superchat-subagent" (tasks))
+(declare-function superchat-subagent-start-background "superchat-subagent" (callback preset task &optional context))
 (declare-function superchat--subagent-begin-placeholder "superchat-subagent" (label))
 (declare-function superchat--subagent-end-placeholder "superchat-subagent" (placeholder label report))
 (declare-function superchat--subagent-set-placeholder "superchat-subagent" (id placeholder))
@@ -1463,6 +1464,34 @@ its end and the value is t."
   (when (> seconds 0) (sleep-for seconds))
   t)
 
+(defconst superchat-tools--eval-in-place-surfaces '(inline-act inline-ask)
+  "Surfaces of Runs the user asked for in the buffer they are in.
+Moving the cursor there may be what they asked for.")
+
+(defun superchat-tools--eval-user-cursor ()
+  "The user's cursor as (WINDOW BUFFER MARKER), to be put back after an expression.
+Nil when it is not to be put back: outside a Run, or for a Run the user asked
+for in place.  Only the selected window needs it: a window not selected keeps
+its own point, whatever an expression does to its buffer's."
+  (when-let* ((run (plist-get superchat--tool-execution-context :run-id))
+              (status (and (fboundp 'superchat-runtime-status)
+                           (superchat-runtime-status run)))
+              ((not (memq (plist-get status :surface)
+                          superchat-tools--eval-in-place-surfaces))))
+    (let* ((window (selected-window))
+           (buffer (window-buffer window)))
+      (list window buffer (with-current-buffer buffer (copy-marker (point) t))))))
+
+(defun superchat-tools--eval-put-back-user-cursor (cursor)
+  "Put the user's CURSOR back, unless the expression chose another place.
+Choosing is selecting another window or showing another buffer in this one."
+  (when cursor
+    (pcase-let ((`(,window ,buffer ,marker) cursor))
+      (when (and (eq window (selected-window))
+                 (eq buffer (window-buffer window)))
+        (with-current-buffer buffer (goto-char marker)))
+      (set-marker marker nil))))
+
 (defun superchat-tool-eval-elisp (expression)
   "Evaluate one complete Elisp EXPRESSION and return its value as a string.
 Wrap multiple forms in progn or let.  Parsing finishes before eval runs;
@@ -1510,9 +1539,15 @@ each call through `superchat-tool-execute' numbered under this one, so it
 can read, edit and check in one round trip (decision of 2026-10-26,
 eval_elisp as code mode).  A call there that the level would ask about is
 refused instead (`superchat-tool-execution-cannot-ask'): the question
-could not be answered while the expression runs."
+could not be answered while the expression runs.
+
+The cursor of a user working in the selected window is put back when the
+expression ends (`superchat-tools--eval-user-cursor'): an expression that moves
+point to read a buffer would make what they type next land elsewhere (decision
+of 2026-10-31, what you type lands where you type)."
   (require 'superchat-script)
   (let* ((asked (make-symbol "asked"))
+         (user-cursor (superchat-tools--eval-user-cursor))
          (limit superchat-tool-eval-time-limit)
          (watch (list asked (and limit (> limit 0) (+ (float-time) limit))))
          (superchat-tools--eval-watches (cons watch superchat-tools--eval-watches))
@@ -1617,7 +1652,8 @@ could not be answered while the expression runs."
                                              'time-limit
                                            'user-quit)))
                     (error (superchat-tools--eval-error-result err)))))
-        (superchat-tools--eval-end-watchdog watchdog watch)))
+        (superchat-tools--eval-end-watchdog watchdog watch)
+        (superchat-tools--eval-put-back-user-cursor user-cursor)))
     (superchat-tools--eval-file-report
      (pcase outcome
        (`(:stopped time-limit)
@@ -1630,23 +1666,27 @@ could not be answered while the expression runs."
        (_ outcome))
      file-changes)))
 
-(defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context)
+(defun superchat-tool-delegate-to-subagent-async (callback preset task &optional context background)
   "Asynchronously delegate TASK to sub-agent PRESET.
 CALLBACK receives the report string when the sub-agent completes.
 A progress placeholder is inserted in the chat buffer immediately
 and replaced by the report on completion.  Emacs stays interactive
-throughout."
+throughout.  With BACKGROUND, CALLBACK is answered at once and the report
+starts a new execution in this conversation when it comes
+\(`superchat-subagent-start-background')."
   (if (require 'superchat-subagent nil t)
-      (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
-                     (superchat--subagent-begin-placeholder preset))))
-        (let ((id (superchat--subagent-run-async
-                   preset task context
-                   (lambda (report)
-                     (when (fboundp 'superchat--subagent-end-placeholder)
-                       (superchat--subagent-end-placeholder ph preset report))
-                     (funcall callback report)))))
-          (when (fboundp 'superchat--subagent-set-placeholder)
-            (superchat--subagent-set-placeholder id ph))))
+      (if (and background (not (memq background '(:json-false :false))))
+          (superchat-subagent-start-background callback preset task context)
+        (let ((ph (and (fboundp 'superchat--subagent-begin-placeholder)
+                       (superchat--subagent-begin-placeholder preset))))
+          (let ((id (superchat--subagent-run-async
+                     preset task context
+                     (lambda (report)
+                       (when (fboundp 'superchat--subagent-end-placeholder)
+                         (superchat--subagent-end-placeholder ph preset report))
+                       (funcall callback report)))))
+            (when (fboundp 'superchat--subagent-set-placeholder)
+              (superchat--subagent-set-placeholder id ph)))))
     (funcall callback "Error: sub-agent module is not loaded.")))
 
 (defun superchat-tool-delegate-to-subagent-parallel-async (callback tasks)
@@ -2506,6 +2546,10 @@ Useful after editing tool functions or adding new ones."
                       (list :name "context"
                             :type 'string
                             :description "Relevant context from the main session."
+                            :optional t)
+                      (list :name "background"
+                            :type 'boolean
+                            :description "Run it in the background: this call answers at once, you and the user can go on, and the report arrives later as a new message. Use it for long work you do not need right now; leave it out when your next step needs the report."
                             :optional t))
           :async t
           :function #'superchat-tool-delegate-to-subagent-async)
@@ -2700,17 +2744,25 @@ It reads every conversation of every workspace, not only this one."
 
          (superchat--maybe-make-llm-tool
           "timer_create"
-          :description "Set a timer for the user. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"); kind \"task\" also starts you on the text as a new request in this workspace's conversation (use it for \"every morning give me ...\"; to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\". The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user."
+          :description "Set a timer for the user. kind \"command\" has Superchat itself run one fixed shell command at that time, with no model and no question: prefer it for anything a command can answer by itself (\"tell me when the star count changes\", \"check git status every morning\"). Give the complete command in command, as simple as it can be: it runs exactly as written every time, in the root of this workspace (no cd), so it must work unattended and cannot use anything you saw. Superchat itself compares the output with the last one, so the command only prints the current value: keep no state of its own, and print nothing that changes by itself, such as the time. Let it fail visibly: do not discard its errors (no 2>/dev/null) or end it in a pipe that hides them. The user is asked once to allow it when you set it. Do not try it first: a repeating one runs once right away, the user sees what it prints, and if that fails nothing is set and you are told why, so correct it and set it again. After that the user sees a line only when its output changed or it keeps failing (report_unchanged true: a line every time, for \"give me a brief every morning\"). brief true has a model with no tools write that line from the output in a few sentences, in place of Superchat's own short line: use it when the user asks for a summary or a brief in words, or when the output is a list or a page that is hard to read, not for one number. It costs a model call each time a line is shown, and it never decides whether a line is shown. You are not told the output. Setting the same command again replaces its timer, which is also how to change its time. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"). kind \"task\" starts you on the text as a new request in a conversation of its own, read-only and with nobody there: you can read and report, not change a buffer, run code or ask the user. Use it only for what needs your judgment (to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\"; with repeat, at can be just \"HH:MM\" (\"every morning at 9\" needs no date). If you do not know today's date, a time that has passed is refused with the date. The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user. on \"compile_failed\" sets a rule rather than a time, for \"when a compile fails, find out why\" or \"keep an eye on my builds\": set it right away, without going through the project first. Each time M-x compile fails in this workspace, a separate model that can only read this workspace looks into it by itself, and the user sees a line when it has something to tell. Give what to look for and when to speak, in the user's words, as text, with no time and no command. The user is asked once. It is not for a failure in front of you now: look into that yourself."
           :args (list (list :name "text" :type 'string
-                            :description "What to remind the user of, or the task to do, in the user's language.")
+                            :description "What to remind the user of, the task to do, or what the command checks, in the user's language.")
                       (list :name "kind" :type 'string
-                            :description "reminder or task.")
+                            :description "command, reminder or task.")
                       (list :name "in_minutes" :type 'number
                             :description "Minutes from now." :optional t)
                       (list :name "at" :type 'string
-                            :description "Local time, YYYY-MM-DD HH:MM." :optional t)
+                            :description "Local time, YYYY-MM-DD HH:MM; with repeat also just HH:MM." :optional t)
                       (list :name "repeat" :type 'string
-                            :description "hourly, daily, weekly, or none (the default)." :optional t))
+                            :description "hourly, daily, weekly, or none (the default)." :optional t)
+                      (list :name "command" :type 'string
+                            :description "kind command: the shell command, complete, on one line." :optional t)
+                      (list :name "report_unchanged" :type 'boolean
+                            :description "kind command: true to show a line every time it runs, not only when its output changed." :optional t)
+                      (list :name "brief" :type 'boolean
+                            :description "kind command: true to have a model with no tools write each line from the output, in a few sentences." :optional t)
+                      (list :name "on" :type 'string
+                            :description "compile_failed: start on that event rather than at a time. Give no time and no command." :optional t))
           :function #'superchat-timer-tool-create)
 
          (superchat--maybe-make-llm-tool
@@ -2913,7 +2965,10 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "workspace_read" "workspace_info" "sql" "memory_search" "tool_history"
     "timer_create" "timer_list" "timer_cancel" "elisp_script" "work_record"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
-    "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference")
+    "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference"
+    ;; No request offers it but the one that looks into a failed compilation
+    ;; (`superchat-watch.el'), which makes it itself.
+    "nothing_to_tell")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

@@ -144,7 +144,7 @@
               (wrec--settled)
               (should (stringp (plist-get fired :run-id)))
               (should (superchat-changes--unattended-run-p
-                       session (plist-get fired :run-id)))))
+                       (plist-get fired :session-id) (plist-get fired :run-id)))))
         (superchat-timer-disarm-all)))))
 
 (ert-deftest beside-user/a-woken-records-execution-is-nobodys ()
