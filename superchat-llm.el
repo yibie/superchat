@@ -12,6 +12,7 @@
 (require 'superchat-service)
 (require 'superchat-event)
 (require 'superchat-select-tools)
+(require 'superchat-wire)
 (require 'llm nil t)
 ;; The model port stays UI-free: streaming sinks arrive through the
 ;; Runtime request, and MCP tools are picked up behind `fboundp' when the
@@ -1126,11 +1127,100 @@ as prompt characters and reserved after conversion to tokens."
 (defconst superchat--llm-preflight-safety-factor 1.10
   "Safety margin applied to transport preflight character estimates.")
 
+(defun superchat--llm-prompt-wire-safe (prompt)
+  "Make every text PROMPT carries one a request can carry, in place.
+The system text, each interaction's text and each tool result go through
+`superchat-wire-safe-text'.  A request is built from all of them at once, so
+one character `json-serialize' rejects in any of them means no request: the
+user's message, a context fragment, an earlier turn read from the Tape, text
+a Step put in.  Each came in by its own way, and this is the one place they
+all pass before an attempt.  A text that can already be sent is left as the
+object it is.  Returns PROMPT."
+  (when (and prompt (fboundp 'llm-chat-prompt-interactions))
+    (let ((context (llm-chat-prompt-context prompt)))
+      (when (stringp context)
+        (let ((safe (superchat-wire-safe-text context)))
+          (unless (eq safe context)
+            (setf (llm-chat-prompt-context prompt) safe)))))
+    (dolist (interaction (llm-chat-prompt-interactions prompt))
+      (let ((content (llm-chat-prompt-interaction-content interaction)))
+        (cond
+         ((stringp content)
+          (let ((safe (superchat-wire-safe-text content)))
+            (unless (eq safe content)
+              (setf (llm-chat-prompt-interaction-content interaction) safe))))
+         ((and (fboundp 'llm-multipart-p) (llm-multipart-p content))
+          (let* ((parts (llm-multipart-parts content))
+                 (safe (mapcar #'superchat-wire-safe-text parts)))
+            (unless (cl-every #'eq safe parts)
+              (setf (llm-multipart-parts content) safe))))))
+      (dolist (result (llm-chat-prompt-interaction-tool-results interaction))
+        (let ((text (llm-chat-prompt-tool-result-result result)))
+          (when (stringp text)
+            (let ((safe (superchat-wire-safe-text text)))
+              (unless (eq safe text)
+                (setf (llm-chat-prompt-tool-result-result result) safe))))))))
+  prompt)
+
+(defconst superchat--llm-local-failure-max-chars 600
+  "Most characters of an error's own words kept in a local failure's reason.")
+
+(defun superchat--llm-request-not-encodable-p (err)
+  "Return non-nil when ERR is `json-serialize' rejecting a text of a request."
+  (and (eq (car-safe err) 'wrong-type-argument)
+       (eq (car-safe (cdr err)) 'json-value-p)))
+
+(defun superchat--llm-local-failure (err attempt-reason)
+  "Describe ERR, signalled while an attempt was prepared or dispatched.
+ATTEMPT-REASON is the attempt that did not start.  Returns a plist for the
+Run's terminal fact: `:class' is \"request-not-encodable\" when a text of the
+request cannot be encoded as JSON, else \"request-not-started\"; `:phase' is
+ATTEMPT-REASON's name; `:error-type' the condition's name; `:reason' what to
+tell the user, bounded and itself text a request can carry.  The rejected
+text is quoted by its first characters only: the whole of it is what could
+not be sent, and it goes into the next request's history with this reason."
+  (let* ((not-encodable (superchat--llm-request-not-encodable-p err))
+         (rejected (and not-encodable (car-safe (cddr err))))
+         (words
+          (if not-encodable
+              (if (stringp rejected)
+                  (format "a text in it cannot be encoded as JSON (%d characters, starting %S)"
+                          (length rejected)
+                          ;; Without its properties: `%S' would print a
+                          ;; propertized text as #("..." 0 40 (face ...)).
+                          (superchat-wire-safe-text
+                           (substring-no-properties
+                            rejected 0 (min 40 (length rejected)))))
+                "a value in it cannot be encoded as JSON")
+            (superchat-wire-safe-text
+             (substring-no-properties
+              (condition-case nil
+                  (error-message-string err)
+                (error (format "%s" (car-safe err)))))))))
+    (list :class (if not-encodable
+                     "request-not-encodable"
+                   "request-not-started")
+          :phase (format "%s" attempt-reason)
+          :error-type (format "%s" (car-safe err))
+          :reason (if (> (length words) superchat--llm-local-failure-max-chars)
+                      (concat (substring words 0
+                                         superchat--llm-local-failure-max-chars)
+                              "…")
+                    words))))
+
+(defun superchat--llm-local-failure-text (failure)
+  "Return what a Run that ended with FAILURE shows in place of an answer.
+It names Superchat: the words are the program's, not a provider's and not
+the model's, and the model reads them in the next request's history."
+  (format "[Superchat could not start this request: %s]"
+          (plist-get failure :reason)))
+
 (defun superchat--llm-serialized-attempt (provider prompt streaming)
-  "Return the provider-visible serialization for one PROMPT attempt.
+  "Return the provider-visible serialization for one PROMPT attempt, or nil.
 PROVIDER's own request builder is the primary source so messages, system
 instructions, tool schemas, and provider options have the same shape as the
-request body.  STREAMING must match the pending provider call."
+request body.  STREAMING must match the pending provider call.  Nil when
+neither builder can serialize PROMPT; the caller then measures its text."
   (or
    (when (fboundp 'llm-provider-chat-request)
      (condition-case nil
@@ -1145,8 +1235,53 @@ request body.  STREAMING must match the pending provider call."
               :tools
               (superchat--llm-evidence-tool-records
                (llm-chat-prompt-tools prompt))))
-     (error nil))
-   (prin1-to-string prompt)))
+     (error nil))))
+
+(defconst superchat--llm-prompt-size-max-steps 200000
+  "Most values `superchat--llm-prompt-size' looks at before it stops.")
+
+(defun superchat--llm-prompt-size (prompt)
+  "Return the bytes of text PROMPT carries, counted without serializing it.
+It stands in for the size of a request when no request builder gives one.
+Counted: the system text, every interaction's text, calls and tool results,
+and each tool's name, description and parameters.  A tool's function is not
+looked at: it is a closure over the Run, which cannot be printed.  It
+returns a number whatever PROMPT holds, because nothing that only measures a
+request may end the Run that sends it."
+  (let ((total 0)
+        (steps 0))
+    (condition-case nil
+        (cl-labels
+            ((measure (value)
+               (when (< (cl-incf steps) superchat--llm-prompt-size-max-steps)
+                 (cond
+                  ((stringp value) (cl-incf total (string-bytes value)))
+                  ((null value) nil)
+                  ((symbolp value)
+                   (cl-incf total (string-bytes (symbol-name value))))
+                  ((numberp value) (cl-incf total 8))
+                  ((consp value)
+                   (while (and (consp value)
+                               (< steps superchat--llm-prompt-size-max-steps))
+                     (measure (car value))
+                     (setq value (cdr value)))
+                   (measure value))
+                  ((vectorp value) (mapc #'measure value))
+                  ;; A multipart text, a tool call, a tool result: structs
+                  ;; of plain data.
+                  ((recordp value)
+                   (cl-loop for index from 1 below (length value)
+                            do (measure (aref value index))))))))
+          (measure (llm-chat-prompt-context prompt))
+          (dolist (interaction (llm-chat-prompt-interactions prompt))
+            (measure (llm-chat-prompt-interaction-content interaction))
+            (measure (llm-chat-prompt-interaction-tool-results interaction)))
+          (dolist (tool (llm-chat-prompt-tools prompt))
+            (measure (llm-tool-name tool))
+            (measure (llm-tool-description tool))
+            (measure (llm-tool-args tool))))
+      (error nil))
+    total))
 
 (defun superchat--llm-estimate-context-tokens (provider prompt)
   "Conservatively estimate provider-visible PROMPT tokens.
@@ -1154,13 +1289,16 @@ The estimate is based on the JSON request body produced for PROVIDER, with a
 fixed calibrated character ratio and safety margin.  llm.el's generic
 word-count implementation is not a provider tokenizer and is deliberately
 not used.  The pending attempt's streaming shape is dynamically bound by the
-transport caller."
+transport caller.  When PROMPT cannot be serialized the estimate comes from
+`superchat--llm-prompt-size': it never signals."
   (let* ((serialized
           (superchat--llm-serialized-attempt
            provider prompt superchat--llm-preflight-streaming-p))
          (character-estimate
           (ceiling
-           (/ (length serialized)
+           (/ (if serialized
+                  (length serialized)
+                (superchat--llm-prompt-size prompt))
               superchat--llm-preflight-chars-per-token))))
     (max 1
          (ceiling
@@ -1735,13 +1873,17 @@ request it describes."
             ;; request instead of checking that a receipt was written.
             (when header-id
               ;; `superchat-invariant-check' is (NAME SESSION-ID RUN-ID &rest ARGS),
-              ;; so the evidence plist is the first check argument.
+              ;; so the evidence plist is the first check argument.  The
+              ;; Step names this attempt: every attempt of a Run records its
+              ;; list under the Run's one request id, and without the Step
+              ;; an earlier attempt's whole list would answer for this one.
               (superchat-invariant-check
                'prompt-reconstructable
                (plist-get context :session-id)
-               nil
+               (plist-get context :run-id)
                (list :session-id (plist-get context :session-id)
-                     :request-id (plist-get context :request-id))))
+                     :request-id (plist-get context :request-id)
+                     :step (plist-get context :step))))
             header-id))
       (error nil))))
 
@@ -3169,17 +3311,22 @@ requests until it receives text, bounded by
                      (and (plist-get streaming-capabilities :streaming)
                           (plist-get streaming-capabilities :streaming-tool-use))
                    (plist-get streaming-capabilities :streaming))))
-           (real-prompt (superchat--llm-set-history
-                         (superchat--build-llm-prompt
-                          prompt tools system-prompt preset context-files)
-                         (and (functionp runtime-observer)
-                              (funcall runtime-observer 'history-messages nil))))
+           ;; The request's texts are made ones a request can carry before
+           ;; anything measures or sends them, and again before each attempt
+           ;; (`send-request'), since a Step, a steer and a retry add more.
+           (real-prompt (superchat--llm-prompt-wire-safe
+                         (superchat--llm-set-history
+                          (superchat--build-llm-prompt
+                           prompt tools system-prompt preset context-files)
+                          (and (functionp runtime-observer)
+                               (funcall runtime-observer 'history-messages nil)))))
            ;; Runtime has already folded the initial request.  These lexical
            ;; values track the latest provider-facing inputs so an async retry
            ;; can apply its own Scope-correct fold without rebuilding or
-           ;; serializing the Run's private execution Scope.
-           (provider-prompt prompt)
-           (provider-system-prompt system-prompt)
+           ;; serializing the Run's private execution Scope.  They are the
+           ;; texts as sent, so the request evidence records what goes out.
+           (provider-prompt (superchat-wire-safe-text prompt))
+           (provider-system-prompt (superchat-wire-safe-text system-prompt))
            (timeout-context-estimate
             (and base-timeout
                  (let ((superchat--llm-preflight-streaming-p
@@ -3374,7 +3521,7 @@ requests until it receives text, bounded by
                       :warning)))))))
            ;; ---- local helper: finalize exactly once ----
            (finalize
-            (lambda (response &optional status)
+            (lambda (response &optional status failure)
               (unless completed
                 (setq completed t)
                 (superchat-llm--transport-timer-owner-cancel
@@ -3385,10 +3532,22 @@ requests until it receives text, bounded by
                 (when (functionp runtime-observer)
                   (funcall runtime-observer
                            'terminal
-                           (list :status (or status 'completed)
-                                 :response response)))
+                           (append (list :status (or status 'completed)
+                                         :response response)
+                                   (when failure (list :failure failure)))))
                 (when callback
                   (funcall callback response)))))
+           ;; ---- local helper: the one ending for an attempt that was
+           ;; never started.  `send-request' signalled while preparing or
+           ;; dispatching it; the Run fails saying so, with the reason on
+           ;; its terminal fact.
+           (fail-attempt
+            (lambda (err attempt-reason)
+              (let ((failure (superchat--llm-local-failure err attempt-reason)))
+                (funcall finalize
+                         (superchat--llm-local-failure-text failure)
+                         'failed
+                         failure))))
            ;; Multi-output plists may carry text, reasoning and tool data
            ;; together.  Every public callback can reenter a newer attempt;
            ;; recheck before writing shared cursors or delivering old output.
@@ -3593,10 +3752,7 @@ requests until it receives text, bounded by
                        (superchat-llm-evidence-recording-error
                         (signal (car e) (cdr e)))
                        (error
-                        (funcall finalize
-                                 (format "[llm-chat-streaming error: %s]"
-                                         (error-message-string e))
-                                 'failed)))))))))
+                        (funcall fail-attempt e 'transient-retry)))))))))
       (when (and adjusted-timeout hard-timeout-limit)
         (let ((expire
                (lambda ()
@@ -3627,7 +3783,13 @@ requests until it receives text, bounded by
       ;; ── Prompt size diagnostic ──
       (when superchat-show-ttft-breakdown
         (let* ((chars (length (or (and (stringp prompt) prompt) "")))
-               (tools-chars (if tools (length (format "%S" tools)) 0))
+               ;; Counted, not printed: a tool is a closure over the Run,
+               ;; and printing one signals before the request is sent.
+               (tools-chars
+                (if tools
+                    (superchat--llm-prompt-size
+                     (llm-make-chat-prompt "" :tools tools))
+                  0))
                ;; M1: the count comes from the Tape derivation, not from the
                ;; per-View cache, so a diagnostic cannot disagree with the
                ;; history the prompt was actually built from.
@@ -3742,10 +3904,7 @@ requests until it receives text, bounded by
                           (superchat-llm-evidence-recording-error
                            (signal (car e) (cdr e)))
                           (error
-                           (funcall finalize
-                                    (format "[llm-chat-streaming error: %s]"
-                                            (error-message-string e))
-                                    'failed))))
+                           (funcall fail-attempt e 'tool-protocol-retry))))
                     (let ((reason (format "Stopped: the reply was cut off at the output limit %d times in a row"
                                           cut-off-streak)))
                       (when (functionp runtime-observer)
@@ -3779,10 +3938,7 @@ requests until it receives text, bounded by
                     (superchat-llm-evidence-recording-error
                      (signal (car e) (cdr e)))
                     (error
-                     (funcall finalize
-                              (format "[llm-chat-streaming error: %s]"
-                                      (error-message-string e))
-                              'failed))))
+                     (funcall fail-attempt e 'tool-protocol-retry))))
                  ((and (not completed)
                        (funcall run-active-p)
                        (not response-parts)
@@ -3813,10 +3969,7 @@ requests until it receives text, bounded by
                            (superchat-llm-evidence-recording-error
                             (signal (car e) (cdr e)))
                            (error
-                            (funcall finalize
-                                     (format "[llm-chat-streaming error: %s]"
-                                             (error-message-string e))
-                                     'failed))))))))
+                            (funcall fail-attempt e 'transient-retry))))))))
                  (t
                   (funcall finalize
                            (let ((reason (format "[API error: %s]"
@@ -3990,10 +4143,10 @@ requests until it receives text, bounded by
                           (superchat-llm-evidence-recording-error
                            (signal (car err) (cdr err)))
                           (error
-                           (funcall finalize
-                                    (format "[llm-chat-streaming error: %s]"
-                                            (error-message-string err))
-                                    'failed))))))))
+                           (funcall fail-attempt err
+                                    (if final-answer-requested
+                                        'final-answer
+                                      'tool-followup)))))))))
                   (t
                    (let ((pending
                           (if (functionp runtime-observer)
@@ -4021,10 +4174,7 @@ requests until it receives text, bounded by
                              (superchat-llm-evidence-recording-error
                               (signal (car err) (cdr err)))
                              (error
-                              (funcall finalize
-                                       (format "[llm-chat-streaming error: %s]"
-                                               (error-message-string err))
-                                       'failed))))
+                              (funcall fail-attempt err 'tool-followup))))
                        ;; Provider success may still omit an answer. Keep
                        ;; explicit empty strings and this attempt's text.
                        (if (or (stringp response)
@@ -4075,10 +4225,7 @@ requests until it receives text, bounded by
                                      (superchat-llm-evidence-recording-error
                                       (signal (car err) (cdr err)))
                                      (error
-                                      (funcall finalize
-                                               (format "[llm-chat-streaming error: %s]"
-                                                       (error-message-string err))
-                                               'failed))))
+                                      (funcall fail-attempt err 'tool-followup))))
                                (funcall finalize
                                         (cond
                                          ((and (consp response)
@@ -4232,8 +4379,10 @@ requests until it receives text, bounded by
                                          selected)))
                                 (setq wrap-fn wrapper
                                       tool-decision-reason 'waterfall)))
-                            (setq provider-prompt next-prompt
-                                  provider-system-prompt next-system)))))
+                            (setq provider-prompt
+                                  (superchat-wire-safe-text next-prompt)
+                                  provider-system-prompt
+                                  (superchat-wire-safe-text next-system))))))
                      ;; A retry listener may synchronously cancel or retire the
                      ;; Run.  Do not even publish a new attempt after it did;
                      ;; the provider dispatch gate below remains the final
@@ -4241,6 +4390,9 @@ requests until it receives text, bounded by
                      (_retry-still-active
                       (unless (funcall run-active-p)
                         (error "Runtime Run is no longer active; continuation refused")))
+                     ;; The last place before this attempt is measured and
+                     ;; sent: every text it carries, whichever way it came in.
+                     (_wire-safe (superchat--llm-prompt-wire-safe real-prompt))
                      (attempt-prompt
                       (if evidence-contract
                           (copy-tree real-prompt t)
@@ -4775,13 +4927,21 @@ requests until it receives text, bounded by
                                                              new-context)))
                                                 (condition-case err
                                                     (funcall send-request attempt-reason (and input-tool t))
+                                                  ;; An attempt that was never
+                                                  ;; started, like the others
+                                                  ;; `fail-attempt' ends: these
+                                                  ;; words name the retry, and
+                                                  ;; the terminal fact carries
+                                                  ;; the same reason theirs do.
                                                   (error
                                                    (funcall
                                                     finalize
                                                     (format
                                                      "[Context recovery retry failed: %s]"
                                                      (error-message-string err))
-                                                    'failed))
+                                                    'failed
+                                                    (superchat--llm-local-failure
+                                                     err attempt-reason)))
                                                   (quit
                                                    (setq quit-condition err)
                                                    (funcall
@@ -4889,10 +5049,7 @@ requests until it receives text, bounded by
          (if evidence-contract
              (signal 'superchat-llm-evidence-recording-error
                      (list (error-message-string err)))
-           (funcall finalize
-                    (format "[llm-chat-streaming error: %s]"
-                            (error-message-string err))
-                    'failed)))))))
+           (funcall fail-attempt err 'initial)))))))
 
 (defun superchat-llm-configure (&rest adapters)
   "Install optional distribution ADAPTERS for the transport port.

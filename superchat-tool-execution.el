@@ -21,6 +21,7 @@
 (require 'superchat-invariant)
 (require 'subr-x)
 (require 'superchat-tape)
+(require 'superchat-wire)
 
 (declare-function superchat-view-session-configuration "superchat-tape-view" (session-id))
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
@@ -857,27 +858,15 @@ success."
 
 (defun superchat-tool-execution--normalize-tool-result (value)
   "Normalize textual tool results at the shared execution seam.
-A byte-level read (e.g. coding-system-for-read bound to binary) or an
-encoding artifact leaves raw bytes inside a tool result string, and
-Emacs 31's json-serialize rejects that string — killing the next
-streaming request with `wrong-type-argument json-value-p'.  Decode
-those back to Unicode here, before the result forks to the Tape, the
-renderer, and the provider.  Non-string values pass through."
-  (if (not (stringp value))
-      value
-    (if (or (and (not (multibyte-string-p value))
-                 (string-match-p "[^\000-\177]" value))
-            (and (multibyte-string-p value)
-                 (catch 'raw-byte
-                   (mapc (lambda (c)
-                           (when (> c #x3FFF7F) (throw 'raw-byte t)))
-                         value))))
-        ;; Decode the underlying bytes as UTF-8; a failed decode keeps
-        ;; the original value so behavior degrades, never hard-fails.
-        (condition-case nil
-            (decode-coding-string (string-as-unibyte value) 'utf-8)
-          (error value))
-      value)))
+A tool result can hold what a provider request cannot carry: raw bytes
+from a byte-level read or from a character cut in half, one half of a
+surrogate pair (telega keeps an emoji as two), a character above
+U+10FFFF.  `json-serialize' rejects such a string, and the request that
+would carry it cannot be built.  `superchat-wire-safe-text' makes it text
+that can be sent here, before the result forks to the Tape, the renderer
+and the provider, so all three hold the same text.  Non-string values
+pass through."
+  (superchat-wire-safe-text value))
 
 (defun superchat-tool-execution--input-read-receipt (expected)
   "Read the exact stored EXPECTED input outcome, rejecting any conflict.

@@ -17,6 +17,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'superchat-db)
+(require 'superchat-wire)
 
 (defgroup superchat-tape nil
   "Runtime event history for Superchat."
@@ -1314,8 +1315,12 @@ where the span it replaces began, although its row is stored after that span."
 
 (defconst superchat-tape-request-header-schema 1
   "Schema version of the `request.header' payload.")
-(defconst superchat-tape-request-message-list-schema 1
-  "Schema version of the `request.message-list' payload.")
+(defconst superchat-tape-request-message-list-schema 2
+  "Schema version of the `request.message-list' payload.
+Version 1 items carry a raw fact's or a compaction Anchor's text; version 2
+items name that row of the Session and carry no text (decision of
+2026-11-09, a message list names its messages).  The rebuild reads the text
+from the named row in both versions, so a version 1 row still rebuilds.")
 (defconst superchat-tape-request-template-version 2
   "Version of the continuity rendering the message list was composed under.
 A reconstruction that does not know this version reports `unknown' rather than
@@ -1356,42 +1361,79 @@ the target model with the call parameters that shape the request."
                        (superchat-tape--request-digest system tools model))))
 
 (defun superchat-tape-request-message-list (request-id series-id header-storage-id
-                                                       items receipt &optional execution)
+                                                       items receipt &optional execution
+                                                       session-id)
   "Return the `request.message-list' event plist for one provider request.
 ITEMS is the ordered provider-visible message list as composition, not
-content: `(:kind KIND :storage-id ID [:source-ids IDS] [:lossy t])' per entry.
+content: each entry names its Tape row, see
+`superchat-tape--request-evidence-item'.
 RECEIPT is the presentation receipt the provider received.  HEADER-STORAGE-ID
 names the `request.header' row this request belongs to, so a reader that
 cannot resolve it reports `unknown' instead of borrowing a neighbour's header.
-EXECUTION optionally links this attempt to its Run, Turn and Step."
+EXECUTION optionally links this attempt to its Run, Turn and Step.
+SESSION-ID is the Session the row is written to; an item from that Session
+is recorded by identity, any other item as it is."
   (list :type "request.message-list"
         :payload (list :request-id request-id
                        :series-id series-id
                        :header-storage-id header-storage-id
                        :schema superchat-tape-request-message-list-schema
                        :template-version superchat-tape-request-template-version
-                       :items (vconcat (mapcar #'superchat-tape--request-evidence-item
+                       :items (vconcat (mapcar (lambda (item)
+                                                 (superchat-tape--request-evidence-item
+                                                  item session-id))
                                                items))
                        :receipt receipt
                        :execution (copy-tree execution))))
 
-(defun superchat-tape--request-evidence-item (item)
+(defun superchat-tape--request-evidence-item (item &optional session-id)
   "Return ITEM's minimal `request.message-list' composition entry.
-A tool observation records identity only (`:kind', `:storage-id',
-`:source-ids', `:lossy'); its text is read back from the two tool rows and
-never copied into this payload.  Every other item is unchanged."
-  (cond
-   ((equal "step-material" (plist-get item :kind))
-    (list :kind "step-material"
-          :storage-id (plist-get item :storage-id)
-          :form (plist-get item :form)))
-   ((superchat-tape--tool-observation-message-p item)
+No entry carries message text; the rebuild reads it from the rows named:
+
+- Step material: `:kind', `:storage-id' (its `attachment.added' row) and
+  `:form', the provider-visible framing.
+- A tool observation: `:kind', `:storage-id', `:source-ids' (the requested
+  and the outcome row) and `:lossy'.
+- A raw fact of SESSION-ID -- a user or assistant message, a system fact,
+  admitted material in the history: `:class', `:kind' and `:storage-id'.
+- A compaction Anchor of SESSION-ID: `:class', `:storage-id', `:source-ids'
+  and `:lossy'.
+
+An item of another Session, with no storage id, or of any other shape is
+returned unchanged, text included, because the rebuild reads rows of the
+request's own Session only.  Copying the text of every earlier message into
+the list of every request made a long conversation's list exceed
+`superchat-tape-max-inline-bytes', so the Tape kept its size and hash only and
+no request of it could be rebuilt (decision of 2026-11-09)."
+  (let ((class (and (plist-get item :class)
+                    (format "%s" (plist-get item :class)))))
+    (cond
+     ((equal "step-material" (plist-get item :kind))
+      (list :kind "step-material"
+            :storage-id (plist-get item :storage-id)
+            :form (plist-get item :form)))
+     ((superchat-tape--tool-observation-message-p item)
       (append
        (list :kind "tool-observation"
              :storage-id (plist-get item :storage-id)
              :source-ids (plist-get item :source-ids))
        (when (plist-get item :lossy) (list :lossy t))))
-   (t item)))
+     ((not (and (stringp session-id)
+                (integerp (plist-get item :storage-id))
+                (member class '("raw-fact" "model-interpretation"))
+                (or (null (plist-get item :session-id))
+                    (equal session-id (plist-get item :session-id)))))
+      item)
+     ((equal class "raw-fact")
+      (list :class class
+            :kind (plist-get item :kind)
+            :storage-id (plist-get item :storage-id)))
+     (t
+      (append
+       (list :class class
+             :storage-id (plist-get item :storage-id)
+             :source-ids (plist-get item :source-ids))
+       (when (plist-get item :lossy) (list :lossy t)))))))
 
 (defun superchat-tape--request-admitted-material-text (row)
   "Return admitted material text from ROW, or nil if it is unavailable.
@@ -1505,7 +1547,7 @@ failed recording never breaks the request it describes."
             (superchat-tape-append-event
              (append (superchat-tape-request-message-list
                       (or request-id "request") series-id header-id
-                      message-items receipt execution)
+                      message-items receipt execution session-id)
                      (list :session-id session-id
                            :actor-id "kernel"
                            :summary
@@ -1619,6 +1661,28 @@ builder `superchat-tape-history-messages'; Step material follows as before."
                history (superchat-tape-step-key-function session-id))
               material))))
 
+(defun superchat-tape--request-wire-safe (value)
+  "Return VALUE with every string in it as `superchat-wire-safe-text' leaves it.
+VALUE is a rebuilt message, a list of them, or a part of one.  A list or a
+vector none of whose strings changed is returned itself, and so is a string
+that can already be sent."
+  (cond
+   ((stringp value) (superchat-wire-safe-text value))
+   ((consp value)
+    (let ((rest value) (out nil) (changed nil))
+      (while (consp rest)
+        (let ((safe (superchat-tape--request-wire-safe (car rest))))
+          (unless (eq safe (car rest)) (setq changed t))
+          (push safe out))
+        (setq rest (cdr rest)))
+      (let ((tail (superchat-tape--request-wire-safe rest)))
+        (unless (eq tail rest) (setq changed t))
+        (if changed (nconc (nreverse out) tail) value))))
+   ((vectorp value)
+    (let ((safe (mapcar #'superchat-tape--request-wire-safe value)))
+      (if (cl-every #'eq safe value) value (vconcat safe))))
+   (t value)))
+
 (defun superchat-tape-request-evidence (session-id request-id &optional step)
   "Rebuild REQUEST-ID's provider request from the Tape, or report why not.
 Returns `(:status reproduced :system S :messages M :tools T)' when the header
@@ -1631,8 +1695,30 @@ Every provider attempt of a Run records its own message list under the Run's
 one REQUEST-ID, told apart by the Step in its `:execution'.  STEP selects the
 attempt of that Step; without it the last attempt recorded is rebuilt.
 
+The system text and every text of the messages are returned as the transport
+sent them: through `superchat-wire-safe-text', which the transport applies to
+every text before each attempt.  A row keeps what was typed, so a text the
+request could not carry as it is would otherwise come back unrepaired, and
+not as what the provider received
+(docs/decisions/accepted/2026-11-09-a-request-that-cannot-be-encoded.md).
+
 This is the check the accepted request-header decision requires; a recorded
 `prompt.assembled' receipt alone is not evidence that a request can be rebuilt."
+  (let ((evidence (superchat-tape--request-evidence-rebuild
+                   session-id request-id step)))
+    (if (eq 'reproduced (plist-get evidence :status))
+        (let ((evidence (copy-sequence evidence)))
+          (plist-put evidence :system
+                     (superchat-wire-safe-text (plist-get evidence :system)))
+          (plist-put evidence :messages
+                     (superchat-tape--request-wire-safe
+                      (plist-get evidence :messages))))
+      evidence)))
+
+(defun superchat-tape--request-evidence-rebuild (session-id request-id step)
+  "Rebuild REQUEST-ID's request of STEP from SESSION-ID's rows as they are.
+See `superchat-tape-request-evidence', which returns this with its texts as
+they were sent."
   (let* ((events (superchat-tape-replay-events session-id))
          (lists (cl-remove-if-not
                  (lambda (event)

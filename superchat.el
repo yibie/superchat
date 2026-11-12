@@ -30,6 +30,7 @@
 (require 'superchat-db)
 (require 'superchat-tape)
 (require 'superchat-tool-execution)
+(require 'superchat-wire)
 (require 'superchat-sandbox)
 (require 'superchat-changes)
 (require 'superchat-runtime)
@@ -3370,8 +3371,14 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
     (let ((history (buffer-substring-no-properties (point-min) (point-max)))
           (cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
       (when (> (length history) 100)
-        (with-temp-file cache-file
-          (insert history))
+        ;; As text a request can carry, written as UTF-8: a raw byte or a
+        ;; character above U+10FFFF would make the write ask for a coding
+        ;; system while Emacs closes the chat, and a surrogate half would
+        ;; come back from `superchat--process-cached-session-on-startup' as
+        ;; raw bytes.
+        (let ((coding-system-for-write 'utf-8))
+          (with-temp-file cache-file
+            (insert (superchat-wire-safe-text history))))
         (message "Superchat session cached for next startup.")))))
 
 (defun superchat--clear-follow-ups-on-kill ()

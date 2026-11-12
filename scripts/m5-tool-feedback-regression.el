@@ -287,22 +287,25 @@
     (should (= 2 m5tf--side-effect))))
 
 (ert-deftest m5-tool-feedback/eval/extra-form-is-rejected-before-first-effect ()
-  "Rejecting only after evaluation would still execute the first mutation."
+  "Rejecting only after evaluation would still execute the first mutation.
+An extra form that is a list runs in order (decision of 2026-11-09); one
+that is not a list is rejected before the first form's effect."
   (let* ((m5tf--side-effect 0)
          (result
           (superchat-tool-eval-elisp
-           "(progn (setq m5tf--side-effect 1) \"OK\") (setq m5tf--side-effect 2)")))
+           "(progn (setq m5tf--side-effect 1) \"OK\") m5tf--side-effect")))
     (m5tf--assert-error result)
     (should (= 0 m5tf--side-effect))
     (should (m5tf--feedback "eval_elisp" result))))
 
-(ert-deftest m5-tool-feedback/eval/extra-form-after-comment-is-rejected ()
+(ert-deftest m5-tool-feedback/eval/extra-form-after-comment-runs-in-order ()
+  "Decision of 2026-11-09: several forms that are all lists are one progn."
   (let* ((m5tf--side-effect 0)
          (result
           (superchat-tool-eval-elisp
-           "(setq m5tf--side-effect 1) ; comment\n(setq m5tf--side-effect 2)")))
-    (m5tf--assert-error result)
-    (should (= 0 m5tf--side-effect))))
+           "(setq m5tf--side-effect 1) ; comment\n(setq m5tf--side-effect (* 2 m5tf--side-effect))")))
+    (should (equal "Result: 2" result))
+    (should (= 2 m5tf--side-effect))))
 
 (ert-deftest m5-tool-feedback/eval/malformed-tail-is-rejected-before-first-effect ()
   "An incomplete second form is not equivalent to comment-only EOF."

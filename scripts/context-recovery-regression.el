@@ -362,6 +362,47 @@ with, so it rebuilds the summary and no question from before compaction."
                          anchor-id))))
         (advice-remove 'superchat-compact--context-envelope #'capture)))))
 
+;;;; A resumed request that cannot start says why on the Run
+
+(ert-deftest context-recovery/a-resumed-request-that-cannot-start-says-why ()
+  "The request after compaction signals before it is sent.  The Run ends
+`failed' with its own words, and `run.failed' carries the reason as every
+other request that did not start does: class, the phase of the attempt that
+was refused, the error and its words."
+  (cr--fixture (cr--script (list (cr--read-round)))
+    (let ((network (symbol-function 'smoke--fake-network)))
+      ;; Only the resumed request, the one that begins with the summary,
+      ;; cannot be sent.
+      (cl-letf (((symbol-function 'smoke--fake-network)
+                 (lambda (mode provider prompt &rest more)
+                   (if (< 0 (cr--count "CR-SUMMARY" (cr--wire-of provider prompt)))
+                       (error "CR-NO-CURL")
+                     (apply network mode provider prompt more)))))
+        (let ((view (smoke--open-chat))
+              (superchat-context-max-chars 620))
+          (dolist (text '("ask one" "ask two" "ask three" "ask four"))
+            (let ((run (smoke--send view text)))
+              (should (smoke--wait (lambda () (smoke--run-done-p run)) 20))))
+          (let* ((run (smoke--send view "CR-FIVE question"))
+                 (_ (should (smoke--wait (lambda () (smoke--run-done-p run)) 30)))
+                 (failed (cl-find-if
+                          (lambda (event)
+                            (and (equal "run.failed" (plist-get event :type))
+                                 (equal run (plist-get event :run-id))))
+                          (superchat-tape-replay-events (cr--session view))))
+                 (failure (plist-get (plist-get failed :payload) :failure)))
+            (should (eq 'failed (plist-get (superchat-runtime-status run) :status)))
+            (should (string-match-p
+                     (regexp-quote "[Context recovery retry failed: CR-NO-CURL]")
+                     (with-current-buffer view
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+            (should failed)
+            (should (equal "request-not-started" (plist-get failure :class)))
+            ;; The refused request followed the Run's tool round.
+            (should (equal "tool-followup" (plist-get failure :phase)))
+            (should (equal "error" (plist-get failure :error-type)))
+            (should (equal "CR-NO-CURL" (plist-get failure :reason)))))))))
+
 (provide 'context-recovery-regression)
 
 ;;; context-recovery-regression.el ends here

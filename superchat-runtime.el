@@ -2787,6 +2787,12 @@ restore its stale `delivering' entry or append another terminal event."
                        (append (list :status status)
                                (when (plist-get entry :tool-budget)
                                  (list :tool-budget (plist-get entry :tool-budget)))
+                               ;; What the transport said of a Run it could
+                               ;; not start a request for: class, phase,
+                               ;; condition and reason.
+                               (when (and (eq status 'failed)
+                                          (plist-get entry :failure))
+                                 (list :failure (plist-get entry :failure)))
                                (when (and (eq status 'audit-incomplete)
                                           (plist-get entry :turn-recording-failures))
                                  '(:audit-incomplete t
@@ -3352,7 +3358,8 @@ Explicit profiles retain precedence over the global tools switch."
 
 REQUEST is a plist containing `:prompt' and a live exact `:buffer'.  Runtime
 borrows that buffer object and never closes it.  Runtime supplies an ephemeral
-Session ID when `:session-id' is absent.  Runtime owns the mutable execution
+Session ID when `:session-id' is absent, and a request ID when `:request-id'
+is absent.  Runtime owns the mutable execution
 Turn, transport request, Tape lifecycle, and result delivery; callers retain
 only the returned IDs and query status separately.
 
@@ -3370,6 +3377,16 @@ Absent options preserve legacy behavior; result delivery retains three args."
          (_scope-before-input
           (superchat-runtime--assert-execution-scope-active execution-scope))
          (request (superchat-runtime--prepare-input-request request))
+         ;; A Run always has a request identity, as it always has a Session.
+         ;; Supplied here, on the Request's own copy, so the Step rows, the
+         ;; transport's context, the request evidence and its check all read
+         ;; the same one; a caller that brought one keeps it.  Without it the
+         ;; evidence was written under "request" and the check looked for
+         ;; nil (docs/decisions/accepted/2026-11-09-a-message-list-names-its-messages.md).
+         (request (if (plist-get request :request-id)
+                      request
+                    (plist-put request :request-id
+                               (superchat-runtime--new-id "req"))))
          (_scope-after-input
           (superchat-runtime--assert-execution-scope-active execution-scope))
          (accepted-function (plist-get request :accepted-function))
@@ -4020,6 +4037,13 @@ Absent options preserve legacy behavior; result delivery retains three args."
                              :context-estimated-p
                              (not (numberp output)))))))
                      ('terminal
+                      ;; Why the transport ended a Run it could not carry
+                      ;; on: kept for the Run's terminal fact, which states
+                      ;; it beside the status.
+                      (when (and (plist-get value :failure)
+                                 (superchat-runtime--entry run-id))
+                        (superchat-runtime--update
+                         run-id :failure (copy-tree (plist-get value :failure))))
                      (superchat-runtime--finish
                        run-id
                        (or (plist-get value :status) 'completed)

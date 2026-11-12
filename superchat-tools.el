@@ -421,6 +421,11 @@ with nothing on disk.  A failure is a string starting with `Error:'."
                  "It has unsaved changes; this is the live buffer, not the version on disk.\n")
                (when new-file
                  (concat "This is a new file: nothing exists on disk until the user saves the buffer.\n"
+                         ;; Decision of 2026-11-09, edit_buffer writes an empty
+                         ;; buffer.  Said only when it is empty: a hook such
+                         ;; as `auto-insert' may have put a header in.
+                         (when (= 0 (buffer-size))
+                           "The buffer is empty: edit_buffer with an empty old_string writes its whole text.\n")
                          (unless (file-directory-p directory)
                            (format "The directory %s does not exist yet; it has to exist before the buffer can be saved.\n"
                                    directory))))
@@ -546,9 +551,18 @@ TARGET is the resolved buffer target and LAYER says how far the change went."
   "Return what replacing OLD-STRING by NEW-STRING in BUFFER-NAME would do.
 The result is (:final TEXT) when nothing is to be written -- the text is the
 tool's answer -- or (:ready t) when exactly one replacement is due.  Nothing
-is modified."
+is modified.  An empty OLD-STRING is allowed only when the accessible text
+of BUFFER-NAME is empty: NEW-STRING is then the whole text to write."
   (if (string-empty-p old-string)
-      (list :final "Error: old_string must be nonempty; read the buffer and supply unique text.")
+      (let ((size (with-current-buffer buffer-name (- (point-max) (point-min)))))
+        (cond
+         ((> size 0)
+          (list :final
+                (format "Error: old_string must be nonempty here: it may be empty only when the buffer is empty, and buffer %s has %d character%s. Read it and give text that occurs once. To add text at the end, replace the last line with that line followed by the new text."
+                        buffer-name size (if (= size 1) "" "s"))))
+         ((string-empty-p new-string)
+          (list :final (format "No change: buffer %s is empty and new_string is empty." buffer-name)))
+         (t (list :ready t))))
     (with-current-buffer buffer-name
       (let ((case-fold-search nil)
             (count 0))
@@ -570,15 +584,21 @@ is modified."
 (defconst superchat-tools--edit-shown-max-lines 12
   "Most lines of the changed text an `edit_buffer' answer shows.")
 
-(defun superchat-tools--edit-shown-lines (start end)
+(defun superchat-tools--edit-shown-lines (start end &optional whole)
   "The lines from START to END of the current buffer, one more each side.
 Numbered, as an `edit_buffer' answer shows the text after its change, so
 the model sees the result without reading the buffer again (2026-10-27:
-measured, the model sent one more request after each edit to look)."
+measured, the model sent one more request after each edit to look).
+With WHOLE, START to END is all the text there is: no line is added on
+either side, and the empty line after a final newline is not shown."
   (save-excursion
-    (let* ((first (progn (goto-char start) (forward-line -1) (point)))
+    (let* ((first (progn (goto-char start)
+                         (unless whole (forward-line -1))
+                         (point)))
            (first-line (line-number-at-pos first))
-           (last (progn (goto-char end) (forward-line 1) (line-end-position)))
+           (last (if whole
+                     (if (and (> end start) (eq ?\n (char-before end))) (1- end) end)
+                   (goto-char end) (forward-line 1) (line-end-position)))
            (lines (split-string (buffer-substring-no-properties first last) "\n"))
            (max superchat-tools--edit-shown-max-lines)
            (numbered (cl-loop for line in lines for n from first-line
@@ -596,16 +616,30 @@ measured, the model sent one more request after each edit to look)."
 
 (defun superchat-tools--edit-buffer-apply (buffer-name old-string new-string)
   "Replace the one OLD-STRING in BUFFER-NAME by NEW-STRING; return the answer.
-The changed lines are left in `superchat-tools--edit-shown'."
-  (with-current-buffer buffer-name
-    (let ((case-fold-search nil))
-      (save-excursion
-        (goto-char (point-min))
-        (search-forward old-string)
-        (replace-match new-string t t)
-        (setq superchat-tools--edit-shown
-              (superchat-tools--edit-shown-lines (match-beginning 0) (match-end 0))))))
-  (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name))
+An empty OLD-STRING writes NEW-STRING as the text of the empty buffer
+\(see `superchat-tools--edit-buffer-plan').  The changed lines are left in
+`superchat-tools--edit-shown'."
+  (if (string-empty-p old-string)
+      (with-current-buffer buffer-name
+        (save-excursion
+          (goto-char (point-min))
+          (insert new-string)
+          (setq superchat-tools--edit-shown
+                (superchat-tools--edit-shown-lines (point-min) (point-max) t))
+          (format "Wrote %d line%s, %d character%s, into the empty buffer %s. This tool does not save or evaluate the buffer."
+                  (count-lines (point-min) (point-max))
+                  (if (= 1 (count-lines (point-min) (point-max))) "" "s")
+                  (length new-string) (if (= 1 (length new-string)) "" "s")
+                  buffer-name)))
+    (with-current-buffer buffer-name
+      (let ((case-fold-search nil))
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward old-string)
+          (replace-match new-string t t)
+          (setq superchat-tools--edit-shown
+                (superchat-tools--edit-shown-lines (match-beginning 0) (match-end 0))))))
+    (format "Replaced 1 occurrence in buffer %s. This tool does not save or evaluate the buffer." buffer-name)))
 
 (defun superchat-tool-append-to-buffer (buffer text)
   "Append TEXT to BUFFER, creating it when it does not exist.
@@ -889,7 +923,9 @@ A count allows a replacement of all only in the execution that made it."
     (buffer-name old-string new-string &optional regexp all count-only)
   "Replace one exact occurrence of OLD-STRING in BUFFER-NAME.
 OLD-STRING must be nonempty and occur exactly once in the accessible
-buffer text.  Identical replacement text returns a no-change result.
+buffer text, except in an empty buffer: there an empty OLD-STRING makes
+NEW-STRING the buffer's text (decision of 2026-11-09).  Identical
+replacement text returns a no-change result.
 This edits the live buffer; it does not save or evaluate its contents.
 Whether the buffer may be edited is judged only when a replacement is about to
 happen.
@@ -932,7 +968,9 @@ what it did before."
 				"in memory only; the buffer was not saved or evaluated")))))))
           ;; The lines after the change, once it was made in the buffer
           ;; itself and not refused.
-          (if (and (stringp answer) (string-prefix-p "Replaced " answer)
+          (if (and (stringp answer)
+                   (or (string-prefix-p "Replaced " answer)
+                       (string-prefix-p "Wrote " answer))
                    superchat-tools--edit-shown)
               (concat answer superchat-tools--edit-shown)
             answer))
@@ -1175,30 +1213,52 @@ scanning, and the model sent the same expression twice more."
         (t (error-message-string err)))))))
 
 (defun superchat-tools--read-one-expression (expression)
-  "Read one complete Elisp EXPRESSION before calling eval on it.
-Allow trailing whitespace and line comments.  Reject extra forms or
-invalid trailing input before the caller can evaluate the first form.
-Reading can construct objects and invoke their callbacks, so call this
-only after the tool pipeline has allowed the call."
-  (let* ((parsed (let ((read-eval nil)
-                       (read-circle nil))
-                   (condition-case err
-                       (read-from-string expression)
-                     ((end-of-file invalid-read-syntax)
-                      (signal 'superchat-tools-unreadable-expression
-                              (list (superchat-tools--unreadable-text
-                                     expression err)))))))
-         (form (car parsed)))
+  "Read the whole Elisp text EXPRESSION before calling eval on any of it.
+Return the one form it holds.  Several top-level forms that are all lists
+are returned as one `progn' of them, in order (decision of 2026-11-09):
+the model sent \"(a) (b)\" for \"(progn (a) (b))\".  Several forms of which
+one is not a list -- a symbol, a number, a string -- are an error naming
+the first such form, so prose after a form, as in \"(foo) done\", is never
+evaluated after (foo) ran.  Whitespace and line comments between and after
+forms are allowed.  Text that does not read, at any point, is an error, and
+nothing is evaluated.  Reading can construct objects and invoke their
+callbacks, so call this only after the tool pipeline has allowed the call."
+  (let ((forms nil)
+        (position 0))
     (with-temp-buffer
-      (insert (substring expression (cdr parsed)))
-      (goto-char (point-min))
-      (skip-chars-forward " \t\n\r\f\v")
-      (while (eq (char-after) ?\;)
-        (forward-line 1)
-        (skip-chars-forward " \t\n\r\f\v"))
-      (unless (eobp)
-        (error "Expected exactly one expression; wrap multiple forms in progn")))
-    form))
+      (insert expression)
+      (while (progn
+               (let ((parsed (condition-case err
+                                 ;; Bound around the read alone: a library
+                                 ;; autoloaded later must read as usual.
+                                 (let ((read-eval nil)
+                                       (read-circle nil))
+                                   (read-from-string expression position))
+                               ((end-of-file invalid-read-syntax)
+                                (signal 'superchat-tools-unreadable-expression
+                                        (list (superchat-tools--unreadable-text
+                                               expression err)))))))
+                 (push (car parsed) forms)
+                 (setq position (cdr parsed)))
+               ;; Only whitespace and line comments left: the text is read.
+               (goto-char (1+ position))
+               (skip-chars-forward " \t\n\r\f\v")
+               (while (eq (char-after) ?\;)
+                 (forward-line 1)
+                 (skip-chars-forward " \t\n\r\f\v"))
+               (not (eobp)))))
+    (setq forms (nreverse forms))
+    (cond
+     ((null (cdr forms)) (car forms))
+     ((cl-every #'consp forms) (cons 'progn forms))
+     (t
+      (let ((index (cl-position-if-not #'consp forms)))
+        (error "Expected exactly one expression; wrap multiple forms in progn.  Several forms run in order only when each is a list, and form %d of %d is not: %s.  Nothing was evaluated"
+               (1+ index) (length forms)
+               (truncate-string-to-width
+                (let ((print-length 4) (print-level 2) (print-escape-newlines t))
+                  (format "%S" (nth index forms)))
+                80 nil nil "...")))))))
 
 (defconst superchat-tool-eval-error-max-chars 1024
   "Maximum characters in an eval error's details, including truncation text.
@@ -2402,13 +2462,13 @@ Useful after editing tool functions or adding new ones."
 
          (superchat--maybe-make-llm-tool
           "edit_buffer"
-          :description (superchat-tools--write-description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Empty, missing or ambiguous old_string fails; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion. regexp: old_string is an Emacs regexp, new_string may use \\N. count_only: count matches and show the first three; changes nothing. all: replace every match, only after count_only of the same old_string and regexp in this execution.")
+          :description (superchat-tools--write-description "Replace one unique, exact, case-sensitive match in a live buffer. Read the target first. Missing or ambiguous old_string fails; an empty old_string only writes new_string into an empty buffer; identical replacement reports no change. This edits buffer text only, without saving or evaluating it. Verify the requested result before reporting completion. regexp: old_string is an Emacs regexp, new_string may use \\N. count_only: count matches and show the first three; changes nothing. all: replace every match, only after count_only of the same old_string and regexp in this execution.")
           :args (list (list :name "buffer_name"
                     :type 'string
                     :description "Name of the buffer to modify")
               (list :name "old_string"
                     :type 'string
-                    :description "Nonempty text copied from the target buffer, with enough surrounding text to occur exactly once.")
+                    :description "Text copied from the target buffer, with enough surrounding text to occur exactly once. Empty only for an empty buffer, to write new_string as its whole text.")
               (list :name "new_string"
                     :type 'string
                     :description "Text to replace old_string with")

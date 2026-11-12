@@ -32,6 +32,11 @@
 (declare-function superchat--llm-context-budget-chars
                   "superchat-llm"
                   (&optional system-prompt turn-prompt target-model))
+(declare-function superchat-view-entries "superchat-tape-view"
+                  (session-id &optional since-id kinds limit max-id))
+(declare-function superchat-turn-state "superchat-core" (turn))
+(declare-function superchat-view-session-configuration "superchat-tape-view"
+                  (session-id))
 
 (define-error 'superchat-envelope-invalid
   "Superchat pipeline: envelope does not satisfy the Request envelope contract")
@@ -342,6 +347,79 @@ pointing at the selection that actually happened."
         (plist-get prepared :context-envelope)
       (and (listp state) (plist-get state :context-envelope)))))
 
+;;; The user's recent words left out of a chat request (2026-11-09)
+
+(defconst superchat-pipeline-recent-words-seconds (* 12 60 60)
+  "How recent a user message left out of a chat history is said to be, in seconds.
+When the chat's own history leaves out, for lack of room, a user message
+of the conversation sent within this many seconds, the user is told once
+for that conversation (`superchat-pipeline--tell-recent-words-left-out').
+Twelve hours covers a working day's conversation: words from it are ones
+the user still counts on the model having, while a message from an earlier
+day dropping out is what a long conversation is expected to do.")
+
+(defvar superchat-pipeline--recent-words-clock #'current-time
+  "Function of no arguments returning the time recent words are measured from.
+A test stands another in.")
+
+(defvar superchat-pipeline--recent-words-told (make-hash-table :test #'equal)
+  "Session ids whose user was told, in this Emacs, that recent words were left out.")
+
+(defun superchat-pipeline--recent-words-left-out (context-envelope now)
+  "Count the user messages CONTEXT-ENVELOPE left out for lack of room.
+Only those whose Tape row was written less than
+`superchat-pipeline-recent-words-seconds' before NOW count.  The omitted
+ranges of the envelope's disclosure name the rows; reasons other than
+`budget' and `oversized' (a cancelled Run, rows that are no material) are
+not lack of room."
+  (let ((count 0))
+    (dolist (range (append (plist-get (plist-get context-envelope :disclosure)
+                                      :omitted)
+                           nil))
+      (when (memq (plist-get range :reason) '(budget oversized))
+        (let ((bounds (plist-get range :range)))
+          (dolist (row (superchat-view-entries
+                        (plist-get range :session-id)
+                        (1- (aref bounds 0)) '("user") nil (aref bounds 1)))
+            (let ((written (ignore-errors
+                             (date-to-time (concat (nth 5 row) " +0000")))))
+              (when (and written
+                         (< (float-time (time-subtract now written))
+                            superchat-pipeline-recent-words-seconds))
+                (setq count (1+ count))))))))
+    count))
+
+(defun superchat-pipeline--tell-recent-words-left-out
+    (envelope session-id surface context-envelope)
+  "Say once for SESSION-ID when its chat history left out recent user words.
+ENVELOPE is the chat Request envelope, SURFACE its surface and
+CONTEXT-ENVELOPE the history selection it was assembled from.  Only the
+chat surface's own history counts: a request without a chat Turn (a
+sub-agent, a workflow step, compaction, skill matching) says nothing.  A
+conversation nobody opened (`conversation.background': a timer's task, a
+woken Work Record) says nothing either, and is not marked as told: its
+user messages are what Superchat wrote, and nobody is looking at it.
+One echo-area line; nothing goes to the Tape or into any request."
+  (when (and (eq surface 'chat)
+             (stringp session-id)
+             context-envelope
+             (not (gethash session-id superchat-pipeline--recent-words-told))
+             (not (plist-get (superchat-view-session-configuration session-id)
+                             :background)))
+    (let* ((context (plist-get envelope :context))
+           (turn (and (listp context) (plist-get context :chat-turn)))
+           (count (and turn
+                       (superchat-pipeline--recent-words-left-out
+                        context-envelope
+                        (funcall superchat-pipeline--recent-words-clock)))))
+      (when (and count (> count 0))
+        (puthash session-id t superchat-pipeline--recent-words-told)
+        (let ((budget (plist-get (superchat-turn-state turn) :context-max-chars)))
+          (message
+           "Superchat: the model is no longer sent %d of your messages from the last %d hours (history budget %s); /compact, or raise `superchat-context-max-chars' or `superchat-llm-context-window-overrides'"
+           count (/ superchat-pipeline-recent-words-seconds 3600)
+           (if (integerp budget) (format "%d characters" budget) "unknown")))))))
+
 (defun superchat-pipeline--dispatch-to-runtime
     (envelope request-id session-id surface sink tools tool-decision prompt)
   "Build the legacy Request for the prepared PROMPT and submit it.
@@ -422,6 +500,12 @@ envelope fields."
               (superchat-invariant-check
                'prompt-reconstructable session-id nil nil)))
          (handle (superchat-runtime-submit request)))
+    (when (eq (plist-get handle :status) 'accepted)
+      (condition-case condition
+          (superchat-pipeline--tell-recent-words-left-out
+           envelope session-id surface (plist-get request :context-envelope))
+        (error
+         (superchat-event-record-fault 'recent-words request-id 'driver condition))))
     (append handle (list :request-id request-id))))
 
 ;;; Legacy Request → envelope (S14; the shape S10/S13 producers use by hand)

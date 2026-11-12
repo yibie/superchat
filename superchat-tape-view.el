@@ -958,8 +958,12 @@ record answers -- the newest user message older than it -- that message is
 kept after all, ahead of what was selected, and the oldest selected records
 that are not user messages go to make room (decision of 2026-10-22: a
 history of 22 probes without the question they served sent the model on
-probing).  The boundary is then no longer one cut: records between the
-question and the rest are left out too."
+probing).  The user's earlier messages follow it, newest first, within one
+eighth of CHAR-BUDGET, also when the oldest selected record is itself a user
+message (decision of 2026-11-09: kept alone, the nearest was \"go on\" and
+the task said five messages earlier was left out); see
+`superchat-view--continuity-keep-question'.  The boundary is then no longer
+one cut: records between the kept messages and the rest are left out too."
   (let ((render-line (or line-function
                          #'superchat-view--continuity-item-line))
         (selected nil)
@@ -1016,41 +1020,98 @@ question and the rest are left out too."
           :boundary-reason boundary-reason
           :skipped-records skipped-records)))
 
+(defconst superchat-view--continuity-user-words-share 8
+  "One part in this many of the character budget goes to the user's earlier words.
+When the character budget cuts the history short, the user messages older
+than what was selected are kept ahead of it, newest first, as long as all
+the user messages kept that way -- the nearest one included -- render
+within the character budget divided by this number.  It bounds what the
+newest calls and answers can lose to them: one eighth, so a long run of
+\"go on\" messages, or one long pasted text, cannot crowd the recent work
+out, while the task said several messages back still reaches the model
+(decision of 2026-11-09: with only the nearest message, \"继续\", kept,
+the model asked the user what it was supposed to do).  A constant, not an
+option: the share is part of how the history is chosen, not a preference.")
+
+(defun superchat-view--continuity-make-room
+    (questions kept entry-budget char-budget length-of question-p)
+  "Return (KEPT-LEFT), KEPT less its oldest records for which QUESTION-P fails.
+KEPT is oldest first.  As few go as let QUESTIONS and what is left of KEPT
+hold ENTRY-BUDGET and CHAR-BUDGET together, counting LENGTH-OF and one
+separator a line but the first.  Nil when no such records are left to go
+and they still do not; KEPT-LEFT itself may be empty."
+  (let* ((kept (copy-sequence kept))
+         (fits
+          (lambda ()
+            (and (or (null entry-budget)
+                     (<= (+ (length questions) (length kept)) entry-budget))
+                 (or (null char-budget) (<= char-budget 0)
+                     (<= (+ (cl-loop for record in questions
+                                     sum (1+ (funcall length-of record)))
+                            -1
+                            (cl-loop for record in kept
+                                     sum (1+ (funcall length-of record))))
+                         char-budget))))))
+    (while (and (not (funcall fits))
+                (when-let* ((drop (cl-find-if-not question-p kept)))
+                  (setq kept (delq drop kept)))))
+    (and (funcall fits) (list kept))))
+
 (defun superchat-view--continuity-keep-question
     (records selected entry-budget char-budget line-of question-p)
-  "SELECTED, oldest first, with the question its oldest record answers.
-The question is the newest record of RECORDS (oldest first) older than
-SELECTED's first record for which QUESTION-P holds.  SELECTED is returned
-as it is when its first record is a question, when there is none, or when
-the question alone exceeds CHAR-BUDGET; otherwise the question goes ahead
-and SELECTED's oldest records that are not questions go until ENTRY-BUDGET
-and CHAR-BUDGET hold, counting LINE-OF's length and one separator a line."
+  "SELECTED, oldest first, with the user's words its oldest record follows.
+Questions are the records of RECORDS (oldest first) older than SELECTED's
+first record for which QUESTION-P holds.
+
+The nearest -- the newest of them -- is kept unless SELECTED's first record
+is itself a question, or the nearest alone exceeds CHAR-BUDGET (decision of
+2026-10-22).  Then the older questions are considered, newest first: each
+is kept when the questions kept so far and it, nearest included, render
+within CHAR-BUDGET divided by `superchat-view--continuity-user-words-share';
+one that does not fit is passed over and older ones are still considered.
+Nothing older is kept without a positive CHAR-BUDGET.
+
+To make room for each question kept, SELECTED's oldest records that are not
+questions go until ENTRY-BUDGET and CHAR-BUDGET hold, counting LINE-OF's
+length and one separator a line; a question for which they cannot is not
+kept.  The questions kept go ahead of what is left of SELECTED, in Tape
+order."
   (let* ((oldest (car selected))
-         (question
-          (unless (funcall question-p oldest)
-            (cl-loop with found = nil
-                     for record in records
-                     until (eq record oldest)
-                     when (funcall question-p record) do (setq found record)
-                     finally return found)))
-         (length-of (lambda (record) (length (funcall line-of record)))))
-    (if (or (null question)
-            (and char-budget (> char-budget 0)
-                 (> (funcall length-of question) char-budget)))
-        selected
-      (let* ((kept (copy-sequence selected))
-             (fits
-              (lambda ()
-                (and (or (null entry-budget) (<= (1+ (length kept)) entry-budget))
-                     (or (null char-budget) (<= char-budget 0)
-                         (<= (+ (funcall length-of question)
-                                (cl-loop for record in kept
-                                         sum (1+ (funcall length-of record))))
-                             char-budget))))))
-        (while (and (not (funcall fits))
-                    (when-let* ((drop (cl-find-if-not question-p kept)))
-                      (setq kept (delq drop kept)))))
-        (if (funcall fits) (cons question kept) selected)))))
+         (earlier (cl-loop for record in records
+                           until (eq record oldest)
+                           when (funcall question-p record) collect record))
+         (nearest (unless (funcall question-p oldest) (car (last earlier))))
+         (older (reverse (if nearest (butlast earlier) earlier)))
+         (length-of (lambda (record) (length (funcall line-of record))))
+         (positive-chars (and char-budget (> char-budget 0)))
+         (kept selected)
+         (questions nil))
+    ;; The rule of 2026-10-22, unchanged: the question the oldest kept
+    ;; record answers.
+    (when (and nearest
+               (not (and positive-chars
+                         (> (funcall length-of nearest) char-budget))))
+      (when-let* ((room (superchat-view--continuity-make-room
+                         (list nearest) kept entry-budget char-budget
+                         length-of question-p)))
+        (setq kept (car room)
+              questions (list nearest))))
+    ;; 2026-11-09: the user's earlier words, within one eighth.
+    (when positive-chars
+      (let ((share (/ char-budget superchat-view--continuity-user-words-share))
+            (used (cl-loop for record in questions
+                           sum (1+ (funcall length-of record)))))
+        (dolist (candidate older)
+          (let ((size (1+ (funcall length-of candidate))))
+            (when (<= (+ used size) share)
+              (when-let* ((room (superchat-view--continuity-make-room
+                                 (cons candidate questions) kept
+                                 entry-budget char-budget
+                                 length-of question-p)))
+                (setq kept (car room)
+                      questions (cons candidate questions)
+                      used (+ used size))))))))
+    (if questions (append questions kept) selected)))
 
 (defun superchat-view--continuity-material-record-p (record)
   "Return non-nil when continuity RECORD is prompt material."

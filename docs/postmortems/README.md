@@ -32,3 +32,4 @@ Links to the test, rule, spec sentence or smoke case that now catches this class
 | # | Title |
 |---|---|
 | [0001](0001-a-broken-tool-call-lost-its-type.md) | A broken tool call lost its type without streaming |
+| [0002](0002-text-a-request-could-not-carry.md) | Text a request could not carry |

@@ -149,8 +149,11 @@ and the result says how to wait instead."
       (should (string-match-p (regexp-quote "accept-process-output")
                               (ef--second-prompt))))))
 
-(ert-deftest eval-failure/more-than-one-expression-is-a-failed-call ()
-  (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(+ 1 2) (+ 3 4)"))))
+(ert-deftest eval-failure/more-than-one-expression-fails-when-one-is-not-a-list ()
+  "Several lists run in order (decision of 2026-11-09,
+scripts/several-forms-regression.el); a form that is not a list among them
+is still a failed call."
+  (ef--fixture (list '(:tool-uses (("eval_elisp" (expression . "(+ 1 2) done"))))
                      '(:text "EF-DONE"))
     (let ((view (smoke--open-chat)))
       (ef--run view "compute")

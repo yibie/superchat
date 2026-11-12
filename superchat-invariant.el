@@ -102,7 +102,9 @@ The recorded `request.header' supplies the system text and tool schemas and the
 `request.message-list' supplies the message composition as storage references.
 The check rebuilds the request from those rows and fails when the receipt, the
 header reference, or a named storage id does not resolve; a recorded receipt
-alone is not evidence that the request can be rebuilt."
+alone is not evidence that the request can be rebuilt.  The record's `:step',
+when present, names the attempt: the list of that Step is rebuilt, not the
+newest whole list of the request, which may be an earlier attempt's."
   :check
   (lambda (record)
     (cond
@@ -112,7 +114,8 @@ alone is not evidence that the request can be rebuilt."
       (let* ((session-id (plist-get record :session-id))
              (request-id (plist-get record :request-id))
              (rebuilt (and (fboundp 'superchat-tape-request-evidence)
-                           (superchat-tape-request-evidence session-id request-id)))
+                           (superchat-tape-request-evidence
+                            session-id request-id (plist-get record :step))))
              (status (plist-get rebuilt :status)))
         (unless (eq status 'reproduced)
           (list :request-id request-id
