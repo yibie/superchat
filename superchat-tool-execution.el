@@ -426,14 +426,40 @@ where `superchat-runtime.el' is not loaded, or with a malformed identity."
     (funcall #'superchat-runtime--note-open-work
              (plist-get context :run-id) execution-id action)))
 
-(defun superchat-tool-execution--note-runtime-outcome (context outcome)
+(defun superchat-tool-execution--note-runtime-outcome (context outcome &optional kind)
   "Tell Runtime that a call of CONTEXT's Run ended with OUTCOME.
 OUTCOME is `succeeded' or `failed'; Runtime counts failures in a row
-\(slice 9c).  A no-op outside a Runtime Run."
+\(slice 9c) and, for a failure, its KIND (`superchat-tool-failure-kind').
+A no-op outside a Runtime Run."
   (when (and (fboundp 'superchat-runtime-note-tool-outcome)
              (stringp (plist-get context :run-id)))
     (funcall #'superchat-runtime-note-tool-outcome
-             (plist-get context :run-id) outcome)))
+             (plist-get context :run-id) outcome kind)))
+
+(defun superchat-tool-failure-kind (error-type message)
+  "Name the kind of a failed call from its ERROR-TYPE and MESSAGE.
+ERROR-TYPE is the `:error-type' `tool.failed' records; MESSAGE is the text
+of the failure.  A function or variable that does not exist adds its name
+\(\"void-function foo-bar\"), and a plain `error' adds the start of its
+message, up to the first period, colon or semicolon (\"error Expected
+exactly one expression\").  Any other type is the kind as it is.  Decision
+of 2026-11-10, the same mistake twice changes what the model is told."
+  (let* ((type (if (and (stringp error-type) (not (string-empty-p error-type)))
+                   error-type
+                 "tool-failed"))
+         (text (string-trim
+                (replace-regexp-in-string
+                 "\\`\\(?:Error: evaluating expression: \\|\\[Tool call failed: \\)" ""
+                 (if (stringp message) (string-trim message) "")))))
+    (cond
+     ((and (member type '("void-function" "void-variable"))
+           (string-match "is void: \\([^ \t\n]+\\)" text))
+      (concat type " " (string-remove-suffix "]" (match-string 1 text))))
+     ((and (equal type "error")
+           (string-match "\\`[^.:;\n]+" text))
+      (concat type " " (truncate-string-to-width
+                        (string-trim (match-string 0 text)) 60)))
+     (t type))))
 
 ;;;; Two hard hooks in the tool loop (slice 11b) ----------------------------
 
@@ -637,7 +663,10 @@ success."
               "error" (or exact-error (list :status status :result result)))))
           nil (and (plist-get context :evidence-contract) t) t)))
     (when (equal status "failed")
-      (superchat-tool-execution--note-runtime-outcome context 'failed))
+      (superchat-tool-execution--note-runtime-outcome
+       context 'failed
+       (superchat-tool-failure-kind (plist-get exact-error :error-type)
+                                    (or (plist-get exact-error :message) result))))
     (superchat-tool-execution--note-runtime-work
      context execution-id 'effect-settled)
     (unless (equal "user-quit" (plist-get metadata :interruption))

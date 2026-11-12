@@ -2793,6 +2793,12 @@ restore its stale `delivering' entry or append another terminal event."
                                (when (and (eq status 'failed)
                                           (plist-get entry :failure))
                                  (list :failure (plist-get entry :failure)))
+                               ;; Its failed tool calls by kind (decision of
+                               ;; 2026-11-10, the same mistake twice).
+                               (when (and (memq status '(failed timed-out))
+                                          (plist-get entry :tool-failure-kinds))
+                                 (list :tool-failures
+                                       (superchat-runtime--tool-failure-summary entry)))
                                (when (and (eq status 'audit-incomplete)
                                           (plist-get entry :turn-recording-failures))
                                  '(:audit-incomplete t
@@ -2837,6 +2843,10 @@ restore its stale `delivering' entry or append another terminal event."
                      entry status terminal-id nil turn-event-id)
                     tape-id (or response-storage-id
                                 (plist-get cancel-record :storage-id)))
+              ;; After the Turn's own rows and before anything can start the
+              ;; next Turn: the note on its failed tool calls (decision of
+              ;; 2026-11-10, the same mistake twice).
+              (superchat-runtime--record-failure-summary entry status)
               ;; Delivery observes only after, and cannot undo, durable facts.
               (superchat-runtime--finish-tail
                entry status response tape-id
@@ -3783,6 +3793,8 @@ Absent options preserve legacy behavior; result delivery retains three args."
                       (superchat-runtime--turn-stopping run-id))
                      ('tool-nudges
                       (superchat-runtime--tool-nudges run-id))
+                     ('tool-failure-advice
+                      (superchat-runtime--tool-failure-advice run-id))
                      ('tools-stopped
                       (superchat-runtime-tools-stopped run-id))
                      ;; A reply stopped at the output limit (slice 12b): one
@@ -4893,17 +4905,190 @@ it as \"tools USED/LIMIT\" and the reminder of slice 9d is decided by it."
     (when (and entry (not (superchat-runtime--terminal-p (plist-get entry :status))))
       (superchat-runtime--update run-id :tool-calls (list :used used :limit limit)))))
 
-(defun superchat-runtime-note-tool-outcome (run-id outcome)
-  "Count RUN-ID's tool calls that failed in a row.
+(defun superchat-runtime-note-tool-outcome (run-id outcome &optional kind)
+  "Count RUN-ID's tool calls that failed in a row, and its failures by KIND.
 OUTCOME is `failed' or `succeeded'.  Only these two count: a refused,
-denied or cancelled call leaves the count as it is (slice 9c)."
+denied or cancelled call leaves the counts as they are (slice 9c).
+
+A failure of KIND, a string from `superchat-tool-failure-kind', is also
+counted under that kind for the whole execution: a success does not reset
+it (`:tool-failure-kinds', an alist in the order first seen).  When a kind
+fails a second time or more, a note for that kind is queued for the next
+request (`superchat-runtime--failure-correction'), unless this failure
+makes the failure brake stop the execution.  Decision of 2026-11-10, the
+same mistake twice changes what the model is told."
   (let ((entry (and (stringp run-id) (superchat-runtime--entry run-id))))
     (when (and entry (memq outcome '(failed succeeded)))
-      (superchat-runtime--update
-       run-id :tool-failure-streak
-       (if (eq outcome 'failed)
-           (1+ (or (plist-get entry :tool-failure-streak) 0))
-         0)))))
+      (let ((streak (if (eq outcome 'failed)
+                        (1+ (or (plist-get entry :tool-failure-streak) 0))
+                      0)))
+        (superchat-runtime--update run-id :tool-failure-streak streak)
+        (when (and (eq outcome 'failed) (stringp kind))
+          (let* ((kinds (copy-alist (plist-get entry :tool-failure-kinds)))
+                 (cell (assoc kind kinds))
+                 (count (1+ (or (cdr cell) 0))))
+            (if cell
+                (setcdr cell count)
+              (setq kinds (append kinds (list (cons kind count)))))
+            (superchat-runtime--update
+             run-id :tool-failure-kinds kinds
+             :tool-failure-round
+             (append (plist-get entry :tool-failure-round) (list kind)))
+            (when (and (>= count 2)
+                       (not (superchat-runtime--brake-stops-p streak)))
+              (superchat-runtime-steer
+               run-id (superchat-runtime--failure-correction kind count)
+               'self-correction))))))))
+
+(defun superchat-runtime--brake-stops-p (streak)
+  "Return non-nil when the failure brake stops at STREAK failures in a row."
+  (and (memq 'superchat-tool-failure-brake-hook
+             (bound-and-true-p superchat-tool-loop-hooks))
+       (natnump superchat-tool-failure-brake)
+       (> superchat-tool-failure-brake 0)
+       (>= streak superchat-tool-failure-brake)))
+
+(defun superchat-runtime--failure-kind-type (kind)
+  "The error type at the head of failure KIND, and the rest, as (TYPE . REST)."
+  (if (string-match "\\`\\([^ ]+\\) \\(.+\\)\\'" kind)
+      (cons (match-string 1 kind) (match-string 2 kind))
+    (cons kind nil)))
+
+(defun superchat-runtime--name-is-p (name what)
+  "Return non-nil when NAME, a string, names an existing WHAT.
+WHAT is `variable' (bound here or by default, or declared special) or
+`function' (`fboundp').  The name is not interned.  Real-model runs of
+2026-11-10: a variable called as a function, told of unrelated functions."
+  (let ((symbol (and (stringp name) (intern-soft name))))
+    (and symbol
+         (if (eq what 'function)
+             (fboundp symbol)
+           (or (boundp symbol) (default-boundp symbol) (special-variable-p symbol))))))
+
+(defun superchat-runtime--failure-advice (kind)
+  "What to do instead, for failure KIND: one or two sentences, or nil."
+  (pcase-let ((`(,type . ,rest) (superchat-runtime--failure-kind-type kind)))
+    (pcase type
+      ((and "void-function" (guard (superchat-runtime--name-is-p rest 'variable)))
+       (format "It is a variable: use its value -- write %s without parentheses around it as the head of a form -- or (symbol-value '%s), or (buffer-local-value '%s BUFFER) for its value in another buffer."
+               rest rest rest))
+      ((and "void-variable" (guard (superchat-runtime--name-is-p rest 'function)))
+       (format "It is a function: call it as (%s ...), or refer to it as #'%s." rest rest))
+      ((or "void-function" "void-variable")
+       (format "Before you use a name, check in a call of its own that it exists: (%s '%s) answers t only for a defined name; the error lists defined names close to it."
+               (if (equal type "void-function") "fboundp" "boundp")
+               (or rest "NAME")))
+      ("unreadable-expression"
+       "Sending such an expression again with small edits fails the same way, and a position such as line 1 tells little when the whole expression is on one line.  Do it another way: split the work into several short eval_elisp calls, or write the code into an emacs-lisp-mode buffer with edit_buffer (an empty buffer takes the whole text when old_string is empty), whose Lisp check names the line of a parenthesis that does not match, and then evaluate that buffer.")
+      ("error"
+       (if (and rest (string-prefix-p "Expected exactly one expression" rest))
+           "eval_elisp runs several forms only when each one is a list, and the error names the form that is not.  Send only lists: remove that symbol, number or string, or put it inside a list."
+         "Read the error, check the assumption it contradicts in a separate small call, and then do it another way."))
+      ("wrong-type-argument"
+       "Before you operate on a value, look at it in a call of its own -- its printed form, or (type-of VALUE) -- and write the next call for what it is.")
+      ("time-limit"
+       "Do not run such a call again as it was: make the work smaller -- fewer items, a smaller region, one step at a time -- or split it into batches; run long work in a process.")
+      (_
+       "Sending the call again with small edits fails the same way.  Read the error, check the assumption it contradicts in a separate small call, and then do it another way."))))
+
+(defun superchat-runtime--failure-correction (kind count)
+  "The note the model is given when failure KIND has happened COUNT times.
+COUNT is at least 2.  It names the kind, says how often it happened in this
+execution, and what to do instead (`superchat-runtime--failure-advice')."
+  (pcase-let ((`(,type . ,rest) (superchat-runtime--failure-kind-type kind)))
+    (concat
+     "Superchat: "
+     (pcase type
+       ((and "void-function" (guard (superchat-runtime--name-is-p rest 'variable)))
+        (format "`%s' is a variable, not a function, and this execution has now called it as a function %d times.  " rest count))
+       ((and "void-variable" (guard (superchat-runtime--name-is-p rest 'function)))
+        (format "`%s' is a function, not a variable, and this execution has now used it as a variable %d times.  " rest count))
+       ("void-function"
+        (format "`%s' is not a defined function, and this execution has now called it %d times.  Do not call it again.  " rest count))
+       ("void-variable"
+        (format "`%s' is not a defined variable, and this execution has now used it %d times.  Do not use it again.  " rest count))
+       ("unreadable-expression"
+        (format "%d expressions in this execution did not read as Lisp, so none of them ran.  " count))
+       ("time-limit"
+        (format "%d calls in this execution were stopped at the time limit.  " count))
+       (_
+        (format "the same kind of failure (%s) has now happened %d times in this execution.  "
+                kind count)))
+     (superchat-runtime--failure-advice kind))))
+
+(defconst superchat-runtime--corrected-retry-sentence
+  "The same kind of failure happened before in this execution: do not send the failed call again with small edits.  Follow the Superchat note in this request, then continue the user's original request."
+  "What the tool feedback says in place of \"Correct the arguments ...\"
+when a note for a repeated failure kind is on its way to the model.")
+
+(defconst superchat-runtime--time-limit-retry-sentence
+  "A call stopped at the time limit must not be run again as it was: make it smaller or split it.  Correct any other failed call and retry it.  Once it succeeds, continue the user's original request."
+  "What the tool feedback says in place of \"Correct the arguments ...\"
+after a call was stopped at the time limit.")
+
+(defun superchat-runtime--tool-failure-advice (run-id)
+  "The retry sentence for RUN-ID's round of tool results just ended, or nil.
+Nil keeps the tool feedback's own sentence.  A note for a repeated failure
+kind queued for the next request wins; then a call stopped at the time
+limit.  The failures of the round are forgotten once asked."
+  (let* ((entry (superchat-runtime--entry run-id))
+         (round (plist-get entry :tool-failure-round)))
+    (when entry
+      (superchat-runtime--update run-id :tool-failure-round nil)
+      (cond
+       ((cl-some (lambda (steer) (eq 'self-correction (plist-get steer :origin)))
+                 (plist-get entry :steer-queue))
+        superchat-runtime--corrected-retry-sentence)
+       ((member "time-limit" round)
+        superchat-runtime--time-limit-retry-sentence)))))
+
+(defun superchat-runtime--tool-failure-summary (entry)
+  "ENTRY's failed tool calls by kind, as a list of (:kind KIND :count N)."
+  (mapcar (lambda (cell) (list :kind (car cell) :count (cdr cell)))
+          (plist-get entry :tool-failure-kinds)))
+
+(defun superchat-runtime--failure-summary-note (entry)
+  "The note the next request carries after ENTRY's execution ended failed.
+Nil when no tool call of it failed.  Written by Superchat and stored as a
+system row, so the next request carries it as a `[System note]', not as
+the assistant's words."
+  (let ((kinds (plist-get entry :tool-failure-kinds))
+        (stopped (superchat-tool-stop-reason (plist-get entry :tool-budget))))
+    (when kinds
+      (let ((shown (cl-subseq (cl-stable-sort (copy-sequence kinds) #'> :key #'cdr)
+                              0 (min 5 (length kinds)))))
+        (concat
+         "Written by Superchat, not by the assistant: the previous execution "
+         (if stopped
+             (format "was stopped by Superchat (%s)." stopped)
+           "ended as failed.")
+         "  Its failed tool calls, by kind: "
+         (mapconcat (lambda (cell)
+                      (format "%s, %d time%s" (car cell) (cdr cell)
+                              (if (= 1 (cdr cell)) "" "s")))
+                    shown "; ")
+         (if (> (length kinds) 5)
+             (format "; and %d other kinds." (- (length kinds) 5))
+           ".")
+         "  Before calling tools again for this task:"
+         (mapconcat (lambda (cell)
+                      (format "\n- %s: %s" (car cell)
+                              (superchat-runtime--failure-advice (car cell))))
+                    shown ""))))))
+
+(defun superchat-runtime--record-failure-summary (entry status)
+  "Store ENTRY's failure note on the Tape when its execution ended with STATUS.
+Only an execution that ended `failed' or `timed-out' with failed tool calls
+gets one.  The row is material of kind \"system\", appended after the
+Turn's own rows, so the next Turn's history carries it.  A failure to store
+it changes nothing else."
+  (when (memq status '(failed timed-out))
+    (when-let* ((note (superchat-runtime--failure-summary-note entry)))
+      (condition-case nil
+          (superchat-tape-append-material
+           (plist-get entry :session-id) "system" note
+           :topic "tool-failures")
+        (error nil)))))
 
 (defun superchat-runtime--tool-nudges (run-id)
   "The sentences RUN-ID's next request is to carry about its tool calls.

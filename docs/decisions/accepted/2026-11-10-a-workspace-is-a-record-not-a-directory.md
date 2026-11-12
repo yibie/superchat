@@ -168,7 +168,7 @@ Tape 上的 `workspace.bound` 事实要带种类和名字：重新打开一段�
 - 85 处的清单没有逐一复核，抽查了 5 处。
 - 用户的数据目录是否改过位置，没查。
 - 真实模型看到"别的工作记录"那一行会不会去接手，没测。2026-11-09 的原型里，接手要模型调一次 `work_record update`；`read` 和 `resume` 都不会让记录成为当前记录，`resume` 的回复还和实际行为不符。这是一个独立的缺陷。
-- 自我纠正的问题不在本提案里，见 [同一天的另一份提案](../proposed/2026-11-10-the-same-mistake-twice-changes-what-the-model-is-told.md)。
+- 自我纠正的问题不在本提案里，见 [同一天的另一份提案](2026-11-10-the-same-mistake-twice-changes-what-the-model-is-told.md)。
 
 ## 做成了什么（2026-11-10 实现）
 

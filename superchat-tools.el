@@ -1310,8 +1310,124 @@ task simulation: one keymap dump of 108,699 bytes ended a Run.")
                                   (length marker)))
                     marker)))
     (superchat-tool-execution-failed
-     (concat "Error: evaluating expression: " details)
+     (concat "Error: evaluating expression: " details
+             (when (and (memq (car err) '(void-function void-variable))
+                        (symbolp (cadr err))
+                        (cadr err))
+               (superchat-tools--close-names-text (cadr err) (car err))))
      (symbol-name (car err)))))
+
+;;;; A name that does not exist: Superchat looks up the close ones ----------
+;; docs/decisions/accepted/2026-11-10-the-same-mistake-twice-changes-what-the-model-is-told.md
+;; On 2026-11-09 three function names the model guessed were called without
+;; being looked up.  The lookup does not wait for the model to think of it.
+
+(defconst superchat-tools-close-names-max 5
+  "Most defined names an error about a name that does not exist lists.")
+
+(defconst superchat-tools-close-names-seconds 0.2
+  "Longest time the lookup of close names may take, in seconds.
+The names found by then are listed.")
+
+(defun superchat-tools--name-parts (name)
+  "The words of symbol NAME, split at `-', `/' and `:', in order."
+  (split-string (downcase name) "[-/:]+" t))
+
+(defun superchat-tools--close-names (symbol kind)
+  "Defined names close to SYMBOL, which is void as KIND, closest first.
+KIND is `void-function' (names that are `fboundp') or `void-variable'
+\(names that are `boundp').  For a name of several words (\"pkg-chat-open\")
+only names whose first word is the same are candidates, and a candidate
+must share at least half of the other words, at least one; a name of one
+word is matched by its spelling (`string-distance' at most 2).  Closest is
+most words shared, then smallest spelling distance.  At most
+`superchat-tools-close-names-max' names; the walk over all symbols stops
+after `superchat-tools-close-names-seconds'."
+  (let* ((name (symbol-name symbol))
+         (parts (superchat-tools--name-parts name))
+         (prefix (and (cdr parts) (car parts)))
+         (rest (cdr parts))
+         (needed (max 1 (/ (1+ (length rest)) 2)))
+         (defined (if (eq kind 'void-variable) #'boundp #'fboundp))
+         (deadline (+ (float-time) superchat-tools-close-names-seconds))
+         (seen 0)
+         found)
+    (catch 'superchat-tools--close-names-done
+      (mapatoms
+       (lambda (candidate)
+         (when (and (zerop (% (cl-incf seen) 2000))
+                    (> (float-time) deadline))
+           (throw 'superchat-tools--close-names-done nil))
+         (let ((other (symbol-name candidate)))
+           (when (and (not (eq candidate symbol))
+                      (if prefix
+                          (string-prefix-p prefix other t)
+                        (<= (abs (- (length other) (length name))) 2))
+                      (funcall defined candidate))
+             (if prefix
+                 (let* ((words (superchat-tools--name-parts other))
+                        (shared (and (equal prefix (car words))
+                                     (cl-count-if
+                                      (lambda (part) (member part rest))
+                                      (cl-remove-duplicates (cdr words)
+                                                            :test #'equal)))))
+                   (when (and shared (>= shared needed))
+                     (push (list other (- shared) (string-distance name other))
+                           found)))
+               (let ((distance (string-distance name other)))
+                 (when (<= distance 2)
+                   (push (list other 0 distance) found)))))))))
+    (setq found (sort found
+                      (lambda (a b)
+                        (or (< (nth 1 a) (nth 1 b))
+                            (and (= (nth 1 a) (nth 1 b))
+                                 (or (< (nth 2 a) (nth 2 b))
+                                     (and (= (nth 2 a) (nth 2 b))
+                                          (string< (car a) (car b)))))))))
+    (mapcar #'car (cl-subseq found 0 (min superchat-tools-close-names-max
+                                          (length found))))))
+
+(defun superchat-tools-variable-not-function-p (symbol)
+  "Return non-nil when SYMBOL, void as a function, is a variable.
+Bound here or by default, or declared special: the model wrote (SYMBOL ...)
+for a value.  Real-model runs of 2026-11-10: `buffer-read-only' and a
+package's buffer-local variable called as functions."
+  (and (symbolp symbol)
+       (or (boundp symbol) (default-boundp symbol) (special-variable-p symbol))))
+
+(defconst superchat-tools-variable-not-function-text
+  "`%s' is a variable, not a function (looked up by Superchat): use its value -- write %s without parentheses around it as the head of a form -- or (symbol-value '%s), or (buffer-local-value '%s BUFFER) for its value in another buffer."
+  "What an error about a variable called as a function says; four times the name.")
+
+(defconst superchat-tools-function-not-variable-text
+  "`%s' is a function, not a variable (looked up by Superchat): call it as (%s ...), or refer to it as #'%s."
+  "What an error about a function used as a variable says; three times the name.")
+
+(defun superchat-tools--close-names-text (symbol kind)
+  "The lines appended to the error about SYMBOL, void as KIND.
+A variable called as a function, or a function used as a variable, is said
+so instead: the close names of the other kind misled the model (real-model
+runs of 2026-11-10)."
+  (let ((names (unless (if (eq kind 'void-variable)
+                           (fboundp symbol)
+                         (superchat-tools-variable-not-function-p symbol))
+                 (superchat-tools--close-names symbol kind)))
+        (what (if (eq kind 'void-variable) "variable" "function")))
+    (cond
+     ((and (eq kind 'void-variable) (fboundp symbol))
+      (concat "\n" (format superchat-tools-function-not-variable-text symbol symbol symbol)))
+     ((and (not (eq kind 'void-variable))
+           (superchat-tools-variable-not-function-p symbol))
+      (concat "\n" (format superchat-tools-variable-not-function-text
+                           symbol symbol symbol symbol)))
+     (names
+      (format "\nDefined %s names close to `%s' (looked up by Superchat): %s.  Check that a name exists before you use it: (%s 'NAME)."
+              what symbol
+              (mapconcat (lambda (name) (format "`%s'" name)) names ", ")
+              (if (eq kind 'void-variable) "boundp" "fboundp")))
+     (t
+      (format "\nNo defined %s name is close to `%s' (looked up by Superchat); the library that would define it may not be loaded."
+              what symbol)))))
 
 (defconst superchat-tools--eval-asked-the-user
   (concat "Error: evaluating expression: it tried to ask the user for input "

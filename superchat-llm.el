@@ -2596,12 +2596,16 @@ docs/decisions/accepted/2026-09-20-reference-reading-on-demand.md"
             (push id ids))))
       (nreverse ids))))
 
-(defun superchat--llm-tool-error-feedback (result &optional pointer-ids offered)
+(defun superchat--llm-tool-error-feedback (result &optional pointer-ids offered retry)
   "Return corrective feedback when RESULT contains failed tool calls.
 POINTER-IDS, from `superchat--llm-reference-pointer-ids', are reference pages
 to name after the instruction.  When OFFERED, the request's tool names, has
 `read_reference' the page is named for it to fetch; otherwise the page itself
-follows, once per tool loop (2026-10-27).
+follows, once per tool loop (2026-10-27).  RETRY, a sentence from Runtime
+for the kind of failure (`superchat-runtime--tool-failure-advice'), takes
+the place of \"Correct the arguments of the failed call and retry it ...\";
+a refusal by the user or a policy still says not to retry (decision of
+2026-11-10, the same mistake twice changes what the model is told).
 
 Add a short user-role instruction after tool results: providers otherwise
 tend to narrate a fallback instead of repairing and retrying the requested
@@ -2615,9 +2619,11 @@ copying their potentially large contents into another prompt message.
     (when errors
       (concat
        "Tool execution failed. Do not claim success or silently substitute a fallback. "
-       (if (superchat--llm-tool-error-non-retryable-p result)
-           "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool."
-         "Correct the arguments of the failed call and retry it. Once it succeeds, continue the user's original request.")
+       (cond
+        ((superchat--llm-tool-error-non-retryable-p result)
+         "The user or a policy prevented this call; do not retry it. Explain the limitation or continue without that tool.")
+        ((and (stringp retry) (not (string-empty-p retry))) retry)
+        (t "Correct the arguments of the failed call and retry it. Once it succeeds, continue the user's original request."))
        "\nRead the error details in the preceding tool results. Failed tools:\n"
        (mapconcat (lambda (entry) (format "- %s" (car entry))) errors "\n")
        (mapconcat (lambda (id)
@@ -4102,9 +4108,15 @@ requests until it receives text, bounded by
                                  (pointer-ids
                                   (superchat--llm-reference-pointer-ids
                                    response offered reference-pointed))
+                                 ;; Runtime's sentence for the kind of
+                                 ;; failure, asked once per round.
+                                 (retry
+                                  (and (functionp runtime-observer)
+                                       (funcall runtime-observer
+                                                'tool-failure-advice nil)))
                                  (feedback
                                   (superchat--llm-tool-error-feedback
-                                   response pointer-ids offered)))
+                                   response pointer-ids offered retry)))
                             (setq reference-pointed
                                   (append reference-pointed pointer-ids))
                             (when feedback
