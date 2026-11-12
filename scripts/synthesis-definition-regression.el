@@ -228,7 +228,9 @@ is made from."
                       (syndef--call "syn_temp") '(:text "Called.")
                       '(:text "Hello."))
       (p)
-    (let* ((view (smoke--open-chat)) (session (hm--session view)))
+    ;; Since Home (2026-11-10) the chat opened from a buffer in no project is
+    ;; Home's; a conversation of no Workspace is made directly.
+    (let* ((view (superchat--temporary-view)) (session (hm--session view)))
       ;; Guard: this conversation belongs to no Workspace.
       (should-not (plist-get (superchat-view-session-configuration session) :workspace-id))
       (hm--turn view "write the tool")

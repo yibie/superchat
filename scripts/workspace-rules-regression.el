@@ -195,9 +195,10 @@
 ;; Leader additions after the mutant run: the two tests below each catch a
 ;; change the tests above let through.
 
-(ert-deftest workspace-rules/a-rules-file-beside-a-temporary-conversation-is-not-read ()
+(ert-deftest workspace-rules/a-rules-file-beside-a-home-conversation-is-not-read ()
   "The root comes from the conversation's binding, not from the directory
-the View happens to sit in."
+the View happens to sit in.  A buffer in no project opens a Home conversation
+\(2026-11-10), which has no root: the rules file beside it is not Home's."
   (wrules--with '((:text "ok")) ()
     (let ((dir (wrules--temp-dir))
           (origin (generate-new-buffer "wrules-origin")))
@@ -208,7 +209,9 @@ the View happens to sit in."
                           (setq default-directory dir)
                           (superchat))))
               (with-current-buffer view (setq default-directory dir))
-              (should-not (buffer-local-value 'superchat--workspace-binding view))
+              (let ((binding (buffer-local-value 'superchat--workspace-binding view)))
+                (should (eq 'home (plist-get binding :kind)))
+                (should-not (plist-get binding :root)))
               (hm--turn view "hello"))
             (should-not (string-match-p "RULE-MARKER-LOOSE" (wrules--system 1))))
         (kill-buffer origin)

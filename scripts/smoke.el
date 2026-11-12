@@ -180,11 +180,14 @@ the data directory, the model and the chat buffer name.  The case still
 exercises the origin path; it just exercises it from a known buffer.")
 
 (defun smoke--open-chat ()
+  "Open the chat from the pinned origin buffer and return its View.
+That is the View `superchat' shows: since Home (2026-11-10) a buffer in no
+project opens its own conversation in Home, whose View is not the buffer
+named `superchat-buffer-name'."
   (let ((origin (get-buffer-create smoke--origin-buffer-name)))
     (with-current-buffer origin
       (fundamental-mode)
-      (superchat)))
-  (or (get-buffer superchat-buffer-name) (current-buffer)))
+      (superchat))))
 
 (defun smoke--send (view text)
   (with-current-buffer view
@@ -200,8 +203,14 @@ A request that offers tools states the Session's workspace root, which under
 the fixture is its throwaway data directory -- a fresh random name every run.
 A byte-for-byte baseline cannot hold that, so the one path is replaced by a
 fixed token; everything around it is still compared exactly."
-  (let ((root (file-name-as-directory (file-truename default-directory))))
-    (replace-regexp-in-string (regexp-quote root) "<smoke-workspace>/" text t t)))
+  (let ((root (file-name-as-directory (file-truename default-directory)))
+        (spelled (file-name-as-directory (expand-file-name default-directory))))
+    ;; Home's rules file is named under the data directory as it is spelled,
+    ;; which on macOS is not its true name (/var is /private/var).
+    (replace-regexp-in-string
+     (regexp-quote spelled) "<smoke-workspace>/"
+     (replace-regexp-in-string (regexp-quote root) "<smoke-workspace>/" text t t)
+     t t)))
 
 (defun smoke-case-A ()
   "chat: one plain turn"

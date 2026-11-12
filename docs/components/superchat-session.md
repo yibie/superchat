@@ -94,6 +94,7 @@ The `kind` column is not a sufficient discriminator on its own: runtime events a
 | `:sandbox-mode` | `sandbox.mode` |
 | `:approval-policy` | `approval.policy` |
 | `:workspace-id`, `:workspace-root` | `workspace.bound`; both are set to nil by `workspace.unbound` |
+| `:workspace-kind`, `:workspace-name`, `:source-key` | `workspace.bound`, when the fact carries them (`"project"` or `"home"`, the stored name, and a Home conversation's source key; since 2026-11-10); absent after a fact that does not carry them and after `workspace.unbound`, so a fact written before then leaves them out ([decision](../decisions/accepted/2026-11-10-a-workspace-is-a-record-not-a-directory.md)) |
 | `:surface` | `intent.received` |
 
 A Session with no such events answers the initial configuration: capability `chat`, topology `single`, and nil for capability source, workspace, surface and the three permission keys (an absent permission key means the configured default: `superchat-sandbox-default-mode`, `superchat-approval-default-policy`). An `authority.policy.selected` event written before M6 is ignored.

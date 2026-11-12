@@ -81,14 +81,20 @@ VARS are fresh project roots."
       (should (string-match-p (concat "Superchat · " (regexp-quote (ws--name p)))
                               (ws--header view))))))
 
-(ert-deftest workspace-screen/the-header-of-an-unbound-view-says-temporary ()
+(ert-deftest workspace-screen/the-header-of-a-home-view-says-home ()
+  "A file in no project opens a Home conversation (2026-11-10); a View bound
+to nothing still says temporary."
   (ws--with nil 'editor (p)
     (let* ((ws--roots nil)
            (view (with-current-buffer (ws--file p) (superchat)))
            (header (ws--header view)))
-      (should-not (buffer-local-value 'superchat--workspace-binding view))
+      (should (eq 'home (plist-get (buffer-local-value 'superchat--workspace-binding view)
+                                   :kind)))
       (should-not (string-match-p (regexp-quote (ws--name p)) header))
-      (should (string-match-p "Superchat · temporary · " header)))))
+      (should (string-match-p "Superchat · Home · " header)))
+    (let ((view (superchat--temporary-view)))
+      (should-not (buffer-local-value 'superchat--workspace-binding view))
+      (should (string-match-p "Superchat · temporary · " (ws--header view))))))
 
 (ert-deftest workspace-screen/a-reopened-conversation-still-names-its-workspace ()
   (ws--with '((:text "ok")) 'editor (p)
@@ -102,28 +108,34 @@ VARS are fresh project roots."
         (should (string-match-p (concat "Superchat · " (regexp-quote (ws--name p)))
                                 (ws--header again)))))))
 
-(ert-deftest workspace-screen/the-name-is-not-stored-on-the-tape ()
+(ert-deftest workspace-screen/the-kind-and-name-are-stored-on-the-tape ()
+  "Since 2026-11-10 the fact stores the Workspace's kind and name: reopening a
+conversation reads only what the Tape holds (before, the name was not stored)."
   (ws--with nil 'editor (p)
     (let* ((view (with-current-buffer (ws--file p) (superchat)))
            (events (hm--events (hm--session view) "workspace.bound")))
       (should (= 1 (length events)))
       (let ((payload (plist-get (car events) :payload)))
-        (should (= 4 (length payload)))
+        (should (= 8 (length payload)))
         (should (plist-member payload :workspace-id))
-        (should (plist-member payload :workspace-root))))))
+        (should (plist-member payload :workspace-root))
+        (should (equal "project" (plist-get payload :workspace-kind)))
+        (should (equal (ws--name p) (plist-get payload :workspace-name)))))))
 
 (ert-deftest workspace-screen/the-conversation-tab-joins-the-tab-group-of-its-workspace ()
   (ws--with nil 'agent (p)
     (with-current-buffer (ws--file p) (superchat))
     (should (equal (ws--name p) (ws--group)))))
 
-(ert-deftest workspace-screen/the-tab-of-a-temporary-conversation-has-no-group ()
+(ert-deftest workspace-screen/the-tab-of-a-home-conversation-joins-the-home-group ()
+  "A file in no project opens a Home conversation (2026-11-10): its tab joins
+the group named Home.  Before, it was temporary and its tab had no group."
   (ws--with nil 'agent (p)
     (let ((ws--roots nil))
       (tab-bar-change-tab-group "g1")
       (should (equal "g1" (ws--group)))
       (with-current-buffer (ws--file p) (superchat))
-      (should-not (ws--group)))))
+      (should (equal "Home" (ws--group))))))
 
 (ert-deftest workspace-screen/beside-the-code-the-tab-group-is-left-alone ()
   (ws--with nil 'editor (p)

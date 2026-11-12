@@ -379,6 +379,8 @@ changes nothing -- no configuration, tool surface, Preset or permission."
 ;;;; open_file: File -> Buffer
 ;; docs/decisions/implemented/2026-09-18-buffer-first-mutation.md
 
+(declare-function superchat-workspace-home-rules-file-p "superchat-workspace" (file))
+
 (defun superchat-tool-open-file (path)
   "Bring the file PATH into Emacs as a buffer and say which buffer it is.
 This is a visit, not a read: `find-file-noselect' runs the major mode, the
@@ -399,7 +401,11 @@ with nothing on disk.  A failure is a string starting with `Error:'."
                (canonical (superchat-sandbox-canonical-path file)))
           (when (file-directory-p file)
             (error "%s is a directory, not a file" file))
-          (when (and data-root (superchat-sandbox--under-p canonical data-root))
+          ;; Home's one rules file is the exception: the model writes it on
+          ;; the user's word, and the user's save makes it a rule (D8).
+          (when (and data-root (superchat-sandbox--under-p canonical data-root)
+                     (not (and (fboundp 'superchat-workspace-home-rules-file-p)
+                               (superchat-workspace-home-rules-file-p canonical))))
             (error "%s is inside Superchat's own data directory" file))
           (when (and (file-exists-p file) large-file-warning-threshold
                      (> (or (file-attribute-size (file-attributes file)) 0)

@@ -142,8 +142,10 @@
       (should-not (string-match-p "temporary conversation" without)))))
 
 (ert-deftest workspace-remember/a-temporary-request-says-nothing-is-kept ()
+  ;; Since Home (2026-11-10) the chat opened from a buffer in no project is
+  ;; Home's; a conversation bound to no Workspace is made directly.
   (wremember--with '((:text "ok")) ()
-    (hm--turn (smoke--open-chat) "hello")
+    (hm--turn (superchat--temporary-view) "hello")
     (let ((system (wremember--system 1)))
       (should (string-match-p "This is a temporary conversation" system))
       (should (string-match-p "/workspace DIRECTORY" system))

@@ -170,7 +170,9 @@ the product writes when the sub-agent hands back is not the model's way in."
   (wrec--with nil (p)
     (let* ((sa (hm--session (wrec--view p)))
            (id (superchat-work-start sa "OSCOPE-PRIVATE-GOAL"))
-           (temporary (hm--session (smoke--open-chat)))
+           ;; Since Home (2026-11-10) the chat opened from a buffer in no
+           ;; project is Home's; a conversation of no Workspace is made directly.
+           (temporary (hm--session (superchat--temporary-view)))
            (rows (oscope--work-rows)))
       (should-not (superchat-work--workspace temporary))
       (oscope--as temporary
@@ -328,7 +330,9 @@ the product writes when the sub-agent hands back is not the model's way in."
            (theirs (plist-get (superchat-timer-create sp 'reminder "OSCOPE-P-REMINDER"
                                                       (+ (float-time) 3600))
                               :id))
-           (temporary (hm--session (smoke--open-chat)))
+           ;; Since Home (2026-11-10) the chat opened from a buffer in no
+           ;; project is Home's; a conversation of no Workspace is made directly.
+           (temporary (hm--session (superchat--temporary-view)))
            (mine (plist-get (superchat-timer-create temporary 'reminder
                                                     "OSCOPE-TEMPORARY-REMINDER"
                                                     (+ (float-time) 3600))

@@ -97,16 +97,17 @@ each holding an `a.txt'; `src-VAR' style sources are made by
             (workspace-session--no-dot-superchat p))
         (kill-buffer src)))))
 
-(ert-deftest workspace-session/a-new-conversation-outside-any-project-is-not-bound ()
+(ert-deftest workspace-session/a-new-conversation-outside-any-project-is-bound-to-home ()
+  "Before Home (2026-11-10) it was not bound at all."
   (workspace-session--with '((:text "ok")) (p)
     (let* ((workspace-session--roots nil)
            (src (workspace-session--source p))
            (view (with-current-buffer src (superchat))))
       (unwind-protect
           (progn
-            (should-not (workspace-session--binding view))
-            (should-not (workspace-session--bound-events
-                         (workspace-session--session view))))
+            (should (eq 'home (plist-get (workspace-session--binding view) :kind)))
+            (should (= 1 (length (workspace-session--bound-events
+                                  (workspace-session--session view))))))
         (kill-buffer src)))))
 
 (ert-deftest workspace-session/binding-happens-once ()
@@ -129,7 +130,9 @@ each holding an `a.txt'; `src-VAR' style sources are made by
   (workspace-session--with '((:text "ok")) (p)
     (let* ((workspace-session--roots nil)
            (src (workspace-session--source p))
-           (view (smoke--open-chat)))
+           ;; Since Home (2026-11-10) the chat opened from a buffer in no
+           ;; project is bound at once; an unbound conversation is made directly.
+           (view (superchat--temporary-view)))
       (unwind-protect
           (progn
             (workspace-session--round view "hi")
@@ -196,7 +199,9 @@ each holding an `a.txt'; `src-VAR' style sources are made by
   (workspace-session--with '((:text "ok")) ()
     (let* ((workspace-session--roots nil)
            (d (workspace-session--temp-dir))
-           (view (smoke--open-chat)))
+           ;; Since Home (2026-11-10) the chat opened from a buffer in no
+           ;; project is bound at once; an unbound conversation is made directly.
+           (view (superchat--temporary-view)))
       (unwind-protect
           (progn
             (workspace-session--slash view d)
@@ -214,7 +219,9 @@ each holding an `a.txt'; `src-VAR' style sources are made by
   (workspace-session--with '((:text "ok")) ()
     (let* ((workspace-session--roots nil)
            (d (workspace-session--temp-dir))
-           (view (smoke--open-chat)))
+           ;; Since Home (2026-11-10) the chat opened from a buffer in no
+           ;; project is bound at once; an unbound conversation is made directly.
+           (view (superchat--temporary-view)))
       (unwind-protect
           (progn
             (workspace-session--round view "hi")
@@ -250,7 +257,9 @@ each holding an `a.txt'; `src-VAR' style sources are made by
 (ert-deftest workspace-session/slash-workspace-on-a-subdirectory-binds-the-project-root ()
   (workspace-session--with '((:text "ok")) (p)
     (let ((sub (expand-file-name "sub/" p))
-          (view (smoke--open-chat)))
+          ;; An unbound conversation (Home binds the chat opened from a
+          ;; buffer in no project since 2026-11-10).
+          (view (superchat--temporary-view)))
       (make-directory sub t)
       (workspace-session--slash view sub)
       (should (equal (plist-get (workspace-session--binding view) :root) p))

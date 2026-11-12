@@ -525,6 +525,8 @@ compaction) never received these blocks."
 (declare-function superchat-workspace-rules-text "superchat-workspace" (root))
 (declare-function superchat-workspace-remember-note "superchat-workspace" (root))
 (declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
+(declare-function superchat-workspace-rules-root "superchat-workspace"
+                  (id root &optional kind))
 (defvar superchat-workspace-rules-problem-note)
 
 (defconst superchat-prompt--rules-only-surfaces
@@ -615,12 +617,15 @@ in its history, and nothing there says they were already hung on the text."
 
 (defun superchat-prompt-collector--workspace-rules (env _state _tools)
   "Return the rules of the Workspace ENV's Session is bound to, as system text.
-The root comes from the Session's own Tape (`workspace.bound'), so the rules
-follow the conversation, not the buffer that happens to be current.  On the
-chat, inline-ask and inline-act surfaces the rules are followed by what to
-do when the user says to remember something
-\(`superchat-workspace-remember-note'); a Session with no Workspace root (a
-temporary conversation) gets only that note, which says nothing is kept.
+Where they are kept comes from the Session's own Tape (`workspace.bound'),
+so the rules follow the conversation, not the buffer that happens to be
+current: a project's root, or Home's store for a Home conversation
+\(`superchat-workspace-rules-root').  Home's rules never reach a project's
+request and a project's never reach Home's (D7).  On the chat, inline-ask
+and inline-act surfaces the rules are followed by what to do when the user
+says to remember something (`superchat-workspace-remember-note'); a Session
+bound to no Workspace (a temporary conversation) gets only that note,
+which says nothing is kept.
 The surfaces in `superchat-prompt--rules-only-surfaces' get the rules
 alone, and nothing when there are none; a region rewrite's rules are followed
 by `superchat-prompt--rewrite-rules-note'."
@@ -628,10 +633,16 @@ by `superchat-prompt--rewrite-rules-note'."
          (surface (plist-get env :surface))
          (note-p (memq surface '(chat inline-ask inline-act)))
          (surface-p (or note-p (memq surface superchat-prompt--rules-only-surfaces)))
-         (root (and surface-p
-                    (stringp session-id)
-                    (plist-get (superchat-view-session-configuration session-id)
-                               :workspace-root)))
+         (config (and surface-p
+                      (stringp session-id)
+                      (superchat-view-session-configuration session-id)))
+         (root (and config
+                    (if (fboundp 'superchat-workspace-rules-root)
+                        (superchat-workspace-rules-root
+                         (plist-get config :workspace-id)
+                         (plist-get config :workspace-root)
+                         (plist-get config :workspace-kind))
+                      (plist-get config :workspace-root))))
          (rules (and (stringp root)
                      (fboundp 'superchat-workspace-rules-text)
                      (superchat-workspace-rules-text root)))

@@ -126,8 +126,16 @@ answers, is evaluated with DIR bound.  BODY runs in the canonical fixture."
     (tab-bar-tabs-set tabs)))
 
 (defun editor-mode--view ()
-  "The primary chat View."
-  (get-buffer superchat-buffer-name))
+  "The chat View the last opening showed.
+Since Home (2026-11-10) a buffer in no project opens its own conversation,
+whose View is not named `superchat-buffer-name': the most recently used chat
+View is the one."
+  (or (cl-some (lambda (window)
+                 (let ((buffer (window-buffer window)))
+                   (and (buffer-local-value 'superchat-mode buffer) buffer)))
+               (window-list nil 'no-minibuf))
+      (cl-find-if (lambda (buffer) (buffer-local-value 'superchat-mode buffer))
+                  (buffer-list))))
 
 (defun editor-mode--side-p (window)
   (and (window-live-p window)
@@ -256,7 +264,9 @@ file does not close another window that already shows it.  The shared
 side-window function closes such windows for the other panels, and only in an
 interactive Emacs, so the opening runs as in one."
   (editor-mode--fixture nil (dir code code-window)
-    (let* ((view (superchat--ensure-chat-view superchat-buffer-name))
+    ;; The View `M-x superchat' opens from the file: its own conversation in
+    ;; Home since 2026-11-10, no longer the buffer named `superchat-buffer-name'.
+    (let* ((view (with-current-buffer code (superchat--ensure-request-chat-buffer)))
            (below (split-window code-window nil 'below)))
       (set-window-buffer below view)
       (select-window code-window)

@@ -97,7 +97,8 @@ active; `none' sends no reference at all."
   "Return the Session an in-place command from BUFFER joins.
 From a buffer inside a project that is the main conversation of that
 Workspace (a chat window beside the code that shows another conversation is
-switched to it); from any other non-chat buffer, the temporary conversation;
+switched to it); from any other non-chat buffer, that buffer's own
+conversation in Home (one per source, `superchat-source-key');
 from a chat View, the conversation shown (`superchat-conversation-session-id').
 The option `superchat-inline-session-scope' no longer has an effect.  Never
 prompts."

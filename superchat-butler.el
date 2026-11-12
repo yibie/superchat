@@ -44,7 +44,11 @@
 (declare-function superchat--response-region-ensure-view-prompt "superchat-render"
                   (&optional independent))
 (declare-function superchat--display-session-view "superchat" (buffer session-id))
-(declare-function superchat--workspace-main-view "superchat" (workspace))
+(declare-function superchat--workspace-main-view "superchat" (workspace &optional source))
+(declare-function superchat--home-view "superchat" (workspace source))
+(declare-function superchat--chat-view-p "superchat" (&optional buffer))
+(declare-function superchat-workspace-home-config-p "superchat-workspace" (config))
+(declare-function superchat-workspace-home "superchat-workspace" ())
 (declare-function superchat--temporary-view "superchat" ())
 (declare-function superchat--break-line "superchat" (line width))
 (declare-function superchat--fit-window "superchat" (text buffer))
@@ -518,15 +522,37 @@ them."
 
 (defun superchat-butler--home-view (line)
   "With no conversation in sight, the one to bring LINE into.
-The main one of the Workspace its work belongs to; the temporary one when it
-belongs to none."
+The main one of the project its work belongs to.  For work of Home, which has
+no main conversation, the conversation of the source the work came from:
+the newest one bound under the origin conversation's source key; when the
+origin has no source (a conversation nobody opened), the conversation of
+the buffer the user is in, else the origin itself.  The temporary one when
+the work belongs to no Workspace."
   (let* ((origin (superchat-butler--work-origin line))
          (config (and (stringp origin) (superchat-view-session-configuration origin)))
          (workspace (plist-get config :workspace-id)))
-    (if workspace
-        (superchat--workspace-main-view
-         (list :id workspace :root (plist-get config :workspace-root)))
-      (superchat--temporary-view))))
+    (cond
+     ((and workspace (superchat-workspace-home-config-p config))
+      (let* ((key (plist-get config :source-key))
+             (session (and (stringp key)
+                           (car (superchat-view-source-session-ids key workspace)))))
+        (cond
+         (session
+          (or (superchat-editor-workspace-buffer session 'session-view)
+              (superchat--render-session-view session)))
+         ((and (buffer-live-p (window-buffer (selected-window)))
+               (not (superchat--chat-view-p (window-buffer (selected-window))))
+               (not (minibufferp (window-buffer (selected-window))))
+               (not (string-prefix-p " " (buffer-name (window-buffer (selected-window))))))
+          (superchat--home-view (superchat-workspace-home)
+                                (window-buffer (selected-window))))
+         (t
+          (or (superchat-editor-workspace-buffer origin 'session-view)
+              (superchat--render-session-view origin))))))
+     (workspace
+      (superchat--workspace-main-view
+       (list :id workspace :root (plist-get config :workspace-root))))
+     (t (superchat--temporary-view)))))
 
 (defun superchat-butler--attached-what (line)
   "The one line that stands for what LINE brings in."

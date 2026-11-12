@@ -188,12 +188,16 @@
         (should (equal '("call mom") (wtimer--fired-in s2)))
         (should-not (wtimer--fired-in s1))))))
 
-(ert-deftest timer/a-temporary-conversation-hears-its-own-timer ()
+(ert-deftest timer/a-home-conversation-hears-its-own-timer ()
+  "Home has no main conversation (2026-11-10): a reminder set in a Home
+conversation is the user's and speaks in that conversation."
   (wtimer--with nil ()
     (let* ((view (smoke--open-chat))
            (session (wtimer--session view))
            (timer (superchat-timer-create session 'reminder "stretch" (+ wtimer--now 60))))
-      (should-not (plist-get timer :workspace-id))
+      (should (equal (plist-get (superchat-workspace-home) :id)
+                     (plist-get timer :workspace-id)))
+      (should (eq 'you (plist-get timer :owner)))
       (setq wtimer--now (+ wtimer--now 60))
       (superchat-timer-catch-up)
       (should (equal '("stretch") (wtimer--fired-in session))))))

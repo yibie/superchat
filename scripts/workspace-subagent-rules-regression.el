@@ -145,7 +145,9 @@
 
 ;; Leader addition after the mutant run: the root is the parent conversation's
 ;; binding, not the directory its View sits in.
-(ert-deftest workspace-subagent-rules/a-rules-file-beside-a-temporary-conversation-is-not-read ()
+(ert-deftest workspace-subagent-rules/a-rules-file-beside-a-home-conversation-is-not-read ()
+  "A buffer in no project opens a Home conversation (2026-11-10), which has no
+root: a rules file in the directory its View sits in is not Home's."
   (wsub--with (list (wsub--delegate-round) '(:text "SUB-REPORT") '(:text "done")) ()
     (let ((dir (wsub--temp-dir)))
       (unwind-protect
@@ -155,7 +157,9 @@
                   (append superchat-llm-tool-names '("delegate_to_subagent")))
             (let ((view (smoke--open-chat)))
               (with-current-buffer view (setq default-directory dir))
-              (should-not (buffer-local-value 'superchat--workspace-binding view))
+              (let ((binding (buffer-local-value 'superchat--workspace-binding view)))
+                (should (eq 'home (plist-get binding :kind)))
+                (should-not (plist-get binding :root)))
               (hm--turn view "please delegate"))
             (wsub--settled)
             (should-not (string-match-p "RULE-MARKER-LOOSE"

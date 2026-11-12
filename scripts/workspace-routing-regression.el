@@ -142,20 +142,30 @@
     (let ((v1 (with-current-buffer (wr--file p) (superchat))))
       (should (eq v1 (with-current-buffer v1 (superchat)))))))
 
-(ert-deftest workspace-routing/an-unbound-chat-view-behaves-as-before ()
+(ert-deftest workspace-routing/a-home-chat-view-keeps-its-own-conversation ()
+  "Before Home (2026-11-10) a file in no project opened an unbound temporary
+View named `superchat-buffer-name'; it opens its own Home conversation now,
+and M-x superchat inside that View stays on it."
   (wr--with nil (p)
     (let* ((wr--roots nil)
            (view (with-current-buffer (wr--file p) (superchat))))
-      (should (eq view (get-buffer superchat-buffer-name)))
+      (should (eq 'home (plist-get (buffer-local-value 'superchat--workspace-binding view)
+                                   :kind)))
+      (should (eq view (with-current-buffer view (superchat))))))
+  (wr--with nil ()
+    (let ((view (superchat--temporary-view)))
       (should-not (buffer-local-value 'superchat--workspace-binding view))
       (should (eq view (with-current-buffer view (superchat)))))))
 
-(ert-deftest workspace-routing/outside-any-project-nothing-changes ()
+(ert-deftest workspace-routing/outside-any-project-the-file-opens-its-home-conversation ()
+  "Before Home (2026-11-10): \"outside any project nothing changes\", the
+temporary View named `superchat-buffer-name'."
   (wr--with nil (p)
     (let* ((wr--roots nil)
            (src (wr--file p))
            (view (with-current-buffer src (superchat))))
-      (should (eq view (get-buffer superchat-buffer-name)))
+      (should (eq 'home (plist-get (buffer-local-value 'superchat--workspace-binding view)
+                                   :kind)))
       (should (equal (hm--session view)
                      (with-current-buffer src
                        (superchat-conversation-session-id)))))))

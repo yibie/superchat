@@ -237,7 +237,8 @@ delegated to."
 
 (defun superchat-changes--outside-p (file root)
   "Non-nil when FILE lies outside the directory ROOT.
-Nil when either is nil: a conversation with no Workspace has no outside."
+Nil when either is nil: a conversation with no Workspace, or of Home, which
+has no root, has no outside."
   (and (stringp file) (stringp root)
        (not (file-in-directory-p (file-truename file) (file-truename root)))))
 

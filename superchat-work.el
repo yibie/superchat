@@ -15,9 +15,11 @@
 ;; `work.outcome' (how an execution left the record, written by the
 ;; product).  What a record is now is computed from those facts.
 ;;
-;; Records belong to a Workspace with a root; a temporary conversation keeps
-;; none (W10).  See
-;; docs/decisions/accepted/2026-10-03-m11-slice-7-work-records.md.
+;; Records belong to a Workspace: a project, or Home, which has no root and
+;; whose records every Home conversation sees and may take up; a temporary
+;; conversation keeps none (W10).  See
+;; docs/decisions/accepted/2026-10-03-m11-slice-7-work-records.md and
+;; docs/decisions/accepted/2026-11-10-a-workspace-is-a-record-not-a-directory.md.
 
 ;;; Code:
 
@@ -33,6 +35,8 @@
 
 (declare-function superchat-view-session-configuration "superchat-tape-view"
                   (session-id))
+(declare-function superchat-workspace-home-config-p "superchat-workspace" (config))
+(declare-function superchat-workspace-home-id-p "superchat-workspace" (id))
 (declare-function superchat-changes-review-due "superchat-changes" (session run))
 (declare-function superchat-changes-candidates "superchat-changes"
                   (session-id &optional run-id))
@@ -227,12 +231,18 @@ should pay for that once."
        (plist-get superchat--tool-execution-context :run-id)))
 
 (defun superchat-work--workspace (session-id)
-  "(ID . ROOT) of the Workspace SESSION-ID is bound to, or nil without a root."
+  "(ID . ROOT) of the Workspace SESSION-ID is bound to, or nil without one.
+A project's ROOT is its directory; Home's is nil.  A conversation bound to
+nothing, or to an id with no root that is not Home's, has none."
   (when (fboundp 'superchat-view-session-configuration)
     (let* ((config (superchat-view-session-configuration session-id))
            (id (plist-get config :workspace-id))
            (root (plist-get config :workspace-root)))
-      (and (stringp id) (stringp root) (not (string-empty-p root)) (cons id root)))))
+      (cond ((and (stringp id) (stringp root) (not (string-empty-p root)))
+             (cons id root))
+            ((and (fboundp 'superchat-workspace-home-config-p)
+                  (superchat-workspace-home-config-p config))
+             (cons id nil))))))
 
 (defun superchat-work--require (id)
   "The open record ID, or signal why it cannot be written to."
@@ -260,19 +270,23 @@ and the refusal says nothing of what the record holds.  The user's own
 commands and the product's own writes reach every record."
   (let ((record (superchat-work-get id)))
     (cond ((null record) (error "No work record %s" id))
-          ((not (superchat-work--within-p session-id record))
-           (error "Work record %s belongs to another workspace; this conversation cannot read or change it" id))
-          (t record))))
+          ((superchat-work--within-p session-id record) record)
+          ;; A record of no Workspace is its own conversation's, not
+          ;; another Workspace's (a temporary one from before Home).
+          ((null (plist-get record :workspace-id))
+           (error "Work record %s belongs to the conversation it was begun in, which belongs to no workspace; this conversation cannot read or change it" id))
+          (t
+           (error "Work record %s belongs to another workspace; this conversation cannot read or change it" id)))))
 
 (defun superchat-work-start (session-id goal &optional follows)
   "Start a Work Record for GOAL in SESSION-ID and make it current; return its id.
 FOLLOWS is the id of a completed record this one continues (K11).  Signals
-when SESSION-ID belongs to no Workspace with a root (W10)."
+when SESSION-ID belongs to no Workspace (W10): neither a project nor Home."
   (unless (and (stringp goal) (not (string-empty-p (string-trim goal))))
     (error "A work record needs a goal: what is to be delivered"))
   (let ((workspace (superchat-work--workspace session-id)))
     (unless workspace
-      (error "This conversation belongs to no workspace, so nothing is kept; the user can make a directory a workspace with /workspace DIRECTORY"))
+      (error "This conversation belongs to no workspace, so nothing is kept; the user can make a directory a workspace with /workspace DIRECTORY, or open a new conversation from the buffer to have it kept in Home"))
     (when (and follows (not (superchat-work-get follows)))
       (error "No work record %s to follow" follows))
     (let ((id (format "work-%s-%04x" (format-time-string "%Y%m%d%H%M%S")
@@ -638,8 +652,20 @@ none that began in a conversation nobody opened."
            (unless (eq 'continuable (superchat-work-status (superchat-work-get id)))
              (error "%s is %s; there is nothing to go on with" id
                     (superchat-work-status-text (superchat-work-get id))))
-           (superchat-work-continue id)
-           (format "Rounds on %s go on: when this execution ends with the record neither done nor waiting, Superchat starts the next round." id))
+           ;; Rounds follow the conversation's current record
+           ;; (`superchat-work--drive'): a record taken up here becomes it,
+           ;; or the rounds this answer promises would never start.
+           (let ((taken (not (equal id (superchat-work-current session)))))
+             (when taken
+               (superchat-work--append session "work.focused"
+                                       (format "Current work record: %s" id)
+                                       (list :work-id id)))
+             (superchat-work-continue id)
+             (format "%sRounds on %s go on in this conversation: when this execution ends with the record neither done nor waiting, Superchat starts the next round."
+                     (if taken
+                         (format "%s is now this conversation's current work record. " id)
+                       "")
+                     id)))
           ("done"
            (unless id (error "No current work record; give its id"))
            (superchat-work-complete session id conclusion)
@@ -667,7 +693,12 @@ none that began in a conversation nobody opened."
                   (vector (plist-get record :id)
                           (superchat-work-status-text record)
                           (let ((root (plist-get record :workspace-root)))
-                            (if root (file-name-nondirectory (directory-file-name root)) ""))
+                            (cond (root (file-name-nondirectory (directory-file-name root)))
+                                  ((and (fboundp 'superchat-workspace-home-id-p)
+                                        (superchat-workspace-home-id-p
+                                         (plist-get record :workspace-id)))
+                                   "Home")
+                                  (t "")))
                           (or (plist-get record :goal) ""))))
           (sort (reverse (superchat-work-records))
                 (lambda (a b) (< (superchat-work--status-order a)
@@ -938,7 +969,13 @@ again.  When that execution ends, the butler says so."
          (detail (plist-get waiting :detail))
          (workspace (list :id (plist-get record :workspace-id)
                           :root (plist-get record :workspace-root)))
-         (main (or (car (superchat-view-workspace-session-ids (plist-get workspace :id)))
+         ;; Home has no main conversation: what the woken work did is told
+         ;; in the conversation that began the record.
+         (home-p (and (null (plist-get workspace :root))
+                      (fboundp 'superchat-workspace-home-id-p)
+                      (superchat-workspace-home-id-p (plist-get workspace :id))))
+         (main (or (and (not home-p)
+                        (car (superchat-view-workspace-session-ids (plist-get workspace :id))))
                    (plist-get record :session-id)))
          (view (superchat-workspace-new-conversation workspace t))
          (session (buffer-local-value 'superchat--session-id view))

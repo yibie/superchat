@@ -135,8 +135,7 @@ test that genuinely needs a live provider should not use this fixture."
 `smoke--open-chat\' pins its own origin buffer so the canonical baseline cannot
 depend on whichever buffer happened to be current; a test about the origin has
 to name the buffer it means."
-  (with-current-buffer source (superchat))
-  (or (get-buffer superchat-buffer-name) (current-buffer)))
+  (with-current-buffer source (superchat)))
 
 (defmacro m5r-capturing-provider (var &rest body)
   "Run BODY with VAR collecting each provider prompt as (:system S :text T).

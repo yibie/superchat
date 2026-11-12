@@ -156,8 +156,10 @@
         (should (equal id (plist-get (superchat-work-get next) :follows)))))))
 
 (ert-deftest work-record/a-temporary-conversation-keeps-none ()
+  ;; Since Home (2026-11-10) a conversation opened from a buffer in no project
+  ;; is Home's; a conversation bound to no Workspace is made directly.
   (wrec--with nil ()
-    (let ((session (hm--session (smoke--open-chat))))
+    (let ((session (hm--session (superchat--temporary-view))))
       (should-error (superchat-work-start session "Anything") :type 'error)
       (should (string-match-p "belongs to no workspace.*/workspace DIRECTORY"
                               (let ((superchat--tool-execution-context (list :session-id session)))

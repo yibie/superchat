@@ -1024,10 +1024,13 @@ says it may try a fix."
              text)
     "A rule's text must be one line with no control or invisible characters")
    ;; A rule on another event is one in all and of no project: any
-   ;; conversation sets it, a temporary one included.
+   ;; conversation sets it, a temporary one included.  Home has no
+   ;; directory, so it sets no compile rule (2026-11-10).
    ((and (not (superchat-watch--kind on))
          (not (superchat-timer--scope-of session)))
-    "This conversation belongs to no workspace, and a rule is of a project; open a conversation there")))
+    (if (superchat-timer--home-p (car (superchat-timer--workspace-of session)))
+        "This conversation is in Home, which has no directory, and a compile rule is of a project; open a conversation in the project"
+      "This conversation belongs to no workspace, and a rule is of a project; open a conversation there"))))
 
 (defun superchat-watch--question (session text &optional fix quiet)
   "What SESSION is asked before a rule with TEXT is set.

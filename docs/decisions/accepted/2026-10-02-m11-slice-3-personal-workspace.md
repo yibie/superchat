@@ -33,5 +33,7 @@ Status: accepted — 用户，2026-10-02："好，下一片"。条目来自 [wor
 ## Consequences
 
 - 从日程、RSS、聊天界面叫出的对话，即使 buffer 的目录在某个项目里，也不再进那个项目的对话：指定了个人 workspace 就进它，否则是临时对话。
+
+> 2026-11-10 注："否则是临时对话"已改为"否则进 Home，每个来源一段"（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)）。
 - 用户的定制文件在执行 `superchat-set-personal-workspace` 时被写入一项；个人目录里多一个 `.superchat/id`。
 - 默认列表里没有的界面按目录认定，用户可以把它的 mode 加进列表。

@@ -2,22 +2,34 @@
 
 ;;; Commentary:
 ;; This file decides which Workspace a directory or buffer belongs to.
-;; A Workspace is a place where work happens: a directory Emacs
-;; recognises as a project (contract W1), not necessarily a version
-;; repository (W3), with exactly one root (W6).  Its identity is the
-;; id kept in `.superchat/id' under the root, so it survives renames
-;; (W4); without that file the id is a hash of the real path.  Only
-;; `superchat-workspace-declare' writes the file.
+;; A Workspace is a record Superchat keeps -- an id, a name, a kind and a
+;; membership rule -- and a directory is only one of its attributes
+;; (docs/decisions/accepted/2026-11-10-a-workspace-is-a-record-not-a-directory.md).
+;; There are two kinds:
+;;
+;; - A project: a directory Emacs recognises as a project (contract W1),
+;;   not necessarily a version repository (W3), with exactly one root (W6).
+;;   Its identity is the id kept in `.superchat/id' under the root, so it
+;;   survives renames (W4); without that file the id is a hash of the real
+;;   path.  Only `superchat-workspace-declare' writes the file.
+;; - Home: the one Workspace with no root.  It always exists, belongs to the
+;;   user, and receives every buffer no project claims.  Its id and its rules
+;;   are kept under `superchat-data-directory' (`home/id', `home/AGENTS.md'),
+;;   never in a `.superchat/' directory, so no project finder takes it for a
+;;   project.  Nothing runs in that directory and it bounds nothing.
 ;;
 ;; Interfaces that belong to no directory -- the agenda, feeds, chats --
-;; belong to the Personal Workspace the user designates (W11);
-;; `superchat-workspace-of-source' is the one place that decides which
-;; Workspace a request made from a buffer belongs to.
+;; belong to Home, or to the Personal Workspace when the user designated a
+;; directory for them (W11); `superchat-workspace-of-source' is the one place
+;; that decides which Workspace a request made from a buffer belongs to.
+;; A Home conversation is also its source's: `superchat-source-key' names
+;; the buffer a request comes from, so the same chat, feed entry, file or
+;; buffer continues the same conversation.
 ;;
 ;; The Artifact Board lives in `superchat-artifact-board.el'; this file
 ;; only answers "which Workspace" and "what are its rules" (the
-;; `AGENTS.md' under the root, contract R2).  Loading it has no side effects:
-;; the project finder is installed by
+;; `AGENTS.md' under the root, contract R2, or Home's own).  Loading it has
+;; no side effects: the project finder is installed by
 ;; `superchat-workspace-install-project-finder', which the default row
 ;; `workspace-resolution' calls when it is mounted and undoes when it is
 ;; unmounted.
@@ -53,16 +65,7 @@ computes."
 Nil means the file is missing, unreadable, empty, longer than 128
 characters, or contains anything outside [A-Za-z0-9._-].  Never signals."
   (condition-case nil
-      (let ((file (superchat-workspace-id-file root)))
-        (when (and (file-regular-p file) (file-readable-p file))
-          (let ((text (string-trim
-                       (with-temp-buffer
-                         (insert-file-contents file nil 0 1024)
-                         (buffer-string)))))
-            (when (and (> (length text) 0)
-                       (<= (length text) superchat-workspace--id-max-length)
-                       (string-match-p "\\`[A-Za-z0-9._-]+\\'" text))
-              text))))
+      (superchat-workspace--read-id-file (superchat-workspace-id-file root))
     (error nil)))
 
 (defun superchat-workspace--from-root (root name)
@@ -135,8 +138,9 @@ directory -- the agenda, feeds, chats: buffers in one of
 `superchat-personal-workspace-modes'.  It is a Workspace like any other,
 with its own `AGENTS.md' and conversations, and no other Workspace sees
 its rules.  While this is nil, a conversation called from those
-interfaces is a temporary one.  Set it with
-`superchat-set-personal-workspace', which also declares the directory."
+interfaces belongs to Home (`superchat-workspace-home'), one conversation
+per source.  Set it with `superchat-set-personal-workspace', which also
+declares the directory."
   :type '(choice (const :tag "None" nil) directory)
   :group 'superchat-workspace)
 
@@ -150,7 +154,9 @@ interfaces is a temporary one.  Set it with
     erc-mode rcirc-mode)
   "Major modes whose buffers belong to the Personal Workspace.
 A buffer in one of these modes, or a mode derived from one, belongs to
-the Personal Workspace whatever its `default-directory' happens to be."
+the Personal Workspace whatever its `default-directory' happens to be;
+while `superchat-personal-workspace-directory' is nil, it belongs to
+Home, never to the project its `default-directory' happens to lie in."
   :type '(repeat symbol)
   :group 'superchat-workspace)
 
@@ -190,15 +196,294 @@ That is a live buffer whose major mode is, or derives from, one of
            (apply #'derived-mode-p superchat-personal-workspace-modes))
          t)))
 
+;;;; Home: the Workspace with no root ------------------------------------------
+
+(defconst superchat-workspace-home-name "Home"
+  "The stored name of Home, the Workspace of everything in no project.")
+
+(defvar superchat-data-directory)
+
+(defun superchat-workspace-home-directory ()
+  "Return the directory where Home keeps its id and rules, or nil.
+That is `home/' under `superchat-data-directory'.  It is a store, not a
+root: no command runs there, no file is inside or outside of it, and no
+project is looked for there."
+  (and (boundp 'superchat-data-directory)
+       (stringp superchat-data-directory)
+       (not (string-empty-p superchat-data-directory))
+       (file-name-as-directory
+        (expand-file-name "home" superchat-data-directory))))
+
+(defun superchat-workspace-home-rules-path ()
+  "Return the path of Home's one rules file, `AGENTS.md' in its store, or nil."
+  (when-let* ((dir (superchat-workspace-home-directory)))
+    (expand-file-name "AGENTS.md" dir)))
+
+(defun superchat-workspace--read-id-file (file)
+  "Return the id stored in FILE, or nil.
+Nil means the file is missing, unreadable, empty, longer than
+`superchat-workspace--id-max-length' characters, or contains anything
+outside [A-Za-z0-9._-].  Never signals."
+  (condition-case nil
+      (when (and (file-regular-p file) (file-readable-p file))
+        (let ((text (string-trim
+                     (with-temp-buffer
+                       (insert-file-contents file nil 0 1024)
+                       (buffer-string)))))
+          (when (and (> (length text) 0)
+                     (<= (length text) superchat-workspace--id-max-length)
+                     (string-match-p "\\`[A-Za-z0-9._-]+\\'" text))
+            text)))
+    (error nil)))
+
+(defun superchat-workspace-home-id ()
+  "Return Home's id as kept in its store, or nil when it has none yet.
+Never creates files."
+  (when-let* ((dir (superchat-workspace-home-directory)))
+    (superchat-workspace--read-id-file (expand-file-name "id" dir))))
+
+(defun superchat-workspace-home ()
+  "Return Home: (:id ID :root nil :name \"Home\" :kind home).
+Its id is read from `id' in `superchat-workspace-home-directory', and
+written there the first time it is needed.  Nil only when the data
+directory is unset."
+  (when-let* ((dir (superchat-workspace-home-directory)))
+    (list :id (or (superchat-workspace-home-id)
+                  (let ((id (format "home-%012x" (random (expt 16 12)))))
+                    (make-directory dir t)
+                    (write-region (concat id "\n") nil (expand-file-name "id" dir)
+                                  nil 'silent)
+                    id))
+          :root nil
+          :name superchat-workspace-home-name
+          :kind 'home)))
+
+(defun superchat-workspace-home-id-p (id)
+  "Return non-nil when ID is Home's id.  Never creates files."
+  (and (stringp id) (not (string-empty-p id))
+       (equal id (superchat-workspace-home-id))))
+
+(defun superchat-workspace-home-p (workspace)
+  "Return non-nil when the Workspace or binding plist WORKSPACE is Home.
+A plist that names no kind is Home when it has no root and Home's id, as a
+binding rebuilt from an old fact or a record may be."
+  (and (consp workspace)
+       (let ((kind (plist-get workspace :kind)))
+         (if kind
+             (member (format "%s" kind) '("home"))
+           (and (null (plist-get workspace :root))
+                (superchat-workspace-home-id-p (plist-get workspace :id)))))
+       t))
+
+(defun superchat-workspace-home-config-p (config)
+  "Return non-nil when the Session configuration CONFIG is bound to Home.
+CONFIG is what `superchat-view-session-configuration' returns: its
+`workspace.bound' fact says `:workspace-kind' home, or, for a fact that
+names no kind, has no root and Home's id."
+  (let ((id (plist-get config :workspace-id))
+        (root (plist-get config :workspace-root))
+        (kind (plist-get config :workspace-kind)))
+    (and (stringp id) (not (string-empty-p id))
+         (not (and (stringp root) (not (string-empty-p root))))
+         (if kind
+             (equal (format "%s" kind) "home")
+           (superchat-workspace-home-id-p id))
+         t)))
+
+(defun superchat-workspace-rules-root (id root &optional kind)
+  "Return the directory holding the rules of the Workspace ID at ROOT, or nil.
+A project's root; for Home (KIND `home', or no root and Home's id), Home's
+store; nil for a conversation of no Workspace."
+  (cond ((and (stringp root) (not (string-empty-p root))) root)
+        ((and (stringp id) (not (string-empty-p id))
+              (if kind
+                  (equal (format "%s" kind) "home")
+                (superchat-workspace-home-id-p id)))
+         (superchat-workspace-home-directory))))
+
+(defun superchat-workspace--home-store-p (dir)
+  "Return non-nil when DIR names Home's store directory."
+  (when-let* ((home (superchat-workspace-home-directory)))
+    (and (stringp dir)
+         (equal (file-name-as-directory (expand-file-name dir)) home))))
+
+(defun superchat-workspace-home-rules-file-p (file)
+  "Return non-nil when FILE is Home's one rules file, `home/AGENTS.md'.
+FILE is a canonical path (`superchat-sandbox-canonical-path'); it is
+compared with `AGENTS.md' in the store's real directory.  A rules file that
+is itself a link to another file under the data directory is therefore not
+this file.  This is the one file under `superchat-data-directory' the model
+may open (D8)."
+  (when-let* ((dir (superchat-workspace-home-directory)))
+    (and (stringp file)
+         (equal (expand-file-name file)
+                (expand-file-name "AGENTS.md" (file-truename dir))))))
+
+;;;; Which source a request is made from (D12, D13) ------------------------------
+
+(defcustom superchat-source-key-functions
+  '((telega-chat-mode . superchat-source-key-telega-chat)
+    (elfeed-show-mode . superchat-source-key-elfeed-entry)
+    (eww-mode . superchat-source-key-eww)
+    (dired-mode . superchat-source-key-dired)
+    (Info-mode . superchat-source-key-info)
+    (gnus-summary-mode . superchat-source-key-gnus-summary)
+    (notmuch-search-mode . superchat-source-key-notmuch-search)
+    (notmuch-show-mode . superchat-source-key-notmuch-show)
+    (rcirc-mode . superchat-source-key-rcirc))
+  "How a buffer of a major mode names the source it shows, for Home.
+Each element is (MODE . FUNCTION).  FUNCTION is called with no argument in
+a buffer whose major mode is, or derives from, MODE, and returns the
+source's key -- a string, coarse to fine, compared whole -- or nil when it
+cannot tell.  The first function that returns a key wins.  A buffer no
+function names is keyed by the file it visits (`file:PATH'), else by its
+mode and name (`buffer:MODE:NAME').  Add an element for a mode whose
+buffers all share one name, or every one of them continues the same
+conversation."
+  :type '(alist :key-type symbol :value-type function)
+  :group 'superchat-workspace)
+
+(defun superchat-source-key--join (&rest parts)
+  "Join PARTS with colons, each printed with `format' %s."
+  (mapconcat (lambda (part) (format "%s" part)) parts ":"))
+
+(defvar telega-chatbuf--chat)
+(defvar telega-chatbuf--topic)
+(declare-function telega-topic-id "ext:telega-topic" (topic))
+
+(defun superchat-source-key-telega-chat ()
+  "The key of a telega chat buffer: `telega:chat:ID', plus `:topic:ID'.
+ID is the chat's Telegram id from `telega-chatbuf--chat'; the topic is the
+forum topic the buffer shows now, when telega gives its id.  The account
+is not part of the key."
+  (let ((chat (bound-and-true-p telega-chatbuf--chat)))
+    (when-let* ((id (and (listp chat) (plist-get chat :id))))
+      (let* ((topic (bound-and-true-p telega-chatbuf--topic))
+             (topic-id (and topic (fboundp 'telega-topic-id)
+                            (ignore-errors (telega-topic-id topic)))))
+        (if topic-id
+            (superchat-source-key--join "telega" "chat" id "topic" topic-id)
+          (superchat-source-key--join "telega" "chat" id))))))
+
+(defvar elfeed-show-entry)
+(declare-function elfeed-entry-id "ext:elfeed-db" (entry))
+
+(defun superchat-source-key-elfeed-entry ()
+  "The key of an elfeed entry buffer: `elfeed:entry:NAMESPACE:ID'.
+From `elfeed-entry-id' of `elfeed-show-entry'; every entry buffer has the
+same name, so this function is what keeps two entries apart."
+  (when-let* ((entry (bound-and-true-p elfeed-show-entry))
+              ((fboundp 'elfeed-entry-id))
+              (id (ignore-errors (elfeed-entry-id entry))))
+    (if (consp id)
+        (superchat-source-key--join "elfeed" "entry" (car id) (cdr id))
+      (superchat-source-key--join "elfeed" "entry" id))))
+
+(defvar eww-data)
+
+(defun superchat-source-key-eww ()
+  "The key of an eww buffer: `eww:URL', the page it shows now."
+  (let ((url (and (boundp 'eww-data) (listp eww-data) (plist-get eww-data :url))))
+    (and (stringp url) (not (string-empty-p url)) (concat "eww:" url))))
+
+(defvar dired-directory)
+
+(defun superchat-source-key-dired ()
+  "The key of a dired buffer: `dir:DIRECTORY', its full directory name."
+  (let* ((dir (bound-and-true-p dired-directory))
+         (dir (if (consp dir) (car dir) dir)))
+    (and (stringp dir) (not (string-empty-p dir))
+         (concat "dir:" (file-name-as-directory (expand-file-name dir))))))
+
+(defvar Info-current-file)
+(defvar Info-current-node)
+
+(defun superchat-source-key-info ()
+  "The key of an Info buffer: `info:MANUAL:NODE'.
+MANUAL is the manual file's name without its directory, which changes when
+Emacs is upgraded."
+  (let ((file (bound-and-true-p Info-current-file))
+        (node (bound-and-true-p Info-current-node)))
+    (when (and file (stringp node))
+      (superchat-source-key--join
+       "info"
+       (if (stringp file) (file-name-nondirectory file) file)
+       node))))
+
+(defvar gnus-newsgroup-name)
+
+(defun superchat-source-key-gnus-summary ()
+  "The key of a Gnus summary buffer: `gnus:group:GROUP'."
+  (let ((group (bound-and-true-p gnus-newsgroup-name)))
+    (and (stringp group) (not (string-empty-p group))
+         (concat "gnus:group:" group))))
+
+(defvar notmuch-search-query-string)
+
+(defun superchat-source-key-notmuch-search ()
+  "The key of a notmuch search buffer: `notmuch:query:QUERY'."
+  (let ((query (bound-and-true-p notmuch-search-query-string)))
+    (and (stringp query) (not (string-empty-p query))
+         (concat "notmuch:query:" query))))
+
+(defvar notmuch-show-thread-id)
+
+(defun superchat-source-key-notmuch-show ()
+  "The key of a notmuch thread buffer: `notmuch:THREAD-ID'.
+The thread id already reads `thread:...'."
+  (let ((thread (bound-and-true-p notmuch-show-thread-id)))
+    (and (stringp thread) (not (string-empty-p thread))
+         (concat "notmuch:" thread))))
+
+(defvar rcirc-server)
+(defvar rcirc-target)
+
+(defun superchat-source-key-rcirc ()
+  "The key of an rcirc buffer: `rcirc:SERVER:TARGET', or `rcirc:SERVER'."
+  (let ((server (bound-and-true-p rcirc-server))
+        (target (bound-and-true-p rcirc-target)))
+    (when (and (stringp server) (not (string-empty-p server)))
+      (if (and (stringp target) (not (string-empty-p target)))
+          (superchat-source-key--join "rcirc" server target)
+        (concat "rcirc:" server)))))
+
+(defun superchat-source-key (&optional buffer)
+  "Return the key of the source BUFFER stands for, computed now.
+In order (D13): the first function of `superchat-source-key-functions'
+whose mode BUFFER's major mode is or derives from and that returns a
+non-empty string; else, for a buffer visiting a file (an indirect buffer
+by its base's), `file:' and that file's full name; else `buffer:', the
+major mode, `:' and the buffer's name as it is now -- a name Emacs made
+unique with a suffix such as `<2>' is used as it is, though which buffer
+gets the suffix depends on the order buffers were made in.  Nil only for
+a dead BUFFER.  BUFFER defaults to the current buffer."
+  (let ((buffer (or buffer (current-buffer))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (or (cl-some (lambda (pair)
+                       (and (symbolp (car pair))
+                            (derived-mode-p (car pair))
+                            (functionp (cdr pair))
+                            (let ((key (condition-case nil (funcall (cdr pair))
+                                         (error nil))))
+                              (and (stringp key) (not (string-empty-p key)) key))))
+                     superchat-source-key-functions)
+            (when-let* ((file (or buffer-file-name
+                                  (and (buffer-base-buffer)
+                                       (buffer-file-name (buffer-base-buffer))))))
+              (concat "file:" (expand-file-name file)))
+            (format "buffer:%s:%s" major-mode (buffer-name)))))))
+
 (defun superchat-workspace-of-source (&optional buffer)
-  "Return the Workspace a request made from BUFFER belongs to, or nil.
+  "Return the Workspace a request made from BUFFER belongs to.
 In order: the Workspace of `superchat-buffer-workspace-directory' when
 the buffer sets it; for an interface of the Personal Workspace
-\(`superchat-workspace-personal-buffer-p'), the Personal Workspace, or nil
-while none is designated -- never the project its `default-directory'
-happens to lie in; otherwise the project Workspace of the buffer's
-directory.  Nil means a temporary conversation.  BUFFER defaults to the
-current buffer; a dead buffer gives nil."
+\(`superchat-workspace-personal-buffer-p'), the Personal Workspace when one
+is designated -- never the project its `default-directory' happens to lie
+in; otherwise the project Workspace of the buffer's directory; and when
+none of these applies, Home (`superchat-workspace-home').  BUFFER defaults
+to the current buffer; a dead buffer, or an unset data directory, gives
+nil."
   (let ((buffer (or buffer (current-buffer))))
     (when (buffer-live-p buffer)
       (let ((own (buffer-local-value 'superchat-buffer-workspace-directory
@@ -207,8 +492,10 @@ current buffer; a dead buffer gives nil."
          ((and (stringp own) (file-directory-p own))
           (superchat-workspace-at-directory own))
          ((superchat-workspace-personal-buffer-p buffer)
-          (superchat-workspace-personal))
-         (t (superchat-workspace-of-buffer buffer)))))))
+          (or (superchat-workspace-personal)
+              (superchat-workspace-home)))
+         (t (or (superchat-workspace-of-buffer buffer)
+                (superchat-workspace-home))))))))
 
 ;;;###autoload
 (defun superchat-set-personal-workspace (dir)
@@ -240,7 +527,9 @@ The one %s is the path `AGENTS.md' would have under the root.")
 (defconst superchat-workspace-temporary-note
   "This is a temporary conversation: it belongs to no workspace, and nothing said here is carried into later conversations.  If the user asks you to remember something for later, say that it will not be kept here, and that `/workspace DIRECTORY' in this window makes a directory a workspace whose rules are kept in its AGENTS.md.  A timer or a rule set with timer_create is kept, and other conversations see it."
   "What a request says about remembering in a conversation bound to no Workspace
-\(contract W5, W10).")
+\(contract W5, W10).  Since Home (2026-11-10) only a conversation the user
+unbound with `/workspace clear' or `/reset', or one from before, is such a
+conversation.")
 
 (defconst superchat-workspace-rules-max-chars 6000
   "Most characters of a rules file that go into one request.")
@@ -248,15 +537,24 @@ The one %s is the path `AGENTS.md' would have under the root.")
 (defconst superchat-workspace-rules-file-names '("AGENTS.md" "CLAUDE.md")
   "File names looked for under a Workspace root, first one found wins.")
 
+(defun superchat-workspace--rules-file-names (root)
+  "The rules file names looked for under ROOT.
+Home's store has one rules file, `AGENTS.md'; a project root may also use
+`CLAUDE.md'."
+  (if (superchat-workspace--home-store-p root)
+      '("AGENTS.md")
+    superchat-workspace-rules-file-names))
+
 (defun superchat-workspace-rules-file (root)
   "Return the rules file of the Workspace rooted at ROOT, or nil.
 That is `AGENTS.md' under ROOT, else `CLAUDE.md', when it is a readable
-regular file.  Nil when ROOT is not an existing directory."
+regular file; in Home's store (`superchat-workspace-rules-root') only
+`AGENTS.md'.  Nil when ROOT is not an existing directory."
   (when (and (stringp root) (file-directory-p root))
     (cl-some (lambda (name)
                (let ((file (expand-file-name name root)))
                  (and (file-regular-p file) (file-readable-p file) file)))
-             superchat-workspace-rules-file-names)))
+             (superchat-workspace--rules-file-names root))))
 
 (defun superchat-workspace-rules-text (root)
   "Return the rules of the Workspace rooted at ROOT as request text, or nil.
@@ -274,8 +572,13 @@ Never signals."
                           (buffer-string))))
                  (cut (> (length body) superchat-workspace-rules-max-chars)))
             (unless (string-empty-p body)
-              (concat "Workspace rules, from " file
-                      ".  The user keeps these for all work in this workspace; follow them.\n\n"
+              (concat (if (superchat-workspace--home-store-p root)
+                          "Home rules, from "
+                        "Workspace rules, from ")
+                      file
+                      (if (superchat-workspace--home-store-p root)
+                          ".  The user keeps these for all work outside a project (Home); follow them.\n\n"
+                        ".  The user keeps these for all work in this workspace; follow them.\n\n")
                       (if cut
                           (substring body 0 superchat-workspace-rules-max-chars)
                         body)
@@ -301,27 +604,41 @@ file.  A Workspace with no rules file, or with a readable one, gives nil."
                      (cl-some (lambda (name)
                                 (let ((f (expand-file-name name root)))
                                   (and (file-regular-p f) f)))
-                              superchat-workspace-rules-file-names)))
+                              (superchat-workspace--rules-file-names root))))
           (format "%s is not readable" present))))))
 
 (defconst superchat-workspace-rules-problem-note
   "This workspace has a rules file that Superchat could not read: %s.  The user's rules are therefore NOT in this request.  Tell the user this in your answer before relying on any convention of this workspace."
   "What a chat request says when the Workspace's rules file cannot be read.")
 
+(defconst superchat-workspace-home-note
+  "This conversation is in Home, the workspace of everything outside a project.  Home's rules and work records are shared by the Home conversations and never reach a project; each Home conversation belongs to the buffer it was called from, so what was said in another one is not here."
+  "What a request of a Home conversation says before its remembering note.")
+
 (defun superchat-workspace-remember-note (root)
   "Return what a request says about remembering, for the Workspace at ROOT.
 With a rules file, the model is told to edit that file's buffer; with a
 root but no rules file, to start `AGENTS.md' there; with a nil ROOT (a
-temporary conversation), that nothing is kept.  The model writes only on
+temporary conversation), that nothing is kept.  ROOT may be Home's store
+\(`superchat-workspace-rules-root'), which need not exist yet: the note
+then says so first, and names `AGENTS.md' there.  The model writes only on
 the user's explicit word, and the user's save is what makes it a rule
 \(contract R4)."
-  (if (and (stringp root) (file-directory-p root))
-      (let ((file (superchat-workspace-rules-file root)))
-        (if file
-            (format superchat-workspace-remember-note-with-file file)
-          (format superchat-workspace-remember-note-without-file
-                  (expand-file-name "AGENTS.md" root))))
-    superchat-workspace-temporary-note))
+  (cond
+   ((superchat-workspace--home-store-p root)
+    (let ((file (superchat-workspace-rules-file root)))
+      (concat superchat-workspace-home-note "  "
+              (if file
+                  (format superchat-workspace-remember-note-with-file file)
+                (format superchat-workspace-remember-note-without-file
+                        (expand-file-name "AGENTS.md" root))))))
+   ((and (stringp root) (file-directory-p root))
+    (let ((file (superchat-workspace-rules-file root)))
+      (if file
+          (format superchat-workspace-remember-note-with-file file)
+        (format superchat-workspace-remember-note-without-file
+                (expand-file-name "AGENTS.md" root)))))
+   (t superchat-workspace-temporary-note)))
 
 (defun superchat-workspace-project-finder (dir)
   "Return a project for the nearest `.superchat/' directory above DIR, or nil.

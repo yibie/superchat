@@ -129,9 +129,8 @@ amendment 2026-09-25)."
     source))
 
 (defun m5rc--open (source)
-  "Open an actual View from SOURCE."
-  (with-current-buffer source (superchat))
-  (let ((view (get-buffer superchat-buffer-name)))
+  "Open an actual View from SOURCE: the one `superchat' shows."
+  (let ((view (with-current-buffer source (superchat))))
     (should (buffer-live-p view))
     view))
 

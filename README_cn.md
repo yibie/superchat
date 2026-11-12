@@ -95,7 +95,7 @@ buffer，但发送第一条消息时请求会被拒绝，并在发送时报告�
 
 ## 5 分钟上手
 
-使用 `M-x superchat` 打开聊天界面。它出现在当前 tab 右侧的侧窗口里，挨着你正在编辑的文件（编辑模式），原有的窗口都还在，只是变窄一些。在聊天里按 `C-c C-w`，这段对话就移进它自己的 tab 并占满（agent 模式）；再按一次回到你刚才那个文件旁边，没发出去的字还在。同一次 Emacs 里，之后打开聊天用你最后切换到的模式；`superchat-display-style`（`editor` 或 `agent`）决定一开始用哪种。关闭一段对话：在它的聊天窗口里 `M-x superchat-close-session-workspace`，agent 模式下关掉它的 tab 也行；还有 Run 在跑时会先问你。
+使用 `M-x superchat` 打开聊天界面。它出现在当前 tab 右侧的侧窗口里，挨着你正在编辑的文件（编辑模式），原有的窗口都还在，只是变窄一些。打开哪段对话取决于你在哪：在项目里的文件上，打开那个项目的主对话；在别处，打开这个 buffer 在 **Home** 里的那段对话。Home 是所有不在项目里的东西的 workspace，按来源分对话：同一个 telega 聊天、同一条 elfeed 条目、同一个文件或 buffer，接上的是同一段对话，关掉窗口、重启 Emacs 之后也一样；不同来源的对话互相看不到。Home 有自己的规矩文件，就是 `superchat-data-directory` 下的 `home/AGENTS.md`（在 Home 里说"记住……"写进这里，只对 Home 的对话生效，不进任何项目），也保存工作记录和定时器：从一个聊天开的工作记录，在另一段 Home 对话里列得出来，也能接手。命令在你叫出对话的那个 buffer 的目录里跑。在聊天里按 `C-c C-w`，这段对话就移进它自己的 tab 并占满（agent 模式）；再按一次回到你刚才那个文件旁边，没发出去的字还在。同一次 Emacs 里，之后打开聊天用你最后切换到的模式；`superchat-display-style`（`editor` 或 `agent`）决定一开始用哪种。关闭一段对话：在它的聊天窗口里 `M-x superchat-close-session-workspace`，agent 模式下关掉它的 tab 也行；还有 Run 在跑时会先问你。
 
 以下是你能在首次会话中做的五件事：
 
@@ -275,13 +275,13 @@ Superchat 的默认修改路径不执行持久化，也不对抗你的环境：�
 | `danger-full-access` | 完全控制类和第三方工具不问就执行。谁也不问，所以模型也拿不到 `ask_user`。 |
 | `read-only` | 只观察：不修改 buffer；完全控制类和第三方工具直接拒绝。 |
 
-模型给自己写的工具（`define_tool`，默认不开）存下来的是它的定义，属于写下它的那个 workspace；在临时对话里写的只属于那段对话，从不写进磁盘。它的每次调用按这段对话的权限档位放行，和别的"完全控制"工具一样。Superchat 会记下它写出来时实际发生了什么：问过你、你答了允许，记作 *approved*；档位直接放行、没有人看过，记作 *admitted*。重启之后只有 approved 的会再加载。其余的，以及这条规矩之前的版本存下的每一个工具，都列在 `M-x superchat-pending` 里，直到你在 `M-x superchat-tools-review-synthesized` 里看过：批准进某个 workspace、拒绝、或删除（删除只把这一条从 `synthesized-tools.el` 里拿掉，并在账本里给它那一行做上标记，别的都不动）。
+模型给自己写的工具（`define_tool`，默认不开）存下来的是它的定义，属于写下它的那个 workspace；在 Home 里写的属于 Home；在不属于任何 workspace 的对话里写的（Home 之前的旧临时对话，或你用 `/workspace clear` 解绑的）只属于那段对话，从不写进磁盘。它的每次调用按这段对话的权限档位放行，和别的"完全控制"工具一样。Superchat 会记下它写出来时实际发生了什么：问过你、你答了允许，记作 *approved*；档位直接放行、没有人看过，记作 *admitted*。重启之后只有 approved 的会再加载。其余的，以及这条规矩之前的版本存下的每一个工具，都列在 `M-x superchat-pending` 里，直到你在 `M-x superchat-tools-review-synthesized` 里看过：批准进某个 workspace、拒绝、或删除（删除只把这一条从 `synthesized-tools.el` 里拿掉，并在账本里给它那一行做上标记，别的都不动）。
 
 `eval_elisp` 和 shell 是逃生口：你批准了某次调用，那段代码就什么都能做，包括保存和写文件——这正是它们每次都要问的原因。Superchat 自己的 buffer（聊天 View 和内部 buffer）在任何档位下都不会被工具修改。`save_buffer` 不在默认工具里；确实需要模型保存的 Preset 可以点名提供它，那时每次调用都会问你——在没法问人的地方（`read-only`，或批准策略为 `never`，也就是 `danger-full-access` 的默认）会被拒绝。原来叫 `workspace-write` 的档位现在叫 `edit-buffers`，旧名仍然接受。
 
 **读不受档位限制。** `read_buffer`（读活 buffer 的文本，含未保存改动；每次最多 2000 行／50 KiB，narrow 过的 buffer 只读 narrow 出的部分，结果会写明）、`read_file`（读磁盘字节，每次最多 2000 行／50 KiB，不创建 buffer）和 `open_file`（真正的 Emacs visit：major mode、你的 hook、文件局部变量都会运行，期间 Emacs 自己提的问题属于 Emacs，不是 Superchat 的批准）在任何档位下都不问人。文件能不能读，由你这个 Emacs 进程的操作系统权限决定，没有敏感路径名单。读出的内容会进入模型上下文，使用远程模型时就会发送给对应的服务商。插件可以用 `tools/pre-execute` 监听收紧这一切。
 
-`/reset` 保留 Session 的档位和批准策略。
+`/reset` 保留 Session 的档位和批准策略，也从不清历史；在 Home 的对话里，这段对话仍属于 Home 和原来的来源。
 
 ### 记忆
 
@@ -346,7 +346,7 @@ superchat 集成 [mcp.el](https://github.com/lizqwerscott/mcp.el)。通过 `mcp-
 | `/work <目标>`（在聊天输入栏里） | 开一条由 Superchat 接着做下去的工作记录：一次执行结束而记录还没做完，Superchat 就在同一段对话里自己接着做，直到做完或需要你。你按停、某次执行失败、连续一阵既没改任何东西也没在记录上写任何东西（`superchat-work-round-idle-limit`，连续 2 次）、或者试了太多次（`superchat-work-round-limit`，256）时，它也会停下，记录上写明原因并等你。`/work resume` 在停下之后接着做，`/work pause` 让 Superchat 不再自己接着做，单独的 `/work` 显示记录现在的状态。Superchat 自己接着做了多少次，只在一个地方显示：记录的详情（`M-x superchat-work-list` 里按 `RET`，或 `M-x superchat-pending` 里按 `v`），写作 `Tries: N/256`。这一切需要模型有 `work_record` 工具：`work-records` 这一行挂着就带它，不受 `superchat-llm-tool-names` 影响；预设自己的工具名单里没有它时，`/work` 不会开始。Superchat 只在对话的 buffer 还开着时接着做，重启后不会自己续；审批仍然一次一次问你。 |
 | `#+begin_src superchat` | Org-babel：块内容作为问题，回答写入 `#+RESULTS:`。 |
 
-就地问、就地做、改写选区进的是你所在位置的那段对话：在项目里的文件上，进那个 workspace 的主对话（文件旁边的对话窗口如果显示的是别的对话，会被切过去）；在别的 buffer 上，进临时对话；在对话窗口里，进它正在显示的那段。不再有单独的就地对话。每次请求只带它指着的内容和你的话，不带这段对话之前的轮次——和 Cursor 的就地编辑、gptel 的改写一样；在同一个小框里追问（`r`）会带上这个小框自己的第一问一答，以及之后你对它改过的 buffer 是否保存或丢弃。这一轮会记进对话：结束时对话窗口里会显示它，带一个按钮能跳回那个文件那一行，之后在对话窗口里发的消息也会带上它。对话正在干活时，就地的请求排队等候。想让某段代码的问题带上对话的历史，就用 `M-x superchat-send-region` 把代码送进对话，在那里问。
+就地问、就地做、改写选区进的是你所在位置的那段对话：在项目里的文件上，进那个 workspace 的主对话（文件旁边的对话窗口如果显示的是别的对话，会被切过去）；在别的 buffer 上，进这个 buffer 在 Home 里的那段对话（见下）；在对话窗口里，进它正在显示的那段。不再有单独的就地对话。每次请求只带它指着的内容和你的话，不带这段对话之前的轮次——和 Cursor 的就地编辑、gptel 的改写一样；在同一个小框里追问（`r`）会带上这个小框自己的第一问一答，以及之后你对它改过的 buffer 是否保存或丢弃。这一轮会记进对话：结束时对话窗口里会显示它，带一个按钮能跳回那个文件那一行，之后在对话窗口里发的消息也会带上它。对话正在干活时，就地的请求排队等候。想让某段代码的问题带上对话的历史，就用 `M-x superchat-send-region` 把代码送进对话，在那里问。
 | Magit 提交 buffer | 加载 Magit 后，superchat 根据暂存的 diff 生成规范化提交信息。 |
 
 ### 统一流水线（高级）
@@ -418,8 +418,9 @@ submit → parse（在产生输入的界面里）→ 准入 → 选择工具 →
 - `superchat-sandbox-default-mode` / `superchat-approval-default-policy` —— 新 Session 起始的档位（默认 `edit-buffers` 和 `ask`）。`superchat-mcp-trusted-servers` —— 其工具不用询问就能运行的 MCP 服务器。
 - `superchat-llm-set-model-capabilities` —— 声明本地模型的流式能力，例如 LM Studio：`(superchat-llm-set-model-capabilities "qwen2.5-coder" '(:streaming t :streaming-tool-use nil))`；未声明的模型走保守默认。
 - `superchat-rewrite-confirmation` —— `overlay`（预览，`C-c C-a` 接受）或 `auto`。
-- `superchat-memory-auto-recall-cross-session` —— 模型可自动看到同一个 workspace 里其他对话的哪些内容：`all`（默认）、`remembered`（只看 `/remember` 记下的）、`none`。不同 workspace 之间互不可见，临时对话只看得到它自己。你自己的 `/recall` 始终搜全部。
-- `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的是临时对话。
+- `superchat-memory-auto-recall-cross-session` —— 模型可自动看到同一个 workspace 里其他对话的哪些内容：`all`（默认）、`remembered`（只看 `/remember` 记下的）、`none`。不同 workspace 之间互不可见，Home 里的对话（以及临时对话）只看得到它自己。你自己的 `/recall` 始终搜全部。
+- `superchat-personal-workspace-directory` —— 个人 workspace 的目录：日程、RSS、聊天这类界面（`superchat-personal-workspace-modes` 里的 mode）归它；用 `M-x superchat-set-personal-workspace` 指定。不指定（默认）时，从这些界面叫出的对话归 Home，每个来源一段。
+- `superchat-source-key-functions` —— 某个 major mode 的 buffer 怎样说出自己显示的是什么，让同一个聊天、同一条 RSS、同一个网页在 Home 里接上同一段对话：一张 `(MODE . 函数)` 的表。自带 telega 聊天（聊天编号和话题）、elfeed 条目、eww 网页、dired 目录、Info 节点、Gnus 组、notmuch 搜索和线索、rcirc 频道的函数，都不需要先加载对应的包。没有函数的 buffer 按它访问的文件认，再不然按 mode 和 buffer 名认。
 - `superchat-handoff-auto-enabled` —— 上下文溢出时自动压缩（默认 `t`）。
 
 内置编辑与求值工具报告各自的操作结果。`edit_buffer` 修改 live buffer 中唯一匹配的文本，不负责保存或执行文件；它也可以把 `old_string` 当正则（`regexp`）、只数匹配并给出前三处（`count_only`）、或替换全部匹配（`all`）——最后一种必须在同一次执行里先数过同一个模式；如果一次修改会让 Lisp buffer 的括号或字符串不再配对，这次修改不会生效——buffer 保持原样，模型会被告知哪一行不配对，然后重新提交；`eval_elisp` 接收一个完整表达式（多步操作用 `progn` 或 `let`），返回表达式的值或长度受限、可被工具循环识别的错误；出错的那次调用记作失败（`tool.failed`），不记作成功，模型收到的文字不变。回答下面那行记录照样数 Emacs Lisp 跑了几次，并写出有几次调用失败。通过 `eval_elisp` 运行的代码被拦着不向你提问：它一旦要弹出提问、输入框，或用 `read-char`、`read-event` 读键，就会在那里停下，模型会被告知自己去查，只有你知道的事才通过 `ask_user` 问你。这比“绝不提问”窄：`read-key-sequence`、`read-key`、`describe-key` 仍然可能停下来等一个按键，表达式交给定时器去跑的代码也一样。配置任务仍需检查实际生效的设置。让配置长期有效是分工完成的：模型修改 Emacs 实际加载的那个配置文件的 buffer，保存由你来做；没有任何工具说明要求模型自己保存。详见[编辑与求值结果](docs/components/superchat-tools.md#built-in-edit-and-evaluation-results)。

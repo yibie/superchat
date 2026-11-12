@@ -1086,12 +1086,16 @@ text, or the failure's own status with its text (contract §2.3 bridge)."
 
 (declare-function superchat-workspace-rules-text "superchat-workspace" (root))
 (declare-function superchat-workspace-rules-problem "superchat-workspace" (root))
+(declare-function superchat-workspace-rules-root "superchat-workspace"
+                  (id root &optional kind))
 
 (defun superchat--subagent-system-with-rules (system root)
-  "Return SYSTEM followed by the rules of the Workspace rooted at ROOT.
-A sub-agent works in its parent's Workspace and carries the same rules
-\(contract R3).  It gets the rules only, not the note about remembering:
-writing rules is the main agent's.  SYSTEM unchanged when ROOT is nil or
+  "Return SYSTEM followed by the rules kept in the directory ROOT.
+ROOT is a project's root, or Home's store for a sub-agent of a Home
+conversation (`superchat-workspace-rules-root').  A sub-agent works in its
+parent's Workspace and carries the same rules (contract R3).  It gets the
+rules only, not the note about remembering: writing rules is the main
+agent's.  SYSTEM unchanged when ROOT is nil or
 has no rules file."
   (let ((rules (and (stringp root)
                     (fboundp 'superchat-workspace-rules-text)
@@ -1155,7 +1159,12 @@ legacy (TEXT STATUS TAPE-ID) callback wrapped into the callback Sink."
          (system (superchat--subagent-system-with-record
                   (superchat--subagent-system-with-rules
                    (plist-get result :system-prompt)
-                   (plist-get ctx :workspace-root))
+                   ;; Home's rules come from its store, not from a root.
+                   (if (fboundp 'superchat-workspace-rules-root)
+                       (superchat-workspace-rules-root
+                        (plist-get ctx :workspace-id)
+                        (plist-get ctx :workspace-root))
+                     (plist-get ctx :workspace-root)))
                   (plist-get ctx :work-record))))
     (superchat-service-call nil 'editor-workspace 'validate-buffer buffer session-id)
     (append

@@ -2276,23 +2276,55 @@ creates files."
 
 (defun superchat--workspace-name-for-root (root)
   "Return the display name of the Workspace rooted at ROOT.
-That is the project's name, else ROOT's directory name."
-  (or (plist-get (superchat-workspace-of-directory root) :name)
-      (file-name-nondirectory (directory-file-name root))))
+That is the project's name, else ROOT's directory name.  A nil ROOT, a
+Workspace with no root, gives nil."
+  (when (and (stringp root) (not (string-empty-p root)))
+    (or (plist-get (superchat-workspace-of-directory root) :name)
+        (file-name-nondirectory (directory-file-name root)))))
+
+(defun superchat--normalize-workspace-binding (binding)
+  "Return BINDING (:id ID :root ROOT ...) with its `:kind' and `:name'.
+Home -- a binding of kind `home', or one with no root and Home's id -- is
+\(:id ID :root nil :name NAME :kind home :source-key KEY); a project's
+name is the one BINDING carries, else the one its root gives."
+  (when binding
+    (if (superchat-workspace-home-p binding)
+        (list :id (plist-get binding :id) :root nil
+              :name (or (plist-get binding :name) superchat-workspace-home-name)
+              :kind 'home
+              :source-key (plist-get binding :source-key))
+      (list :id (plist-get binding :id)
+            :root (plist-get binding :root)
+            :name (or (plist-get binding :name)
+                      (superchat--workspace-name-for-root
+                       (plist-get binding :root)))
+            :kind 'project))))
+
+(defun superchat--workspace-bound-payload (binding)
+  "The payload of the `workspace.bound' fact for the normalized BINDING.
+It carries the id, the root (nil for Home), the kind and the name, and a
+Home conversation's source key: reopening a conversation reads only what
+its Tape holds (2026-11-10)."
+  (append
+   (list :workspace-id (plist-get binding :id)
+         :workspace-root (plist-get binding :root)
+         :workspace-kind (symbol-name (or (plist-get binding :kind) 'project))
+         :workspace-name (plist-get binding :name))
+   (when (plist-get binding :source-key)
+     (list :source-key (plist-get binding :source-key)))))
 
 (defun superchat--apply-workspace-binding (binding)
-  "Record BINDING (:id ID :root ROOT) as the current Session's Workspace.
-A nil BINDING clears it.  The View keeps the binding with a `:name' added
-(the Tape fact carries only id and root).  Return that binding."
-  (when (and binding (not (plist-get binding :name)))
-    (setq binding (append binding
-                          (list :name (superchat--workspace-name-for-root
-                                       (plist-get binding :root))))))
+  "Record BINDING (:id ID :root ROOT ...) as the current Session's Workspace.
+A nil BINDING clears it.  BINDING is normalized first
+\(`superchat--normalize-workspace-binding'): the Tape fact and the View
+both keep its id, root, kind and name, and a Home conversation's source
+key.  A Workspace with no root (Home) leaves the tools' directory to the
+View's own `default-directory'.  Return that binding."
+  (setq binding (superchat--normalize-workspace-binding binding))
   (if binding
       (superchat--configuration-event
        "workspace.bound"
-       (list :workspace-id (plist-get binding :id)
-             :workspace-root (plist-get binding :root)))
+       (superchat--workspace-bound-payload binding))
     (superchat--configuration-event "workspace.unbound" nil))
   (when binding
     (superchat-artifact-board-bind
@@ -2321,11 +2353,13 @@ A nil BINDING clears it.  The View keeps the binding with a `:name' added
 (defun superchat--session-bind-workspace-at-creation (view source)
   "Bind chat VIEW to the Workspace of SOURCE, once, at creation.
 SOURCE is the buffer the entry command was called from; its Workspace is
-what `superchat-workspace-of-source' gives (a project, or the Personal
-Workspace for the agenda and its like).  Do nothing and return nil when
-either buffer is dead, SOURCE is a Superchat surface, VIEW is already
-bound or has user/assistant rows, or SOURCE has no Workspace.  Otherwise
-bind VIEW and return the binding.  Never creates files."
+what `superchat-workspace-of-source' gives (a project, the Personal
+Workspace for the agenda and its like, or Home).  A Home conversation is
+bound under SOURCE's key (`superchat-source-key'), and runs its commands
+in SOURCE's `default-directory'.  Do nothing and return nil when either
+buffer is dead, SOURCE is a Superchat surface, VIEW is already bound or
+has user/assistant rows, or SOURCE has no Workspace.  Otherwise bind VIEW
+and return the binding.  Creates no file but Home's id."
   (when (and (buffer-live-p view) (buffer-live-p source)
              (not (superchat--chat-view-p source)))
     (let ((workspace (superchat-workspace-of-source source)))
@@ -2333,9 +2367,13 @@ bind VIEW and return the binding.  Never creates files."
         (with-current-buffer view
           (unless (or superchat--workspace-binding
                       (superchat--session-has-turns-p superchat--session-id))
+            (when (superchat-workspace-home-p workspace)
+              (setq default-directory
+                    (buffer-local-value 'default-directory source)))
             (superchat--apply-workspace-binding
-             (list :id (plist-get workspace :id)
-                   :root (plist-get workspace :root)))))))))
+             (append workspace
+                     (when (superchat-workspace-home-p workspace)
+                       (list :source-key (superchat-source-key source)))))))))))
 
 (defun superchat--session-runtime-configuration ()
   "Return the current Session configuration as Runtime Request fields."
@@ -2395,9 +2433,13 @@ bind VIEW and return the binding.  Never creates files."
          (topology (if (stringp topology) (intern topology) topology))
          (workspace-id (plist-get configuration :workspace-id))
          (workspace-root (plist-get configuration :workspace-root))
+         ;; Home has no root: its fact says so (or, written before kinds
+         ;; were recorded, it has no root and Home's id).
+         (home-p (superchat-workspace-home-config-p configuration))
          (workspace-live-p
-          (and (stringp workspace-id) (stringp workspace-root)
-               (file-directory-p workspace-root))))
+          (or home-p
+              (and (stringp workspace-id) (stringp workspace-root)
+                   (file-directory-p workspace-root)))))
     ;; Reopen is a real composition activation, not merely a cache restore:
     ;; it creates this View's fresh Preset Scope (or reuses its exact current
     ;; one) without appending another `capability.activated' fact.  Do this
@@ -2413,11 +2455,16 @@ bind VIEW and return the binding.  Never creates files."
       (superchat-artifact-board-bind workspace-id workspace-root session-id))
     (setq-local superchat--workspace-binding
                 (and workspace-live-p
-                     (list :id workspace-id :root workspace-root
-                           :name (superchat--workspace-name-for-root
-                                  workspace-root))))
+                     (superchat--normalize-workspace-binding
+                      (if home-p
+                          (list :id workspace-id :root nil
+                                :name (plist-get configuration :workspace-name)
+                                :kind 'home
+                                :source-key (plist-get configuration :source-key))
+                        (list :id workspace-id :root workspace-root
+                              :name (plist-get configuration :workspace-name))))))
     (setq-local superchat-tools-default-directory
-                (and workspace-live-p workspace-root))
+                (and workspace-live-p (not home-p) workspace-root))
     (setq-local superchat--last-surface
                 (plist-get configuration :surface))
     configuration))
@@ -3362,11 +3409,31 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
     (when (eq result 'cleared) (message "Chat cleared."))
     result))
 
+(defun superchat--session-cache-view-p (&optional buffer)
+  "Non-nil when BUFFER's text is handed to the next startup when it closes.
+That is the primary chat, the buffer named `superchat-buffer-name', or the
+View of a Home conversation the user opened -- the conversation a buffer in
+no project opens, which was the temporary one, named so, before Home
+\(2026-11-10).  A project's conversations and conversations nobody opened
+are durable on the Tape and do not write the cache.  BUFFER defaults to the
+current buffer."
+  (let ((buffer (or buffer (current-buffer))))
+    (and (buffer-live-p buffer)
+         (or (equal (buffer-name buffer) superchat-buffer-name)
+             (and (buffer-local-value 'superchat-mode buffer)
+                  (superchat-workspace-home-p
+                   (buffer-local-value 'superchat--workspace-binding buffer))
+                  (let ((session (buffer-local-value 'superchat--session-id buffer)))
+                    (and (stringp session)
+                         (not (plist-get (superchat-view-session-configuration session)
+                                         :background)))))))))
+
 (defun superchat--summarize-session-on-exit ()
   "Get the entire buffer content and cache it for next startup processing."
-  ;; The cache is a legacy handoff for the primary chat only.  Secondary
-  ;; Session Views are already durable in Tape and must not overwrite it.
-  (when (equal (buffer-name) superchat-buffer-name)
+  ;; The cache is a legacy handoff for the primary chat only
+  ;; (`superchat--session-cache-view-p').  Other Session Views are already
+  ;; durable in Tape and must not overwrite it.
+  (when (superchat--session-cache-view-p)
     (superchat--ensure-directories)
     (let ((history (buffer-substring-no-properties (point-min) (point-max)))
           (cache-file (expand-file-name "session-cache.org" superchat-data-directory)))
@@ -3387,8 +3454,11 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
     (superchat-runtime-clear-follow-ups superchat--session-id 'view-closed)))
 
 (defun superchat--summarize-session-before-emacs-exit ()
-  "Ensure the superchat session is cached when Emacs exits."
-  (let ((buffer (get-buffer superchat-buffer-name)))
+  "Ensure the superchat session is cached when Emacs exits.
+That is the primary chat's, else the most recently used Home conversation's
+View (`superchat--session-cache-view-p')."
+  (let ((buffer (or (get-buffer superchat-buffer-name)
+                    (cl-find-if #'superchat--session-cache-view-p (buffer-list)))))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (condition-case err
@@ -3780,8 +3850,8 @@ openings in this Emacs session use the mode switched to."
 ;; ── Turns started elsewhere (M10 slice 2) ──
 ;;
 ;; In-place ask, act and rewrite go into the conversation of where they are
-;; asked -- the Workspace's main one for a project file, the temporary one
-;; otherwise (`superchat-conversation-session-id') -- and are recorded there;
+;; asked -- the Workspace's main one for a project file, the source's own in
+;; Home otherwise (`superchat-conversation-session-id') -- and are recorded there;
 ;; the chat window shows each such Turn when it
 ;; ends, with a button back to where it was asked (M10 record, "共用一段对话").
 
@@ -3790,11 +3860,12 @@ openings in this Emacs session use the mode switched to."
 That is the chat beside the code in this tab when there is one, else the main
 chat View's Session, as `superchat-act' uses.
 Called from a buffer inside a project it is that Workspace's main
-conversation instead; as a side effect, a chat window already beside the code
-in this tab that shows another conversation is switched to it (not selected),
-and no window is opened when there is none.
-Called from any other non-chat buffer it is the temporary conversation
-(`superchat--temporary-view'; nothing is displayed)."
+conversation instead, and from any other non-chat buffer that buffer's own
+conversation in Home (`superchat--home-view'); as a side effect, a chat
+window already beside the code in this tab that shows another conversation
+is switched to it (not selected), and no window is opened when there is none.
+Only when there is no Workspace at all (no data directory to keep Home in)
+is it the temporary conversation (`superchat--temporary-view')."
   (if-let* ((workspace (superchat--source-workspace)))
       (let* ((view (superchat--workspace-main-view workspace))
              (window
@@ -4148,27 +4219,62 @@ a new Session starts.  Shows nothing and selects no window."
                      superchat-buffer-name)))
         (superchat--ensure-chat-view name session-id))))
 
-(defun superchat--workspace-main-view (workspace)
-  "Return the chat View of WORKSPACE's main conversation, making one if needed.
-The main conversation is the Session bound to WORKSPACE with the newest Tape
-activity; with none, a new Session is created and bound.  Shows nothing and
-selects no window."
-  (let ((id (car (superchat-view-workspace-session-ids
-                  (plist-get workspace :id)))))
-    (if id
-        (or (superchat-editor-workspace-buffer id 'session-view)
-            (superchat--render-session-view id))
-      (superchat-workspace-new-conversation workspace))))
+(defun superchat--workspace-main-view (workspace &optional source)
+  "Return the View of WORKSPACE's conversation for SOURCE, made if need be.
+For a project the conversation is its main one: the Session bound to
+WORKSPACE with the newest Tape activity; with none, a new Session is
+created and bound.  For Home it is SOURCE's own (`superchat--home-view');
+SOURCE defaults to the current buffer.  Shows nothing and selects no
+window."
+  (if (superchat-workspace-home-p workspace)
+      (superchat--home-view workspace (or source (current-buffer)))
+    (let ((id (car (superchat-view-workspace-session-ids
+                    (plist-get workspace :id)))))
+      (if id
+          (or (superchat-editor-workspace-buffer id 'session-view)
+              (superchat--render-session-view id))
+        (superchat-workspace-new-conversation workspace)))))
+
+(defun superchat--home-view (workspace source)
+  "Return the View of SOURCE's conversation in Home WORKSPACE.
+SOURCE's key is computed now (`superchat-source-key', D13).  Its
+conversation is the most recently active Session bound to Home under that
+key (`superchat-view-source-session-ids', D14); with none, a new one is
+started and bound under it.  The View runs its commands in SOURCE's
+`default-directory' (D4).  Shows nothing and selects no window."
+  (let* ((key (superchat-source-key source))
+         (id (and key (car (superchat-view-source-session-ids
+                            key (plist-get workspace :id)))))
+         (view (if id
+                   (or (superchat-editor-workspace-buffer id 'session-view)
+                       (superchat--render-session-view id))
+                 (superchat-workspace-new-conversation
+                  (append (list :id (plist-get workspace :id) :root nil
+                                :kind 'home :name (plist-get workspace :name))
+                          (when key (list :source-key key)))))))
+    (when (and (buffer-live-p source) (buffer-live-p view)
+               (not (superchat--chat-view-p source)))
+      (let ((dir (buffer-local-value 'default-directory source)))
+        (with-current-buffer view (setq default-directory dir))))
+    view))
 
 (defun superchat-workspace-new-conversation (workspace &optional background)
-  "Start a new conversation bound to WORKSPACE (:id :root) and return its View.
+  "Start a new conversation bound to WORKSPACE (:id :root ...); return its View.
 Shows nothing and selects no window.
 With BACKGROUND it is a conversation nobody opened: it is not WORKSPACE's main
-one and is not recalled from (`superchat-view-workspace-session-ids').  Then
-WORKSPACE may be nil: bound to nothing, it is still not the temporary one."
+one, not a source's, and is not recalled from
+\(`superchat-view-workspace-session-ids').  Then WORKSPACE may be nil: bound
+to nothing, it is still not the temporary one.  A Home WORKSPACE may carry
+a `:source-key', which binds the new conversation under that source unless
+it is BACKGROUND.  Its commands run where it was started from: the root of
+a project; for Home the `default-directory' of the current buffer, or the
+user's home directory for a conversation nobody opened."
   (let* ((session-id (superchat--new-session-id))
-         (view (let ((default-directory (or (plist-get workspace :root)
-                                            default-directory)))
+         (home-p (superchat-workspace-home-p workspace))
+         (view (let ((default-directory
+                      (cond ((plist-get workspace :root))
+                            ((and home-p background) (expand-file-name "~/"))
+                            (t default-directory))))
                  (superchat--ensure-chat-view
                   (superchat--session-buffer-name session-id)
                   session-id))))
@@ -4178,8 +4284,15 @@ WORKSPACE may be nil: bound to nothing, it is still not the temporary one."
         (superchat--configuration-event "conversation.background" nil))
       (when workspace
         (superchat--apply-workspace-binding
-         (list :id (plist-get workspace :id)
-               :root (plist-get workspace :root)))))
+         (append (list :id (plist-get workspace :id)
+                       :root (plist-get workspace :root))
+                 (when (plist-get workspace :kind)
+                   (list :kind (plist-get workspace :kind)))
+                 (when (plist-get workspace :name)
+                   (list :name (plist-get workspace :name)))
+                 (when (and home-p (not background)
+                            (plist-get workspace :source-key))
+                   (list :source-key (plist-get workspace :source-key)))))))
     view))
 
 (defun superchat--open-workspace-conversation (workspace &optional from-session)
@@ -4289,16 +4402,19 @@ When called non-interactively with nil, branch after the latest Turn."
              (list :parent_session_id parent-session-id
                    :parent_turn_id parent-turn-id
                    :source_ids source-ids)))
-      ;; S1: a branch is a conversation of its parent's Workspace.
-      (when-let* ((binding superchat--workspace-binding))
+      ;; S1: a branch is a conversation of its parent's Workspace.  A
+      ;; branch of a Home conversation is Home's under no source: opening
+      ;; from the source still continues the parent.
+      (when-let* ((binding (superchat--normalize-workspace-binding
+                            superchat--workspace-binding)))
         (superchat-tape-append-event
          (list :type "workspace.bound"
                :session-id session-id
                :actor-id "user"
                :summary "workspace.bound"
                :payload
-               (list :workspace-id (plist-get binding :id)
-                     :workspace-root (plist-get binding :root)))))
+               (superchat--workspace-bound-payload
+                (plist-put (copy-sequence binding) :source-key nil)))))
       (superchat-open-session session-id))))
 
 ;;;###autoload
@@ -4342,15 +4458,16 @@ programmatically to launch with a specific preset."
          (source-workspace (superchat--source-workspace source))
          (buffer (cond
                   (source-workspace
-                   (superchat--workspace-main-view source-workspace))
-                  ;; Called inside a View bound to a project Workspace, it
-                  ;; stays on that conversation.
+                   (superchat--workspace-main-view source-workspace source))
+                  ;; Called inside a View bound to a Workspace -- a project
+                  ;; or Home -- it stays on that conversation.
                   ((and (superchat--chat-view-p source)
-                        (plist-get superchat--workspace-binding :root))
+                        (plist-get superchat--workspace-binding :id))
                    source)
                   ;; An unbound View is a temporary conversation: stay on it.
                   ((superchat--view-temporary-p source) source)
-                  ;; Outside any project: the temporary Workspace.
+                  ;; A source that has no Workspace at all (no data
+                  ;; directory to keep Home in): the temporary Workspace.
                   ((not (superchat--chat-view-p source))
                    (superchat--temporary-view))
                   (t (superchat--ensure-chat-view
@@ -4407,7 +4524,8 @@ programmatically to launch with a specific preset."
 (defun superchat--ensure-request-chat-buffer ()
   "Return an initialized chat buffer without changing selected windows.
 Called from a buffer inside a project, it is that Workspace's main
-conversation; from any other non-chat buffer, the temporary one."
+conversation; from any other non-chat buffer, that buffer's conversation in
+Home (`superchat--home-view')."
   (let ((workspace (superchat--source-workspace)))
     (cond
      (workspace (superchat--workspace-main-view workspace))
@@ -5890,9 +6008,12 @@ When ARGS names a directory, also bind it as the Session Workspace."
 
 (defun superchat--workspace-echo (binding)
   "Return the echo line naming the Workspace BINDING."
-  (format "Workspace: %s (%s)"
-          (file-name-nondirectory (directory-file-name (plist-get binding :root)))
-          (plist-get binding :root)))
+  (if (plist-get binding :root)
+      (format "Workspace: %s (%s)"
+              (file-name-nondirectory (directory-file-name (plist-get binding :root)))
+              (plist-get binding :root))
+    (format "Workspace: %s (no directory; everything outside a project)"
+            (or (plist-get binding :name) superchat-workspace-home-name))))
 
 (defun superchat--cmd-workspace (_cmd args _input _lang _target-model)
   "Show, declare, or clear the current Session's Workspace.
@@ -5982,15 +6103,22 @@ Without ARGS, list available skills.  With ARGS, load and activate that skill."
         `(:type :echo :content ,(format "Skill not found: %s" skill-name))))))
 
 (defun superchat--cmd-reset (_cmd _args _input _lang _target-model)
+  "Reset the Capability and Topology; unbind a project Workspace.
+History is never cleared.  A Home conversation stays Home's and its
+source's: unbinding it would only make it temporary (2026-11-10)."
   (setq superchat--current-command nil)
   (superchat--activate-capability nil "chat")
   (superchat--set-topology 'single)
-  (superchat--bind-workspace nil)
-  ;; The sandbox mode and approval policy are a security posture, not a
-  ;; working mode: a reset never widens a Session the user narrowed
-  ;; (`/permissions' changes them).  Unbinding the Workspace above can still
-  ;; move the workspace root of the next request to the fallback directory.
-  '(:type :echo :content "Reset Capability, Topology, and Workspace."))
+  (let ((home-p (superchat-workspace-home-p superchat--workspace-binding)))
+    (unless home-p
+      (superchat--bind-workspace nil))
+    ;; The sandbox mode and approval policy are a security posture, not a
+    ;; working mode: a reset never widens a Session the user narrowed
+    ;; (`/permissions' changes them).  Unbinding the Workspace above can still
+    ;; move the workspace root of the next request to the fallback directory.
+    (if home-p
+        '(:type :echo :content "Reset Capability and Topology. This conversation stays in Home; its history is kept.")
+      '(:type :echo :content "Reset Capability, Topology, and Workspace."))))
 
 (defun superchat--cmd-clear-context (_cmd _args _input _lang _target-model)
   (superchat--clear-session-context)

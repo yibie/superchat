@@ -127,14 +127,70 @@ Nil when WORKSPACE-ID is not a non-empty string."
                   (mapconcat (lambda (_) "?") sessions ","))
           sessions))))))
 
+(defun superchat-view-source-session-ids (key &optional workspace-id)
+  "Return the Sessions bound under the source KEY, most recently active first.
+A Session counts when the last `workspace.bound' or `workspace.unbound' fact
+on its Tape binds it with exactly the source key KEY -- compared whole --
+and, when WORKSPACE-ID is given, to exactly that Workspace.  A conversation
+nobody opened (`conversation.background') does not count.  Activity is the
+Session's newest Tape row of any kind, so the first element is the source's
+conversation (D14) and no pointer to it is stored.  Nil when KEY is not a
+non-empty string."
+  (when (and (stringp key) (not (string-empty-p key)))
+    (let ((bound (make-hash-table :test #'equal))
+          (background (make-hash-table :test #'equal))
+          sessions)
+      (dolist (row (superchat-db-tape-select
+                    "SELECT session_id, meta
+                     FROM tape
+                     WHERE kind = 'system'
+                       AND (meta LIKE '%workspace.bound%'
+                            OR meta LIKE '%workspace.unbound%'
+                            OR meta LIKE '%conversation.background%')
+                     ORDER BY id ASC"))
+        (let* ((meta (ignore-errors
+                       (superchat-tape-read-json-alist (or (nth 1 row) "")
+                                                       'list)))
+               (type (superchat-view--object-get meta '(event_type event-type)))
+               (payload (superchat-view--object-get meta '(payload))))
+          (pcase type
+            ("workspace.bound"
+             (puthash (nth 0 row)
+                      (cons (superchat-view--object-get
+                             payload '(workspace_id workspace-id id))
+                            (superchat-view--object-get
+                             payload '(source_key source-key)))
+                      bound))
+            ("workspace.unbound" (remhash (nth 0 row) bound))
+            ("conversation.background"
+             (puthash (nth 0 row) t background)))))
+      (maphash (lambda (session pair)
+                 (when (and (equal (cdr pair) key)
+                            (or (null workspace-id) (equal (car pair) workspace-id))
+                            (not (gethash session background)))
+                   (push session sessions)))
+               bound)
+      (when sessions
+        (mapcar
+         #'car
+         (superchat-db-tape-select
+          (format "SELECT session_id, MAX(id) AS last_id
+                   FROM tape
+                   WHERE session_id IN (%s)
+                   GROUP BY session_id
+                   ORDER BY last_id DESC"
+                  (mapconcat (lambda (_) "?") sessions ","))
+          sessions))))))
+
 ;; `superchat-view-session-configuration' is defined further down this file.
 (defun superchat-view-recall-session-ids (session-id)
   "Return the Sessions a search made from SESSION-ID may look in.
 For a Session bound to a Workspace with a root, those are the Sessions bound
 to that Workspace, SESSION-ID among them: recall is shared inside a Workspace
-and never crosses to another (contract R5).  Any other Session -- a temporary
-conversation, or one from before Workspaces -- gets only itself.  Nil when
-SESSION-ID is not a non-empty string."
+and never crosses to another (contract R5).  Any other Session -- a Home
+conversation, whose recall is its own (D9), a temporary conversation, or one
+from before Workspaces -- gets only itself.  Nil when SESSION-ID is not a
+non-empty string."
   (when (and (stringp session-id) (not (string-empty-p session-id)))
     (let* ((config (superchat-view-session-configuration session-id))
            (workspace-id (plist-get config :workspace-id))
@@ -288,6 +344,14 @@ rebuilt View hides replaced turns."
         :workspace-root nil
         :surface nil))
 
+(defconst superchat-view--workspace-fact-keys
+  '((:workspace-kind workspace_kind workspace-kind)
+    (:workspace-name workspace_name workspace-name)
+    (:source-key source_key source-key))
+  "What a `workspace.bound' fact may say beyond id and root (2026-11-10).
+A fact written before then says none of them, and its Session's
+configuration has none of these keys.")
+
 (defun superchat-view--session-config-apply (config row)
   "Apply Tape ROW to Session CONFIG and return CONFIG."
   (let* ((meta (ignore-errors
@@ -323,10 +387,19 @@ rebuilt View hides replaced turns."
                (plist-put
                 config :workspace-root
                 (superchat-view--object-get
-                 payload '(workspace_root workspace-root root))))))
+                 payload '(workspace_root workspace-root root))))
+         ;; Kind, name and source key, as this fact says them: a later
+         ;; binding that says none clears what an earlier one said.
+         (dolist (spec superchat-view--workspace-fact-keys)
+           (let ((value (superchat-view--object-get payload (cdr spec))))
+             (if value
+                 (setq config (plist-put config (car spec) value))
+               (cl-remf config (car spec)))))))
       ("workspace.unbound"
        (setq config (plist-put config :workspace-id nil))
-       (setq config (plist-put config :workspace-root nil)))
+       (setq config (plist-put config :workspace-root nil))
+       (dolist (spec superchat-view--workspace-fact-keys)
+         (cl-remf config (car spec))))
       ("conversation.background"
        (setq config (plist-put config :background t)))
       ;; Permission levels.  The keys are absent until a Session selects a

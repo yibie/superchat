@@ -114,15 +114,16 @@ PERSONAL is the value of `superchat-personal-workspace-directory'."
     (should (memq mode (default-value 'superchat-personal-workspace-modes))))
   (should-not (default-value 'superchat-personal-workspace-directory)))
 
-(ert-deftest workspace-personal/an-interface-is-temporary-until-one-is-designated ()
-  "Even when its `default-directory' happens to lie in a project."
+(ert-deftest workspace-personal/an-interface-belongs-to-home-until-one-is-designated ()
+  "Even when its `default-directory' happens to lie in a project.  Before Home
+\(2026-11-10) it was temporary until one was designated."
   (wpers--with-personal nil (p) nil
     (let ((agenda (wpers--agenda p)))
       (unwind-protect
           (progn
             (should (superchat-workspace-personal-buffer-p agenda))
             (should-not (superchat-workspace-personal))
-            (should-not (superchat-workspace-of-source agenda))
+            (should (eq 'home (plist-get (superchat-workspace-of-source agenda) :kind)))
             ;; The buffer's directory alone would have given the project.
             (should (superchat-workspace-of-buffer agenda)))
         (kill-buffer agenda)))))
@@ -163,7 +164,8 @@ PERSONAL is the value of `superchat-personal-workspace-directory'."
       (unwind-protect
           (progn
             (should-not (superchat-workspace-personal))
-            (should-not (superchat-workspace-of-source agenda)))
+            ;; Nothing designated: Home, as with none (2026-11-10).
+            (should (eq 'home (plist-get (superchat-workspace-of-source agenda) :kind))))
         (kill-buffer agenda)))))
 
 (ert-deftest workspace-personal/other-buffers-resolve-as-before ()
@@ -178,8 +180,9 @@ PERSONAL is the value of `superchat-personal-workspace-directory'."
                   (should-not (superchat-workspace-personal-buffer-p file))
                   (should (equal p (plist-get (superchat-workspace-of-source file) :root)))
                   ;; A plain buffer sitting in the personal directory is not an
-                  ;; interface: the directory is no project, so it is temporary.
-                  (should-not (superchat-workspace-of-source loose))
+                  ;; interface: the directory is no project, so it is Home's
+                  ;; (temporary before 2026-11-10).
+                  (should (eq 'home (plist-get (superchat-workspace-of-source loose) :kind)))
                   (with-current-buffer file
                     (should (equal (superchat-workspace-of-source)
                                    (superchat-workspace-of-source file)))))
@@ -280,17 +283,19 @@ PERSONAL is the value of `superchat-personal-workspace-directory'."
               (kill-buffer agenda))))
       (delete-directory dir t))))
 
-(ert-deftest workspace-personal/without-one-the-interface-gets-a-temporary-conversation ()
+(ert-deftest workspace-personal/without-one-the-interface-gets-its-own-home-conversation ()
+  "Before Home (2026-11-10) it got a temporary conversation."
   (wpers--with-personal '((:text "ok")) (p) nil
     (wpers--write p "AGENTS.md" "RULE-MARKER-P\n")
     (let* ((agenda (wpers--agenda p))
            (view (with-current-buffer agenda (superchat))))
       (unwind-protect
           (progn
-            (should-not (buffer-local-value 'superchat--workspace-binding view))
+            (should (eq 'home (plist-get (buffer-local-value 'superchat--workspace-binding view)
+                                         :kind)))
             (hm--turn view "what is on today")
             (should-not (string-match-p "RULE-MARKER-P" (wpers--system 1)))
-            (should (string-match-p "This is a temporary conversation"
+            (should (string-match-p "This conversation is in Home"
                                     (wpers--system 1))))
         (kill-buffer agenda)))))
 

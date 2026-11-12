@@ -41,9 +41,9 @@ A durable logical context spanning multiple Turns and Runs.  The chat View
 shows one Session at a time, either beside the file being edited (editor mode)
 or in the Session's own tab (agent mode); both modes show the same Session.
 Entry points invoked from an ordinary buffer — inline ask, inline act, region
-rewrite, annotation — join the main conversation of the Workspace that buffer
-belongs to; from a buffer that belongs to none they join the temporary
-conversation.
+rewrite, annotation — join the main conversation of the project that buffer
+belongs to; from a buffer in no project they join that buffer's own
+conversation in Home (one per Source).
 _Avoid_: Buffer, Run, project session
 
 **Session Buffer Set**:
@@ -121,31 +121,49 @@ _Avoid_: Agent, Agent Profile, profile
 
 ## Workspace
 
-The behaviour behind Workspace, Temporary Workspace, Personal Workspace and
-Work Record is the
-[accepted contract](docs/decisions/accepted/2026-10-01-workspace-work-record-session-rules.md);
+The behaviour behind Workspace, Home, Source, Personal Workspace and Work
+Record is the
+[accepted contract](docs/decisions/accepted/2026-10-01-workspace-work-record-session-rules.md)
+as revised by
+[a Workspace is a record, not a directory](docs/decisions/accepted/2026-11-10-a-workspace-is-a-record-not-a-directory.md);
 which of it is built is stated per slice in the roadmap's M11.
 
 **Workspace**:
-The place work happens in: one directory that Emacs treats as a project,
-together with what Superchat keeps for it — its rules (the `AGENTS.md` at its
-root), its conversations and its Work Records.
-A buffer belongs to the Workspace of its file; on screen a Workspace is its tab
-group.
-_Avoid_: project (Emacs's own object, which says where a Workspace is), working
-copy (what jj calls a workspace), global memory
+A record Superchat keeps of where work belongs — an id, a name, a kind and a
+membership rule — together with its rules, its conversations and its Work
+Records.  A directory is only one of its attributes.  There are two kinds: a
+project (one directory that Emacs treats as a project, its rules the
+`AGENTS.md` at its root) and Home.  A buffer belongs to the project of its file,
+else to Home; on screen a Workspace is its tab group.
+_Avoid_: project (Emacs's own object, which says where a project Workspace is),
+working copy (what jj calls a workspace), global memory
 
-**Temporary Workspace**:
-The Workspace of work done outside any project.  It has no directory and so no
-rules, holds one conversation, and nothing in it is carried into another
-conversation.
-_Avoid_: default workspace, global workspace
+**Home**:
+The one Workspace with no root: it always exists, belongs to the user, and
+receives every buffer no project claims.  Its id and its rules (`home/AGENTS.md`)
+are kept in Superchat's data directory; its rules apply to Home's conversations
+only.  Its conversations are kept per Source, and recall in one of them stays in
+it; its Work Records and the user's timers are shared by them.
+_Avoid_: global workspace, default workspace, temporary workspace
+
+**Source**:
+The buffer a request is made from, named by a key computed when the request is
+made (`superchat-source-key`): a mode's own identity such as a chat id, else
+the file it visits, else its mode and name.  In Home the same Source continues
+the same conversation.
+_Avoid_: origin (the buffer a View speaks about), project
+
+**Temporary conversation**:
+A conversation bound to no Workspace: one from before Home, or one the user
+unbound.  It has no rules, and nothing in it is carried into another
+conversation.  Since Home it is no longer what work outside a project gets.
+_Avoid_: Temporary Workspace (the former default), Home
 
 **Personal Workspace**:
-The Workspace the user designates as the home of interfaces that belong to no
+A project the user designates as the home of interfaces that belong to no
 directory, such as the agenda, feeds and chats.  Until one is designated, work
-started from them is in a Temporary Workspace.
-_Avoid_: global workspace, default workspace, home
+started from them is in Home.
+_Avoid_: global workspace, default workspace, Home
 
 **Work Record**:
 The durable record of a piece of work that has to outlive the Run that started

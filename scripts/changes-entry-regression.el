@@ -42,7 +42,10 @@ The review screen does not appear by itself."
         (view (nth 2 bindings)))
     `(let ((superchat-changes-review-after-run nil))
        (editor-mode--fixture (editor-mode--edit-other-script dir) (dir ,code ,code-window)
-         (let* ((,view (superchat--ensure-chat-view superchat-buffer-name))
+         ;; The conversation the file's in-place commands reach: since Home
+         ;; (2026-11-10) the file's own, not whichever unbound View is beside.
+         (let* ((,view (with-current-buffer ,code
+                         (superchat--ensure-request-chat-buffer)))
                 (chat (editor-mode--show-beside ,view)))
            (select-window chat)
            (smoke--send ,view "edit the other file")

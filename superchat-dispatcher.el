@@ -507,8 +507,9 @@ post-fetch filter would.  This exclusion applies uniformly across every
 history must never be re-injected as a \"memory\" no matter how
 cross-session eligibility is configured.  A row from a DIFFERENT session
 is eligible only when that session belongs to the same Workspace (see
-`superchat-view-recall-session-ids'; a temporary conversation has only
-itself), and then as `superchat-memory-auto-recall-cross-session' says:
+`superchat-view-recall-session-ids'; a Home conversation and a temporary
+one have only themselves), and then as
+`superchat-memory-auto-recall-cross-session' says:
 `all' (the default) admits any matching row; `remembered' admits only
 explicit `/remember' anchors (kind \"anchor\", topic \"remember\");
 `none' admits no cross-session rows at

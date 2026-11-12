@@ -47,9 +47,13 @@ Status: accepted — 用户，2026-10-02：对整份记录答"现在可以规划
 | 工作记录 | 一件必须跨多次执行存活的工作的持久记录 | 恰好一个 workspace |
 | 定时器 | 一张到点起作用的条子 | 恰好一个 workspace |
 
+> 2026-11-10 注：对象表中"Workspace""临时 workspace""个人 workspace"三行已由[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)改写：workspace 是 superchat 存下的一份记录（编号、名字、种类、成员规则），目录只是项目这一种的属性；不在任何项目里的 buffer 归 Home，不再落进临时 workspace。
+
 ### Workspace
 
 W1. 一个文件属于哪个 workspace，以 Emacs 的 project 机制为准，superchat 不另设名单。
+
+> 2026-11-10 注：对项目仍成立；不被任何项目认领的 buffer 由 superchat 自己的规则归入 Home（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md) D3）。
 
 W2. AI 跟着按键那一刻所在的 buffer：从哪个文件叫出对话窗口或用就地命令，就是那个文件所在的 workspace。只移动光标不切换。
 
@@ -57,9 +61,15 @@ W3. workspace 不要求是版本库。推荐用 git，尤其是 jj 来初始化�
 
 W4. 身份是放在目录里的一个编号（`.superchat/` 下），第一次需要时生成；目录改名、搬家后仍是同一个 workspace。
 
+> 2026-11-10 注：对项目仍成立。Home 没有目录，编号存在 superchat 数据目录的 `home/id` 里（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)）。
+
 W5. 普通目录在第一次有东西要留下时成为 workspace：用户在那里说"记住"，superchat 当场问是否把这个目录设为 workspace。
 
+> 2026-11-10 注：不在项目里时，"记住"现在写进 Home 的规矩文件，不再要求先设目录（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md) D8）。
+
 W6. 一个 workspace 只有一个根目录。
+
+> 2026-11-10 注：改为"至多一个"：Home 没有根目录（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md) D4）。
 
 W7. 屏幕上，workspace 就是它的 tab 组：对话独占一个 tab 时，这个 tab 归入所在 workspace 的 tab 组；对话窗口的标题写 workspace 的名字，与 tab 组同名。
 
@@ -69,7 +79,11 @@ W9. 模型改了不在当前 workspace 里的文件，不拦；保存前的审�
 
 W10. 临时 workspace：不在任何 project 里时使用。每次临时使用各开一个，互不相通。它没有目录，所以没有规矩；只有一段对话；它里面的东西不会被带进任何别的对话。它的对话仍能在历史对话列表里翻到。它的 tab 不归组，标题写明"临时"。
 
+> 2026-11-10 注：默认地位已取消：不在任何项目里时用的是 Home，对话按来源分（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md) D10、D11）。旧的临时对话仍在历史列表里，打开后仍是临时的；只有用户在对话里执行 `/workspace clear` 或在项目对话里 `/reset` 才会得到一段新的临时对话。
+
 W11. 个人 workspace：用户指定一个真实的目录。日程、RSS、Telegram 这类不对应文件的界面默认归它，个别界面可以另指给别的 workspace。指定之前，从这些界面叫出的是临时 workspace。它不是全局层：别的 workspace 看不到它的规矩。
+
+> 2026-11-10 注："指定之前是临时 workspace"已改为"指定之前归 Home"；指定过的用户照旧（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)）。
 
 ### Session
 
@@ -84,6 +98,8 @@ S3. 一段对话只装一个 agent 的过程。agent 之间只传三样：任务
 R1. 没有全局层：不存在所有 workspace 都带上的规矩或记忆。
 
 R2. workspace 的规矩是它根目录下的 `AGENTS.md`；没有它时退而读 `CLAUDE.md`。superchat 不另设自己的规矩文件。
+
+> 2026-11-10 注：对项目仍成立。Home 的规矩是 superchat 数据目录下的 `home/AGENTS.md`，只对 Home 的对话生效，这正是 superchat 自己设的规矩文件（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md) D7，用户 2026-11-10 定）。
 
 R3. 规矩每次请求都带上，有总量上限；这个 workspace 里的所有对话都带，子代理也带。
 
@@ -193,6 +209,8 @@ T4. "到点接着干某件事"是挂在工作记录上的一个等待，不是�
 **workspace 只能手动创建。** 输在用户选了自动认定；手动的 `/workspace <目录>` 保留。
 
 **一个长期存在的"临时区"，有自己的记忆。** 输在它会变成事实上的全局记忆：不在 project 里的使用都落进同一个地方。Antigravity 的默认 project、Holon 的家目录是这种做法。
+
+> 2026-11-10 注：此项已被采纳为 Home（[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)）。理由见那份记录的"它推翻了什么"：Home 的对话按来源分、回忆不跨对话，落进同一个地方的只有规矩、工作记录和定时器。
 
 **AI 跟着 tab 组走，或跟着光标实时切换。** 输在规矩应该跟着文件走：在代码仓库的 tab 组里打开日记来改，该用的是日记那边的规矩；实时切换则太跳。
 

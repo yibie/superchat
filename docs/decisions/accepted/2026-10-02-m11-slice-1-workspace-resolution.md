@@ -19,6 +19,8 @@ Status: accepted — 用户，2026-10-02："现在可以规划，然后实现"�
 | 1.4 | 对话窗口的标题写 workspace 的名字；对话独占的 tab 归入同名的 tab 组 | W7 |
 | 1.5 | 不在任何 project 里时用临时 workspace：每次临时使用各一段对话，标题写明"临时"，tab 不归组 | W10 |
 
+> 2026-11-10 注：1.5 已由[Workspace 是一份记录](2026-11-10-a-workspace-is-a-record-not-a-directory.md)取代：不在任何 project 里时用 Home，每个来源一段对话。
+
 验收：`scripts/workspace-regression.el`；现有各回归、M3 回归、内核检查、canonical smoke 不变或只按本记录列出的方式变化；一个在两个 project 之间来回切换的真实任务，两边的请求里都没有对方的历史。
 
 ## leader 的选择

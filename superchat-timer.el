@@ -277,19 +277,39 @@ Nil when none has come due."
            (id (plist-get config :workspace-id)))
       (and (stringp id) (cons id (plist-get config :workspace-root))))))
 
+(declare-function superchat-workspace-home-id-p "superchat-workspace" (id))
+
+(defun superchat-timer--home-p (workspace-id)
+  "Non-nil when WORKSPACE-ID is Home's id."
+  (and (stringp workspace-id)
+       (fboundp 'superchat-workspace-home-id-p)
+       (superchat-workspace-home-id-p workspace-id)))
+
 (defun superchat-timer--scope-of (session-id)
-  "The id of the Workspace SESSION-ID belongs to, or nil when it has none.
-A conversation belongs to a Workspace when it is bound to one with a root."
+  "The id of the project SESSION-ID belongs to, or nil when it has none.
+A conversation belongs to a project when it is bound to a Workspace with a
+root.  Home has no root: a timer set there is the user's own, as one set in
+a conversation of no Workspace is (2026-11-10)."
   (let ((workspace (and (stringp session-id)
                         (superchat-timer--workspace-of session-id))))
     (and (stringp (cdr workspace)) (not (string-empty-p (cdr workspace)))
          (car workspace))))
 
 (defun superchat-timer-owner-for (session-id)
-  "Whose a timer set in SESSION-ID is: `project' in a Workspace, else `you'.
-A timer of a Workspace runs and speaks there; one set in a conversation of no
-Workspace is the user's own, whichever conversation asks after it later."
+  "Whose a timer set in SESSION-ID is: `project' in a project, else `you'.
+A timer of a project runs and speaks there; one set in Home or in a
+conversation of no Workspace is the user's own, whichever conversation asks
+after it later."
   (if (superchat-timer--scope-of session-id) 'project 'you))
+
+(defun superchat-timer--owning-project (timer)
+  "The id of the project TIMER is of, or nil when it is of none.
+A pending timer carries its Workspace; a fired one is its conversation's."
+  (if (plist-member timer :workspace-root)
+      (and (stringp (plist-get timer :workspace-root))
+           (not (string-empty-p (plist-get timer :workspace-root)))
+           (plist-get timer :workspace-id))
+    (superchat-timer--scope-of (plist-get timer :session-id))))
 
 (defun superchat-timer--within-p (session-id timer)
   "Non-nil when SESSION-ID's conversation may see and cancel TIMER.
@@ -300,11 +320,7 @@ they are: a conversation of a Workspace sees that Workspace's, and one of no
 Workspace only what was set in it.  A pending timer carries its Workspace; a
 fired one is its conversation's."
   (let ((asking (superchat-timer--scope-of session-id))
-        (owner (if (plist-member timer :workspace-root)
-                   (and (stringp (plist-get timer :workspace-root))
-                        (not (string-empty-p (plist-get timer :workspace-root)))
-                        (plist-get timer :workspace-id))
-                 (superchat-timer--scope-of (plist-get timer :session-id)))))
+        (owner (superchat-timer--owning-project timer)))
     (pcase (plist-get timer :owner)
       ('you t)
       ('project (and asking (equal asking owner)))
@@ -432,9 +448,10 @@ That is a pending timer, or a fired task still waiting to be started."
 ;;;; Firing ----------------------------------------------------------------------------
 
 (defun superchat-timer--target-session (timer)
-  "The conversation a fired reminder TIMER speaks in: its Workspace's main one.
-That is the most recently active conversation bound to the Workspace; a
-timer set in a temporary conversation speaks in that conversation."
+  "The conversation a fired reminder TIMER speaks in: its project's main one.
+That is the most recently active conversation bound to the project; a timer
+set in Home, which has no main conversation, or in a conversation of no
+Workspace speaks in the conversation it was set in."
   (or (and (plist-get timer :workspace-root)
            (fboundp 'superchat-view-workspace-session-ids)
            (car (superchat-view-workspace-session-ids
@@ -465,8 +482,11 @@ own conversation changes it for that task."
 
 (defun superchat-timer--new-home (timer)
   "Start the conversation TIMER's task runs in; return its Session.
-Nobody opened it.  It runs at `superchat-timer-task-level'."
-  (let* ((workspace (and (plist-get timer :workspace-root)
+Nobody opened it.  It runs at `superchat-timer-task-level'.  It is bound to
+the timer's project, or to Home for a timer set in Home -- it then carries
+Home's rules, under no source -- and to nothing otherwise."
+  (let* ((workspace (and (or (plist-get timer :workspace-root)
+                             (superchat-timer--home-p (plist-get timer :workspace-id)))
                          (list :id (plist-get timer :workspace-id)
                                :root (plist-get timer :workspace-root))))
          (session (buffer-local-value
@@ -1873,9 +1893,10 @@ ON it sets a rule instead, which starts on an event
                   (if (plist-get call :brief)
                       "  Each line the user sees is written from the output by a model with no tools, which is not you; what it writes does not decide whether a line is shown."
                     "")
-                  (if (or (plist-get timer :workspace-root) (eq kind 'command))
-                      ""
-                    "  This conversation belongs to no workspace: the timer fires in it.")
+                  (cond ((or (plist-get timer :workspace-root) (eq kind 'command)) "")
+                        ((superchat-timer--home-p (plist-get timer :workspace-id))
+                         "  It is the user's own, set in Home: it fires in this conversation, and every conversation sees it.")
+                        (t "  This conversation belongs to no workspace: the timer fires in it."))
                   ;; Measured 2026-11-01: a model saw it had set the wrong timer and
                   ;; set the right one, and the wrong one went on.
                   (format "  To cancel it: eval_elisp (superchat-timer-cancel %S)."
@@ -1951,8 +1972,11 @@ any."
                     (cl-find-if by-id (superchat-timer-unstarted-tasks)))))
     (cond ((null timer) (format "Error: no pending timer %s." id))
           ((not (superchat-timer--within-p session timer))
-           (format "Error: timer %s belongs to another workspace; this conversation cannot cancel it."
-                   id))
+           (format "Error: timer %s %s; this conversation cannot cancel it."
+                   id
+                   (if (superchat-timer--owning-project timer)
+                       "belongs to another workspace"
+                     "was set in another conversation of no workspace")))
           ((superchat-timer-cancel id) (format "Timer %s cancelled." id))
           (t (format "Error: no pending timer %s." id)))))
 

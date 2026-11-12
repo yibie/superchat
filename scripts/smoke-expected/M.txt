@@ -1,4 +1,4 @@
-events: ("prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
+events: ("workspace.bound" "prompt.assembled" "intent.received" "run.started" "response.completed" "run.completed" "turn.completed")
 status: completed
 network-calls: 0
 mock-calls: 1

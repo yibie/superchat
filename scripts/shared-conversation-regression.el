@@ -39,8 +39,8 @@
 
 (defmacro sc--fixture (script bindings &rest body)
   "Run BODY with SCRIPT, the chat window open, and a file outside git.
-BINDINGS is (VIEW FILE-BUFFER): the chat View and the buffer visiting
-DIR/note.txt, which holds three lines, point on the third."
+BINDINGS is (VIEW FILE-BUFFER): the chat View opened from the file, and the
+buffer visiting DIR/note.txt, which holds three lines, point on the third."
   (declare (indent 2) (debug t))
   (let ((view (nth 0 bindings)) (buffer (nth 1 bindings)))
     `(let* ((dir (file-name-as-directory (make-temp-file "shared-conversation-" t)))
@@ -50,8 +50,11 @@ DIR/note.txt, which holds three lines, point on the third."
        (with-temp-file file (insert "first line\nsecond line\nthird line\n"))
        (unwind-protect
            (hm--fixture ,script
-             (let ((,view (smoke--open-chat))
-                   (,buffer (find-file-noselect file)))
+             ;; The chat is opened from the file: since Home (2026-11-10) a
+             ;; file outside any project has its own conversation, which its
+             ;; in-place commands join, as a project file's join its project's.
+             (let* ((,buffer (find-file-noselect file))
+                    (,view (with-current-buffer ,buffer (superchat))))
                (with-current-buffer ,buffer
                  (goto-char (point-min))
                  (forward-line 2))
