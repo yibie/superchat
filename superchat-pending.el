@@ -23,6 +23,8 @@
 (require 'superchat-changes)
 (require 'superchat-butler)
 
+(declare-function superchat-watch--kind "superchat-watch" (on))
+(declare-function superchat-watch-rule-words "superchat-watch" (rule))
 (declare-function superchat-subagent-background-for "superchat-subagent" (session))
 (declare-function superchat-runtime-active-runs "superchat-runtime" ())
 (declare-function superchat-runtime-status "superchat-runtime" (run-id))
@@ -325,39 +327,64 @@ column cuts off: no news must not look like nothing having been checked."
                (superchat-pending--item
                 'timer (plist-get rule :id)
                 (superchat-pending--one-line (plist-get rule :text))
-                (format "%s; when a compilation fails in %s"
+                (format "%s; %s"
                         (superchat-timer-command-stats-words
                          (gethash (plist-get rule :id) stats) t)
-                        (plist-get rule :workspace-root))
+                        (if (and (fboundp 'superchat-watch--kind)
+                                 (superchat-watch--kind (plist-get rule :on)))
+                            (superchat-watch-rule-words rule)
+                          (format "when a compilation fails in %s"
+                                  (plist-get rule :workspace-root))))
                 (plist-get rule :session-id)))
              (superchat-timer-rules)))))
+
+(defun superchat-pending--notice-detail (notice)
+  "How NOTICE's execution ended and what it concluded, for a row."
+  (format "%s%s%s"
+          (pcase (plist-get notice :status)
+            ((guard (or (plist-get notice :calls-cut-off)
+                        (plist-get notice :calls-stopped)))
+             (superchat-changes--notice-ending notice))
+            ('cut-off "cut off when Emacs quit")
+            ('cancelled "stopped")
+            (status status))
+          (let ((n (plist-get notice :unsaved)))
+            (if (and (numberp n) (> n 0))
+                (format ", %d unsaved when it ended" n)
+              ""))
+          (if-let* ((text (superchat-butler-text-of (plist-get notice :run)))
+                    ((not (string-empty-p text))))
+              (concat ": " text)
+            "")))
 
 (defun superchat-pending--unseen ()
   "Executions that ended and were not looked at.
 Those Superchat started by itself, and those the user started that ended
-with their conversation closed."
-  (mapcar (lambda (notice)
-            (superchat-pending--item
-             'unseen (plist-get notice :run)
-             (plist-get notice :what)
-             (format "%s%s%s"
-                     (pcase (plist-get notice :status)
-                       ((guard (or (plist-get notice :calls-cut-off)
-                                   (plist-get notice :calls-stopped)))
-                        (superchat-changes--notice-ending notice))
-                       ('cut-off "cut off when Emacs quit")
-                       ('cancelled "stopped")
-                       (status status))
-                     (let ((n (plist-get notice :unsaved)))
-                       (if (and (numberp n) (> n 0))
-                           (format ", %d unsaved when it ended" n)
-                         ""))
-                     (if-let* ((text (superchat-butler-text-of (plist-get notice :run)))
-                               ((not (string-empty-p text))))
-                         (concat ": " text)
-                       ""))
-             (plist-get notice :session)))
-          (reverse superchat-changes--notices)))
+with their conversation closed.  The ends of one piece of work Superchat
+started again and again (a task each hour) are one row, its newest: the
+list is what is left to do, not a log (the user, 2026-11-06).  The row's
+:runs are all of them, newest first."
+  (let (groups order)
+    (dolist (notice (reverse superchat-changes--notices))
+      (let ((key (if (eq 'unattended (plist-get notice :origin))
+                     (cons 'work (plist-get notice :what))
+                   (cons 'run (plist-get notice :run)))))
+        (unless (assoc key groups) (push key order))
+        (push notice (alist-get key groups nil nil #'equal))))
+    (mapcar (lambda (key)
+              ;; Pushed oldest first, so each group is newest first.
+              (let* ((notices (alist-get key groups nil nil #'equal))
+                     (newest (car notices))
+                     (item (superchat-pending--item
+                            'unseen (plist-get newest :run)
+                            (plist-get newest :what)
+                            (concat (if (cdr notices)
+                                        (format "ran %d times, last: " (length notices))
+                                      "")
+                                    (superchat-pending--notice-detail newest))
+                            (plist-get newest :session))))
+                (plist-put item :runs (mapcar (lambda (n) (plist-get n :run)) notices))))
+            (nreverse order))))
 
 (defun superchat-pending--unsaved ()
   "Buffers a tool edited that are still unsaved, each with whose edit it is."
@@ -463,7 +490,7 @@ leaves the list."
            ;; once what it points at was actually reached.
            (pop-to-buffer (superchat-pending--view session))
            (when (eq kind 'unseen)
-             (superchat-changes-notice-dismiss (plist-get item :key)))))
+             (superchat-pending--forget item))))
          ;; What was gone to may have left the list: read it again.
          (superchat-pending-refresh))))))
 
@@ -542,8 +569,13 @@ Its conversation is switched to the permission level `auto'."
   (interactive (list (tabulated-list-get-id)))
   (unless (and item (eq 'unseen (plist-get item :kind)))
     (user-error "Only an ended execution can be dismissed"))
-  (superchat-changes-notice-dismiss (plist-get item :key))
+  (superchat-pending--forget item)
   (superchat-pending-refresh))
+
+(defun superchat-pending--forget (item)
+  "Forget every ended execution the row ITEM stands for."
+  (dolist (run (or (plist-get item :runs) (list (plist-get item :key))))
+    (superchat-changes-notice-dismiss run)))
 
 (defun superchat-pending-bring (item)
   "Put what the ended work of the row at point concluded in your message.
@@ -558,6 +590,8 @@ Nothing is sent (`superchat-butler-bring')."
              :session (plist-get item :session)
              :what (plist-get item :what)
              :ending (plist-get item :detail))))
+  ;; The newest is what was brought in; the times before it go with it.
+  (superchat-pending--forget item)
   (superchat-pending-refresh))
 
 (defun superchat-pending-refresh ()

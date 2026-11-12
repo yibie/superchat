@@ -52,6 +52,7 @@
 (require 'superchat-timer)
 (require 'superchat-work)
 (require 'superchat-butler)
+(require 'superchat-note)
 (require 'superchat-editor-workspace)
 (require 'superchat-widgets)
 (require 'superchat-change-set)
@@ -5167,6 +5168,7 @@ View is already open and has its own buffer-local value."
     (define-key map (kbd "C-c C-r") #'superchat-resume)
     (define-key map (kbd "C-c C-g") #'superchat-agents-panel-show)
     (define-key map (kbd "C-c C-a") #'superchat-rewrite-apply-code-block-at-point)
+    (define-key map (kbd "C-c C-b") #'superchat-butler-attached-toggle)
     ;; Over org's refile, which a chat has no use for.
     (define-key map (kbd "C-c C-w") #'superchat-toggle-display-style)
     map)

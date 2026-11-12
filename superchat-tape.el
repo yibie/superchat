@@ -142,6 +142,10 @@ writer's domain and this inventory's knowledge of it cannot drift apart.")
              "timer.home"
              ;; What work nobody asked for concluded.
              "butler.line"
+             ;; A fix the user took into their buffers.
+             "butler.applied"
+             ;; Something came in, and what read it was done with it.
+             "inbox.event" "inbox.done"
              ;; A conclusion the user put in a message, and which conversation.
              "butler.brought"
              ;; What a timer's fixed command printed.

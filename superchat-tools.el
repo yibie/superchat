@@ -22,6 +22,7 @@
 (require 'llm nil t)
 ;; Generated UI loads on the first `render_ui' call; see `superchat-tool-render-ui'.
 (defvar superchat-genui-buffer-name)
+(declare-function superchat-watch-on-description "superchat-watch" ())
 (declare-function superchat-genui-render-form "superchat-genui" (form))
 (require 'superchat-tool-execution)
 (require 'superchat-reference)
@@ -2744,7 +2745,7 @@ It reads every conversation of every workspace, not only this one."
 
          (superchat--maybe-make-llm-tool
           "timer_create"
-          :description "Set a timer for the user. kind \"command\" has Superchat itself run one fixed shell command at that time, with no model and no question: prefer it for anything a command can answer by itself (\"tell me when the star count changes\", \"check git status every morning\"). Give the complete command in command, as simple as it can be: it runs exactly as written every time, in the root of this workspace (no cd), so it must work unattended and cannot use anything you saw. Superchat itself compares the output with the last one, so the command only prints the current value: keep no state of its own, and print nothing that changes by itself, such as the time. Let it fail visibly: do not discard its errors (no 2>/dev/null) or end it in a pipe that hides them. The user is asked once to allow it when you set it. Do not try it first: a repeating one runs once right away, the user sees what it prints, and if that fails nothing is set and you are told why, so correct it and set it again. After that the user sees a line only when its output changed or it keeps failing (report_unchanged true: a line every time, for \"give me a brief every morning\"). brief true has a model with no tools write that line from the output in a few sentences, in place of Superchat's own short line: use it when the user asks for a summary or a brief in words, or when the output is a list or a page that is hard to read, not for one number. It costs a model call each time a line is shown, and it never decides whether a line is shown. You are not told the output. Setting the same command again replaces its timer, which is also how to change its time. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"). kind \"task\" starts you on the text as a new request in a conversation of its own, read-only and with nobody there: you can read and report, not change a buffer, run code or ask the user. Use it only for what needs your judgment (to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\"; with repeat, at can be just \"HH:MM\" (\"every morning at 9\" needs no date). If you do not know today's date, a time that has passed is refused with the date. The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user. on \"compile_failed\" sets a rule rather than a time, for \"when a compile fails, find out why\" or \"keep an eye on my builds\": set it right away, without going through the project first. Each time M-x compile fails in this workspace, a separate model that can only read this workspace looks into it by itself, and the user sees a line when it has something to tell. Give what to look for and when to speak, in the user's words, as text, with no time and no command. The user is asked once. It is not for a failure in front of you now: look into that yourself."
+          :description "Set a timer for the user. kind \"command\" has Superchat itself run one fixed shell command at that time, with no model and no question: prefer it for anything a command can answer by itself (\"tell me when the star count changes\", \"check git status every morning\"). Give the complete command in command, as simple as it can be: it runs exactly as written every time, in the root of this workspace (no cd), so it must work unattended and cannot use anything you saw. Superchat itself compares the output with the last one, so the command only prints the current value: keep no state of its own, and print nothing that changes by itself, such as the time. Let it fail visibly: do not discard its errors (no 2>/dev/null) or end it in a pipe that hides them. The user is asked once to allow it when you set it. Do not try it first: a repeating one runs once right away, the user sees what it prints, and if that fails nothing is set and you are told why, so correct it and set it again. After that the user sees a line only when its output changed or it keeps failing (report_unchanged true: a line every time, for \"give me a brief every morning\"). brief true has a model with no tools write that line from the output in a few sentences, in place of Superchat's own short line: use it when the user asks for a summary or a brief in words, or when the output is a list or a page that is hard to read, not for one number. It costs a model call each time a line is shown, and it never decides whether a line is shown. You are not told the output. Setting the same command again replaces its timer, which is also how to change its time. kind \"reminder\" tells the user the text when it comes due (use it for \"remind me ...\"). kind \"task\" starts you on the text as a new request in a conversation of its own, read-only and with nobody there: you can read and report, not change a buffer, run code or ask the user. Use it only for what needs your judgment (to continue a piece of work kept in a work record later, use work_record wait instead). Give in_minutes for a time from now, or at as local \"YYYY-MM-DD HH:MM\"; with repeat, at can be just \"HH:MM\" (\"every morning at 9\" needs no date). If you do not know today's date, a time that has passed is refused with the date. The timer is kept across restarts; one missed while Emacs was closed fires once when it starts. Do not use run-at-time or eval_elisp for this. The result states the time it was set for; tell the user. on \"compile_failed\" sets a rule rather than a time, for \"when a compile fails, find out why\", \"if a build fails, tell me what went wrong\" or \"keep an eye on my builds\": what the user wants to happen when or if a build fails, breaks or shows errors, in any words (\"if the build breaks, repair it\", \"if compile errors show up, explain them\"), is this rule, not a question about now, so set it right away, without going through the project first and without looking for a failure. Each time M-x compile fails in this workspace, a separate model that can only read this workspace looks into it by itself, and the user sees a line when it has something to tell. Give what to look for and when to speak, in the user's words, as text, with no time and no command. The user is asked once. fix true, when the user wants it fixed and not only looked into, also lets that model change a copy of the workspace and run the compilation there, with no network, and offers the user a change that passes, which they apply if they want it. It is not for a failure in front of you now: look into that yourself."
           :args (list (list :name "text" :type 'string
                             :description "What to remind the user of, the task to do, or what the command checks, in the user's language.")
                       (list :name "kind" :type 'string
@@ -2762,18 +2763,26 @@ It reads every conversation of every workspace, not only this one."
                       (list :name "brief" :type 'boolean
                             :description "kind command: true to have a model with no tools write each line from the output, in a few sentences." :optional t)
                       (list :name "on" :type 'string
-                            :description "compile_failed: start on that event rather than at a time. Give no time and no command." :optional t))
+                            :description (concat (if (fboundp 'superchat-watch-on-description)
+                                                     (superchat-watch-on-description)
+                                                   "compile_failed: start when a compilation in this workspace fails")
+                                                 ". Start on that event rather than at a time. Give no time and no command.")
+                            :optional t)
+                      (list :name "fix" :type 'boolean
+                            :description "With on compile_failed: true when the user wants it fixed, not only looked into." :optional t)
+                      (list :name "quiet" :type 'boolean
+                            :description "With on: true only when the user's words leave some of these events out, as in \"only when it is my code\", \"vendor/ does not matter\", \"tell me about the Emacs ones\" or \"articles on LLMs, nothing else\". Otherwise leave it out: the user hears of every one." :optional t))
           :function #'superchat-timer-tool-create)
 
          (superchat--maybe-make-llm-tool
           "timer_list"
-          :description "List this workspace's pending timers (id, next time, kind, text) and its timers that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
+          :description "List the pending timers and rules this conversation may see, the user's own and this workspace's (id, next time, kind, text), and those that fired in the last 24 hours. Use it to answer whether a reminder came or was missed."
           :args nil
           :function #'superchat-timer-tool-list)
 
          (superchat--maybe-make-llm-tool
           "timer_cancel"
-          :description "Cancel a pending timer by the id timer_list or timer_create gave."
+          :description "Cancel a pending timer or rule by the id timer_list or timer_create gave. The user is asked first: a timer the user set is cancelled only when the user says yes."
           :args (list (list :name "id" :type 'string :description "The timer id."))
           :function #'superchat-timer-tool-cancel)
 
@@ -2966,9 +2975,9 @@ changing `superchat-llm-tool-names' or the global tool cache."
     "timer_create" "timer_list" "timer_cancel" "elisp_script" "work_record"
     "file_history" "recent_errors" "lsp-references" "lsp-code-actions"
     "lsp-hover" "save_buffer" "read_file" "open_file" "read_reference"
-    ;; No request offers it but the one that looks into a failed compilation
-    ;; (`superchat-watch.el'), which makes it itself.
-    "nothing_to_tell")
+    ;; No request offers these but the one that looks into a failed compilation
+    ;; (`superchat-watch.el'), which makes them itself.
+    "nothing_to_tell" "edit_file" "run_build")
   "Built-in tool names reserved by `superchat-llm-tools-reload'.")
 
 (defconst superchat-tools--installation-property

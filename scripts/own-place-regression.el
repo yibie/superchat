@@ -513,6 +513,75 @@
   (prog1 (superchat-timer-fire timer (plist-get timer :due))
     (wtimer--settled)))
 
+(defun own-place--unseen-rows ()
+  (cl-remove-if-not (lambda (item) (eq 'unseen (plist-get item :kind)))
+                    (superchat-pending-items)))
+
+(defun own-place--fire-times (timer n)
+  "Fire TIMER N times, at its time and each minute after; settle each."
+  (dotimes (i n)
+    (setq wtimer--now (+ (plist-get timer :due) (* 60 i)))
+    (superchat-timer-fire timer (+ (plist-get timer :due) (* 60 i)))
+    (wtimer--settled)))
+
+(ert-deftest own-place/a-task-that-ran-again-and-again-is-one-row ()
+  ;; 2026-11-06, the user: an hourly task left a row each hour, and the list
+  ;; read like a log.
+  (wtimer--with '((:text "FIRST") (:text "SECOND") (:text "THIRD")) (p)
+    (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
+      (own-place--fire-times timer 3)
+      (let ((rows (own-place--unseen-rows)))
+        (should (= 1 (length rows)))
+        (should (string-match-p "ran 3 times" (plist-get (car rows) :detail)))
+        (should (string-match-p "THIRD" (plist-get (car rows) :detail)))
+        (should (= 3 (length (plist-get (car rows) :runs))))))))
+
+(ert-deftest own-place/d-on-it-forgets-every-time-it-ran ()
+  (wtimer--with '((:text "FIRST") (:text "SECOND")) (p)
+    (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
+      (own-place--fire-times timer 2)
+      (superchat-pending-dismiss (car (own-place--unseen-rows)))
+      (should-not (own-place--unseen-rows))
+      ;; As the Tape has it, not only in memory.
+      (superchat-changes-notices-reload)
+      (should-not (own-place--unseen-rows)))))
+
+(ert-deftest own-place/going-to-it-takes-the-row-away ()
+  (wtimer--with '((:text "FIRST") (:text "SECOND")) (p)
+    (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
+      (own-place--fire-times timer 2)
+      (superchat-pending-open (car (own-place--unseen-rows)))
+      (should-not (own-place--unseen-rows)))))
+
+(ert-deftest own-place/bringing-it-in-takes-the-row-away ()
+  (wtimer--with '((:text "FIRST") (:text "SECOND")) (p)
+    (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
+      (own-place--fire-times timer 2)
+      (superchat-pending-bring (car (own-place--unseen-rows)))
+      (should-not (own-place--unseen-rows)))))
+
+(ert-deftest own-place/a-cancelled-task-leaves-no-row ()
+  (wtimer--with '((:text "FIRST") (:text "SECOND")) (p)
+    (let* ((view (with-current-buffer (wtimer--file p) (superchat)))
+           (timer (superchat-timer-create (wtimer--session view) 'task "TASK-MARKER"
+                                          (+ wtimer--now 60) 3600)))
+      (own-place--fire-times timer 2)
+      (should (own-place--unseen-rows))
+      (superchat-timer-cancel (plist-get timer :id))
+      (should-not (own-place--unseen-rows))
+      (superchat-changes-notices-reload)
+      (should-not (own-place--unseen-rows)))))
+
+(ert-deftest own-place/two-tasks-are-two-rows ()
+  (wtimer--with '((:text "ONE") (:text "TWO")) (p)
+    (cl-destructuring-bind (view session timer) (presence--task p "TASK-ONE")
+      (ignore view)
+      (let ((other (superchat-timer-create session 'task "TASK-TWO" (+ wtimer--now 60))))
+        (own-place--fire-and-settle timer)
+        (setq wtimer--now (+ wtimer--now 60))
+        (own-place--fire-and-settle other)
+        (should (= 2 (length (own-place--unseen-rows))))))))
+
 (ert-deftest own-place/a-task-s-end-is-one-line-in-the-butler ()
   (wtimer--with '((:text "FIRST-LINE\n\nmore of the answer")) (p)
     (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
@@ -560,6 +629,26 @@
         (should (eq 'failed (plist-get line :status)))
         (should (string-match-p "failed.*BOOM-FROM-THE-SERVER"
                                 (superchat-butler-line-text line)))))))
+
+(ert-deftest own-place/a-runaway-task-ends-at-its-deadline-and-has-a-line ()
+  ;; Nobody watches a task, so nobody stops one that calls tools for ever: the Run's
+  ;; deadline does, and the person hears of it in the butler and the list.
+  (wtimer--with (append (make-list 40 '(:tool-uses (("read_file" (path . "a.txt"))) :delay 0.2))
+                        '((:text "NEVER")))
+      (p)
+    (wtimer--write p "a.txt" "A\n")
+    (let ((superchat-runtime-default-deadline 2))
+      (cl-destructuring-bind (_view _session timer) (presence--task p "TASK-MARKER")
+        (superchat-timer-fire timer (plist-get timer :due))
+        (let ((end (+ (float-time) 15)))
+          (while (and (< (float-time) end) (not (own-place--lines)))
+            (accept-process-output nil 0.1)))
+        (wtimer--settled)
+        (let ((line (car (own-place--lines))))
+          (should (eq 'timed-out (plist-get line :status)))
+          (should (string-match-p "deadline" (superchat-butler-line-text line))))
+        (should (cl-some (lambda (item) (string-match-p "deadline" (or (plist-get item :detail) "")))
+                         (superchat-pending-items)))))))
 
 (ert-deftest own-place/what-the-user-started-leaves-no-line ()
   (wtimer--with '((:text "USER-ANSWER")) (p)

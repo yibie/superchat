@@ -289,6 +289,13 @@ belongs to the level stage and the approval seam."
 
 ;;;; The fixed level stage
 
+(defvar superchat-sandbox-reading-tools nil
+  "Registered tools that only read what Superchat already has, as a builtin does.
+A plugin of this package puts a tool here when it reads and changes nothing,
+so it is not asked about on each call: `feed_search' of
+plugins/superchat-elfeed reads elfeed's database.  Any other registered tool
+stays an outside tool.")
+
 (defconst superchat-sandbox-full-control-tools
   '("eval_elisp" "shell-command" "eshell-command" "bash" "define_tool")
   "Built-in tools with full control of Emacs.
@@ -326,6 +333,7 @@ third-party registered tool; `builtin' for everything else Superchat ships."
                (member server (bound-and-true-p superchat-mcp-trusted-servers)))
           'trusted
         'outside)))
+   ((member tool-name superchat-sandbox-reading-tools) 'builtin)
    ((or (equal tool-name "ask_user")
         (not (boundp 'superchat-tools--builtin-tool-names))
         (member tool-name superchat-tools--builtin-tool-names))

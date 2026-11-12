@@ -48,12 +48,15 @@
     (should (smoke--wait (lambda () (> cwatch--ended before)) 10))
     buffer))
 
+(defvar cwatch--settle-seconds 15
+  "How long `cwatch--settled' waits.")
+
 (defun cwatch--settled ()
   "Wait until nothing is being looked into and no execution runs."
   (should (smoke--wait (lambda ()
                          (and (zerop (hash-table-count superchat-timer--writing))
                               (null (superchat-runtime-active-runs))))
-                       15)))
+                       cwatch--settle-seconds)))
 
 (defun cwatch--fail-and-settle (root &optional command)
   (prog1 (cwatch--compile root (or command cwatch--fails))
@@ -61,7 +64,8 @@
 
 (defun cwatch--rule (view &optional text)
   "Set the rule of VIEW's Workspace."
-  (superchat-watch-set (hm--session view) (or text "RULE-TEXT") "compile_failed"))
+  ;; May keep quiet: what comes of that is tested here; compile-fix tests the other.
+  (superchat-watch-set (hm--session view) (or text "RULE-TEXT") "compile_failed" nil t))
 
 (defun cwatch--results (rule)
   (tcmd--results rule))
@@ -82,7 +86,7 @@
   `(:tool-uses (("read_buffer" (buffer . ,name)))))
 
 (defun cwatch--nothing (why)
-  `(:tool-uses (("nothing_to_tell" (why . ,why)))))
+  `(:tool-uses (("nothing_to_tell" (why . ,why) (left_out . t)))))
 
 (defun cwatch--tool-results (wire)
   "The tool results WIRE carries, as one string."
@@ -1087,7 +1091,7 @@ Ran 1 tests, 0 results as expected, 1 unexpected (2026-11-02 00:47:00-0800, 0.06
                             (superchat-pending-items))))))
 
 (ert-deftest compile-watch/ending-the-look-there-still-counts-its-tokens ()
-  (wtimer--with '((:chunks ((:input-tokens 100)) :tool-uses (("nothing_to_tell" (why . "NO"))))) (p)
+  (wtimer--with '((:chunks ((:input-tokens 100)) :tool-uses (("nothing_to_tell" (why . "NO") (left_out . t))))) (p)
     (let ((rule (cwatch--rule (tcmd--view p))))
       (cwatch--fail-and-settle p)
       (should (equal 100 (plist-get (cwatch--last rule) :note-input-tokens))))))
@@ -1138,7 +1142,7 @@ Ran 1 tests, 0 results as expected, 1 unexpected (2026-11-02 00:47:00-0800, 0.06
       (should (= 1 (tcmd--count))))))
 
 (ert-deftest compile-watch/an-empty-reason-is-still-a-reason-to-keep-quiet ()
-  (wtimer--with '((:tool-uses (("nothing_to_tell" (why . "")))) (:text "")) (p)
+  (wtimer--with '((:tool-uses (("nothing_to_tell" (why . "") (left_out . t)))) (:text "")) (p)
     (let ((rule (cwatch--rule (tcmd--view p))))
       (cwatch--fail-and-settle p)
       (should (equal '("nothing") (cwatch--statuses rule)))
@@ -1507,7 +1511,7 @@ Ran 1 tests, 0 results as expected, 1 unexpected (2026-11-02 00:47:00-0800, 0.06
       (cwatch--fail-and-settle p)
       (superchat-butler-bring (car (tcmd--lines rule)) view)
       (let ((input (with-current-buffer view
-                     (buffer-substring-no-properties superchat--prompt-start (point-max)))))
+                     (superchat-butler-message))))
         (should (string-match-p "THE CONCLUSION" input))
         (should (string-match-p "THE REST" input))
         (should (string-match-p "foo.el:2:1" input))
@@ -1550,7 +1554,7 @@ Ran 1 tests, 0 results as expected, 1 unexpected (2026-11-02 00:47:00-0800, 0.06
       (cwatch--fail-and-settle p)
       (superchat-butler-bring (car (tcmd--lines rule)) view)
       (let ((input (with-current-buffer view
-                     (buffer-substring-no-properties superchat--prompt-start (point-max)))))
+                     (superchat-butler-message))))
         (should (= 1 (with-temp-buffer (insert input) (how-many "THE CONCLUSION"
                                                                  (point-min) (point-max)))))
         (should (string-match-p "THE REST" input))))))
@@ -1567,9 +1571,7 @@ Ran 1 tests, 0 results as expected, 1 unexpected (2026-11-02 00:47:00-0800, 0.06
         (should (string-match-p (regexp-quote long)
                                 (replace-regexp-in-string
                                  "[\n> ]" ""
-                                 (with-current-buffer view
-                                   (buffer-substring-no-properties
-                                    superchat--prompt-start (point-max))))))))))
+                                 (superchat-butler-message view))))))))
 
 (ert-deftest compile-watch/a-note-is-still-written-on-the-same-session ()
   ;; The two share the butler's Session; it being read-only takes no words away.

@@ -33,7 +33,8 @@
 
 (declare-function superchat-work-get "superchat-work" (id))
 (declare-function superchat-timer-command-stats "superchat-timer" ())
-(declare-function superchat-timer-command-stats-words "superchat-timer" (stats))
+(declare-function superchat-timer-command-stats-words "superchat-timer" (stats &optional rule))
+(declare-function superchat-fix-apply-texts "superchat-fix" (root paths patch))
 (declare-function superchat-runtime--terminal-p "superchat-runtime" (status))
 (declare-function superchat--insert-persistent-system-message "superchat-render"
                   (content &optional owned-response-marker))
@@ -298,9 +299,23 @@ else.  Return the line."
        ("skipped" (format "  Not looked into: %s" why))
        (status (format "  %s" status))))))
 
+(defvar superchat-butler-show-functions nil
+  "How a rule's result of another kind is shown: (KIND . FUNCTION).
+FUNCTION inserts the body, given the result's payload as an alist; what the
+line is and how it went comes before it.")
+
+(defun superchat-butler--show-other (payload function)
+  "Insert the result PAYLOAD with FUNCTION, of `superchat-butler-show-functions'."
+  (insert (format "%s\n\n" (alist-get 'what payload)))
+  (when-let* ((timer (alist-get 'timer-id payload))
+              (stats (gethash timer (superchat-timer-command-stats))))
+    (insert (superchat-timer-command-stats-words stats t) "\n\n"))
+  (funcall function payload))
+
 (defun superchat-butler-show (id)
   "Show what the command of the line ID did; it counts as looked at."
   (let* ((payload (superchat-butler--result id))
+         (other (cdr (assoc (alist-get 'kind payload) superchat-butler-show-functions)))
          (compile (equal "compile" (alist-get 'kind payload)))
          (output (alist-get 'output payload))
          (stderr (alist-get 'stderr payload))
@@ -315,6 +330,8 @@ else.  Return the line."
       (setq superchat-butler--output-of id)
       (let ((inhibit-read-only t))
         (erase-buffer)
+        (if other
+            (superchat-butler--show-other payload other)
         (insert (format "%s\n$ %s\nin %s\n%s\n\n"
                         (alist-get 'what payload)
                         (alist-get 'command payload)
@@ -328,13 +345,26 @@ else.  Return the line."
                     (stats (gethash timer (superchat-timer-command-stats))))
           (insert (superchat-timer-command-stats-words stats compile) "\n\n"))
         (when (stringp note)
-          (insert (if compile
-                      "The model's words (it can read this project and change nothing):\n"
-                    "The model's words (it read the output below and has no tools):\n")
+          (insert (cond
+                   ((alist-get 'fix-tried payload)
+                    "The model's words (it worked in a copy of this project):\n")
+                   (compile
+                      "The model's words (it can read this project and change nothing):\n")
+                   (t
+                    "The model's words (it read the output below and has no tools):\n"))
                   note "\n\n"
                   (if compile "" "What the command printed:\n")))
         (when-let* ((read (alist-get 'read payload)))
           (insert (format "It read: %s\n\n" (mapconcat #'identity read ", "))))
+        (when-let* ((patch (alist-get 'fix-patch payload)))
+          (insert "A fix that passes the build in a copy of the project.  Nothing of yours\n"
+                  "has changed: `a' puts it in your buffers, unsaved, for you to review.\n\n"
+                  patch "\n"))
+        (when-let* ((dropped (alist-get 'fix-dropped payload)))
+          (insert (format "Its change did not pass, or could not be offered, and was dropped: %s\n\n"
+                          dropped)))
+        (when-let* ((no-fix (alist-get 'no-fix payload)))
+          (insert (format "It did not try a fix: %s\n\n" no-fix)))
         (when compile
           (insert "What the compilation printed:\n"))
         (when (stringp no-note)
@@ -346,7 +376,7 @@ else.  Return the line."
           (insert (format "\n\n(the %s %d of %d bytes)"
                           (if compile "last" "first") (string-bytes output) bytes)))
         (when (and (stringp stderr) (not (string-empty-p stderr)))
-          (insert "\n\nOn standard error:\n" (ansi-color-filter-apply stderr)))
+          (insert "\n\nOn standard error:\n" (ansi-color-filter-apply stderr))))
         (insert "\n")
         (goto-char (point-min))))
     (pop-to-buffer buffer)
@@ -360,14 +390,18 @@ That is its conversation, or what its command printed."
   (let ((line (get-text-property (line-beginning-position) 'superchat-butler-line)))
     (unless line
       (user-error "There is no line here"))
-    (let ((session (plist-get line :session)))
+    (superchat-butler-open-line line)))
+
+(defun superchat-butler-open-line (line)
+  "Go to what LINE is about; its work counts as looked at."
+  (let ((session (plist-get line :session)))
       (if (equal session superchat-butler-session-id)
           (superchat-butler-show (plist-get line :run))
         (let ((view (or (let ((buffer (superchat-editor-workspace-buffer session 'session-view)))
                           (and (buffer-live-p buffer) buffer))
                         (superchat--render-session-view session))))
           (pop-to-buffer view)
-          (superchat-changes-notice-dismiss (plist-get line :run)))))))
+          (superchat-changes-notice-dismiss (plist-get line :run))))))
 
 ;;;; Bringing it in -----------------------------------------------------------------
 
@@ -418,6 +452,7 @@ the Tape holds the start of a long output."
          (stderr (alist-get 'stderr payload))
          (bytes (alist-get 'bytes payload))
          (note (alist-get 'note payload))
+         (patch (alist-get 'fix-patch payload))
          ;; The line holds its first line, cut to fit: when that is all of it,
          ;; the rest is what is left to say.
          (rest (when (stringp note)
@@ -431,11 +466,19 @@ the Tape holds the start of a long output."
             (if (and rest (not (string-empty-p rest)))
                 (concat (superchat-butler--cut rest) "\n")
               "")
-            "$ " (or (alist-get 'command payload) "") "\n"
-            (superchat-butler--cut output)
-            (if (and (numberp bytes) (> bytes (+ (string-bytes output) 1)))
-                (format "\n(%d bytes in all)" bytes)
+            (if (stringp patch)
+                (concat "A fix that passes the build in a copy; it is not applied:\n"
+                        (superchat-butler--cut patch) "\n")
               "")
+            ;; A rule on feeds runs no command: nothing to show for one.
+            (let ((command (alist-get 'command payload)))
+              (if (and (stringp command) (not (string-empty-p command)))
+                  (concat "$ " command "\n"
+                          (superchat-butler--cut output)
+                          (if (and (numberp bytes) (> bytes (+ (string-bytes output) 1)))
+                              (format "\n(%d bytes in all)" bytes)
+                            ""))
+                ""))
             (if (and (stringp stderr) (not (string-empty-p (string-trim stderr))))
                 (concat "\nOn standard error:\n"
                         (superchat-butler--cut (string-trim stderr)))
@@ -485,15 +528,157 @@ belongs to none."
          (list :id workspace :root (plist-get config :workspace-root)))
       (superchat--temporary-view))))
 
-(defun superchat-butler--put-in-input (view words)
-  "Put WORDS at the start of what is being written in VIEW."
+(defun superchat-butler--attached-what (line)
+  "The one line that stands for what LINE brings in."
+  (truncate-string-to-width
+   (string-trim (replace-regexp-in-string
+                 "[\n\t]+" " "
+                 (format "%s %s: %s" (or (plist-get line :what) "")
+                         (or (plist-get line :ending) "")
+                         (or (plist-get line :text) ""))))
+   160 nil nil "…"))
+
+(defvar-local superchat-butler--attached nil
+  "What is attached to the message being written in this conversation.
+Plists (:run RUN :what WHAT :words WORDS [:sent FUNCTION]), oldest first.  WORDS
+go at the start of the message when it is sent; until then the input area is
+the user's (the user, 2026-11-06: in the input area it hid what they wrote).
+WHAT and WORDS may be functions of no arguments, asked each time: what is
+attached then follows what it stands for, as the user's notes do.  Empty WORDS
+are not sent.  FUNCTION is called once WORDS went into the message.")
+
+(defun superchat-butler--attached-part (one key)
+  "The KEY of the attachment ONE, asked now when it is a function."
+  (let ((value (plist-get one key)))
+    (or (if (functionp value) (funcall value) value) "")))
+
+(defun superchat-butler--attached-live (view)
+  "What is attached to VIEW's message and has words now."
   (with-current-buffer view
-    (let ((superchat-buffer-name (buffer-name view))
-          (inhibit-read-only t))
-      (superchat--response-region-ensure-view-prompt)
-      (save-excursion
-        (goto-char superchat--prompt-start)
-        (insert words "\n\n")))))
+    (cl-remove-if (lambda (one)
+                    (string-empty-p (superchat-butler--attached-part one :words)))
+                  superchat-butler--attached)))
+
+(defvar-local superchat-butler--attached-overlay nil
+  "The overlay that shows `superchat-butler--attached' above the input.")
+
+(defvar-local superchat-butler--attached-whole nil
+  "Non-nil when the attachments are shown whole, as they will be sent.")
+
+(defun superchat-butler--prompt (view)
+  "Where VIEW's input area starts, or nil."
+  (with-current-buffer view
+    (and (markerp superchat--prompt-start)
+         (eq (marker-buffer superchat--prompt-start) view)
+         (marker-position superchat--prompt-start))))
+
+(defun superchat-butler--show-attached (view)
+  "Show what is attached to VIEW's message, above the heading of its input area.
+Not on the heading line: there it stood where the user writes (2026-11-06)."
+  (with-current-buffer view
+    (when (overlayp superchat-butler--attached-overlay)
+      (delete-overlay superchat-butler--attached-overlay))
+    (setq superchat-butler--attached-overlay nil)
+    (let ((prompt (superchat-butler--prompt view)))
+      (when (and (superchat-butler--attached-live view) prompt)
+        ;; On the first character of the heading, advancing at its front:
+        ;; what goes in before the heading (a doorbell, an answer) goes in
+        ;; above it, and it stays right above the heading.
+        (let* ((heading (save-excursion (goto-char prompt) (line-beginning-position)))
+               (overlay (make-overlay heading (1+ heading) nil t nil)))
+          (overlay-put overlay 'superchat-butler-attached t)
+          (overlay-put
+           overlay 'before-string
+           (propertize
+            (concat
+             (mapconcat
+              (lambda (one)
+                (if superchat-butler--attached-whole
+                    (concat (superchat-butler--attached-part one :words) "\n")
+                  (format "Attached: %s\n" (superchat-butler--attached-part one :what))))
+              (superchat-butler--attached-live view) "")
+             (format "(sent at the start of your message; C-c C-b %s, C-u C-c C-b drops %s)\n"
+                     (if superchat-butler--attached-whole "folds it" "shows all of it")
+                     (if (cdr (superchat-butler--attached-live view)) "them" "it")))
+            'face 'shadow))
+          (setq superchat-butler--attached-overlay overlay))))))
+
+(defun superchat-butler--attach (view run what words &optional sent)
+  "Attach WORDS, from the work of RUN, to the message being written in VIEW.
+WHAT is the one line that stands for them.  The same work twice is once.
+SENT, a function, is called once WORDS went into the message.
+Return non-nil when it was attached now."
+  (prog1
+      (with-current-buffer view
+        (if (cl-find run superchat-butler--attached
+                     :key (lambda (one) (plist-get one :run)) :test #'equal)
+            (progn (message "superchat: that is attached already") nil)
+          (setq superchat-butler--attached
+                (append superchat-butler--attached
+                        (list (append (list :run run :what what :words words)
+                                      (and sent (list :sent sent))))))
+          t))
+    (superchat-butler--show-attached view)))
+
+(defun superchat-butler-attached-p (view run)
+  "Non-nil when the attachment RUN is on the message being written in VIEW."
+  (and (buffer-live-p view)
+       (cl-find run (buffer-local-value 'superchat-butler--attached view)
+                :key (lambda (one) (plist-get one :run)) :test #'equal)
+       t))
+
+(defun superchat-butler-attached-refresh (run)
+  "Show again every message RUN is attached to: what it stands for changed."
+  (dolist (view (buffer-list))
+    (when (superchat-butler-attached-p view run)
+      (superchat-butler--show-attached view))))
+
+(defun superchat-butler-attached-toggle (&optional drop)
+  "Show what is attached to this message whole, or fold it again.
+With a prefix argument DROP, take it off: nothing of it is sent."
+  (interactive "P")
+  (unless (superchat-butler--attached-live (current-buffer))
+    (user-error "Nothing is attached to this message"))
+  (if drop
+      (progn (setq superchat-butler--attached nil
+                   superchat-butler--attached-whole nil)
+             (message "superchat: taken off; it is not sent"))
+    (setq superchat-butler--attached-whole (not superchat-butler--attached-whole)))
+  (superchat-butler--show-attached (current-buffer)))
+
+(defun superchat-butler-message (&optional view)
+  "What sending VIEW's message now would send.
+What is attached, then what is written."
+  (with-current-buffer (or view (current-buffer))
+    (let ((prompt (superchat-butler--prompt (current-buffer))))
+      (concat (mapconcat (lambda (one)
+                           (concat (superchat-butler--attached-part one :words) "\n\n"))
+                         (superchat-butler--attached-live (current-buffer)) "")
+              (if prompt (buffer-substring-no-properties prompt (point-max)) "")))))
+
+(defun superchat-butler-attach-into-input (view)
+  "Put what is attached to VIEW's message at its start, as it is sent.
+Called by `superchat-send-input' first: from here on the message is one text,
+the one the conversation shows and the model gets."
+  (with-current-buffer view
+    (let ((prompt (superchat-butler--prompt view)))
+      (when (and superchat-butler--attached prompt)
+        (let* ((inhibit-read-only t)
+               (live (superchat-butler--attached-live view))
+               (words (mapconcat
+                       (lambda (one)
+                         (concat (superchat-butler--attached-part one :words) "\n\n"))
+                       live "")))
+          (save-excursion
+            (goto-char prompt)
+            (insert words))
+          (setq superchat-butler--attached nil
+                superchat-butler--attached-whole nil)
+          (superchat-butler--show-attached view)
+          (dolist (one live)
+            (when-let* ((sent (plist-get one :sent)))
+              (with-demoted-errors "superchat: after sending: %S"
+                (funcall sent)))))))))
 
 (defun superchat-butler--show-view (view)
   "Show VIEW and select its window."
@@ -515,7 +700,9 @@ the work's own conversation nothing is quoted: the model there knows it already.
     ;; Shown first: how wide the words may be is the window's.
     (superchat-butler--show-view target)
     (unless own
-      (superchat-butler--put-in-input target (superchat-butler--words line target)))
+      (superchat-butler--attach target (plist-get line :run)
+                                (superchat-butler--attached-what line)
+                                (superchat-butler--words line target)))
     (with-current-buffer target
       (goto-char (point-max)))
     (unless own
@@ -529,7 +716,7 @@ the work's own conversation nothing is quoted: the model there knows it already.
     ;; What it points at was reached: only now is it looked at.
     (superchat-changes-notice-dismiss (plist-get line :run))
     (unless own
-      (message "superchat: it is in your message, write under it; nothing is sent"))
+      (message "superchat: attached to your message, sent with it; C-c C-b shows it, nothing is sent yet"))
     target))
 
 (defun superchat-butler-bring-from-here (line)
@@ -576,15 +763,74 @@ waits, g reads the lines again."
   (setq header-line-format
         " RET look   t put it in your message   l what is pending   g read again"))
 
+(defun superchat-butler--set-buffer-text (buffer bytes)
+  "Make BUFFER hold BYTES, in its own coding, as one step of undo.
+It is left unsaved; point and marks stay where they can."
+  (with-current-buffer buffer
+    (let ((text (decode-coding-string bytes (or buffer-file-coding-system 'utf-8-unix)))
+          (source (generate-new-buffer " *superchat-fix-text*" t)))
+      (unwind-protect
+          (progn
+            (with-current-buffer source (insert text))
+            (save-restriction
+              (widen)
+              ;; `replace-region-contents' takes a buffer only from Emacs 31.
+              (with-suppressed-warnings ((obsolete replace-buffer-contents))
+                (replace-buffer-contents source))))
+        (kill-buffer source)))))
+
+;;;###autoload
+(defun superchat-butler-apply-fix (id)
+  "Put the fix of the result ID in the user's buffers, unsaved, and review it.
+All of it or none: what no longer matches what is there now is refused."
+  (interactive (list superchat-butler--output-of))
+  (require 'superchat-fix)
+  (let* ((payload (or (superchat-butler--result id)
+                      (user-error "What this is about is not on record")))
+         (patch (alist-get 'fix-patch payload))
+         (paths (alist-get 'fix-paths payload))
+         (root (alist-get 'fix-root payload)))
+    (unless (stringp patch)
+      (user-error "This has no fix to apply"))
+    (let* ((texts (superchat-fix-apply-texts root paths patch))
+           (buffers
+            (mapcar (lambda (entry)
+                      (let ((buffer (find-file-noselect
+                                     (expand-file-name (car entry) root))))
+                        (with-current-buffer buffer
+                          (barf-if-buffer-read-only))
+                        (cons buffer (cdr entry))))
+                    texts))
+           rows)
+      (dolist (entry buffers)
+        (let ((buffer (car entry)))
+          (superchat-butler--set-buffer-text buffer (cdr entry))
+          (superchat-changes-mark-buffer buffer superchat-butler-session-id id)
+          (let ((file (buffer-file-name buffer)))
+            (push (list :buffer buffer :name (buffer-name buffer) :file file
+                        :new-file (not (file-exists-p file)) :outside nil)
+                  rows))))
+      (superchat-tape-append-event
+       (list :type "butler.applied"
+             :session-id superchat-butler-session-id
+             :actor-id "butler"
+             :summary (format "The fix of %s was put in %s" id
+                              (mapconcat #'identity paths ", "))
+             :requires-payload t
+             :payload (list :run id :paths (vconcat paths))))
+      (superchat-changes-notice-dismiss id)
+      (superchat-changes-review (nreverse rows) t))))
+
 (defvar superchat-butler-output-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "t") #'superchat-butler-bring-output)
+    (define-key map (kbd "a") #'superchat-butler-apply-fix)
     map)
   "Keys of the buffer showing what a command printed.")
 
 (define-derived-mode superchat-butler-output-mode special-mode "Superchat-Output"
   "What a timer's command printed.
-t puts it in the message you are writing.")
+t puts it in the message you are writing, a applies a fix when there is one.")
 
 ;;;###autoload
 (defun superchat-butler ()
@@ -626,30 +872,72 @@ takes only a `keymap' on the text itself away."
                         'action (lambda (_button) (superchat-butler-bring line view)))
     (buffer-string)))
 
+(defun superchat-butler--see-button (line)
+  "A button showing the fix of LINE."
+  (with-temp-buffer
+    (insert-text-button "[see fix]"
+                        'follow-link t
+                        'help-echo "See what it would change; nothing changes yet"
+                        'action (lambda (_button) (superchat-butler-show (plist-get line :run))))
+    (buffer-string)))
+
+(defun superchat-butler--has-fix-p (line)
+  "Non-nil when there is a fix to apply for LINE."
+  (and (equal (plist-get line :session) superchat-butler-session-id)
+       (stringp (alist-get 'fix-patch (superchat-butler--result (plist-get line :run))))))
+
 (defun superchat-butler--doorbell (line view)
   "What the doorbell says of LINE in VIEW.
-The button comes first, where no window cuts it off, and the rest is broken to
+The buttons come first, where no window cuts them off, and the rest is broken to
 fit: a chat View may cut long lines, and this is all there is to read of it
 there."
-  (let* ((before "* System: Butler: [bring in] ")
+  (let* ((fix (superchat-butler--has-fix-p line))
+         (before (if fix
+                     "* System: Butler: [bring in] [see fix] "
+                   "* System: Butler: [bring in] "))
          (text (superchat-butler-line-text line))
          (fitted (superchat--fit-window (concat before text) view)))
     (concat "Butler: " (superchat-butler--bring-button line view) " "
+            (if fix (concat (superchat-butler--see-button line) " ") "")
             ;; A window narrower than what comes before it breaks that too.
             (if (string-prefix-p before fitted)
                 (substring fitted (length before))
               text))))
 
+(defvar superchat-butler--unrung nil
+  "Lines said while no conversation was in use, newest first: (LINE . EXCEPT).
+The doorbell rings for them in the first conversation that is.")
+
+(defun superchat-butler--ring-in (line view)
+  "Put LINE in VIEW, on no Tape."
+  (condition-case err
+      (let ((superchat-buffer-name (buffer-name view)))
+        (with-current-buffer view
+          (superchat--insert-persistent-system-message
+           (superchat-butler--doorbell line view))))
+    (error (message "superchat: the butler could not say it in %s: %s"
+                    (buffer-name view) (error-message-string err)))))
+
 (defun superchat-butler--ring (line except)
-  "Put LINE in the conversation in use, on no Tape; EXCEPT as above."
-  (when-let* ((view (superchat-butler--conversation-in-use except)))
-    (condition-case err
-        (let ((superchat-buffer-name (buffer-name view)))
-          (with-current-buffer view
-            (superchat--insert-persistent-system-message
-             (superchat-butler--doorbell line view))))
-      (error (message "superchat: the butler could not say it in %s: %s"
-                      (buffer-name view) (error-message-string err))))))
+  "Put LINE in the conversation in use, on no Tape; EXCEPT as above.
+With none in use, it rings when one is: the inbox wakes Superchat when nobody
+is in a conversation."
+  (if-let* ((view (superchat-butler--conversation-in-use except)))
+      (superchat-butler--ring-in line view)
+    (push (cons line except) superchat-butler--unrung)
+    (add-hook 'window-buffer-change-functions #'superchat-butler--ring-unrung)))
+
+(defun superchat-butler--ring-unrung (&optional _frame)
+  "Ring for the lines said while no conversation was in use, once one is.
+On `window-buffer-change-functions' only while there are some."
+  (let (left)
+    (dolist (entry (reverse superchat-butler--unrung))
+      (if-let* ((view (superchat-butler--conversation-in-use (cdr entry))))
+          (superchat-butler--ring-in (car entry) view)
+        (push entry left)))
+    (setq superchat-butler--unrung left))
+  (unless superchat-butler--unrung
+    (remove-hook 'window-buffer-change-functions #'superchat-butler--ring-unrung)))
 
 ;;;; When work ends -----------------------------------------------------------------
 

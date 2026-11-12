@@ -10,7 +10,7 @@ Status: accepted — 用户，2026-10-31。用户问"怎么样的交互让用户
 
 ## Decision
 
-**一个动作：把结论放进输入区。** 在管家的一行、列表里"Ended, not looked at"的一行、`*superchat command output*` 里按 `t`，或者点门铃那一行开头的 `[bring in]`。结论成为你正在写的消息的开头，光标到消息末尾，你接着写。
+**一个动作：把结论放进输入区。**（2026-11-06 改：用户说放在输入区"相当于遮蔽了用户输入区"，同意改成附件。现在按 `t` 只附上，`* User:` 那一行的上方一行代表它，输入区留给你写（第一版放在 `* User:` 同一行，用户说还是占着输入框，改到它上面；之后进来的门铃和回答排在附件上面，测试 `bring-in/a-line-that-comes-later-goes-above-what-is-attached`）；`C-c C-b` 展开看全文，`C-u C-c C-b` 去掉，同一条附两次只算一次。发送时才放到消息开头，发出去的、对话里显示的和下面写的一样。测试 `bring-in/the-input-area-stays-yours` 等，`scripts/bring-in-regression.el`；真窗口、真按键、真 DeepSeek 3/3（`.scratch/super-agent-exp/e17.py flow`）：输入区只有用户写的字，`C-c C-b` 展开、再按收起，发出去的是引用在前、用户的话在后。同时修了一处：RSS 规则的报告引用末尾多一行空的 `$`，那行只该给定时命令，模型在回答里把它解释成"命令输出的残留"（测试 `feed/bringing-it-in-shows-no-command`）。） 在管家的一行、列表里"Ended, not looked at"的一行、`*superchat command output*` 里按 `t`，或者点门铃那一行开头的 `[bring in]`。结论成为你正在写的消息的开头，光标到消息末尾，你接着写。
 
 **什么都不发。** 没有模型请求，对话的 Tape 上没有新行。用户按 `C-c C-c` 才发，发出去的是一条普通消息：看到的就是发出去的，能改，权限是这段对话自己的。
 

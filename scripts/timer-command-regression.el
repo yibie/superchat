@@ -1293,6 +1293,110 @@ would make the turn wait for ever."
       (should (string-match-p "another workspace"
                               (superchat-timer-tool-cancel (plist-get timer :id)))))))
 
+(ert-deftest timer-command/set-in-no-workspace-it-is-yours ()
+  ;; Measured 2026-11-05: a rule set in a temporary conversation could be seen
+  ;; only there.  A timer of no project is the user's: every conversation's
+  ;; model sees it and can cancel it.
+  (wtimer--with nil (p)
+    (let* ((in-p (hm--session (tcmd--view p)))
+           (default-directory (file-name-as-directory p))
+           (temporary (hm--session (superchat--temporary-view)))
+           (timer (tcmd--set temporary "STARS" "echo THE-COMMAND" 86400)))
+      (should (eq 'you (plist-get (car (superchat-timer-list)) :owner)))
+      (dolist (session (list temporary "another-conversation" in-p))
+        (should (superchat-timer--within-p session timer)))
+      (let ((superchat--tool-execution-context (list :session-id in-p)))
+        (should (string-match-p "STARS" (superchat-timer-tool-list)))
+        (should (string-match-p "cancelled"
+                                (superchat-timer-tool-cancel (plist-get timer :id))))))))
+
+(ert-deftest timer-command/set-in-a-workspace-it-is-the-workspace-s ()
+  (wtimer--with nil (p)
+    (let* ((timer (tcmd--set (hm--session (tcmd--view p)) "STARS" "echo THE-COMMAND" 86400)))
+      (should (eq 'project (plist-get (car (superchat-timer-list)) :owner)))
+      (should-not (superchat-timer--within-p "another-conversation" timer)))))
+
+(ert-deftest timer-command/an-old-timer-with-no-owner-keeps-to-its-conversation ()
+  ;; Set before timers said whose they are: the guess from where it was set.
+  (wtimer--with nil (_p)
+    (superchat-tape-append-event
+     (list :type "timer.created" :session-id "old-conversation" :actor-id "timers"
+           :summary "Reminder set" :payload (list :timer-id "timer-old" :kind "reminder"
+                                                  :text "OLD" :due (+ wtimer--now 600.0))))
+    (let ((timer (car (superchat-timer-list))))
+      (should (equal "timer-old" (plist-get timer :id)))
+      (should-not (plist-get timer :owner))
+      (should (superchat-timer--within-p "old-conversation" timer))
+      (should-not (superchat-timer--within-p "another-conversation" timer)))))
+
+(ert-deftest timer-command/a-temporary-conversation-is-told-a-timer-is-kept ()
+  (should (string-match-p "will not be kept" superchat-workspace-temporary-note))
+  (should (string-match-p "timer_create is kept" superchat-workspace-temporary-note)))
+
+(defun tcmd--cancel-through-the-model (view id answer)
+  "VIEW's model cancels ID, the user answering ANSWER.  Return what was asked.
+VIEW must have been made with `timer_cancel' in `hm--extra-tool-names'."
+  (setq smoke--script (list `(:tool-uses (("timer_cancel" (id . ,id))))
+                            '(:text "finished")))
+  (tcmd--asking answer
+    (hm--turn view "cancel that timer")
+    tcmd--asked))
+
+(ert-deftest timer-command/a-model-cancels-a-timer-only-when-the-user-says-yes ()
+  ;; 2026-11-06, the user: a timer a person set is cancelled by a person.
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
+    (wtimer--with nil (p)
+      (let* ((view (tcmd--view p))
+             (timer (superchat-timer-create (hm--session view) 'reminder "CALL-MUM"
+                                            (+ wtimer--now 3600)))
+             (asked (tcmd--cancel-through-the-model view (plist-get timer :id) t)))
+        (should (= 1 (length asked)))
+        (should (string-match-p "CALL-MUM" (plist-get (car asked) :reason)))
+        (should-not (superchat-timer-list))))))
+
+(ert-deftest timer-command/a-timer-the-user-keeps-is-not-cancelled ()
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
+    (wtimer--with nil (p)
+      (let* ((view (tcmd--view p))
+             (timer (superchat-timer-create (hm--session view) 'reminder "CALL-MUM"
+                                            (+ wtimer--now 3600)))
+             (asked (tcmd--cancel-through-the-model view (plist-get timer :id) nil)))
+        (should (= 1 (length asked)))
+        (should (equal (list (plist-get timer :id))
+                       (mapcar (lambda (one) (plist-get one :id)) (superchat-timer-list))))))))
+
+(ert-deftest timer-command/a-timer-it-may-not-touch-asks-nobody ()
+  ;; Another Workspace's: the tool refuses it, as before; nobody is asked.
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
+    (wtimer--with nil (p q)
+      (let* ((timer (superchat-timer-create (hm--session (tcmd--view p)) 'reminder "CALL-MUM"
+                                            (+ wtimer--now 3600)))
+             (asked (tcmd--cancel-through-the-model (tcmd--view q) (plist-get timer :id) t)))
+        (should-not asked)
+        (should (= 1 (length (superchat-timer-list))))))))
+
+(ert-deftest timer-command/a-task-nobody-sees-cannot-cancel-a-timer ()
+  ;; Nobody could say yes: it is refused, not left waiting.
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
+    (wtimer--with nil (p)
+      (cl-destructuring-bind (view _session task) (presence--task p "TASK-MARKER")
+        (let ((keep (superchat-timer-create (hm--session view) 'reminder "CALL-MUM"
+                                            (+ wtimer--now 7200))))
+          (setq smoke--script (list `(:tool-uses (("timer_cancel" (id . ,(plist-get keep :id)))))
+                                    '(:text "TASK-ANSWER")))
+          (tcmd--asking t
+            (own-place--fire-and-settle task)
+            (should-not tcmd--asked))
+          (should (cl-find (plist-get keep :id) (superchat-timer-list)
+                           :key (lambda (one) (plist-get one :id)) :test #'equal))
+          (should (cl-some (lambda (text) (string-match-p "not cancelled" text))
+                           (own-place--tool-results 2))))))))
+
+(ert-deftest timer-command/no-such-timer-asks-nobody ()
+  (let ((hm--extra-tool-names '("timer_list" "timer_cancel")))
+    (wtimer--with nil (p)
+      (should-not (tcmd--cancel-through-the-model (tcmd--view p) "timer-no-such" t)))))
+
 (defun tcmd--changed (root)
   "A timer in a new conversation of ROOT whose output changed: (VIEW TIMER LINE)."
   (let* ((view (tcmd--view root))

@@ -110,6 +110,29 @@ window that cuts them does is tested by itself."
     (should (equal "user" (alist-get 'role message)))
     (hm--text message)))
 
+(defun bring--message (view)
+  "What sending VIEW's message would send: what is attached, then what is written.
+Bringing in attaches; the input area is the user's (2026-11-06)."
+  (superchat-butler-message view))
+
+(defun bring--attached-shown (view)
+  "What VIEW shows of what is attached, or nil."
+  (with-current-buffer view
+    (and (overlayp superchat-butler--attached-overlay)
+         (overlay-buffer superchat-butler--attached-overlay)
+         (overlay-get superchat-butler--attached-overlay 'before-string))))
+
+(defun bring--attached-above-the-heading (view)
+  "What is attached shows on a line of its own right above the heading."
+  (with-current-buffer view
+    (let ((heading (save-excursion (goto-char superchat--prompt-start)
+                                   (line-beginning-position))))
+      (should (= heading (overlay-start superchat-butler--attached-overlay)))
+      (should (string-prefix-p "* User:" (buffer-substring-no-properties
+                                          heading superchat--prompt-start)))
+      (should (string-suffix-p "\n" (overlay-get superchat-butler--attached-overlay
+                                                 'before-string))))))
+
 (defun bring--button (view)
   "Where the newest `[bring in]' of VIEW is."
   (with-current-buffer view
@@ -123,7 +146,7 @@ window that cuts them does is tested by itself."
   (bring--with '((:text "FIRST-LINE\n\nSECOND-PART")) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (string-prefix-p bring--heading input))
         (should (string-match-p "^> .*TASK-MARKER.* completed$" input))
         (should (string-match-p "^> FIRST-LINE$" input))
@@ -139,7 +162,7 @@ window that cuts them does is tested by itself."
         (should (= (point) (point-max)))
         (let ((last-command-event ?x))
           (self-insert-command 1)))
-      (should (string-suffix-p "\n\nx" (presence--input view))))))
+      (should (string-suffix-p "\n\nx" (bring--message view))))))
 
 (ert-deftest bring-in/nothing-is-sent ()
   (bring--with '((:text "FIRST-LINE")) (p)
@@ -157,7 +180,7 @@ window that cuts them does is tested by itself."
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (presence--type view "HALF-A-MESSAGE")
       (bring--from-butler)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (string-prefix-p bring--heading input))
         (should (string-suffix-p "\n\nHALF-A-MESSAGE" input))
         (should (= 1 (how-many "HALF-A-MESSAGE" (point-min) (point-max))))
@@ -182,11 +205,96 @@ window that cuts them does is tested by itself."
   (bring--with '((:text "FIRST-LINE")) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (with-current-buffer view
-        (let ((inhibit-read-only t))
-          (delete-region superchat--prompt-start (point-max))))
+      (with-current-buffer view (superchat-butler-attached-toggle t))
+      (should (equal "" (bring--message view)))
       (bring--from-butler)
-      (should (string-match-p "^> FIRST-LINE$" (presence--input view))))))
+      (should (string-match-p "^> FIRST-LINE$" (bring--message view))))))
+
+(ert-deftest bring-in/the-input-area-stays-yours ()
+  ;; 2026-11-06, the user: put in the input area, it hid what they wrote.
+  (bring--with '((:text "FIRST-LINE")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (presence--type view "MY-HALF-WRITTEN")
+      (bring--from-butler)
+      (should (equal "MY-HALF-WRITTEN" (presence--input view)))
+      (let ((shown (bring--attached-shown view)))
+        (should (string-match-p "^Attached: .*TASK-MARKER" shown))
+        ;; One line stands for it, not the quote.
+        (should-not (string-match-p (regexp-quote bring--heading) shown))
+        (should-not (string-match-p "^> " shown))
+        (should (string-match-p "C-c C-b" shown)))
+      ;; What you type goes after what stands for it.
+      (presence--type view "-MORE")
+      (should (equal "MY-HALF-WRITTEN-MORE" (presence--input view)))
+      (bring--attached-above-the-heading view))))
+
+(ert-deftest bring-in/typed-into-an-empty-input-it-goes-after-what-is-attached ()
+  (bring--with '((:text "FIRST-LINE")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (with-current-buffer view
+        (goto-char superchat--prompt-start)
+        (insert "TYPED"))
+      (bring--attached-above-the-heading view)
+      (should (string-match-p "\\`Butler's report[^\0]*\n\nTYPED\\'" (bring--message view))))))
+
+(ert-deftest bring-in/a-line-that-comes-later-goes-above-what-is-attached ()
+  ;; Another doorbell after it was attached: above, not between it and the heading.
+  (bring--with '((:text "FIRST-LINE") (:text "SECOND-LINE")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (with-current-buffer view
+        (let ((inhibit-read-only t)
+              (heading (save-excursion (goto-char superchat--prompt-start)
+                                       (line-beginning-position))))
+          (save-excursion (goto-char heading) (insert "A-LINE-ABOVE\n"))))
+      (bring--attached-above-the-heading view)
+      (with-current-buffer view
+        (should (string-match-p "A-LINE-ABOVE\n\\'"
+                                (buffer-substring-no-properties
+                                 (point-min)
+                                 (overlay-start superchat-butler--attached-overlay))))))))
+
+(ert-deftest bring-in/the-same-twice-is-attached-once ()
+  (bring--with '((:text "FIRST-LINE")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (bring--from-butler)
+      (let ((message (bring--message view)))
+        (should (= 1 (cl-count-if (lambda (line) (equal line bring--heading))
+                                  (split-string message "\n"))))))))
+
+(ert-deftest bring-in/shown-whole-it-is-what-is-sent ()
+  (bring--with '((:text "FIRST-LINE\n\nSECOND-PART")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (with-current-buffer view (superchat-butler-attached-toggle))
+      (should (string-prefix-p (string-trim (bring--message view))
+                               (bring--attached-shown view)))
+      (with-current-buffer view (superchat-butler-attached-toggle))
+      (should-not (string-match-p "SECOND-PART" (bring--attached-shown view))))))
+
+(ert-deftest bring-in/taken-off-it-is-not-sent ()
+  (bring--with '((:text "TASK-ANSWER") (:text "YOUR-ANSWER")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (with-current-buffer view (superchat-butler-attached-toggle t))
+      (should-not (bring--attached-shown view))
+      (presence--type view "JUST-ME")
+      (bring--send view)
+      (let ((sent (bring--last-user-text 2)))
+        (should (string-match-p "JUST-ME" sent))
+        (should-not (string-match-p (regexp-quote bring--heading) sent))
+        (should-not (string-match-p "TASK-ANSWER" sent))))))
+
+(ert-deftest bring-in/it-can-be-sent-with-nothing-written ()
+  (bring--with '((:text "TASK-ANSWER") (:text "YOUR-ANSWER")) (p)
+    (cl-destructuring-bind (view _run _home) (bring--task p)
+      (bring--from-butler)
+      (bring--send view)
+      (should (string-match-p "^> TASK-ANSWER$" (bring--last-user-text 2)))
+      (should-not (bring--attached-shown view))
+      (should-not (buffer-local-value 'superchat-butler--attached view)))))
 
 (ert-deftest bring-in/the-butler-says-which-keys-it-has ()
   (bring--with nil (_p)
@@ -204,15 +312,15 @@ window that cuts them does is tested by itself."
       (wtimer--settled)
       (superchat-butler)
       (bring--press-t)
-      (should (string-match-p "^> TWO$" (presence--input view)))
-      (should-not (string-match-p "^> ONE$" (presence--input view))))))
+      (should (string-match-p "^> TWO$" (bring--message view)))
+      (should-not (string-match-p "^> ONE$" (bring--message view))))))
 
 (ert-deftest bring-in/t-on-no-line-does-nothing ()
   (bring--with nil (p)
     (let ((view (tcmd--view p)))
       (pop-to-buffer (superchat-butler))
       (should-error (bring--press-t) :type 'user-error)
-      (should (equal "" (presence--input view))))))
+      (should (equal "" (bring--message view))))))
 
 ;;;; What you send --------------------------------------------------------------------
 
@@ -221,7 +329,7 @@ window that cuts them does is tested by itself."
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
       (presence--type view "WHAT-DOES-IT-MEAN")
-      (let ((shown (presence--input view)))
+      (let ((shown (bring--message view)))
         (bring--send view)
         (should (= 2 (length hm--wires)))
         (let ((sent (bring--last-user-text 2)))
@@ -229,7 +337,7 @@ window that cuts them does is tested by itself."
           (should (string-match-p "WHAT-DOES-IT-MEAN" sent))
           (should (string-match-p (regexp-quote bring--heading) sent)))
         (should (equal (list (string-trim shown)) (bring--user-rows (hm--session view))))
-        (should (equal "" (presence--input view)))))))
+        (should (equal "" (bring--message view)))))))
 
 (ert-deftest bring-in/the-next-request-still-knows-it ()
   (bring--with '((:text "TASK-ANSWER") (:text "ONE") (:text "TWO")) (p)
@@ -272,7 +380,7 @@ window that cuts them does is tested by itself."
                      (lambda ()
                        (bring--from-butler)
                        (presence--type view "WHAT-DOES-IT-MEAN")
-                       (setq brought (presence--input view))
+                       (setq brought (bring--message view))
                        ;; Sent while the execution waits: it goes when that one ended.
                        (with-current-buffer view (superchat-send-input))
                        (superchat-approval-answer
@@ -290,9 +398,9 @@ window that cuts them does is tested by itself."
     (cl-destructuring-bind (view run _home) (bring--task p)
       (bring--on-row run)
       (bring--press-t)
-      (should (string-match-p "^> SECOND-PART$" (presence--input view)))
+      (should (string-match-p "^> SECOND-PART$" (bring--message view)))
       ;; The butler's words for the work, which the row itself does not have.
-      (should (string-match-p "^> .*TASK-MARKER.* completed$" (presence--input view)))
+      (should (string-match-p "^> .*TASK-MARKER.* completed$" (bring--message view)))
       (should (eq view (window-buffer (selected-window))))
       (should-not (bring--notice-p run))
       (should-not (cl-find run (superchat-pending-items)
@@ -306,14 +414,14 @@ window that cuts them does is tested by itself."
                                                      :session (hm--session view)))
                       :type 'user-error))
       (should-error (superchat-pending-bring nil) :type 'user-error)
-      (should (equal "" (presence--input view))))))
+      (should (equal "" (bring--message view))))))
 
 (ert-deftest bring-in/a-command-brings-what-it-printed ()
   (bring--with nil (p)
     (cl-destructuring-bind (view _timer line) (tcmd--changed p)
       (bring--on-row (plist-get line :run))
       (bring--press-t)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (string-prefix-p bring--heading input))
         (should (string-match-p (concat "^> " (regexp-quote (superchat-butler-line-text line)) "$")
                                 input))
@@ -328,7 +436,7 @@ window that cuts them does is tested by itself."
       (should (tcmd--output-shown-p))
       (select-window (get-buffer-window superchat-butler-output-buffer-name))
       (bring--press-t)
-      (should (string-match-p "^> MORE-LINES$" (presence--input view)))
+      (should (string-match-p "^> MORE-LINES$" (bring--message view)))
       (should (eq view (window-buffer (selected-window)))))))
 
 (ert-deftest bring-in/a-failed-command-brings-what-it-said-on-standard-error ()
@@ -343,7 +451,7 @@ window that cuts them does is tested by itself."
                            finally return (car (last (tcmd--lines timer))))))
         (should (string-match-p "failed" (superchat-butler-line-text line)))
         (superchat-butler-bring line view)
-        (let ((input (presence--input view)))
+        (let ((input (bring--message view)))
           (should (string-match-p "^> On standard error:$" input))
           (should (string-match-p "^> ERROR-WORDS$" input)))))))
 
@@ -355,7 +463,7 @@ window that cuts them does is tested by itself."
       (tcmd--counter p (make-string 9000 ?x))
       (tcmd--fire timer)
       (superchat-butler-bring (car (last (tcmd--lines timer))) view)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (string-match-p "^> (the first 3000 of 6000 characters)$" input))
         (should (string-match-p "^> (9000 bytes in all)$" input))))))
 
@@ -363,7 +471,7 @@ window that cuts them does is tested by itself."
   (bring--with nil (p)
     (cl-destructuring-bind (view _timer line) (tcmd--changed p)
       (superchat-butler-bring line view)
-      (should-not (string-match-p "bytes in all" (presence--input view))))))
+      (should-not (string-match-p "bytes in all" (bring--message view))))))
 
 ;;;; The window you pressed it in -----------------------------------------------------
 
@@ -397,7 +505,7 @@ window that cuts them does is tested by itself."
       (with-temp-buffer
         (setq superchat-butler--output-of "no-such-line")
         (should-error (superchat-butler-bring-output) :type 'user-error))
-      (should (equal "" (presence--input view))))))
+      (should (equal "" (bring--message view))))))
 
 ;;;; Which conversation ---------------------------------------------------------------
 
@@ -409,8 +517,8 @@ window that cuts them does is tested by itself."
         (should (eq other (window-buffer (get-buffer-window other))))
         (should-not (get-buffer-window view))
         (bring--from-butler)
-        (should (string-match-p "^> FIRST-LINE$" (presence--input other)))
-        (should (equal "" (presence--input view)))
+        (should (string-match-p "^> FIRST-LINE$" (bring--message other)))
+        (should (equal "" (bring--message view)))
         (should (eq other (window-buffer (selected-window))))))))
 
 (ert-deftest bring-in/with-none-shown-the-main-conversation-opens ()
@@ -419,7 +527,7 @@ window that cuts them does is tested by itself."
       (delete-window (get-buffer-window view))
       (should-not (get-buffer-window view))
       (bring--from-butler)
-      (should (string-match-p "^> FIRST-LINE$" (presence--input view)))
+      (should (string-match-p "^> FIRST-LINE$" (bring--message view)))
       (should (eq view (window-buffer (selected-window)))))))
 
 (ert-deftest bring-in/a-command-with-none-shown-goes-to-the-main-conversation-too ()
@@ -428,7 +536,7 @@ window that cuts them does is tested by itself."
       (delete-window (get-buffer-window view))
       (bring--on-row (plist-get line :run))
       (bring--press-t)
-      (should (string-match-p "^> MORE-LINES$" (presence--input view)))
+      (should (string-match-p "^> MORE-LINES$" (bring--message view)))
       (should (eq view (window-buffer (selected-window)))))))
 
 (ert-deftest bring-in/a-background-conversation-is-not-where-it-goes ()
@@ -438,8 +546,8 @@ window that cuts them does is tested by itself."
         (set-window-buffer (get-buffer-window view) background)
         (should-not (get-buffer-window view))
         (bring--from-butler)
-        (should (equal "" (presence--input background)))
-        (should (string-match-p "^> FIRST-LINE$" (presence--input view)))
+        (should (equal "" (bring--message background)))
+        (should (string-match-p "^> FIRST-LINE$" (bring--message view)))
         (should (eq view (window-buffer (selected-window))))))))
 
 (ert-deftest bring-in/with-no-workspace-it-goes-to-the-temporary-conversation ()
@@ -452,7 +560,7 @@ window that cuts them does is tested by itself."
       (own-place--fire-and-settle timer)
       (should-not (get-buffer-window view))
       (bring--from-butler)
-      (should (string-match-p "^> FIRST-LINE$" (presence--input view)))
+      (should (string-match-p "^> FIRST-LINE$" (bring--message view)))
       (should (eq view (window-buffer (selected-window)))))))
 
 (ert-deftest bring-in/into-its-own-conversation-nothing-is-quoted ()
@@ -465,7 +573,7 @@ window that cuts them does is tested by itself."
       (delete-window (get-buffer-window view))
       (superchat-pending-bring (list :kind 'unseen :key run :what "x" :detail "completed"
                                      :session session))
-      (should (equal "" (presence--input view)))
+      (should (equal "" (bring--message view)))
       (should (eq view (window-buffer (selected-window))))
       (should-not (hm--events superchat-butler-session-id "butler.brought")))))
 
@@ -476,7 +584,7 @@ window that cuts them does is tested by itself."
            (other (with-current-buffer (wtimer--file q) (superchat))))
       (superchat-pending-bring (list :kind 'unseen :key run :what "YOUR-WORK"
                                      :detail "completed" :session (hm--session view)))
-      (let ((input (presence--input other)))
+      (let ((input (bring--message other)))
         (should (string-match-p "^> YOUR-WORK completed$" input))
         (should (string-match-p "^> MORE-OF-IT$" input))))))
 
@@ -489,7 +597,7 @@ window that cuts them does is tested by itself."
             (progn
               (delete-window (get-buffer-window view))
               (bring--from-butler)
-              (should (string-match-p "^> FIRST-LINE$" (presence--input view)))
+              (should (string-match-p "^> FIRST-LINE$" (bring--message view)))
               (should (eq view (window-buffer (selected-window))))
               ;; A tab of its own, as agent mode opens any conversation.
               (should (= (1+ tabs) (length (tab-bar-tabs)))))
@@ -507,7 +615,7 @@ window that cuts them does is tested by itself."
         (let ((button (button-at (bring--button view))))
           (should button)
           (button-activate button)))
-      (should (string-match-p "^> SECOND-PART$" (presence--input view)))
+      (should (string-match-p "^> SECOND-PART$" (bring--message view)))
       (should (eq view (window-buffer (selected-window))))
       (with-current-buffer view
         (should (= (point) (point-max)))))))
@@ -530,7 +638,7 @@ window that cuts them does is tested by itself."
       (with-current-buffer (wtimer--file q) (superchat))
       (with-current-buffer view
         (button-activate (button-at (bring--button view))))
-      (should (string-match-p "^> FIRST-LINE$" (presence--input view)))
+      (should (string-match-p "^> FIRST-LINE$" (bring--message view)))
       (should (eq view (window-buffer (selected-window)))))))
 
 (ert-deftest bring-in/in-a-very-narrow-window-nothing-of-the-doorbell-is-lost ()
@@ -569,7 +677,7 @@ window that cuts them does is tested by itself."
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (with-current-buffer view (setq truncate-lines t))
       (bring--from-butler)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (bring--fits-p input (get-buffer-window view)))
         (should (cl-every (lambda (line) (or (string-prefix-p bring--heading line)
                                              (string-empty-p line)
@@ -583,7 +691,7 @@ window that cuts them does is tested by itself."
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (with-current-buffer view (setq truncate-lines t))
       (bring--from-butler)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (bring--fits-p input (get-buffer-window view)))
         (should (= 500 (cl-count ?x input)))))))
 
@@ -594,7 +702,7 @@ window that cuts them does is tested by itself."
       (with-current-buffer view (setq truncate-lines nil))
       (bring--from-butler)
       (should (string-match-p (concat "^> " (regexp-quote bring--long-words) "$")
-                              (presence--input view))))))
+                              (bring--message view))))))
 
 (ert-deftest bring-in/a-conversation-opened-for-it-fits-too ()
   (bring--with `((:text ,bring--long-words)) (p)
@@ -602,7 +710,7 @@ window that cuts them does is tested by itself."
       (with-current-buffer view (setq truncate-lines t))
       (delete-window (get-buffer-window view))
       (bring--from-butler)
-      (should (bring--fits-p (presence--input view) (get-buffer-window view))))))
+      (should (bring--fits-p (bring--message view) (get-buffer-window view))))))
 
 (ert-deftest bring-in/all-the-doorbell-says-can-be-read-and-its-button-is-in-sight ()
   ;; Measured 2026-11-01: the line was cut at the edge of the window, its button with it.
@@ -628,7 +736,11 @@ window that cuts them does is tested by itself."
   (bring--with '((:text "before [[HIDDEN-PART][ok]] after")) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (should (string-match-p "HIDDEN-PART" (presence--input view)))
+      (should (string-match-p "HIDDEN-PART" (bring--message view)))
+      ;; Shown whole it is the text that is sent; sent, the conversation shows it.
+      (with-current-buffer view (superchat-butler-attached-toggle))
+      (should (string-match-p "HIDDEN-PART" (bring--attached-shown view)))
+      (superchat-butler-attach-into-input view)
       (should (string-match-p "HIDDEN-PART" (tcmd--as-shown view))))))
 
 (ert-deftest bring-in/brackets-that-pile-up-do-not-make-a-link-again ()
@@ -640,14 +752,14 @@ window that cuts them does is tested by itself."
                                   (string #x2028) "G\tH"))) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (should (string-match-p "^> ABCDEG\tH$" (presence--input view)))))
+      (should (string-match-p "^> ABCDEG\tH$" (bring--message view)))))
   (should (equal "ab\ncd" (superchat-butler--quotable "a\rb\ncd"))))
 
 (ert-deftest bring-in/a-long-answer-is-cut-and-says-so ()
   (bring--with `((:text ,(make-string 9000 ?x))) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (let ((input (presence--input view)))
+      (let ((input (bring--message view)))
         (should (< (length input) (+ superchat-butler-brought-chars 400)))
         (should (string-match-p "^> .*first 3000 of 9000 characters" input))))))
 
@@ -655,13 +767,13 @@ window that cuts them does is tested by itself."
   (bring--with `((:text ,(make-string 3000 ?x))) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (should-not (string-match-p "characters" (presence--input view))))))
+      (should-not (string-match-p "characters" (bring--message view))))))
 
 (ert-deftest bring-in/a-failed-task-brings-how-it-ended ()
   (bring--with '((:error (error . "BOOM-FROM-THE-SERVER"))) (p)
     (cl-destructuring-bind (view _run _home) (bring--task p)
       (bring--from-butler)
-      (should (string-match-p "^> .*TASK-MARKER.* failed" (presence--input view))))))
+      (should (string-match-p "^> .*TASK-MARKER.* failed" (bring--message view))))))
 
 ;;;; Quoted lines -----------------------------------------------------------------------
 

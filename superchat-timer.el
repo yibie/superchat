@@ -90,10 +90,13 @@ the bell."
   :type 'function
   :group 'superchat-timer)
 
-(declare-function superchat-watch-decision "superchat-watch" (session text on others))
-(declare-function superchat-watch-tool-create "superchat-watch" (text on others))
+(declare-function superchat-watch-decision "superchat-watch" (session text on others &optional fix quiet))
+(declare-function superchat-watch-tool-create "superchat-watch" (text on others &optional fix quiet))
 (declare-function superchat-watch--on-compile-finished "superchat-watch" (buffer msg))
 (declare-function superchat-watch--stop-after-nothing "superchat-watch" (phase call))
+(declare-function superchat-watch-rule-words "superchat-watch" (rule))
+(declare-function superchat-elfeed--install "superchat-elfeed" ())
+(declare-function superchat-elfeed--uninstall "superchat-elfeed" ())
 
 (defvar superchat-timer-now-function #'float-time
   "Function returning the current time in seconds since the epoch.
@@ -159,7 +162,8 @@ this one forward.")
 (defun superchat-timer--known ()
   "Every timer that was not cancelled, in the order they were set.
 Each is a plist (:id :session-id :kind :text :due :repeat :workspace-id
-:workspace-root :command :directory :report-unchanged :brief :on :last-fired)."
+:workspace-root :owner :command :directory :report-unchanged :brief :on
+:last-fired).  :owner is nil for one set before timers said whose they are."
   (let ((table (make-hash-table :test #'equal)) order)
     (dolist (row (superchat-timer--rows))
       (cl-destructuring-bind (session type payload) row
@@ -177,6 +181,9 @@ Each is a plist (:id :session-id :kind :text :due :repeat :workspace-id
                                            payload 'workspace_id 'workspace-id)
                             :workspace-root (superchat-timer--payload-get
                                              payload 'workspace_root 'workspace-root)
+                            :owner (let ((owner (alist-get 'owner payload)))
+                                     (and (member owner '("you" "project"))
+                                          (intern owner)))
                             :command (alist-get 'command payload)
                             :directory (alist-get 'directory payload)
                             :report-unchanged
@@ -184,6 +191,8 @@ Each is a plist (:id :session-id :kind :text :due :repeat :workspace-id
                                    payload 'report_unchanged 'report-unchanged))
                             :brief (eq t (alist-get 'brief payload))
                             :on (alist-get 'on payload)
+                            :fix (eq t (alist-get 'fix payload))
+                            :quiet (eq t (alist-get 'quiet payload))
                             :last-fired nil)
                       table))
             ("timer.fired"
@@ -276,22 +285,33 @@ A conversation belongs to a Workspace when it is bound to one with a root."
     (and (stringp (cdr workspace)) (not (string-empty-p (cdr workspace)))
          (car workspace))))
 
+(defun superchat-timer-owner-for (session-id)
+  "Whose a timer set in SESSION-ID is: `project' in a Workspace, else `you'.
+A timer of a Workspace runs and speaks there; one set in a conversation of no
+Workspace is the user's own, whichever conversation asks after it later."
+  (if (superchat-timer--scope-of session-id) 'project 'you))
+
 (defun superchat-timer--within-p (session-id timer)
   "Non-nil when SESSION-ID's conversation may see and cancel TIMER.
-TIMER is a plist with :session-id, the conversation it was set in.  A
-conversation of a Workspace: TIMER is that Workspace's.  A conversation of
-no Workspace: TIMER was set in that very conversation.  A pending timer
-carries its Workspace; a fired one is its conversation's."
+TIMER is a plist with :session-id, the conversation it was set in, and :owner.
+The user's own (`you'): every conversation.  A Workspace's (`project'): that
+Workspace's conversations.  One with no :owner, set before timers said whose
+they are: a conversation of a Workspace sees that Workspace's, and one of no
+Workspace only what was set in it.  A pending timer carries its Workspace; a
+fired one is its conversation's."
   (let ((asking (superchat-timer--scope-of session-id))
         (owner (if (plist-member timer :workspace-root)
                    (and (stringp (plist-get timer :workspace-root))
                         (not (string-empty-p (plist-get timer :workspace-root)))
                         (plist-get timer :workspace-id))
                  (superchat-timer--scope-of (plist-get timer :session-id)))))
-    (if asking
-        (equal asking owner)
-      (and (stringp session-id)
-           (equal session-id (plist-get timer :session-id))))))
+    (pcase (plist-get timer :owner)
+      ('you t)
+      ('project (and asking (equal asking owner)))
+      (_ (if asking
+             (equal asking owner)
+           (and (stringp session-id)
+                (equal session-id (plist-get timer :session-id))))))))
 
 (defun superchat-timer--directory (session-id)
   "The directory a command set in SESSION-ID runs in.
@@ -337,6 +357,7 @@ This writes COMMAND down for good: asking the user is the tool's
                       :due (float due) :repeat repeat
                       :workspace-id (car workspace)
                       :workspace-root (cdr workspace)
+                      :owner (superchat-timer-owner-for session-id)
                       :command command :directory directory
                       :report-unchanged report-unchanged
                       :brief brief
@@ -360,7 +381,8 @@ This writes COMMAND down for good: asking the user is the tool's
                      (list :timer-id id :kind (symbol-name kind) :text text
                            :due (float due) :repeat repeat
                            :workspace-id (car workspace)
-                           :workspace-root (cdr workspace))
+                           :workspace-root (cdr workspace)
+                           :owner (symbol-name (superchat-timer-owner-for session-id)))
                      (when command
                        (list :command command :directory directory
                              :report-unchanged report-unchanged
@@ -392,7 +414,20 @@ That is a pending timer, or a fired task still waiting to be started."
              :payload (list :timer-id id)))
       (superchat-timer--disarm id)
       (superchat-timer--stop-command id)
+      ;; Cancelled, what it ended with is not left to look at either.
+      (when (fboundp 'superchat-changes-notice-dismiss)
+        (dolist (run (superchat-timer--runs-of id))
+          (superchat-changes-notice-dismiss run)))
       t)))
+
+(defun superchat-timer--runs-of (id)
+  "The executions the timer ID started, by the Tape."
+  (delq nil (mapcar (lambda (row)
+                      (cl-destructuring-bind (_session type payload) row
+                        (and (equal type "timer.started")
+                             (equal id (superchat-timer--payload-get payload 'timer_id 'timer-id))
+                             (superchat-timer--payload-get payload 'run_id 'run-id))))
+                    (superchat-timer--rows))))
 
 ;;;; Firing ----------------------------------------------------------------------------
 
@@ -1160,6 +1195,8 @@ in `superchat-timer--ask-model'."
   "Stop writing the note of the timer ID, if it is; nothing comes of it."
   (when-let* ((writing (gethash id superchat-timer--writing)))
     (remhash id superchat-timer--writing)
+    (when-let* ((stop (plist-get writing :stop)))
+      (funcall stop))
     (when-let* ((run (plist-get writing :run)))
       (ignore-errors (superchat-runtime-cancel run)))))
 
@@ -1186,15 +1223,16 @@ is no run of it."
                           json_extract(meta, '$.payload.occurrence'),
                           json_extract(meta, '$.payload.note') IS NOT NULL,
                           COALESCE(json_extract(meta, '$.payload.\"note-input-tokens\"'), 0)
-                          + COALESCE(json_extract(meta, '$.payload.\"note-output-tokens\"'), 0)
+                          + COALESCE(json_extract(meta, '$.payload.\"note-output-tokens\"'), 0),
+                          json_extract(meta, '$.payload.\"fix-patch\"') IS NOT NULL
                    FROM tape
                    WHERE session_id = ?
                      AND json_extract(meta, '$.event_type') = 'command.result'
                    ORDER BY id ASC"
                   (list superchat-butler-session-id)))
-      (cl-destructuring-bind (id status time note tokens) row
+      (cl-destructuring-bind (id status time note tokens fix) row
         (let ((stats (or (gethash id table) (list :runs 0 :changes 0 :failures 0
-                                                  :skipped 0 :notes 0 :told 0 :nothing 0
+                                                  :skipped 0 :notes 0 :told 0 :nothing 0 :fixes 0
                                                   :tokens 0))))
           (cl-flet ((more (key n) (setq stats (plist-put stats key
                                                          (+ n (plist-get stats key))))))
@@ -1209,6 +1247,7 @@ is no run of it."
               (when (equal status "told") (more :told 1))
               (when (equal status "nothing") (more :nothing 1))))
             (when (memq note '(1 t)) (more :notes 1))
+            (when (memq fix '(1 t)) (more :fixes 1))
             (more :tokens (if (numberp tokens) tokens 0)))
           (puthash id stats table))))
     table))
@@ -1239,12 +1278,27 @@ is a rule's, which looks rather than runs."
                            (superchat-timer-format-time (plist-get stats :last-time)))
                    (funcall count :changes "change" "changes")
                    (funcall count :told "told" "told")
+                   (funcall count :fixes "fix" "fixes")
                    (funcall count :nothing "nothing to tell" "nothing to tell")
                    (funcall count :failures "failed" "failed")
                    (funcall count :skipped "skipped" "skipped")
                    (unless rule (funcall count :notes "note" "notes"))
                    (funcall count :tokens "token" "tokens")))
        ", "))))
+
+(defun superchat-timer-last-result-run (id)
+  "The id of the newest result of the timer or rule ID that has a line, or nil."
+  (caar (superchat-db-tape-select
+         "SELECT json_extract(meta, '$.run_id') FROM tape
+          WHERE session_id = ?
+            AND json_extract(meta, '$.event_type') = 'command.result'
+            AND json_extract(meta, '$.payload.\"timer-id\"') = ?
+            AND COALESCE(json_extract(meta, '$.payload.status'), '')
+                NOT IN ('passed', 'replaced', 'skipped')
+          ORDER BY id DESC LIMIT 1"
+         (list superchat-butler-session-id id))))
+
+(autoload 'superchat-schedule-task "superchat-schedule" nil t)
 
 (defun superchat-timer-last-shown (id)
   "The id of the newest result of the timer ID that kept what it printed, or nil."
@@ -1432,6 +1486,13 @@ It is on record first, like any timer, and the user is told nothing yet."
 (defun superchat-timer--active-p ()
   (and (fboundp 'superchat-plugin-row-active-p)
        (superchat-plugin-row-active-p 'timers)))
+
+(defun superchat-timer--with-elfeed ()
+  "Make what comes into elfeed an event a rule can start on.
+docs/decisions/accepted/2026-11-02-what-others-wrote-in-your-feeds.md."
+  (when (and (superchat-timer--active-p)
+             (require 'superchat-elfeed "plugins/superchat-elfeed/superchat-elfeed" t))
+    (superchat-elfeed--install)))
 
 (defun superchat-timer--disarm (id)
   (when-let* ((emacs-timer (gethash id superchat-timer--armed)))
@@ -1647,12 +1708,14 @@ own, indented: a chat View is Org."
 CALL is a `tools/pre-execute' call of `timer_create'.  Nil when it carries no
 command, or cannot work."
   (cl-destructuring-bind (&optional text kind in-minutes at repeat command
-                                     report-unchanged brief on &rest rest)
+                                     report-unchanged brief on fix quiet &rest rest)
       (plist-get call :args)
     (ignore rest)
     (if (superchat-timer--given-p on)
         (superchat-watch-decision (plist-get call :session-id) text on
-                                  (list in-minutes at repeat command report-unchanged brief))
+                                  (list in-minutes at repeat command report-unchanged brief)
+                                  (superchat-timer--truthy-p fix)
+                                  (superchat-timer--truthy-p quiet))
      (when (superchat-timer--given-p command)
       (let ((session (plist-get call :session-id))
             ;; A call that cannot work is not refused: the tool says why, as an
@@ -1669,14 +1732,34 @@ command, or cannot work."
           (cons 'deny "a command that runs by itself is not granted in read-only mode; use /permissions to change the level"))
          (t (cons 'ask (superchat-timer--question session parsed)))))))))
 
+(defun superchat-timer--cancel-decision (call)
+  "The decision on CALL, a `tools/pre-execute' call of `timer_cancel'.
+Every timer was set after the user said yes, so the user says yes to its end
+too (the user, 2026-11-06).  Nil when the tool refuses it anyway: no such
+timer, or one this conversation may not see."
+  (let* ((session (plist-get call :session-id))
+         (id (car (plist-get call :args)))
+         (by-id (lambda (timer) (equal id (plist-get timer :id))))
+         (timer (and (stringp id)
+                     (or (cl-find-if by-id (superchat-timer-list))
+                         (cl-find-if by-id (superchat-timer-rules))
+                         (cl-find-if by-id (superchat-timer-unstarted-tasks))))))
+    (cond
+     ((not (and timer (superchat-timer--within-p session timer))) nil)
+     ((superchat-tool-execution--nobody-there-p (list :session-id session))
+      (cons 'deny "nobody has this conversation open to say yes, so it was not cancelled; say in your answer which timer you would cancel"))
+     (t (cons 'ask (format "Cancel this, which you set?\n  %s"
+                           (or (plist-get timer :text) id)))))))
+
 (defun superchat-timer--ask-about-command (call next)
-  "Have a `timer_create' that leaves a command behind asked about, once.
+  "Have a `timer_create' that leaves a command behind, or a `timer_cancel', asked about.
 A `tools/pre-execute' listener: a builtin tool is otherwise allowed.  This is
 how the question stays with this row: unmounted, nothing would run the command
 and the tool refuses it anyway."
   (let ((answer (funcall next call))
-        (decision (and (equal "timer_create" (plist-get call :tool-name))
-                       (superchat-timer--command-decision call))))
+        (decision (pcase (plist-get call :tool-name)
+                    ("timer_create" (superchat-timer--command-decision call))
+                    ("timer_cancel" (superchat-timer--cancel-decision call)))))
     (if (or (null decision)
             (superchat-waterfall-refused-p answer)
             (eq 'deny (plist-get answer :kind)))
@@ -1700,7 +1783,7 @@ wait, for `superchat-timer-command-first-wait' seconds at most."
   (not (member value '(nil :json-false :false "false" "" 0))))
 
 (defun superchat-timer-tool-create (text kind &optional in-minutes at repeat command
-                                         report-unchanged brief on)
+                                         report-unchanged brief on fix quiet)
   "The `timer_create' tool: set a timer in the asking conversation.
 A timer is a promise that something happens at its time.  While the
 `timers' row is not mounted nothing would fire it, so it is refused
@@ -1710,9 +1793,15 @@ ON it sets a rule instead, which starts on an event
 \(`superchat-watch-tool-create')."
   (if (superchat-timer--given-p on)
       (superchat-watch-tool-create text on
-                                   (list in-minutes at repeat command report-unchanged brief))
+                                   (list in-minutes at repeat command report-unchanged brief)
+                                   (superchat-timer--truthy-p fix)
+                                   (superchat-timer--truthy-p quiet))
   (condition-case err
       (let* ((now (progn
+                    (when (superchat-timer--truthy-p fix)
+                      (error "fix goes with on, which sets a rule: a timer has nothing to fix"))
+                    (when (superchat-timer--truthy-p quiet)
+                      (error "quiet goes with on, which sets a rule: use report_unchanged for a timer"))
                     (unless (superchat-timer--active-p)
                       (error "%s, so no timer was set and nothing will happen at that time; tell the user"
                              superchat-timer--off))
@@ -1795,8 +1884,8 @@ ON it sets a rule instead, which starts on an event
 
 (defun superchat-timer-tool-list ()
   "The `timer_list' tool: the pending timers, then those fired in the last day.
-Only those of the asking conversation's Workspace; of that conversation
-alone when it belongs to none."
+Only those the asking conversation may see (`superchat-timer--within-p'):
+the user's own, and its Workspace's."
   (let* ((session (superchat-timer--tool-session))
          (mine (lambda (timer) (superchat-timer--within-p session timer)))
          (timers (cl-remove-if-not mine (superchat-timer-list)))
@@ -1831,9 +1920,9 @@ alone when it belongs to none."
                              "")))
                  timers "\n")))
      (mapconcat (lambda (rule)
-                  (format "\nRule %s: when a compilation in %s fails: %s"
+                  (format "\nRule %s: %s: %s"
                           (plist-get rule :id)
-                          (plist-get rule :workspace-root)
+                          (superchat-watch-rule-words rule)
                           (plist-get rule :text)))
                 rules "")
      (if (null fired)
@@ -1852,8 +1941,9 @@ alone when it belongs to none."
 
 (defun superchat-timer-tool-cancel (id)
   "The `timer_cancel' tool: cancel the pending timer ID.
-A timer of another Workspace is refused, pending or fired and not yet
-started; the user's own commands cancel any."
+A timer the asking conversation may not see (another Workspace's) is
+refused, pending or fired and not yet started; the user's own commands cancel
+any."
   (let* ((session (superchat-timer--tool-session))
          (by-id (lambda (timer) (equal id (plist-get timer :id))))
          (timer (or (cl-find-if by-id (superchat-timer-list))
@@ -1891,8 +1981,14 @@ A timer that carries a command is asked about here when it is set."
        (setq superchat-timer--start-timer
              (run-at-time 0 nil #'superchat-timer-arm-all))
        (add-hook 'superchat-tool-loop-hooks #'superchat-watch--stop-after-nothing)
-       (add-hook 'compilation-finish-functions #'superchat-watch--on-compile-finished))
+       (add-hook 'compilation-finish-functions #'superchat-watch--on-compile-finished)
+       ;; What comes into elfeed is an event once elfeed is there.
+       ;; After mounting finishes, as arming does: the row is active only then.
+       (with-eval-after-load 'elfeed
+         (run-at-time 0 nil #'superchat-timer--with-elfeed)))
      (lambda ()
+       (when (fboundp 'superchat-elfeed--uninstall)
+         (superchat-elfeed--uninstall))
        (remove-hook 'compilation-finish-functions #'superchat-watch--on-compile-finished)
        (remove-hook 'superchat-tool-loop-hooks #'superchat-watch--stop-after-nothing)
        (when (timerp superchat-timer--start-timer)

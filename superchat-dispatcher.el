@@ -27,6 +27,7 @@
 
 ;; ── Forward declarations (owned by superchat.el) ──
 (declare-function superchat--with-supported-input "superchat" (request scope &optional current-p))
+(declare-function superchat-butler-attach-into-input "superchat-butler" (view))
 (declare-function superchat--request-attachment-description "superchat" (file))
 (declare-function superchat--origin-remember "superchat" (view snapshot))
 (declare-function superchat--origin-known-fallback "superchat" (view source))
@@ -1478,6 +1479,10 @@ is non-nil.  An error in one does not stop the message.")
   "Send the visible draft, or queue it while ordinary chat is active."
   (interactive)
   (superchat-plugin-require-active-row 'chat)
+  ;; What the user attached from the butler goes in first: from here on the
+  ;; message is the one text the conversation shows and the model gets.
+  (when (fboundp 'superchat-butler-attach-into-input)
+    (superchat-butler-attach-into-input (current-buffer)))
   (let* ((view (current-buffer))
          (session superchat--session-id)
          (superchat-buffer-name (buffer-name view))

@@ -414,7 +414,7 @@
       (tcmd--counter p "123")
       (tbrief--fire timer)
       (superchat-butler-bring (tbrief--last-line timer) view)
-      (let ((input (presence--input view)))
+      (let ((input (superchat-butler-message view)))
         (should (string-search "LINE ONE" input))
         (should (string-search "LINE TWO" input))
         (should (string-search "123" input))
@@ -428,7 +428,7 @@
       (tbrief--fire timer)
       (superchat-butler-bring (tbrief--last-line timer) view)
       (should (= 1 (with-temp-buffer
-                     (insert (presence--input view))
+                     (insert (superchat-butler-message view))
                      (how-many "THE-ONLY-LINE" (point-min) (point-max))))))))
 
 (ert-deftest timer-brief/the-doorbell-can-bring-it-in-from-a-conversation-streaming ()

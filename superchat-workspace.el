@@ -238,7 +238,7 @@ The one %s is the file's path (contract R4).")
 The one %s is the path `AGENTS.md' would have under the root.")
 
 (defconst superchat-workspace-temporary-note
-  "This is a temporary conversation: it belongs to no workspace, and nothing said here is carried into later conversations.  If the user asks you to remember something for later, say that it will not be kept here, and that `/workspace DIRECTORY' in this window makes a directory a workspace whose rules are kept in its AGENTS.md."
+  "This is a temporary conversation: it belongs to no workspace, and nothing said here is carried into later conversations.  If the user asks you to remember something for later, say that it will not be kept here, and that `/workspace DIRECTORY' in this window makes a directory a workspace whose rules are kept in its AGENTS.md.  A timer or a rule set with timer_create is kept, and other conversations see it."
   "What a request says about remembering in a conversation bound to no Workspace
 \(contract W5, W10).")
 

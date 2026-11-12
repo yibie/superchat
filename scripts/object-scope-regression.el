@@ -319,7 +319,10 @@ the product writes when the sub-agent hands back is not the model's way in."
         (should (string-match-p "cancelled" (superchat-timer-tool-cancel id))))
       (should-not (superchat-timer-unstarted-tasks)))))
 
-(ert-deftest object-scope/a-conversation-of-no-workspace-has-only-its-own-timers ()
+(ert-deftest object-scope/a-conversation-of-no-workspace-sees-the-user-s-timers-not-a-workspace-s ()
+  ;; 2026-11-06: a timer set in a conversation of no Workspace is the user's
+  ;; own (docs/decisions/accepted/2026-11-06-whose-a-standing-job-is.md); a
+  ;; Workspace's timer stays the Workspace's.
   (wrec--with nil (p)
     (let* ((sp (hm--session (wrec--view p)))
            (theirs (plist-get (superchat-timer-create sp 'reminder "OSCOPE-P-REMINDER"
@@ -341,15 +344,15 @@ the product writes when the sub-agent hands back is not the model's way in."
               (should (string-match-p "cancelled" (superchat-timer-tool-cancel mine))))
             (should (oscope--pending-p theirs))
             (should-not (oscope--pending-p mine))
-            ;; And the Workspace's conversation does not see the temporary one's.
+            ;; The Workspace's conversation sees the user's own and can cancel it.
             (let ((again (plist-get (superchat-timer-create
                                      temporary 'reminder "OSCOPE-TEMPORARY-AGAIN"
                                      (+ (float-time) 3600))
                                     :id)))
               (oscope--as sp
-                (should-not (string-match-p "OSCOPE-TEMPORARY-AGAIN"
-                                            (superchat-timer-tool-list)))
-                (should (string-match-p oscope--refusal
+                (should (string-match-p "OSCOPE-TEMPORARY-AGAIN"
+                                        (superchat-timer-tool-list)))
+                (should (string-match-p "cancelled"
                                         (superchat-timer-tool-cancel again))))))
         (superchat-timer-disarm-all)))))
 
