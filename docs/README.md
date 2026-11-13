@@ -13,9 +13,10 @@ Each fact has one home: the tier whose job it is. Elsewhere, link there.
 | [protocols/](protocols/session-editor-workspace-close.md) | Cross-component behavioural contracts that no single component owns | Component-local detail |
 | [adr/](adr/) | Accepted design decisions in force, written before the decisions/ format existed; one becomes historical only when a later record names it as superseded | New records |
 | [SKILLS_QUICKSTART.md](SKILLS_QUICKSTART.md), [plugin-guide.md](plugin-guide.md) | Tutorials: an ordered path to an outcome | Reference tables, rationale |
+| [guide/](guide/README.md) | How to use Superchat, by feature, for users: what to type or run, what appears, the options and their defaults. The root README is its short tour and links here | Rationale, contracts, history |
 | [CONTEXT.md](../CONTEXT.md) | Domain vocabulary, one canonical term per concept | Implementation detail |
 
-Placement: bugs → postmortems; rationale → decisions; procedures → tutorials; contracts → components; standing orders → root `AGENTS.md` with a link to the rationale.
+Placement: bugs → postmortems; rationale → decisions; procedures → tutorials; how to use a feature → guide; contracts → components; standing orders → root `AGENTS.md` with a link to the rationale.
 
 ## Writing rules
 

@@ -6,7 +6,7 @@ Status: implemented — execution reliability work under the user's delegation t
 
 A multi-request Emacs task needs separate answers to three questions: whether the current provider request is making progress, which reasoning setting the provider actually receives, and why tool execution ends. A Run's final answer alone cannot establish that a configuration change is saved, loaded or effective.
 
-The [M5 comparison](../../roadmap.md#m5--operating-context-and-reference-reading-accepted-in-progress) exposes these distinctions. The reviewed traces locate the six T3 wait expirations about 180 seconds after the first request, while their last requests have run for only 2–15 seconds. The evidence does not establish that those last requests need more than 180 seconds for a first token. The compatibility serializer also omits Qwen's automatic reasoning field, and exhausting the tool budget does not establish completion of the requested work.
+The [M5 comparison](../../roadmap.md#m5--operating-context-and-reference-reading-done-for-the-accepted-scopes-slices-34-accepted-as-mechanisms-and-operating-workflow-utility-not-established) exposes these distinctions. The reviewed traces locate the six T3 wait expirations about 180 seconds after the first request, while their last requests have run for only 2–15 seconds. The evidence does not establish that those last requests need more than 180 seconds for a first token. The compatibility serializer also omits Qwen's automatic reasoning field, and exhausting the tool budget does not establish completion of the requested work.
 
 ## Decision
 
@@ -32,7 +32,7 @@ Tool budget finalization states the actual boundary and asks for completed, inco
 
 ## Consequences
 
-The [configuration guide](../../../README.md#reasoning-settings) explains provider defaults, explicit Preset inheritance and compatible endpoint mappings. Existing users who explicitly set an unmapped effort need to declare its protocol or choose provider defaults. An explicit raw parameter overrides automatic effort selection, so it is unsuitable for users who expect Presets to vary that setting. Successful request serialization is evidence of the requested value, not proof that an arbitrary server honors it.
+The [configuration guide](../../guide/configuration.md#reasoning) explains provider defaults, explicit Preset inheritance and compatible endpoint mappings. Existing users who explicitly set an unmapped effort need to declare its protocol or choose provider defaults. An explicit raw parameter overrides automatic effort selection, so it is unsuitable for users who expect Presets to vary that setting. Successful request serialization is evidence of the requested value, not proof that an arbitrary server honors it.
 
 The focused [execution regression](../../../scripts/m5-execution-regression.el) covers real request construction, scripted tool execution through Authority and Runtime, fake-clock counterexamples and actual Emacs timer scheduling. The existing leader-owned M3 and M5 sets remain unchanged. Scripted correctness and a particular model's success on an Emacs task remain separate evidence; the reference reader and operating guide remain proposals in the roadmap.
 
