@@ -46,9 +46,11 @@
   "Give ON-ENTRY every entry appended to the timeline since the last call."
   (dolist (entry (superchat-tape-entries :tape (plist-get run :tape)
                                          :after (plist-get run :seen)))
-    (setf (plist-get run :seen) (plist-get entry :id))
-    (when-let* ((on-entry (plist-get run :on-entry)))
-      (funcall on-entry entry))))
+    ;; ON-ENTRY may cancel, which emits the rest of this list itself.
+    (when (> (plist-get entry :id) (plist-get run :seen))
+      (setf (plist-get run :seen) (plist-get entry :id))
+      (when-let* ((on-entry (plist-get run :on-entry)))
+        (funcall on-entry entry)))))
 
 (defun superchat-agent--add (run kind text &rest keys)
   "Append an entry to the timeline of RUN and show it to ON-ENTRY."

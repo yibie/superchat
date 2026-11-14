@@ -184,6 +184,26 @@
                           tools)))
       (should (eq (plist-get (car (last (superchat-tape-entries :tape "t"))) :kind) 'event)))))
 
+;; A cancel from inside ON-ENTRY emits the entries after the one in hand;
+;; the outer emit must not give them a second time.
+(ert-deftest superchat-agent-on-entry-that-cancels-sees-each-entry-once ()
+  (superchat-test-agent--with
+    (let ((superchat-default-level 'ask)
+          (superchat-permission-ask-function (lambda (&rest _) 'allow))
+          ids)
+      (superchat-test-script
+          (list `(:calls (,(superchat-test-agent--call "c1" "poke"))))
+        (superchat-run "t" "go"
+                       :on-entry
+                       (lambda (e)
+                         (push (plist-get e :id) ids)
+                         (when (equal (plist-get (plist-get e :data) :type)
+                                      "permission")
+                           (superchat-cancel "t")))))
+      (should (equal (nreverse ids)
+                     (mapcar (lambda (e) (plist-get e :id))
+                             (superchat-tape-entries :tape "t")))))))
+
 (ert-deftest superchat-agent-cancel-after-first-call ()
   (superchat-test-agent--with
     (superchat-test-script
