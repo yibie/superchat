@@ -119,7 +119,7 @@ Dependencies go one way only:
 
 ```
 inline → chat
-chat → agent, plugin
+chat → agent, plugin, recall
 agent → llm, tools, view, context
 recall → tools, view
 context → view
@@ -129,7 +129,8 @@ every file → superchat.el
 ```
 
 `superchat.el` requires no other Superchat file. Every other file requires it
-for the user options. A file requires only what the arrows give it, and
+for the user options. Arrows carry on: a file may require what the files it
+points to require. A file requires nothing else, and
 `superchat-llm.el` and `superchat-plugin.el` require only `superchat.el`.
 
 ## superchat-tape.el
@@ -153,8 +154,8 @@ Triggers: one `AFTER INSERT` trigger keeps `entry_fts` in step. Two triggers,
 append-only')`. The database enforces the invariant; no Lisp code checks it.
 
 `:data` is stored as JSON. A plist is a JSON object: keys lose the colon and
-come back as keywords, at every depth. A list that is not a plist is a JSON
-array. Nil comes back as nil. `:refs` is a JSON array of integers.
+come back as keywords, at every depth. Any other list is a JSON array, of
+numbers, strings, plists or lists. Nil comes back as nil. `:refs` is a JSON array of integers.
 
 Public functions, and no others:
 
@@ -163,8 +164,8 @@ Public functions, and no others:
   file, kept. `(superchat-tape-close)` closes it.
 - `(superchat-tape-append TAPE KIND TEXT &key data refs scope at)` → the new
   entry. SCOPE defaults to the scope of the latest entry of TAPE; it is an
-  error to give none for the first entry of a timeline. KIND must be one of
-  the six kinds.
+  error to give none for the first entry of a timeline. KIND is one of the
+  six kind symbols.
 - `(superchat-tape-get ID)` → entry or nil.
 - `(superchat-tape-entries &key tape scope kinds after before limit newest)`
   → entries in id order. AFTER and BEFORE are ids, exclusive. With NEWEST
@@ -225,6 +226,18 @@ The only file that requires `llm`. It translates between neutral messages and
     once with `(:text S :calls CALLS :model S)`. ON-ERROR is called once
     with a string. Exactly one of ON-DONE and ON-ERROR is called, unless the
     request is cancelled, and then neither.
+  - The `:model` of ON-DONE is the model asked for: MODEL, else
+    `superchat-llm-model`, else the string `default`.
+  - Every call the model made comes back in CALLS, also one that names no
+    known tool or lacks an argument: `llm.el` is given every argument as
+    optional, and the caller judges. Where `llm.el` itself refuses a response
+    (a tool name it was not given), ON-ERROR gets a sentence a person can
+    read, not printed Lisp data.
+  - A signal raised while the request is started is delivered through
+    ON-ERROR; `superchat-llm-request` itself signals only for a missing
+    provider.
+  - MODEL reaches the provider through its `chat-model` slot. A provider
+    without that slot gets a `user-error` that names it.
   - One request is one model response. When the model asks for tools the
     calls come back in ON-DONE; the caller runs them and makes another
     request with the results appended to MESSAGES.
@@ -235,8 +248,6 @@ The only file that requires `llm`. It translates between neutral messages and
   given to `llm.el` only record that they were called and with what. Call ids
   are made here, so a call and its result agree when they are replayed.
 - `(superchat-llm-cancel HANDLE)`.
-- `(superchat-llm-models)` → names for completion, from the provider when it
-  can list them, else the configured model alone.
 
 The provider is `superchat-llm-provider`, an `llm.el` provider object the
 user sets. Tests never touch the network: `superchat-llm-request-function`
@@ -281,7 +292,9 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   appends the result, and for an `ask` or `deny` decision appends a
   `permission` event first. A denied call, an unknown tool, a missing
   required argument and an error signalled by the function all become a
-  `tool` entry with `:error t` whose text says what happened. Nothing is
+  `tool` entry with `:error t` whose text says what happened; so does a
+  function that returns something that is not a string. A required argument
+  is present when its key is in the plist, whatever its value. Nothing is
   swallowed and nothing is signalled to the loop. A quit (`C-g` while the
   tool runs or while the user is asked) is such an entry too, with the text
   `Interrupted by the user.`
@@ -296,11 +309,11 @@ Built-in tools, and no others:
 | `read_buffer` | read | `buffer`, `start` opt, `count` opt | the same for a buffer |
 | `list_buffers` | read | none | name, mode, file and size of the user's buffers (no names starting with a space) |
 | `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, at most 100 matching lines |
-| `edit_buffer` | write | `buffer`, `old`, `new` | replace OLD by NEW in a buffer; OLD must occur exactly once; does not save |
+| `edit_buffer` | write | `buffer`, `old`, `new` | replace OLD by NEW in a buffer; OLD must occur exactly once, case and overlapping occurrences counted; does not save |
 | `write_file` | write | `path`, `content` | create or replace a file, through a buffer, and save it |
 | `save_buffer` | write | `buffer` | save |
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order, return the last value printed, with what was printed to `*Messages*` meanwhile |
-| `shell` | exec | `command` | run through `shell-file-name`, at most `superchat-shell-seconds` (60), return output and exit status |
+| `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else |
 
 A path is relative to the scope. A file a tool edits is edited through its
 buffer, so the user can undo it.
@@ -313,10 +326,10 @@ Three tools, defined with `superchat-tool-define`, all of class `read`:
 | name | arguments | does |
 |---|---|---|
 | `recall` | `view`, `query` opt, `name` opt, `id` opt, `limit` opt | run a built-in or plugin view for the current scope and return `superchat-view-render` of it, at most 6000 characters |
-| `tape_query` | `sql` | `superchat-tape-select`, rows as JSON lines, at most 200 rows |
+| `tape_query` | `sql` | `superchat-tape-select`, rows as JSON lines, at most 200 rows; the limit is part of the statement that runs, so a query that would return a million rows does not fetch them |
 | `note` | `title`, `text`, `sources` (comma-separated entry ids) | append a `note` entry to the current timeline |
 
-The description of `recall` lists the views and their arguments from
+A number argument may arrive as a string. The description of `recall` lists the views and their arguments from
 `superchat-view-names`, each time the specs are asked for. The description of
 `tape_query` gives the table definition.
 
@@ -354,7 +367,15 @@ The description of `recall` lists the views and their arguments from
   ON-TEXT gets streamed text. ON-ENTRY gets each entry as it is appended.
   ON-DONE gets the run once, with `:status` `done`, `cancelled` or `error`.
 - At most one run per timeline. `superchat-run` on a timeline that has one is
-  an error.
+  an error. A handoff occupies its timeline like a run: while it is pending,
+  `superchat-run` and a second handoff are errors, and `superchat-handoff`
+  on a timeline with a run is an error.
+- A run always ends. Whatever is signalled while a request is started or
+  inside a callback of the run becomes an `error` event and the run ends
+  with status `error`; the timeline is free again.
+- A tool is called with `inhibit-quit` bound to nil: the callbacks of a real
+  model run in a timer, where quitting is otherwise off, and `C-g` must be
+  able to stop a tool.
 - `(superchat-run-active TAPE)` → the run or nil.
 - `(superchat-cancel TAPE)`: cancel the request, append a `cancelled` event,
   call ON-DONE with `cancelled`. Tool calls of the current response that
@@ -367,17 +388,22 @@ The description of `recall` lists the views and their arguments from
   status `error`.
 - `(superchat-handoff TAPE &optional NAME on-done)`: ask the model, with no
   tools, for a summary of the `conversation` view and for what comes next,
-  and append an anchor with them, its `:refs` the ids summarised. NAME is the
+  and append an anchor with them, its `:refs` the ids summarised. The
+  request is one `user` message holding `superchat-view-render` of the view
+  and the question, so it has no tool turns a provider could refuse. It
+  returns the handle of the request. NAME is the
   topic name, default `"handoff"`. ON-DONE is called with the anchor, or with
   nil when the model failed (an `error` event is appended then).
 - When `superchat-run` is called and the timeline's messages are already
   longer than `superchat-context-chars`, a handoff is made first, and the
   `user` entry is appended after the anchor, so the request is never behind
-  the anchor. There is no handoff in the middle of a run.
+  the anchor. When that handoff fails, the `user` entry is appended all the
+  same, after the error event, and the run ends with status `error`: what
+  the user wrote is never lost. There is no handoff in the middle of a run.
 - `(superchat-fork TAPE ENTRY-ID)` → a new timeline name whose first entry is
   an anchor: summary empty, `:refs` the ids of TAPE's `conversation` view up
-  to ENTRY-ID, and when that entry is an `assistant` entry with calls, the
-  `tool` entries that answer them as well. The `conversation` view of a
+  to ENTRY-ID, and the `tool` entries that answer the calls of every
+  `assistant` entry among them, so that no call is left without its result. The `conversation` view of a
   timeline whose first anchor has refs and an empty summary begins with
   those referred entries.
 
@@ -397,7 +423,11 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
   `C-c C-c` always sends. `C-c C-k` cancels the run.
 - While a run is active the mode line shows `[running]`, streamed text
   appears as it comes, and the input stays editable but sending is refused
-  with a message.
+  with a message. An entry is shown once, however it reached the buffer. The
+  callbacks of a run find the chat buffer of their timeline when they fire,
+  so a buffer killed and opened again during a run shows the rest of it.
+- `superchat` remembers the buffer it was called from as the origin of the
+  next request sent from the chat buffer.
 - `superchat` (an autoloaded command): open the chat buffer of the most
   recent timeline of the current buffer's scope, or a new one. With a prefix
   argument, always a new one. It enables the plugins of `superchat-plugins`
@@ -417,7 +447,7 @@ Built-in commands, and no others:
 
 | command | does |
 |---|---|
-| `/new` | a new timeline in the same scope, in a new buffer |
+| `/new` | a new timeline in the same scope as this buffer's timeline, in a new buffer |
 | `/resume` | choose a timeline from the `timelines` view with `completing-read` and open it |
 | `/fork` | fork at the entry at point, open the new timeline |
 | `/handoff [name]` | `superchat-handoff`; refused while a run is active |
@@ -431,9 +461,13 @@ Built-in commands, and no others:
 ## superchat-inline.el
 
 - `superchat-rewrite` (a command): with a region, read an instruction, run on
-  the timeline `inline:` + scope with tools `none`, and show the model's
-  replacement over the region in an overlay as it streams. `C-c C-c` on the
-  overlay replaces the region (one undo step), `C-c C-k` discards it. The
+  a new timeline named `inline:` + `superchat-tape-new-name` with tools
+  `none`, and show the model's replacement over the region in an overlay as
+  it streams. Each rewrite has its own timeline, so one does not resend the
+  others. The replacement is the text of the run's `assistant` entry; the
+  streamed text is only shown while it comes. `C-c C-c` on the overlay
+  replaces the region (one undo step) once the run is over, `C-c C-k`
+  cancels the run when it is active and discards the overlay. The
   request tells the model to answer with the replacement text only; a
   fenced code block around the whole answer is unwrapped.
 - `superchat-ask` (a command): read a question; the origin is the current
@@ -445,7 +479,8 @@ Built-in commands, and no others:
 ## superchat-plugin.el
 
 - `(superchat-plugin-define NAME &key doc enable disable)`: ENABLE and
-  DISABLE are functions of no arguments. A plugin adds tools, views and
+  DISABLE are functions of no arguments. Another keyword is an error.
+  Defining a name that is enabled disables the old definition first. A plugin adds tools, views and
   commands in ENABLE and removes them in DISABLE.
 - `(superchat-plugin-enable NAME)`, `(superchat-plugin-disable NAME)`,
   `(superchat-plugin-enabled-p NAME)`.
@@ -462,8 +497,8 @@ Package header, `defgroup superchat`, the user options and the constant
 
 ## User options
 
-`superchat-directory` (`~/.superchat/`), `superchat-tape-file`
-(`tape.sqlite` in it), `superchat-llm-provider` (nil; using Superchat without
+`superchat-directory` (`superchat/` in the user's Emacs directory),
+`superchat-tape-file` (nil, meaning `tape.sqlite` in that directory), `superchat-llm-provider` (nil; using Superchat without
 one is an error that says how to set it), `superchat-llm-model` (nil: the
 provider's own), `superchat-default-level` (`ask`), `superchat-context-chars`
 (120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
@@ -475,7 +510,9 @@ ERT, one file per module in `test/`, named `test-NAME.el`. `test/helper.el`
 gives `superchat-test-with-tape` (a fresh database in a temporary directory,
 closed and deleted afterwards) and `superchat-test-script` (bind
 `superchat-llm-request-function` to answer from a list of scripted
-responses, synchronously by default). Tests do not use the network, the
+responses, synchronously by default; with `superchat-test-async` bound to t
+each response is delivered from a timer, as a real model's is, and
+`superchat-test-drain` waits for the timers). Tests do not use the network, the
 user's home directory or timers longer than 0.1 s. Test what this file
 promises, by behaviour. Do not test private functions.
 

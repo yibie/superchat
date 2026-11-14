@@ -46,17 +46,40 @@ text first through ON-TEXT.  Asking after the last response is an error."
                     (response (if (functionp next)
                                   (funcall next (car superchat-test-requests))
                                 next)))
-               (if-let* ((why (plist-get response :error)))
-                   (funcall (plist-get keys :on-error) why)
-                 (when-let* ((on-text (plist-get keys :on-text))
-                             (text (plist-get response :text)))
-                   (funcall on-text text))
-                 (funcall (plist-get keys :on-done)
-                          (list :text (or (plist-get response :text) "")
-                                :calls (plist-get response :calls)
-                                :model "scripted")))
+               (superchat-test--deliver
+                (lambda ()
+                  (if-let* ((why (plist-get response :error)))
+                      (funcall (plist-get keys :on-error) why)
+                    (when-let* ((on-text (plist-get keys :on-text))
+                                (text (plist-get response :text)))
+                      (funcall on-text text))
+                    (funcall (plist-get keys :on-done)
+                             (list :text (or (plist-get response :text) "")
+                                   :calls (plist-get response :calls)
+                                   :model "scripted")))))
                'scripted-handle))))
      ,@body))
+
+(defvar superchat-test-async nil
+  "Non-nil makes the scripted model answer from a timer, as a real one does:
+after the request call has returned, and with quitting off.")
+
+(defvar superchat-test--pending 0 "Answers not delivered yet.")
+
+(defun superchat-test--deliver (thunk)
+  "Call THUNK now, or from a timer when `superchat-test-async' is set."
+  (if (not superchat-test-async)
+      (funcall thunk)
+    (cl-incf superchat-test--pending)
+    (run-at-time 0 nil (lambda ()
+                         (cl-decf superchat-test--pending)
+                         (funcall thunk)))))
+
+(defun superchat-test-drain ()
+  "Wait until every answer of the asynchronous scripted model was delivered."
+  (with-timeout (5 (error "The scripted model did not finish"))
+    (while (> superchat-test--pending 0)
+      (accept-process-output nil 0.01))))
 
 (provide 'helper)
 ;;; helper.el ends here
