@@ -204,7 +204,7 @@ Built-in views:
 | `topic` | `:name`, `:scope` optional | for every anchor with that name: the entries from that anchor up to the next anchor of the same timeline |
 | `search` | `:query`, `:scope`, `:kinds`, `:limit` (default 8), `:around` (default 1) | each hit with AROUND neighbours before and after it in its timeline, no entry twice, in id order |
 | `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"` |
-| `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline whose name does not start with `inline:`, most recently active first: its latest anchor if it has one, else its first `user` entry |
+| `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline that has no `user` entry with `:ephemeral t`, most recently active first: its latest anchor if it has one, else its first `user` entry |
 | `sources` | `:id` | the entries named by the `:refs` of entry ID |
 
 `conversation` is what a session is. `timelines` is the list of sessions.
@@ -407,13 +407,26 @@ A number argument may arrive as a string. The description of `recall` lists the 
 
 ## superchat-agent.el
 
-- `(superchat-run TAPE TEXT &key scope origin tools system model on-text on-entry on-done)`
-  → the run, a plist. The first entry of a new timeline takes SCOPE, or the
-  scope of `default-directory` when none is given. It appends the `user` entry, then loops:
+- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral on-text on-entry on-done)`
+  → the run, a plist. It opens the Tape itself. The first entry of a new
+  timeline takes SCOPE, or the scope of `default-directory` when none is
+  given. With EPHEMERAL the `user` entry it appends has `:ephemeral t` in
+  its data: a timeline with such an entry is one question another package
+  asked, not a conversation, and the `timelines` view and
+  `superchat-chat-recent-tape` leave it out. It stays on the Tape and the
+  `search` view finds it. It appends the `user` entry, then loops:
   1. messages = the `conversation` view of TAPE turned into neutral
      messages. An anchor becomes a `user` message that begins
      `Summary of the conversation so far:`. `event` and `note` entries are
-     left out.
+     left out. When the texts of the messages together are longer than
+     `superchat-context-chars`, the oldest are left out of this request
+     until the rest fits: never the anchor message, never the `user` entry
+     of this run, never the latest `assistant` entry and its results; an
+     `assistant` entry goes together with the `tool` entries that answer
+     it. In their place stands one `user` message, `[N earlier entries of
+     this conversation are left out of this request; recall and tape_query
+     can read them.]`. Nothing is removed from the Tape and no event is
+     appended.
   2. `superchat-llm-request` with `superchat-context-system` and the tool
      specs. TOOLS is a list of names, or nil for every tool, or `none`.
   3. On done: append the `assistant` entry. If it has calls, run each with
@@ -422,7 +435,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
      is over. The run does not block Emacs while an asynchronous tool
      works: the user can type, switch buffers and cancel.
   ON-TEXT gets streamed text. ON-ENTRY gets each entry as it is appended.
-  ON-DONE gets the run once, with `:status` `done`, `cancelled` or `error`.
+  ON-DONE gets the run once, with `:status` `done`, `cancelled` or `error`,
+  `:text` the text of the last `assistant` entry of this run (nil when it
+  made none) and, for `error`, `:error` the text of the error event.
 - At most one run per timeline. `superchat-run` on a timeline that has one is
   an error. A handoff occupies its timeline like a run: while it is pending,
   `superchat-run` and a second handoff are errors, and `superchat-handoff`
@@ -504,7 +519,16 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
-  timeline of SCOPE whose name does not start with `inline:`, or nil.
+  timeline of SCOPE that is not ephemeral, or nil.
+- `superchat-note` (an autoloaded command, any buffer): read a line in the
+  minibuffer and append it as a `note` entry, with no sources and its first
+  60 characters as title, to the most recent timeline of the current
+  buffer's scope, or to a new timeline of that scope when there is none.
+  The person writes memory the same way the model does.
+- `superchat-recall` (an autoloaded command, any buffer): read a query and
+  open the `search` view of the current buffer's scope in a read-only
+  buffer. With an empty query, the `notes` view.
+- `superchat-chat-send` runs a line that starts with `/` as a command.
 - A line starting with `/` is a command. `(superchat-command-define NAME
   FUNCTION DOC)` and `(superchat-command-remove NAME)`: NAME is written
   without the slash; FUNCTION is called with the rest of the line, in the
@@ -521,6 +545,7 @@ Built-in commands, and no others:
 | `/topic name` | open the `topic` view of that name in a read-only buffer |
 | `/recall query` | open the `search` view in a read-only buffer |
 | `/notes` | open the `notes` view in a read-only buffer |
+| `/note text` | append TEXT as a `note` entry to this timeline, as `superchat-note` does |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
 | `/help` | list commands |
@@ -528,8 +553,7 @@ Built-in commands, and no others:
 ## superchat-inline.el
 
 - `superchat-rewrite` (a command): with a region, read an instruction, run on
-  a new timeline named `inline:` + `superchat-tape-new-name` with tools
-  `none`, and show the model's replacement over the region in an overlay as
+  a new ephemeral timeline with tools `none`, and show the model's replacement over the region in an overlay as
   it streams. Each rewrite has its own timeline, so one does not resend the
   others. The replacement is the text of the run's `assistant` entry; the
   streamed text is only shown while it comes. `C-c C-c` on the overlay
@@ -545,7 +569,8 @@ Built-in commands, and no others:
 
 ## superchat-plugin.el
 
-- `(superchat-plugin-define NAME &key doc enable disable)`: ENABLE and
+- `(superchat-plugin-define NAME &key doc enable disable)`: NAME is a
+  symbol; ENABLE and
   DISABLE are functions of no arguments. Another keyword is an error.
   Defining a name that is enabled disables the old definition first. A plugin adds tools, views and
   commands in ENABLE and removes them in DISABLE.
