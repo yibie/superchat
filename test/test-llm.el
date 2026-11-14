@@ -256,6 +256,25 @@
       (superchat-llm-request '((:role user :text "hi")) :on-done #'ignore))
     (should (eq (llm-chat-prompt-reasoning (car test-llm--prompts)) 'none))))
 
+(ert-deftest test-llm-reasoning-goes-back-with-its-calls-until-the-turn-ends ()
+  (test-llm-with '((:chunks ("a")) (:chunks ("b")))
+    (let ((superchat-llm--reasoning (make-hash-table :test #'equal))
+          (turn '((:role user :text "q")
+                  (:role assistant :text "" :calls ((:id "c1" :name "t" :args nil)))
+                  (:role tool :call-id "c1" :name "t" :text "r"))))
+      (puthash "c1" "because" superchat-llm--reasoning)
+      (superchat-llm-request turn :on-done #'ignore)
+      (should (equal (seq-keep #'llm-chat-prompt-interaction-multi-turn-plist
+                               (llm-chat-prompt-interactions (car test-llm--prompts)))
+                     '((:reasoning "because"))))
+      ;; The next user turn: the reasoning is neither sent nor kept.
+      (superchat-llm-request (append turn '((:role assistant :text "done")
+                                            (:role user :text "next")))
+                             :on-done #'ignore)
+      (should-not (seq-keep #'llm-chat-prompt-interaction-multi-turn-plist
+                            (llm-chat-prompt-interactions (car test-llm--prompts))))
+      (should (= (hash-table-count superchat-llm--reasoning) 0)))))
+
 (ert-deftest test-llm-request-calls-the-request-function ()
   (let* ((got nil)
          (superchat-llm-request-function

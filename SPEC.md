@@ -239,6 +239,12 @@ The only file that requires `llm`. It translates between neutral messages and
     provider.
   - MODEL reaches the provider through its `chat-model` slot. A provider
     without that slot gets a `user-error` that names it.
+  - The model's reasoning is never on the Tape and never in ON-DONE. This
+    module keeps it in memory, by the id of the first call it led to, and
+    puts it on that call's interaction as the multi-turn plist
+    `(:reasoning TEXT)` so a provider that wants it back (DeepSeek does) can
+    send it. A request whose last message is from the user clears it: no
+    provider wants the reasoning of an earlier turn.
   - One request is one model response. When the model asks for tools the
     calls come back in ON-DONE; the caller runs them and makes another
     request with the results appended to MESSAGES.
@@ -516,8 +522,7 @@ Package header, `defgroup superchat`, the user options and the constant
 one is an error that says how to set it), `superchat-llm-model` (nil: the
 provider's own), `superchat-llm-reasoning` (nil: the provider's own; else
 `none`, `light`, `medium` or `maximum`, passed to `llm-make-chat-prompt` as
-`:reasoning`. The Tape keeps no reasoning text, so a provider that wants its
-reasoning sent back with tool calls, such as DeepSeek, needs `none`), `superchat-default-level` (`ask`), `superchat-context-chars`
+`:reasoning`), `superchat-default-level` (`ask`), `superchat-context-chars`
 (120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 

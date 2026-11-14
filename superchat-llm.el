@@ -54,6 +54,11 @@ over a missing one; the caller judges the calls."
              (plist-get message :tool) (plist-get message :arg)))
     (_ (format "The model's response was refused (%s)" type))))
 
+(defvar superchat-llm--reasoning (make-hash-table :test #'equal)
+  "The model's reasoning for the turn being answered, by first call id.
+Memory only: the Tape keeps no reasoning.  Some providers want it sent
+back with the tool calls it led to until the turn is answered.")
+
 (defun superchat-llm--prompt (messages system tools)
   "An `llm-chat-prompt' that replays MESSAGES, with TOOLS offered.
 Replay uses llm.el's interaction structs: an assistant turn whose content is
@@ -63,11 +68,13 @@ a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
                  :tools (mapcar #'superchat-llm--tool tools)))
         (results nil))
     (setf (llm-chat-prompt-interactions prompt) nil)
-    (cl-flet ((add (role content)
+    (cl-flet ((add (role content &optional reasoning)
                 (setf (llm-chat-prompt-interactions prompt)
                       (append (llm-chat-prompt-interactions prompt)
                               (list (make-llm-chat-prompt-interaction
-                                     :role role :content content)))))
+                                     :role role :content content
+                                     :multi-turn-plist
+                                     (and reasoning (list :reasoning reasoning)))))))
               (flush ()
                 (when results
                   (setf (llm-chat-prompt-interactions prompt)
@@ -76,6 +83,9 @@ a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
                                        :role 'tool-results
                                        :tool-results (nreverse results)))))
                   (setq results nil))))
+      ;; A new user turn: no provider wants the reasoning of earlier turns.
+      (when (eq (plist-get (car (last messages)) :role) 'user)
+        (clrhash superchat-llm--reasoning))
       (dolist (message messages)
         (let ((text (plist-get message :text)))
           (if (eq (plist-get message :role) 'tool)
@@ -93,7 +103,8 @@ a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
                              (make-llm-provider-utils-tool-use
                               :id (plist-get call :id) :name (plist-get call :name)
                               :args (superchat-llm--alist (plist-get call :args))))
-                           calls))))))
+                           calls)
+                   (gethash (plist-get (car calls) :id) superchat-llm--reasoning))))))
       (flush))
     prompt))
 
@@ -140,17 +151,22 @@ a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
                        (funcall on-text (substring text seen))
                        (setq seen (length text)))))
                  (live (lambda (result)
-                         (funcall on-done
-                                  (list :text (or (plist-get result :text) "")
-                                        ;; Documented: `tool-uses' lists every use.
-                                        :calls (mapcar
-                                                (lambda (use)
-                                                  (list :id (make-temp-name "call_")
-                                                        :name (plist-get use :name)
-                                                        :args (superchat-llm--plist
-                                                               (plist-get use :args))))
-                                                (plist-get result :tool-uses))
-                                        :model (or model "default")))))
+                         ;; Documented: `tool-uses' lists every use.
+                         (let ((calls (mapcar
+                                       (lambda (use)
+                                         (list :id (make-temp-name "call_")
+                                               :name (plist-get use :name)
+                                               :args (superchat-llm--plist
+                                                      (plist-get use :args))))
+                                       (plist-get result :tool-uses))))
+                           (when (and calls (plist-get result :reasoning))
+                             (puthash (plist-get (car calls) :id)
+                                      (plist-get result :reasoning)
+                                      superchat-llm--reasoning))
+                           (funcall on-done
+                                    (list :text (or (plist-get result :text) "")
+                                          :calls calls
+                                          :model (or model "default"))))))
                  (live (lambda (type message)
                          (funcall on-error (superchat-llm--explain type message))))
                  t))
