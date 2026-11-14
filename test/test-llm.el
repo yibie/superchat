@@ -3,285 +3,419 @@
 ;;; Code:
 
 (require 'helper)
+(require 'json)
 (require 'superchat-llm)
+;; Loaded here so that the `let' of their variables binds them dynamically.
+(require 'llm-pi-ai-http)
+(require 'llm-pi-ai-utils-retry)
 
-;; A provider that needs no network.  It implements the generics the real
-;; providers implement (streaming, and how tool uses are written into a
-;; prompt, as llm-openai does) and feeds canned responses through llm.el's
-;; own `llm-provider-utils-process-result', so the real path is exercised.
-(cl-defstruct (test-llm-provider (:include llm-standard-chat-provider))
-  (chat-model "base"))
+;; The provider is a real pi-ai provider whose API is a stub: it records what
+;; it was given and returns the event stream the script says, at once or from
+;; a timer.  Script entry: (:text S :thinking S :calls ((ID NAME ARGS)...)
+;; :deltas LIST :stop S :error S :later BOOL :raise BOOL).
 
-(defvar test-llm--script nil
-  "Responses, in order: (:chunks LIST :tool-uses LIST :error S :defer BOOL).")
-(defvar test-llm--seen nil "What the provider received, newest first.")
-(defvar test-llm--prompts nil "The prompt objects received, newest first.")
-(defvar test-llm--deferred nil "A thunk delivering a response that was held back.")
+(defvar test-llm--calls nil "What the stub API received, newest first.")
+(defvar test-llm--script nil "Entries of the stub's answers, in order.")
+(defvar test-llm--last nil "The final assistant message the stub made last.")
 
-(cl-defmethod llm-provider-populate-tool-uses ((_ test-llm-provider) prompt uses)
-  (llm-provider-utils-append-to-prompt prompt uses nil nil 'assistant))
+(defun test-llm--message (model spec)
+  "The final assistant message of MODEL that script entry SPEC describes."
+  (llm-pi-ai-make-assistant-message
+   :content (append
+             (when-let* ((thinking (plist-get spec :thinking)))
+               (list (llm-pi-ai-make-thinking-content
+                      :thinking thinking :thinking-signature "reasoning_content")))
+             (when-let* ((text (plist-get spec :text)))
+               (list (llm-pi-ai-make-text-content :text text)))
+             (mapcar (pcase-lambda (`(,id ,name ,args))
+                       (llm-pi-ai-make-tool-call :id id :name name :arguments args))
+                     (plist-get spec :calls)))
+   :api (llm-pi-ai-model-api model) :provider (llm-pi-ai-model-provider model)
+   :model (llm-pi-ai-model-id model)
+   :usage (llm-pi-ai-make-usage :cost (llm-pi-ai-make-cost))
+   :stop-reason (or (plist-get spec :stop) (if (plist-get spec :calls) "toolUse" "stop"))
+   :error-message (plist-get spec :error)
+   :timestamp 1))
 
-(cl-defmethod llm-chat-streaming ((p test-llm-provider) prompt partial success
-                                  failure &optional multi-output)
-  (push prompt test-llm--prompts)
-  (push (list :model (test-llm-provider-chat-model p)
-              :system (llm-chat-prompt-context prompt)
-              :tools (mapcar (lambda (tool) (list (llm-tool-name tool)
-                                                  (llm-tool-args tool)))
-                             (llm-chat-prompt-tools prompt))
-              :interactions
-              (mapcar (lambda (i)
-                        (list (llm-chat-prompt-interaction-role i)
-                              (llm-chat-prompt-interaction-content i)
-                              (mapcar (lambda (r)
-                                        (list (llm-chat-prompt-tool-result-call-id r)
-                                              (llm-chat-prompt-tool-result-tool-name r)
-                                              (llm-chat-prompt-tool-result-result r)))
-                                      (llm-chat-prompt-interaction-tool-results i))))
-                      (llm-chat-prompt-interactions prompt)))
-        test-llm--seen)
-  (let* ((response (pop test-llm--script))
-         (uses (plist-get response :tool-uses))
-         (acc nil)
-         (deliver
-          (lambda ()
-            (dolist (chunk (plist-get response :chunks))
-              (setq acc (llm-provider-utils-streaming-accumulate acc (list :text chunk)))
-              (funcall partial acc))
-            (llm-provider-utils-process-result
-             p prompt
-             (append (list :text (apply #'concat (plist-get response :chunks)))
-                     (when uses (list :tool-uses uses)))
-             multi-output success failure))))
-    (when-let* ((why (plist-get response :error)))
-      (setq deliver (lambda () (funcall failure 'error why))))
-    (if (plist-get response :defer)
-        (setq test-llm--deferred deliver)
-      (funcall deliver))
-    'test-request))
+(defun test-llm--emit (stream message deltas)
+  "Push the events of MESSAGE, with text DELTAS, to STREAM and end it."
+  (llm-pi-ai-event-stream-push stream (llm-pi-ai-make-event :type "start" :partial message))
+  (dolist (delta deltas)
+    (llm-pi-ai-event-stream-push
+     stream (llm-pi-ai-make-event :type "text_delta" :content-index 0
+                                  :delta delta :partial message)))
+  (let ((reason (llm-pi-ai-assistant-message-stop-reason message)))
+    (llm-pi-ai-event-stream-push
+     stream (if (member reason '("error" "aborted"))
+                (llm-pi-ai-make-event :type "error" :reason reason :error message)
+              (llm-pi-ai-make-event :type "done" :reason reason :message message))))
+  (llm-pi-ai-event-stream-end stream message))
+
+(defun test-llm--respond (model context options)
+  "The stub API: record the request, answer from `test-llm--script'."
+  (push (list :model model :context context :options options) test-llm--calls)
+  (let* ((spec (pop test-llm--script))
+         (stream (llm-pi-ai-create-assistant-message-event-stream))
+         (message (test-llm--message model spec))
+         (deltas (or (plist-get spec :deltas)
+                     (and (plist-get spec :text) (list (plist-get spec :text))))))
+    (when (plist-get spec :raise) (error "Boom at start"))
+    (setq test-llm--last message)
+    (if (plist-get spec :later)
+        (run-at-time 0 nil #'test-llm--emit stream message deltas)
+      (test-llm--emit stream message deltas))
+    stream))
+
+(defun test-llm--provider (&optional id)
+  "A pi-ai provider ID (default \"stub\") with two models and the stub API."
+  (llm-pi-ai-create-provider
+   :id (or id "stub") :name "Stub" :base-url "http://stub.test"
+   :auth (llm-pi-ai-make-provider-auth
+          :api-key (llm-pi-ai-make-api-key-auth
+                    :name "none" :resolve (lambda (_c _k _s) (list :auth nil))))
+   :models (mapcar (lambda (model)
+                     (llm-pi-ai-make-model
+                      :id model :name model :api "test-api" :provider (or id "stub")
+                      :base-url "http://stub.test" :input '("text")
+                      :reasoning t :cost (llm-pi-ai-make-model-cost)
+                      :context-window 10000 :max-tokens 1000))
+                   '("model-a" "model-b"))
+   :api (llm-pi-ai-make-provider-streams :stream #'test-llm--respond
+                                         :stream-simple #'test-llm--respond)))
 
 (defmacro test-llm-with (script &rest body)
-  (declare (indent 1) (debug t))
-  `(let ((test-llm--script ,script) (test-llm--seen nil) (test-llm--prompts nil)
-         (test-llm--deferred nil)
-         (superchat-llm-provider (make-test-llm-provider))
-         (superchat-llm-model nil))
+  "Run BODY with the stub provider answering SCRIPT, and no state kept."
+  (declare (indent 1))
+  `(let ((test-llm--calls nil) (test-llm--script (copy-sequence ,script))
+         (superchat-llm-providers (list (cons "stub" #'test-llm--provider)))
+         (superchat-llm-provider "stub") (superchat-llm-model "model-a")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil)
+         (superchat-llm--kept (make-hash-table :test #'equal))
+         (superchat-llm-request-function #'superchat-llm--request))
      ,@body))
 
 (defun test-llm--ask (messages &rest keys)
-  "Request, collecting what the callbacks got into a plist."
-  (let (text done error)
-    (apply #'superchat-llm-request messages
-           :on-text (lambda (s) (push s text))
-           :on-done (lambda (r) (push r done))
-           :on-error (lambda (e) (push e error))
-           keys)
-    (list :text (nreverse text) :done (nreverse done) :error (nreverse error))))
+  "Ask with MESSAGES and KEYS; return (:pieces :done :errors :handle), newest first."
+  (let ((r (list :pieces nil :done nil :errors nil)))
+    (setf (plist-get r :handle)
+          (apply #'superchat-llm-request messages
+                 :on-text (lambda (s) (push s (plist-get r :pieces)))
+                 :on-done (lambda (x) (push x (plist-get r :done)))
+                 :on-error (lambda (x) (push x (plist-get r :errors)))
+                 keys))
+    r))
 
-(ert-deftest test-llm-plain-text ()
-  (test-llm-with '((:chunks ("Hello")))
-    (let ((r (test-llm--ask '((:role user :text "hi")) :system "be brief")))
-      (should (equal (plist-get r :done) '((:text "Hello" :calls nil :model "default"))))
-      (should-not (plist-get r :error))
-      (should (equal (plist-get (car test-llm--seen) :system) "be brief"))
-      (should (equal (plist-get (car test-llm--seen) :interactions)
-                     '((user "hi" nil)))))))
+(defun test-llm--settle ()
+  "Let timers run for a moment."
+  (let ((end (+ (float-time) 0.06)))
+    (while (< (float-time) end) (accept-process-output nil 0.01))))
 
-(ert-deftest test-llm-streams-deltas ()
-  (test-llm-with '((:chunks ("Hel" "lo" " there")))
-    (let ((r (test-llm--ask '((:role user :text "hi")))))
-      (should (equal (plist-get r :text) '("Hel" "lo" " there")))
-      (should (equal (plist-get (car (plist-get r :done)) :text) "Hello there")))))
+(defun test-llm--user (text) (list :role 'user :text text))
 
-(ert-deftest test-llm-tool-calls-come-back-unrun ()
-  (test-llm-with
-      (list (list :chunks '("Looking.")
-                  :tool-uses (list (make-llm-provider-utils-tool-use
-                                    :id "p1" :name "read_file"
-                                    :args '((path . "a.el") (count . 5)))
-                                   (make-llm-provider-utils-tool-use
-                                    :id "p2" :name "list_buffers"
-                                    :args '((all . :json-false))))))
-    (let* ((r (test-llm--ask '((:role user :text "go"))
-                             :tools '((:name "read_file" :description "Read"
-                                       :args ((:name "path" :type string
-                                               :description "Where" :required t)
-                                              (:name "count" :type number :required nil)))
-                                      (:name "list_buffers" :description "List"
-                                       :args ((:name "all" :type boolean :required nil))))))
-           (done (car (plist-get r :done)))
-           (calls (plist-get done :calls)))
-      (should (equal (plist-get done :text) "Looking."))
-      (should (equal (mapcar (lambda (c) (plist-get c :name)) calls)
-                     '("read_file" "list_buffers")))
-      (should (equal (plist-get (car calls) :args) '(:path "a.el" :count 5)))
-      (should (equal (plist-get (cadr calls) :args) '(:all nil)))
-      (should (stringp (plist-get (car calls) :id)))
-      (should-not (equal (plist-get (car calls) :id) (plist-get (cadr calls) :id)))
-      (should-not (plist-get r :error))
-      ;; The provider was asked exactly once: llm.el made no follow-up request.
-      (should (= 1 (length test-llm--seen)))
-      (should (equal (plist-get (car test-llm--seen) :tools)
-                     '(("read_file" ((:name "path" :type string :description "Where"
-                                      :optional t)
-                                     (:name "count" :type number :description nil
-                                      :optional t)))
-                       ("list_buffers" ((:name "all" :type boolean :description nil
-                                         :optional t)))))))))
+(defun test-llm--sent (&optional n)
+  "The messages of the Nth newest request of the stub (default the newest)."
+  (llm-pi-ai-context-messages (plist-get (nth (or n 0) test-llm--calls) :context)))
 
-(ert-deftest test-llm-one-provider-call-per-request ()
-  (test-llm-with
-      (list (list :tool-uses (list (make-llm-provider-utils-tool-use
-                                    :id "p1" :name "t" :args nil)))
-            '(:chunks ("next")))
-    (let ((tools '((:name "t" :description "T" :args nil))))
-      (test-llm--ask '((:role user :text "a")) :tools tools)
-      (should (= 1 (length test-llm--seen)))
-      (test-llm--ask '((:role user :text "b")) :tools tools)
-      (should (= 2 (length test-llm--seen))))))
+(defun test-llm--args-hash ()
+  "Arguments as pi-ai parses them: a hash table with nested object, array, false."
+  (llm-pi-ai-json-object "path" "a.el" "count" 5
+                         "opts" (llm-pi-ai-json-object "deep" t "off" :false)
+                         "list" ["x" "y"]))
 
-(ert-deftest test-llm-replays-calls-and-results-natively ()
-  (test-llm-with '((:chunks ("Done.")))
-    (test-llm--ask
-     '((:role user :text "go")
-       (:role assistant :text "Looking."
-        :calls ((:id "c1" :name "read_file" :args (:path "a.el" :count 5))
-                (:id "c2" :name "shell" :args (:command "ls"))))
-       (:role tool :call-id "c1" :name "read_file" :text "contents")
-       (:role tool :call-id "c2" :name "shell" :text "files"))
-     :tools '((:name "read_file" :description "Read" :args nil)))
-    (let ((seen (plist-get (car test-llm--seen) :interactions)))
-      (should (= 4 (length seen)))
-      (should (equal (nth 0 seen) '(user "go" nil)))
-      (should (equal (nth 1 seen) '(assistant "Looking." nil)))
-      (pcase-let ((`(,role ,uses ,results) (nth 2 seen)))
-        (should (eq role 'assistant))
-        (should (equal (mapcar #'llm-provider-utils-tool-use-id uses) '("c1" "c2")))
-        (should (equal (mapcar #'llm-provider-utils-tool-use-name uses) '("read_file" "shell")))
-        (should (equal (llm-provider-utils-tool-use-args (car uses))
-                       '((path . "a.el") (count . 5))))
-        (should-not results))
-      (should (equal (nth 3 seen)
-                     '(tool-results nil
-                       (("c1" "read_file" "contents") ("c2" "shell" "files"))))))))
+(ert-deftest superchat-llm-text-deltas-and-done ()
+  (test-llm-with (list '(:text "Hello" :deltas ("Hel" "lo")))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")) :system "Be brief.")))
+      (should (equal (reverse (plist-get r :pieces)) '("Hel" "lo")))
+      (should (equal (plist-get r :done)
+                     '((:text "Hello" :calls nil :model "model-a"))))
+      (should-not (plist-get r :errors))
+      (should (plist-member (plist-get (car test-llm--calls) :options) :signal)))))
 
-(ert-deftest test-llm-provider-error-is-a-string ()
-  (test-llm-with '((:error "rate limited"))
-    (let ((r (test-llm--ask '((:role user :text "hi")))))
-      (should (equal (plist-get r :error) '("rate limited")))
+(ert-deftest superchat-llm-async-answer-comes-once ()
+  (test-llm-with (list '(:text "late" :later t))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should-not (plist-get r :done))
+      (test-llm--settle)
+      (should (equal (plist-get r :pieces) '("late")))
+      (should (= (length (plist-get r :done)) 1))
+      (should-not (plist-get r :errors)))))
+
+(ert-deftest superchat-llm-calls-have-provider-ids-and-plist-args ()
+  (test-llm-with (list (list :text "ok" :thinking "hmm"
+                             :calls `(("call_9" "read_file" ,(test-llm--args-hash))
+                                      ("call_10" "list_buffers" nil))))
+    (let* ((r (test-llm--ask (list (test-llm--user "hi"))))
+           (done (car (plist-get r :done))))
+      (should (equal (plist-get done :calls)
+                     '((:id "call_9" :name "read_file"
+                        :args (:path "a.el" :count 5 :opts (:deep t :off nil)
+                               :list ("x" "y")))
+                       (:id "call_10" :name "list_buffers" :args nil))))
+      ;; the reasoning is in neither the text nor the result's keys
+      (should (equal (plist-get done :text) "ok"))
+      (should (equal (cl-loop for (k) on done by #'cddr collect k)
+                     '(:text :calls :model))))))
+
+(ert-deftest superchat-llm-unparsable-arguments-come-back-as-nil-args ()
+  (let ((bad (llm-pi-ai-make-tool-call :id "c1" :name "t" :arguments (llm-pi-ai-json-object)
+                                       :arguments-error "not an object")))
+    (test-llm-with (list '(:text "x"))
+      (cl-letf (((symbol-function 'test-llm--message)
+                 (let ((orig (symbol-function 'test-llm--message)))
+                   (lambda (model spec)
+                     (let ((m (funcall orig model spec)))
+                       (setf (llm-pi-ai-message-content m) (list bad)
+                             (llm-pi-ai-assistant-message-stop-reason m) "toolUse")
+                       m)))))
+        (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+          (should (equal (plist-get (car (plist-get r :done)) :calls)
+                         '((:id "c1" :name "t" :args nil)))))))))
+
+(ert-deftest superchat-llm-error-stop-goes-to-on-error ()
+  (test-llm-with (list '(:stop "error" :error "429 slow down"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should (equal (plist-get r :errors) '("429 slow down")))
       (should-not (plist-get r :done)))))
 
-(ert-deftest test-llm-cancel-silences-both-callbacks ()
-  ;; The provider's callback still fires after the cancel, as success or failure.
-  (dolist (response '((:chunks ("a" "b") :defer t) (:error "late" :defer t)))
-    (test-llm-with (list response)
-      (let* (calls
-             (handle (superchat-llm-request
-                      '((:role user :text "hi"))
-                      :on-text (lambda (s) (push s calls))
-                      :on-done (lambda (_) (push 'done calls))
-                      :on-error (lambda (_) (push 'error calls)))))
-        (superchat-llm-cancel handle)
-        (funcall test-llm--deferred)
-        (should-not calls)))))
+(ert-deftest superchat-llm-aborted-stop-calls-neither ()
+  (test-llm-with (list '(:stop "aborted"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should-not (plist-get r :done))
+      (should-not (plist-get r :errors)))))
 
-(ert-deftest test-llm-every-call-comes-back ()
-  (let ((tools '((:name "read_file" :description "Read"
-                  :args ((:name "path" :type string :required t)))))
-        (use (lambda (name args)
-               (make-llm-provider-utils-tool-use :id "p" :name name :args args))))
-    ;; An unknown tool beside a good call, and a call missing a required argument.
-    (test-llm-with (list (list :tool-uses (list (funcall use "nope" '((x . 1)))
-                                                (funcall use "read_file" nil))))
-      (let* ((r (test-llm--ask '((:role user :text "go")) :tools tools))
-             (calls (plist-get (car (plist-get r :done)) :calls)))
-        (should-not (plist-get r :error))
-        (should (equal (mapcar (lambda (c) (plist-get c :name)) calls)
-                       '("nope" "read_file")))
-        (should (equal (plist-get (car calls) :args) '(:x 1)))))
-    ;; llm.el refuses a response whose only call is unknown: a sentence, not Lisp data.
-    (test-llm-with (list (list :tool-uses (list (funcall use "nope" nil))))
-      (let ((r (test-llm--ask '((:role user :text "go")) :tools tools)))
-        (should-not (plist-get r :done))
-        (should (equal (plist-get r :error)
-                       '("The model asked for a tool that is not available: nope")))))))
+(ert-deftest superchat-llm-cancel-before-the-answer ()
+  (test-llm-with (list '(:text "late" :later t))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (superchat-llm-cancel (plist-get r :handle))
+      (test-llm--settle)
+      (should (llm-pi-ai-abort-signal-aborted-p
+               (plist-get (plist-get (car test-llm--calls) :options) :signal)))
+      (should-not (plist-get r :pieces))
+      (should-not (plist-get r :done))
+      (should-not (plist-get r :errors)))))
 
-(ert-deftest test-llm-start-failure-reaches-on-error ()
+(ert-deftest superchat-llm-cancel-after-the-answer-changes-nothing ()
+  (test-llm-with (list '(:text "done"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (superchat-llm-cancel (plist-get r :handle))
+      (should (= (length (plist-get r :done)) 1))
+      (should-not (plist-get r :errors))
+      (should-not (llm-pi-ai-abort-signal-aborted-p
+                   (plist-get (plist-get (car test-llm--calls) :options) :signal))))))
+
+(ert-deftest superchat-llm-start-time-signal-goes-to-on-error ()
+  (test-llm-with (list '(:raise t))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should (= (length (plist-get r :errors)) 1))
+      (should (string-match-p "Boom at start" (car (plist-get r :errors))))
+      (should-not (plist-get r :done))))
+  ;; a message pi-ai cannot be given fails inside the module, same route
   (test-llm-with nil
-    (cl-letf (((symbol-function 'llm-chat-streaming)
-               (lambda (&rest _) (signal 'llm-provider-unconfigured '("no key")))))
-      (let ((r (test-llm--ask '((:role user :text "hi")))))
-        (should (= 1 (length (plist-get r :error))))
-        (should (string-match-p "no key" (car (plist-get r :error))))
-        (should-not (plist-get r :done))))))
+    (let ((r (test-llm--ask (list '(:role system :text "x")))))
+      (should (= (length (plist-get r :errors)) 1))
+      (should (string-match-p "role" (car (plist-get r :errors))))
+      (should-not test-llm--calls))))
 
-(cl-defstruct (test-llm-slotless (:include llm-standard-chat-provider)))
+(ert-deftest superchat-llm-an-error-in-on-done-is-the-callers ()
+  (test-llm-with (list '(:text "x"))
+    (let (errors)
+      (should-error (superchat-llm-request
+                     (list (test-llm--user "hi"))
+                     :on-done (lambda (_) (error "mine"))
+                     :on-error (lambda (e) (push e errors))))
+      (should-not errors))))
 
-(ert-deftest test-llm-model-needs-a-chat-model-slot ()
-  (let ((superchat-llm-provider (make-test-llm-slotless)))
-    (let ((r (test-llm--ask '((:role user :text "hi")) :model "m")))
-      (should (string-match-p "test-llm-slotless" (car (plist-get r :error)))))))
+(ert-deftest superchat-llm-unset-or-unknown-provider-is-a-user-error ()
+  (test-llm-with nil
+    (let ((superchat-llm-provider nil))
+      (let ((err (should-error (test-llm--ask (list (test-llm--user "hi")))
+                               :type 'user-error)))
+        (should (string-match-p "superchat-llm-provider" (cadr err)))
+        (should (string-match-p "stub" (cadr err)))))
+    (let ((superchat-llm-provider "nope"))
+      (let ((err (should-error (test-llm--ask (list (test-llm--user "hi")))
+                               :type 'user-error)))
+        (should (string-match-p "nope" (cadr err)))
+        (should (string-match-p "stub" (cadr err)))))
+    (should-not test-llm--calls)))
 
-(ert-deftest test-llm-only-the-first-callback-counts ()
-  (test-llm-with '((:chunks ("a") :defer t))
-    (let (calls)
-      (superchat-llm-request '((:role user :text "hi"))
-                             :on-done (lambda (_) (push 'done calls))
-                             :on-error (lambda (_) (push 'error calls)))
-      (funcall test-llm--deferred)
-      (funcall test-llm--deferred)
-      (should (equal calls '(done))))))
+(ert-deftest superchat-llm-unset-or-unknown-model-is-a-user-error ()
+  (test-llm-with nil
+    (let ((superchat-llm-model nil))
+      (let ((err (should-error (test-llm--ask (list (test-llm--user "hi")))
+                               :type 'user-error)))
+        (should (string-match-p "superchat-llm-model" (cadr err)))
+        (should (string-match-p "model-a, model-b" (cadr err)))))
+    (let ((superchat-llm-model "model-z"))
+      (let ((err (should-error (test-llm--ask (list (test-llm--user "hi")))
+                               :type 'user-error)))
+        (should (string-match-p "model-z" (cadr err)))
+        (should (string-match-p "model-a, model-b" (cadr err)))))
+    (should-not test-llm--calls)))
 
-(ert-deftest test-llm-needs-a-provider ()
-  (let ((superchat-llm-provider nil))
-    (let ((err (should-error (superchat-llm-request '((:role user :text "hi")))
-                             :type 'user-error)))
-      (should (string-match-p "superchat-llm-provider" (cadr err))))))
+(ert-deftest superchat-llm-model-override ()
+  (test-llm-with (list '(:text "x") '(:text "y"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")) :model "model-b")))
+      (should (equal (plist-get (car (plist-get r :done)) :model) "model-b"))
+      (should (equal (llm-pi-ai-model-id (plist-get (car test-llm--calls) :model))
+                     "model-b")))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (should (equal (llm-pi-ai-model-id (plist-get (car test-llm--calls) :model))
+                   "model-a"))
+    (should-error (test-llm--ask (list (test-llm--user "hi")) :model "model-z")
+                  :type 'user-error)))
 
-(ert-deftest test-llm-model-reaches-the-provider ()
-  (test-llm-with '((:chunks ("x")) (:chunks ("y")))
-    (let ((r (test-llm--ask '((:role user :text "hi")) :model "big")))
-      (should (equal (plist-get (car test-llm--seen) :model) "big"))
-      (should (equal (plist-get (car (plist-get r :done)) :model) "big")))
-    (let ((superchat-llm-model "small"))
-      (test-llm--ask '((:role user :text "hi")))
-      (should (equal (plist-get (car test-llm--seen) :model) "small")))
-    (should (equal (test-llm-provider-chat-model superchat-llm-provider) "base"))))
+(ert-deftest superchat-llm-provider-added-later-is-found ()
+  (test-llm-with (list '(:text "x") '(:text "y"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let ((superchat-llm-provider "other"))
+      (should-error (test-llm--ask (list (test-llm--user "hi"))) :type 'user-error))
+    (let ((superchat-llm-providers
+           (append superchat-llm-providers (list (cons "other" (lambda () (test-llm--provider "other"))))))
+          (superchat-llm-provider "other"))
+      (should (= (length (plist-get (test-llm--ask (list (test-llm--user "hi"))) :done))
+                 1)))))
 
-(ert-deftest test-llm-reasoning-reaches-the-prompt ()
-  (test-llm-with '((:chunks ("a")) (:chunks ("b")))
-    (superchat-llm-request '((:role user :text "hi")) :on-done #'ignore)
-    (should-not (llm-chat-prompt-reasoning (car test-llm--prompts)))
-    (let ((superchat-llm-reasoning 'none))
-      (superchat-llm-request '((:role user :text "hi")) :on-done #'ignore))
-    (should (eq (llm-chat-prompt-reasoning (car test-llm--prompts)) 'none))))
+(ert-deftest superchat-llm-reasoning-reaches-the-options ()
+  (test-llm-with (list '(:text "a") '(:text "b"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (should-not (plist-member (plist-get (car test-llm--calls) :options) :reasoning))
+    (let ((superchat-llm-reasoning 'high))
+      (test-llm--ask (list (test-llm--user "hi"))))
+    (should (equal (plist-get (plist-get (car test-llm--calls) :options) :reasoning)
+                   "high"))))
 
-(ert-deftest test-llm-reasoning-goes-back-with-its-calls-until-the-turn-ends ()
-  (test-llm-with '((:chunks ("a")) (:chunks ("b")))
-    (let ((superchat-llm--reasoning (make-hash-table :test #'equal))
-          (turn '((:role user :text "q")
-                  (:role assistant :text "" :calls ((:id "c1" :name "t" :args nil)))
-                  (:role tool :call-id "c1" :name "t" :text "r"))))
-      (puthash "c1" "because" superchat-llm--reasoning)
-      (superchat-llm-request turn :on-done #'ignore)
-      (should (equal (seq-keep #'llm-chat-prompt-interaction-multi-turn-plist
-                               (llm-chat-prompt-interactions (car test-llm--prompts)))
-                     '((:reasoning "because"))))
-      ;; The next user turn: the reasoning is neither sent nor kept.
-      (superchat-llm-request (append turn '((:role assistant :text "done")
-                                            (:role user :text "next")))
-                             :on-done #'ignore)
-      (should-not (seq-keep #'llm-chat-prompt-interaction-multi-turn-plist
-                            (llm-chat-prompt-interactions (car test-llm--prompts))))
-      (should (= (hash-table-count superchat-llm--reasoning) 0)))))
+(ert-deftest superchat-llm-tool-specs-become-json-schema ()
+  (test-llm-with (list '(:text "x"))
+    (test-llm--ask (list (test-llm--user "hi"))
+                   :tools '((:name "read_file" :description "Read a file"
+                             :args ((:name "path" :type string :description "File" :required t)
+                                    (:name "count" :type number :description "Lines")
+                                    (:name "all" :type boolean :required t)))
+                            (:name "list_buffers" :description "List" :args nil)))
+    (let* ((system (car (test-llm--sent)))
+           (tools (llm-pi-ai-system-message-tools-added system)))
+      (should (equal (mapcar #'llm-pi-ai-tool-name tools) '("read_file" "list_buffers")))
+      (should (equal (llm-pi-ai-tool-description (car tools)) "Read a file"))
+      (should (equal (llm-pi-ai-tool-parameters (car tools))
+                     '((type . "object")
+                       (properties (path (type . "string") (description . "File"))
+                                   (count (type . "number") (description . "Lines"))
+                                   (all (type . "boolean") (description . "")))
+                       (required . ["path" "all"]))))
+      (should (equal (llm-pi-ai-tool-parameters (cadr tools))
+                     '((type . "object") (properties)))))))
 
-(ert-deftest test-llm-request-calls-the-request-function ()
-  (let* ((got nil)
-         (superchat-llm-request-function
-          (lambda (messages &rest keys) (setq got (cons messages keys)) 'handle)))
-    (should (eq 'handle (superchat-llm-request '((:role user :text "hi")) :system "s")))
-    (should (equal (car got) '((:role user :text "hi"))))
-    (should (equal (plist-get (cdr got) :system) "s"))))
+(defun test-llm--replay (call-id)
+  "Messages that answer CALL-ID's turn: user, assistant with the call, result."
+  (list (test-llm--user "hi")
+        (list :role 'assistant :text "ok"
+              :calls (list (list :id call-id :name "read_file" :args '(:path "a.el"))))
+        (list :role 'tool :call-id call-id :name "read_file" :text "contents")))
+
+(ert-deftest superchat-llm-kept-message-is-replayed-within-a-turn ()
+  (test-llm-with (list (list :text "ok" :thinking "I should read"
+                             :calls '(("call_1" "read_file" nil)))
+                       '(:text "all done"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let ((first test-llm--last))
+      (test-llm--ask (test-llm--replay "call_1"))
+      (let* ((sent (test-llm--sent))
+             (assistant (cl-find-if #'llm-pi-ai-assistant-message-p sent)))
+        (should (eq assistant first))
+        (should (cl-some #'llm-pi-ai-thinking-content-p
+                         (llm-pi-ai-message-content assistant)))
+        (should (cl-some #'llm-pi-ai-tool-result-message-p sent))))))
+
+(ert-deftest superchat-llm-kept-message-is-dropped-after-a-user-message ()
+  (test-llm-with (list '(:text "ok" :thinking "I should read"
+                         :calls (("call_1" "read_file" nil)))
+                       '(:text "next"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let ((first test-llm--last))
+      (test-llm--ask (append (test-llm--replay "call_1") (list (test-llm--user "again"))))
+      (let ((assistant (cl-find-if #'llm-pi-ai-assistant-message-p (test-llm--sent))))
+        (should-not (eq assistant first))
+        (should-not (cl-some #'llm-pi-ai-thinking-content-p
+                             (llm-pi-ai-message-content assistant)))
+        (should (equal (llm-pi-ai-tool-call-id
+                        (cl-find-if #'llm-pi-ai-tool-call-p
+                                    (llm-pi-ai-message-content assistant)))
+                       "call_1"))))))
+
+(ert-deftest superchat-llm-unkept-assistant-is-built-as-the-models-own ()
+  (test-llm-with (list '(:text "x"))
+    (test-llm--ask (test-llm--replay "call_7"))
+    (let* ((model (plist-get (car test-llm--calls) :model))
+           (assistant (cl-find-if #'llm-pi-ai-assistant-message-p (test-llm--sent)))
+           (call (cl-find-if #'llm-pi-ai-tool-call-p (llm-pi-ai-message-content assistant))))
+      (should (equal (list (llm-pi-ai-assistant-message-api assistant)
+                           (llm-pi-ai-assistant-message-provider assistant)
+                           (llm-pi-ai-assistant-message-model assistant)
+                           (llm-pi-ai-assistant-message-stop-reason assistant))
+                     (list (llm-pi-ai-model-api model) "stub" "model-a" "toolUse")))
+      (should (equal (llm-pi-ai-tool-call-name call) "read_file"))
+      (should (equal (llm-pi-ai-text-content-text
+                      (car (llm-pi-ai-message-content (cl-find-if #'llm-pi-ai-tool-result-message-p
+                                                                  (test-llm--sent)))))
+                     "contents")))))
+
+;; The path a real failure came through: DeepSeek asks for its reasoning back
+;; together with the tool call it led to.
+
+(ert-deftest superchat-llm-deepseek-gets-its-reasoning-back ()
+  (let* ((requests nil)
+         (process-environment (list "DEEPSEEK_API_KEY=dummy" "HOME=/nonexistent"))
+         (llm-pi-ai-retry-run-at-time-function (lambda (&rest _) nil))
+         (llm-pi-ai-retry-cancel-timer-function #'ignore)
+         (llm-pi-ai-http-start-function
+          (lambda (_args _config stdin on-output on-exit)
+            (setq requests (append requests (list (list stdin on-output on-exit))))
+            #'ignore))
+         (superchat-llm-providers '(("deepseek" . llm-pi-ai-deepseek-provider)))
+         (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
+         (superchat-llm-reasoning 'high) (superchat-llm--models nil)
+         (superchat-llm--kept (make-hash-table :test #'equal))
+         (superchat-llm-request-function #'superchat-llm--request)
+         (chunks
+          (list
+           "{\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Need the list\"}}]}"
+           "{\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"list_buffers\",\"arguments\":\"{\\\"all\\\":true}\"}}]}}]}"
+           "{\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}"))
+         (tool '(:name "list_buffers" :description "List the open buffers"
+                 :args ((:name "all" :type boolean :description "Include hidden"))))
+         (r (test-llm--ask (list (test-llm--user "hi")) :system "Be brief." :tools (list tool))))
+    (pcase-let ((`(,_ ,on-output ,on-exit) (car requests)))
+      (funcall on-output
+               (encode-coding-string
+                (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+                        (mapconcat (lambda (c) (concat "data: " c "\n\n")) chunks "")
+                        "data: [DONE]\n\n")
+                'utf-8))
+      (funcall on-exit 0 ""))
+    (should-not (plist-get r :errors))
+    (let ((first (json-parse-string (car (nth 0 requests)) :object-type 'alist)))
+      (should (equal (alist-get 'name (alist-get 'function (aref (alist-get 'tools first) 0)))
+                     "list_buffers"))
+      (should (equal (alist-get 'reasoning_effort first) "high")))
+    (let ((done (car (plist-get r :done))))
+      (should (equal (plist-get done :calls)
+                     '((:id "call_a" :name "list_buffers" :args (:all t)))))
+      (test-llm--ask (list (test-llm--user "hi")
+                           (list :role 'assistant :text "" :calls (plist-get done :calls))
+                           (list :role 'tool :call-id "call_a" :name "list_buffers"
+                                 :text "*scratch*"))
+                     :system "Be brief." :tools (list tool))
+      (let* ((second (json-parse-string (car (nth 1 requests)) :object-type 'alist))
+             (messages (append (alist-get 'messages second) nil))
+             (assistant (cl-find "assistant" messages
+                                 :key (lambda (m) (alist-get 'role m)) :test #'equal))
+             (result (cl-find "tool" messages
+                              :key (lambda (m) (alist-get 'role m)) :test #'equal)))
+        (should (equal (alist-get 'reasoning_content assistant) "Need the list"))
+        (should (equal (alist-get 'id (aref (alist-get 'tool_calls assistant) 0)) "call_a"))
+        (should (equal (alist-get 'tool_call_id result) "call_a"))
+        (should (equal (alist-get 'content result) "*scratch*"))))))
 
 (provide 'test-llm)
 ;;; test-llm.el ends here

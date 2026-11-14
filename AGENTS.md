@@ -8,8 +8,7 @@ names. When something seems missing, write one line in `NOTES.md` and go on.
   directly in this directory.
 - Stay in this directory. Do not read or search any other Superchat checkout
   on this machine: this is a clean implementation and must not borrow from an
-  earlier one. The `llm` package source under `~/.cache/superchat-test-elpa/`
-  may be read.
+  earlier one.
 - Each module has a line cap in `SPEC.md`. Under the cap is good; far under is
   better. Do not pad, and do not compress code to fit: if it does not fit,
   the design is wrong, say so in `NOTES.md`.

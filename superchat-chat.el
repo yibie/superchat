@@ -339,7 +339,7 @@ With a prefix argument NEW, start a new timeline."
 (defun superchat-chat--model-command (name)
   "Show the model of this buffer, or set it to NAME."
   (if (string-empty-p name)
-      (message "Model: %s" (or superchat-chat--model superchat-llm-model "the provider's own"))
+      (message "Model: %s" (or superchat-chat--model superchat-llm-model "not set"))
     (setq superchat-chat--model name)
     (message "Model of this buffer: %s" name)))
 

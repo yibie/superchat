@@ -1,7 +1,7 @@
 ;;; superchat.el --- The AI layer of Emacs, on an append-only tape -*- lexical-binding: t; -*-
 
 ;; Version: 2.0.0
-;; Package-Requires: ((emacs "30.1") (llm "0.32.1"))
+;; Package-Requires: ((emacs "30.1"))
 ;; Keywords: tools, convenience
 
 ;;; Commentary:
@@ -26,17 +26,21 @@
   :type '(choice (const nil) file))
 
 (defcustom superchat-llm-provider nil
-  "The `llm' provider object that answers, e.g. from `make-llm-openai'."
-  :type 'sexp)
+  "The name of the provider that answers, a key of `superchat-llm-providers'.
+For example \"deepseek\".  Nil is an error that says how to set it."
+  :type '(choice (const nil) string))
 
 (defcustom superchat-llm-model nil
-  "The model to ask for; nil means the provider's own."
+  "The id of the model to ask, one of that provider's, e.g. \"deepseek-flash\".
+A model is required."
   :type '(choice (const nil) string))
 
 (defcustom superchat-llm-reasoning nil
-  "How much the model reasons; nil means the provider's own setting."
-  :type '(choice (const nil) (const none) (const light)
-                 (const medium) (const maximum)))
+  "How much the model reasons.
+Nil means it does not.  Otherwise a pi-ai thinking level; pi-ai clamps it to
+what the model has."
+  :type '(choice (const nil) (const minimal) (const low) (const medium)
+                 (const high) (const xhigh) (const max)))
 
 (defcustom superchat-default-level 'ask
   "The permission level of a conversation that has not set one."

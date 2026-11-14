@@ -20,7 +20,7 @@ An Emacs package with three uses:
 - Product code: **6,000 lines in total**, counted by `wc -l` over the `.el`
   files at the repository root. Tests are not counted. Each file has its own
   cap in the module table. `scripts/check.sh` fails when a cap is exceeded.
-- Emacs 30.1 or later. Dependencies: `llm` 0.32.1 and what Emacs ships with
+- Emacs 30.1 or later. Dependencies: `curl`, the `pi-ai/` directory of this repository, and what Emacs ships with
   (`sqlite`, `project`, `cl-lib`, `subr-x`, `json`). Nothing else.
 - Every file starts with `;;; NAME.el --- ... -*- lexical-binding: t; -*-` and
   byte-compiles with no warnings.
@@ -104,7 +104,7 @@ function. A JSON false is nil.
 |---|---|---|
 | `superchat-tape.el` | 550 | the database, append, read, search |
 | `superchat-view.el` | 500 | the view registry and the built-in views |
-| `superchat-llm.el` | 450 | the only file that knows `llm.el` |
+| `superchat-llm.el` | 450 | the only file that knows pi-ai |
 | `superchat-tools.el` | 800 | the tool registry, running a tool, the built-in tools |
 | `superchat-permission.el` | 250 | levels, the decision for one tool call, asking |
 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
@@ -212,8 +212,10 @@ Built-in views:
 
 ## superchat-llm.el
 
-The only file that requires `llm`. It translates between neutral messages and
-`llm.el`, and never runs a tool.
+The only file that requires `llm-pi-ai` (the port of pi's AI package kept in
+`pi-ai/`; its own plan and rules are in `pi-ai/`). It translates between
+neutral messages and pi-ai, and never runs a tool. Nothing in Superchat
+requires `llm.el`.
 
 - `(superchat-llm-request MESSAGES &key system tools model on-text on-done on-error)`
   → a handle.
@@ -222,45 +224,51 @@ The only file that requires `llm`. It translates between neutral messages and
     `(:role tool :call-id ID :name NAME :text S)`.
   - TOOLS: a list of `(:name S :description S :args ARGS)`, each of ARGS
     `(:name S :type string|number|boolean :description S :required BOOL)`.
+    They become pi-ai tools with a JSON-schema object as parameters.
   - ON-TEXT is called with each piece of streamed text. ON-DONE is called
     once with `(:text S :calls CALLS :model S)`. ON-ERROR is called once
     with a string. Exactly one of ON-DONE and ON-ERROR is called, unless the
     request is cancelled, and then neither.
-  - The `:model` of ON-DONE is the model asked for: MODEL, else
-    `superchat-llm-model`, else the string `default`.
-  - Every call the model made comes back in CALLS, also one that names no
-    known tool or lacks an argument: `llm.el` is given every argument as
-    optional, and the caller judges. Where `llm.el` itself refuses a response
-    (every call names a tool it was not given, or has an argument the tool does
-    not declare), ON-ERROR gets a sentence a person can
-    read, not printed Lisp data.
+  - The `:model` of ON-DONE is the id of the model that was asked.
+  - Every call the model made comes back in CALLS with the id the provider
+    gave it and `:args` as a plist with keyword keys, also a call that names
+    no known tool or lacks an argument: the caller judges. A call whose
+    arguments the provider sent as text that is not a JSON object comes back
+    with `:args` nil.
+  - A response that ends with pi-ai's stop reason `error` goes to ON-ERROR
+    with its error message; `aborted` calls neither; every other stop reason
+    goes to ON-DONE.
   - A signal raised while the request is started is delivered through
-    ON-ERROR; `superchat-llm-request` itself signals only for a missing
-    provider.
-  - MODEL reaches the provider through its `chat-model` slot. A provider
-    without that slot gets a `user-error` that names it.
+    ON-ERROR; `superchat-llm-request` itself signals a `user-error` only when
+    `superchat-llm-provider` or the model is not set or not known, and the
+    message says how to set it and which are known.
   - The model's reasoning is never on the Tape and never in ON-DONE. This
-    module keeps it in memory, by the id of the first call it led to, and
-    puts it on that call's interaction as the multi-turn plist
-    `(:reasoning TEXT)` so a provider that wants it back (DeepSeek does) can
-    send it. A request whose last message is from the user clears it: no
+    module keeps, in memory, the whole pi-ai assistant message of a response
+    that made calls, by the id of its first call. When MESSAGES holds an
+    assistant message whose first call has that id, the kept message is sent
+    in its place, so the provider gets its reasoning back as pi-ai sends it.
+    A request whose last message is from the user clears what is kept: no
     provider wants the reasoning of an earlier turn.
   - One request is one model response. When the model asks for tools the
     calls come back in ON-DONE; the caller runs them and makes another
     request with the results appended to MESSAGES.
-- It uses only what `llm.el` documents for its callers: no advice on, and no
-  call to, a function of `llm.el` whose name has `--` or that lives in
-  `llm-provider-utils`, with one exception: `make-llm-provider-utils-tool-use`,
-  the only way to write an earlier tool call into a prompt. The tool functions
-  given to `llm.el` do nothing; the calls are read from the tool uses `llm.el`
-  reports for the response. Call ids are made here, so a call and its result
-  agree when they are replayed.
-- `(superchat-llm-cancel HANDLE)`.
+- `(superchat-llm-cancel HANDLE)`: aborts the request through pi-ai's abort
+  signal.
+- `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
+  function of no arguments that returns a pi-ai provider. It starts with
+  `("deepseek" . llm-pi-ai-deepseek-provider)`; a plugin adds to it. The
+  pi-ai models collection is made from it on first use.
+- It calls pi-ai only through what `pi-ai/lisp` files provide as public
+  functions (no `--` name).
 
-The provider is `superchat-llm-provider`, an `llm.el` provider object the
-user sets. Tests never touch the network: `superchat-llm-request-function`
+The provider is `superchat-llm-provider`, a name in `superchat-llm-providers`;
+the model is `superchat-llm-model`, one of that provider's model ids; the API
+key is found by pi-ai (for DeepSeek, the environment variable
+`DEEPSEEK_API_KEY`). Tests never touch the network: `superchat-llm-request-function`
 (a `defvar`, default `#'superchat-llm--request`) is what `superchat-llm-request`
-calls, and tests bind it to a scripted function.
+calls, and `test/helper.el` replaces it. The tests of this file give
+`superchat-llm-providers` a provider whose API is a stub that returns scripted
+pi-ai event streams.
 
 ## superchat-permission.el
 
@@ -518,11 +526,12 @@ Package header, `defgroup superchat`, the user options and the constant
 ## User options
 
 `superchat-directory` (`superchat/` in the user's Emacs directory),
-`superchat-tape-file` (nil, meaning `tape.sqlite` in that directory), `superchat-llm-provider` (nil; using Superchat without
-one is an error that says how to set it), `superchat-llm-model` (nil: the
-provider's own), `superchat-llm-reasoning` (nil: the provider's own; else
-`none`, `light`, `medium` or `maximum`, passed to `llm-make-chat-prompt` as
-`:reasoning`), `superchat-default-level` (`ask`), `superchat-context-chars`
+`superchat-tape-file` (nil, meaning `tape.sqlite` in that directory), `superchat-llm-provider` (nil; a name such as `"deepseek"`; using Superchat
+without one is an error that says how to set it), `superchat-llm-model` (nil;
+a model id of that provider such as `"deepseek-flash"`; required),
+`superchat-llm-reasoning` (nil: the model does not reason; else one of pi-ai's
+thinking levels `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, a symbol,
+which pi-ai clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
 (120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
