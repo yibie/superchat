@@ -55,6 +55,17 @@ FUNCTION is called with the rest of the line, in the chat buffer."
                         (car (split-string (plist-get entry :text) "\n")))
                 'face 'shadow)))
 
+(defun superchat-chat--seal (string &optional id)
+  "Make STRING read-only, carrying ID.  Text typed right after it is free:
+only its last character is rear-nonsticky, so nothing can be inserted inside."
+  (unless (string-empty-p string)
+    (add-text-properties 0 (length string)
+                         (list 'read-only t 'front-sticky '(read-only) 'superchat-chat-id id)
+                         string)
+    (add-text-properties (1- (length string)) (length string)
+                         '(rear-nonsticky (read-only)) string))
+  string)
+
 (defun superchat-chat--format (entry)
   "The text of ENTRY as the buffer shows it, read-only and carrying its id."
   (let* ((text (string-trim-right (plist-get entry :text)))
@@ -69,11 +80,7 @@ FUNCTION is called with the rest of the line, in the chat buffer."
                                          'face 'shadow)
                              "\n" text "\n\n"))
             (_ (propertize (concat text "\n") 'face 'shadow)))))
-    (add-text-properties 0 (length string)
-                         (list 'read-only t 'rear-nonsticky t
-                               'superchat-chat-id (plist-get entry :id))
-                         string)
-    string))
+    (superchat-chat--seal string (plist-get entry :id))))
 
 (defun superchat-chat--insert (string)
   "Insert the sealed STRING above the input area; the user's point stays put."
@@ -135,9 +142,8 @@ FUNCTION is called with the rest of the line, in the chat buffer."
   "Show streamed TEXT as it comes."
   (unless superchat-chat--stream
     (setq superchat-chat--stream (copy-marker superchat-chat--input))
-    (superchat-chat--insert (propertize "▸ Assistant\n" 'face 'bold 'read-only t
-                                        'rear-nonsticky t)))
-  (superchat-chat--insert (propertize text 'read-only t 'rear-nonsticky t)))
+    (superchat-chat--insert (superchat-chat--seal (propertize "▸ Assistant\n" 'face 'bold))))
+  (superchat-chat--insert (superchat-chat--seal (copy-sequence text))))
 
 (defun superchat-chat--in (buffer function)
   "A function that calls FUNCTION in BUFFER, if BUFFER is still alive."

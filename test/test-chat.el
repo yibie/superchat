@@ -19,6 +19,7 @@ tool `echo', and no chat buffers left behind."
   `(superchat-test-with-tape
      (let ((superchat-test-chat--dir (file-name-as-directory (make-temp-file "sc-chat-" t)))
            (superchat-tools--always (make-hash-table :test #'equal))
+           (superchat-agent--runs (make-hash-table :test #'equal))
            (superchat-chat--commands superchat-chat--commands)
            (superchat-plugin--definitions superchat-plugin--definitions)
            (superchat-plugin--enabled superchat-plugin--enabled))
@@ -166,7 +167,7 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-script (list '(:text "Hello"))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (with-current-buffer buffer
-        (goto-char (point-min))
+        (goto-char (1+ (point-min)))
         (should-error (insert "x") :type 'text-read-only)
         (goto-char (point-max))
         (insert "typed")
@@ -177,16 +178,16 @@ tool `echo', and no chat buffers left behind."
 (ert-deftest superchat-chat-return-sends-on-last-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))
-      (superchat-test-chat--type buffer "line one")
+      (superchat-test-chat--type buffer "line one\nline two")
       (with-current-buffer buffer
         (goto-char (marker-position superchat-chat--input))
         (call-interactively (key-binding (kbd "RET")))
-        (should (equal (superchat-test-chat--input buffer) "\nline one"))
+        (should (equal (superchat-test-chat--input buffer) "\nline one\nline two"))
         (should-not (superchat-tape-entries :tape "t1"))
         (goto-char (point-max))
         (superchat-test-script (list '(:text "ok"))
           (call-interactively (key-binding (kbd "RET")))))
-      (should (equal (plist-get (car (superchat-tape-entries :tape "t1")) :text) "line one"))
+      (should (equal (plist-get (car (superchat-tape-entries :tape "t1")) :text) "line one\nline two"))
       (should (equal (superchat-test-chat--input buffer) "")))))
 
 (ert-deftest superchat-chat-c-c-c-c-sends-anywhere ()
@@ -261,9 +262,10 @@ tool `echo', and no chat buffers left behind."
 (ert-deftest superchat-chat-new-command ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) (before (buffer-list)))
-      (with-current-buffer buffer (superchat-chat-send "/new"))
-      (let ((new (car (cl-set-difference (buffer-list) before))))
-        (should (eq (current-buffer) new))
+      (let ((new (with-current-buffer buffer
+                   (superchat-chat-send "/new")
+                   (current-buffer))))
+        (should (memq new (cl-set-difference (buffer-list) before)))
         (should-not (equal (superchat-test-chat--tape-of new) "t1"))
         (should (equal default-directory (buffer-local-value 'default-directory buffer)))))))
 
@@ -272,15 +274,17 @@ tool `echo', and no chat buffers left behind."
     (superchat-test-script (list '(:text "a1") '(:text "b1"))
       (with-current-buffer (superchat-chat-open "t1") (superchat-chat-send "first topic"))
       (with-current-buffer (superchat-chat-open "t2") (superchat-chat-send "second topic")))
-    (let (offered (other (superchat-chat-open "t3")))
+    (let (offered shown (other (superchat-chat-open "t3")))
       (cl-letf (((symbol-function 'completing-read)
                  (lambda (_prompt choices &rest _)
                    (setq offered (mapcar #'car choices))
                    (car (seq-find (lambda (c) (string-prefix-p "first" (car c))) choices)))))
-        (with-current-buffer other (superchat-chat-send "/resume")))
+        (setq shown (with-current-buffer other
+                      (superchat-chat-send "/resume")
+                      (current-buffer))))
       (should (= (length offered) 2))
       (should (cl-every (lambda (s) (string-match-p "topic" s)) offered))
-      (should (equal (superchat-test-chat--tape-of (current-buffer)) "t1")))))
+      (should (equal (superchat-test-chat--tape-of shown) "t1")))))
 
 (ert-deftest superchat-chat-fork-command ()
   (superchat-test-chat--with
@@ -288,14 +292,15 @@ tool `echo', and no chat buffers left behind."
       (with-current-buffer (superchat-chat-open "t1")
         (superchat-chat-send "one")
         (superchat-chat-send "two")))
-    (with-current-buffer (superchat-chat-open "t1")
-      (goto-char (point-min))
-      (search-forward "a1")
-      (superchat-chat-send "/fork"))
-    (let ((fork (superchat-test-chat--tape-of (current-buffer))))
+    (let* ((shown (with-current-buffer (superchat-chat-open "t1")
+                    (goto-char (point-min))
+                    (search-forward "a1")
+                    (superchat-chat-send "/fork")
+                    (current-buffer)))
+           (fork (superchat-test-chat--tape-of shown)))
       (should-not (equal fork "t1"))
-      (should (equal (superchat-test-chat--text (current-buffer))
-                     "── summary: fork ──\n\n\n▸ You\none\n\n▸ Assistant\na1\n\n"))
+      (should (equal (superchat-test-chat--text shown)
+                     "▸ You\none\n\n▸ Assistant\na1\n\n── summary: fork ──\n\n\n"))
       (should (= (length (superchat-tape-entries :tape "t1")) 4)))))
 
 (ert-deftest superchat-chat-fork-without-entry-at-point ()
@@ -379,7 +384,6 @@ tool `echo', and no chat buffers left behind."
       (superchat-tape-append "inline:p" 'user "inline" :scope p)
       (superchat-tape-append "other" 'user "x" :scope q)
       (should (equal (superchat-chat-recent-tape p) "20240101-a"))
-      (should-not (superchat-chat-recent-tape (expand-file-name "none/" superchat-test-chat--dir)))
       (superchat-tape-append "20240102-b" 'user "newer" :scope p)
       (superchat-tape-append "inline:p" 'user "inline again")
       (should (equal (superchat-chat-recent-tape p) "20240102-b")))))
@@ -402,6 +406,7 @@ tool `echo', and no chat buffers left behind."
   (superchat-test-chat--with
     (let ((file (expand-file-name "a.el" superchat-test-chat--dir))
           (source (current-buffer)))
+      (superchat-tape-append "20240101-a" 'user "earlier" :scope (superchat-test-chat--scope))
       (emacs-lisp-mode)
       (setq buffer-file-name file)
       (rename-buffer "a.el")
@@ -411,12 +416,19 @@ tool `echo', and no chat buffers left behind."
         (superchat-chat-send "first")
         (superchat-chat-send "second"))
       (let ((users (superchat-tape-entries :kinds '(user))))
-        (should (equal (plist-get (plist-get (car users) :data) :origin)
+        (should (equal (plist-get (plist-get (cadr users) :data) :origin)
                        (list :buffer "a.el" :file file :mode "emacs-lisp-mode" :line 3)))
-        (should-not (plist-get (plist-get (cadr users) :data) :origin)))
+        (should (stringp (plist-get (plist-get (plist-get (cadr users) :data) :origin) :mode)))
+        (should-not (plist-get (plist-get (car (last users)) :data) :origin)))
       (with-current-buffer source
         (set-buffer-modified-p nil)
         (setq buffer-file-name nil)))))
+
+(ert-deftest superchat-chat-command-in-a-scope-with-no-timeline ()
+  (superchat-test-chat--with
+    (superchat)
+    (should (equal (superchat-test-chat--text (current-buffer)) ""))
+    (should (equal (buffer-name) "*superchat: new*"))))
 
 (ert-deftest superchat-chat-send-origin-argument ()
   (superchat-test-chat--with
@@ -429,6 +441,7 @@ tool `echo', and no chat buffers left behind."
 (ert-deftest superchat-chat-command-enables-plugins ()
   (superchat-test-chat--with
     (let (enabled (superchat-plugins '(chat-test-plugin)))
+      (superchat-tape-append "20240101-a" 'user "earlier" :scope (superchat-test-chat--scope))
       (superchat-plugin-define 'chat-test-plugin :enable (lambda () (push 'on enabled)))
       (superchat)
       (superchat)

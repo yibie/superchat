@@ -154,7 +154,9 @@ With NEWEST and LIMIT, the last LIMIT entries."
   (let ((db (sqlite-open (superchat-tape--file nil))))
     (unwind-protect
         (progn (sqlite-execute db "PRAGMA query_only=ON")
-               (sqlite-execute db sql args))
+               ;; `sqlite-execute' answers a count, not nil, when no row matches.
+               (let ((rows (sqlite-execute db sql args)))
+                 (and (listp rows) rows)))
       (sqlite-close db))))
 
 (defun superchat-tape-new-name ()

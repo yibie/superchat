@@ -128,5 +128,9 @@
   (let ((project-find-functions nil))
     (should (equal (superchat-tape-scope-of temporary-file-directory) "home"))))
 
+(ert-deftest superchat-test-tape-select-with-no-row-is-nil ()
+  (superchat-test-with-tape
+    (should-not (superchat-tape-select "SELECT id FROM entry WHERE id = ?" '(999)))))
+
 (provide 'test-tape)
 ;;; test-tape.el ends here
