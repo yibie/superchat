@@ -177,7 +177,9 @@ Public functions, and no others:
 - `(superchat-tape-select SQL &optional ARGS)` → rows, for `SELECT` and
   `WITH` statements only. It opens the file a second time read-only
   (`file:...?mode=ro` is not available in Emacs: use `PRAGMA query_only=ON`
-  on a second connection) so that a statement cannot write.
+  on a second connection) so that a statement cannot write. It opens the
+  Tape first when it is not open, so it works before anything was appended.
+  The read-only connection is kept and used again, not opened each time.
 - `(superchat-tape-new-name)` → a fresh timeline name, `YYYYMMDD-HHMMSS-xxxx`.
 - `(superchat-tape-scope-of DIRECTORY)` → the scope for DIRECTORY, by
   `project-current`.
@@ -274,6 +276,7 @@ requires `llm.el`.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
   function of no arguments that returns a bridge provider. When a name is
   there twice the first entry counts, and a changed entry is seen at the
+  next request. An entry whose function signalled is tried again at the
   next request. It starts with
   one entry for each provider the bridge has (`"deepseek"`, `"groq"`,
   `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
@@ -488,6 +491,22 @@ A number argument may arrive as a string. The description of `recall` lists the 
 - An entry `superchat-tool-call` appended (a permission event, a result) is
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
+- What a provider is sent is well formed by how the messages are built, not
+  only by what endings wrote: a `tool` entry that does not answer a call of
+  the `assistant` entry before it is left out of every request.
+- A summary is never forgotten and never too large: the text given to a
+  handoff always begins with the conversation's current anchor message
+  when there is one, the entries after it are cut to the budget oldest
+  first, and when a single entry alone is larger than what is left its
+  text is cut. The summary a handoff appends is cut to a quarter of the
+  budget.
+- The timeline of a run that ends is freed after its last entries were
+  given to ON-ENTRY, just before ON-DONE: ON-DONE may start the next run,
+  ON-ENTRY may not.
+- The refusal compares the entries that are never left out, without the
+  stand-in sentence, with twice the budget. Its text names the model, or
+  says that none is set, and advises raising `superchat-context-chars`
+  only when that is a number.
 - The budget of a run, in characters, is `superchat-context-chars` when
   that is a number. When it is nil, the budget follows the run's model:
   half of `superchat-llm-context-window`, taking one token as one
