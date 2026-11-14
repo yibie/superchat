@@ -270,8 +270,15 @@ requires `llm.el`.
   signal.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
   function of no arguments that returns a bridge provider. It starts with
-  `("deepseek" . superchat-bridge-deepseek-provider)`; a plugin adds to it. The
-  the bridge models collection is made from it on first use.
+  one entry for each provider the bridge has (`"deepseek"`, `"groq"`,
+  `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
+  collection is made from it on first use.
+- A server on the user's own machine (LM Studio, Ollama) or any other
+  OpenAI-compatible endpoint has no entry of its own. The user adds one:
+  `(push (cons "ollama" (lambda () (superchat-bridge-openai-compatible-provider
+  :id "ollama" :base-url "http://localhost:11434/v1" :models '("qwen3.5:9b"))))
+  superchat-llm-providers)`. Such a provider needs no API key unless it is
+  given `:api-key-env`.
 - It calls the bridge only through what `bridge/lisp` files provide as public
   functions (no `--` name).
 

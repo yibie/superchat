@@ -95,6 +95,8 @@ Provider 文件基本是 `createProvider` 的参数表（如 `deepseek.ts` 仅 5
 | `src/providers/openai.ts` | `lisp/superchat-bridge-provider-openai.el` | todo |
 | `src/providers/google.ts` | `lisp/superchat-bridge-provider-google.el` | todo |
 | `src/providers/groq.ts` `xai` `together` `mistral` `zai` `minimax` `moonshotai` `qwen` `cerebras` `fireworks` `deepinfra` `nvidia` `huggingface` `opencode` `opencode-go` `vercel-ai-gateway` `openrouter` `baseten` | `lisp/superchat-bridge-provider-<id>.el` | todo（Tier 2，逐个落地） |
+| `src/providers/<id>.ts` 与 `<id>.models.ts`，id 为 ant-ling baseten cerebras groq huggingface moonshotai moonshotai-cn nvidia qwen-token-plan qwen-token-plan-cn qwen-token-plan-individual together xiaomi xiaomi-token-plan-ams xiaomi-token-plan-cn xiaomi-token-plan-sgp zai zai-coding-cn（18 个，均与 `deepseek.ts` 同形） | `lisp/superchat-bridge-providers.el` | done | 一张表（id、名称、base URL、auth 标签、环境变量，逐字抄自各 .ts）加 `superchat-bridge-provider` / `superchat-bridge-provider-ids`；模型读 `data/<id>.json`。`api-key-auth` 结构体多一个 `env-vars` 槽（源码没有），供调用方告诉用户该设哪个变量。测试 `test/superchat-bridge-providers-test.el` |
+| 无上游 | 同上 | done | `superchat-bridge-openai-compatible-provider`：本地服务器（LM Studio、Ollama）或任意 OpenAI 兼容端点；无 `:api-key-env` 时 auth 恒解析为占位 key `"none"`。同一测试文件 |
 | `src/providers/faux.ts` | 见 §1 | todo |
 | `src/providers/all.ts` | `lisp/superchat-bridge-provider-all.el` | todo（聚合，Tier 2 末尾） |
 | `src/providers/*.models.ts`（约 47 个） | `gen` | gen | 由生成脚本产出 |

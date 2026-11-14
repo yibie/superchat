@@ -109,9 +109,12 @@ falls through to BASE."
 `(lambda (CTX CREDENTIAL SIGNAL))' with CTX an `superchat-bridge-auth-context',
 CREDENTIAL the stored credential plist or nil and SIGNAL an abort
 signal; it returns an auth result plist, or nil for \"not configured\",
-or signals an error."
+or signals an error.  `env-vars' is not in the source: the names of the
+variables `superchat-bridge-env-api-key-auth' reads, kept so that a caller
+can tell the user which one to set."
   name
-  resolve)
+  resolve
+  env-vars)
 
 (cl-defstruct (superchat-bridge-provider-auth
                (:constructor superchat-bridge-make-provider-auth)
@@ -182,6 +185,7 @@ ENV-VARS, a list of names, resolves.  This is the source's
 `envApiKeyAuth' without its `login'."
   (superchat-bridge-make-api-key-auth
    :name name
+   :env-vars env-vars
    :resolve
    (lambda (ctx credential signal)
      (superchat-bridge-abort-signal-throw-if-aborted signal)

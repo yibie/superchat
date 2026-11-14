@@ -11,9 +11,13 @@
 (require 'superchat)
 (require 'superchat-bridge)
 (require 'superchat-bridge-provider-deepseek)
+(require 'superchat-bridge-providers)
 (require 'superchat-bridge-utils-abort)
 
-(defvar superchat-llm-providers '(("deepseek" . superchat-bridge-deepseek-provider))
+(defvar superchat-llm-providers
+  (cons '("deepseek" . superchat-bridge-deepseek-provider)
+        (mapcar (lambda (id) (cons id (apply-partially #'superchat-bridge-provider id)))
+                (superchat-bridge-provider-ids)))
   "Alist from a provider name to a function of no arguments that returns a
 bridge provider.  The name is the provider's id.  A plugin may add to it.")
 
@@ -213,9 +217,13 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
                 superchat-llm-reasoning))
   (let* ((pi-model (superchat-llm--find-model (or model superchat-llm-model)))
          (_ (unless (superchat-bridge-models-get-auth (superchat-llm--models) pi-model)
-              (user-error "No API key for %s: set it in the environment (usually %s_API_KEY) and restart Emacs, or `setenv' it"
+              (user-error "No API key for %s: set %s in the environment and restart Emacs, or `setenv' it"
                           superchat-llm-provider
-                          (upcase (string-replace "-" "_" superchat-llm-provider)))))
+                          (string-join
+                           (superchat-bridge-provider-env-vars
+                            (superchat-bridge-models-get-provider
+                             (superchat-llm--models) superchat-llm-provider))
+                           " or "))))
          (abort (superchat-bridge-make-abort-signal))
          (handle (list :cancelled nil :finished nil :abort abort))
          (stream nil))

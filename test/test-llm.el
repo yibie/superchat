@@ -623,6 +623,46 @@ finished messages and the messages the third request sent."
     (should (string-match-p "DEEPSEEK_API_KEY" (cadr err)))
     (should-not started)))
 
+(ert-deftest superchat-llm-default-providers-are-the-bridges ()
+  (let ((names (mapcar #'car (default-value 'superchat-llm-providers))))
+    (should (member "deepseek" names))
+    (should (member "groq" names))
+    (should (equal (cdr names) (superchat-bridge-provider-ids)))
+    (should (equal (superchat-bridge-provider-id
+                    (funcall (cdr (assoc "groq" (default-value 'superchat-llm-providers)))))
+                   "groq"))))
+
+(ert-deftest superchat-llm-missing-key-names-the-providers-own-variable ()
+  (let* ((started nil)
+         (process-environment (list "HOME=/nonexistent"))
+         (superchat-bridge-http-start-function
+          (lambda (&rest _) (setq started t) #'ignore))
+         (superchat-llm-providers (default-value 'superchat-llm-providers))
+         (superchat-llm-provider "moonshotai-cn") (superchat-llm-model "kimi-k3")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request)
+         (err (should-error (test-llm--ask (list (test-llm--user "hi"))) :type 'user-error)))
+    (should (string-match-p "MOONSHOT_API_KEY" (cadr err)))
+    (should-not started)))
+
+(ert-deftest superchat-llm-keyless-provider-passes-the-key-check ()
+  (let* ((config nil)
+         (process-environment (list "HOME=/nonexistent"))
+         (superchat-bridge-retry-run-at-time-function (lambda (&rest _) nil))
+         (superchat-bridge-retry-cancel-timer-function #'ignore)
+         (superchat-bridge-http-start-function
+          (lambda (_args cfg _stdin _on-output _on-exit) (setq config cfg) #'ignore))
+         (superchat-llm-providers
+          (list (cons "local" (lambda ()
+                                (superchat-bridge-openai-compatible-provider
+                                 :id "local" :base-url "http://localhost:1234/v1"
+                                 :models '("m"))))))
+         (superchat-llm-provider "local") (superchat-llm-model "m")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (should (string-match-p "http://localhost:1234/v1/chat/completions" config))))
+
 (ert-deftest superchat-llm-options-carry-the-timeout-and-retries ()
   (test-llm-with (list '(:text "x"))
     (test-llm--ask (list (test-llm--user "hi")))
