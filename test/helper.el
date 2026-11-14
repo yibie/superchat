@@ -45,8 +45,10 @@ text first through ON-TEXT.  Asking after the last response is an error."
              (let* ((next (pop left))
                     (response (if (functionp next)
                                   (funcall next (car superchat-test-requests))
-                                next)))
+                                next))
+                    (handle (list :scripted t :cancelled nil)))
                (superchat-test--deliver
+                handle
                 (lambda ()
                   (if-let* ((why (plist-get response :error)))
                       (funcall (plist-get keys :on-error) why)
@@ -57,7 +59,7 @@ text first through ON-TEXT.  Asking after the last response is an error."
                              (list :text (or (plist-get response :text) "")
                                    :calls (plist-get response :calls)
                                    :model "scripted")))))
-               'scripted-handle))))
+               handle))))
      ,@body))
 
 (defvar superchat-test-async nil
@@ -66,14 +68,17 @@ after the request call has returned, and with quitting off.")
 
 (defvar superchat-test--pending 0 "Answers not delivered yet.")
 
-(defun superchat-test--deliver (thunk)
-  "Call THUNK now, or from a timer when `superchat-test-async' is set."
+(defun superchat-test--deliver (handle thunk)
+  "Call THUNK now, or from a timer when `superchat-test-async' is set.
+A request cancelled meanwhile with `superchat-llm-cancel', which sets
+:cancelled on HANDLE, is not answered."
   (if (not superchat-test-async)
       (funcall thunk)
     (cl-incf superchat-test--pending)
     (run-at-time 0 nil (lambda ()
                          (cl-decf superchat-test--pending)
-                         (funcall thunk)))))
+                         (unless (plist-get handle :cancelled)
+                           (funcall thunk))))))
 
 (defun superchat-test-drain ()
   "Wait until every answer of the asynchronous scripted model was delivered."

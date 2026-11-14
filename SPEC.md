@@ -204,7 +204,7 @@ Built-in views:
 | `topic` | `:name`, `:scope` optional | for every anchor with that name: the entries from that anchor up to the next anchor of the same timeline |
 | `search` | `:query`, `:scope`, `:kinds`, `:limit` (default 8), `:around` (default 1) | each hit with AROUND neighbours before and after it in its timeline, no entry twice, in id order |
 | `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"` |
-| `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline, most recently active first: its latest anchor if it has one, else its first `user` entry |
+| `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline whose name does not start with `inline:`, most recently active first: its latest anchor if it has one, else its first `user` entry |
 | `sources` | `:id` | the entries named by the `:refs` of entry ID |
 
 `conversation` is what a session is. `timelines` is the list of sessions.
@@ -231,7 +231,8 @@ The only file that requires `llm`. It translates between neutral messages and
   - Every call the model made comes back in CALLS, also one that names no
     known tool or lacks an argument: `llm.el` is given every argument as
     optional, and the caller judges. Where `llm.el` itself refuses a response
-    (a tool name it was not given), ON-ERROR gets a sentence a person can
+    (every call names a tool it was not given, or has an argument the tool does
+    not declare), ON-ERROR gets a sentence a person can
     read, not printed Lisp data.
   - A signal raised while the request is started is delivered through
     ON-ERROR; `superchat-llm-request` itself signals only for a missing
@@ -245,8 +246,9 @@ The only file that requires `llm`. It translates between neutral messages and
   call to, a function of `llm.el` whose name has `--` or that lives in
   `llm-provider-utils`, with one exception: `make-llm-provider-utils-tool-use`,
   the only way to write an earlier tool call into a prompt. The tool functions
-  given to `llm.el` only record that they were called and with what. Call ids
-  are made here, so a call and its result agree when they are replayed.
+  given to `llm.el` do nothing; the calls are read from the tool uses `llm.el`
+  reports for the response. Call ids are made here, so a call and its result
+  agree when they are replayed.
 - `(superchat-llm-cancel HANDLE)`.
 
 The provider is `superchat-llm-provider`, an `llm.el` provider object the
@@ -295,7 +297,10 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   `tool` entry with `:error t` whose text says what happened; so does a
   function that returns something that is not a string. A required argument
   is present when its key is in the plist, whatever its value. Nothing is
-  swallowed and nothing is signalled to the loop. A quit (`C-g` while the
+  swallowed and nothing is signalled to the loop. The function and the
+  question to the user run with `inhibit-quit` bound to nil, because the
+  callbacks of a real model run in a timer, where quitting is otherwise off;
+  the entry is appended with quitting off again. A quit (`C-g` while the
   tool runs or while the user is asked) is such an entry too, with the text
   `Interrupted by the user.`
 - Results longer than `superchat-tool-max-chars` (20000) are cut, and the
@@ -352,9 +357,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
 
 ## superchat-agent.el
 
-- `(superchat-run TAPE TEXT &key origin tools system model on-text on-entry on-done)`
-  → the run, a plist. The first entry of a new timeline takes the scope of
-  `default-directory`. It appends the `user` entry, then loops:
+- `(superchat-run TAPE TEXT &key scope origin tools system model on-text on-entry on-done)`
+  → the run, a plist. The first entry of a new timeline takes SCOPE, or the
+  scope of `default-directory` when none is given. It appends the `user` entry, then loops:
   1. messages = the `conversation` view of TAPE turned into neutral
      messages. An anchor becomes a `user` message that begins
      `Summary of the conversation so far:`. `event` and `note` entries are
@@ -373,15 +378,19 @@ A number argument may arrive as a string. The description of `recall` lists the 
 - A run always ends. Whatever is signalled while a request is started or
   inside a callback of the run becomes an `error` event and the run ends
   with status `error`; the timeline is free again.
-- A tool is called with `inhibit-quit` bound to nil: the callbacks of a real
-  model run in a timer, where quitting is otherwise off, and `C-g` must be
-  able to stop a tool.
+- That holds when a callback the caller gave (ON-ENTRY, ON-TEXT) signals
+  while the error event is being recorded: the run is ended first.
 - `(superchat-run-active TAPE)` → the run or nil.
-- `(superchat-cancel TAPE)`: cancel the request, append a `cancelled` event,
+- `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
+  append a `cancelled` event and free the timeline. For a run: cancel the
+  request, append a `cancelled` event,
   call ON-DONE with `cancelled`. Tool calls of the current response that
   have not started are not run. So that the timeline stays well formed, a
   `tool` entry with `:error t` and the text `Cancelled.` is appended for
-  each call that has no result.
+  each call that has no result. When the run was cancelled before its `user`
+  entry was appended (during the handoff that comes first), the `user`
+  entry is appended before the `cancelled` event: what the user wrote is
+  never lost.
 - After `superchat-max-rounds` (40) model responses in one run, the run ends
   with status `error` and an `error` event that says so.
 - An error from the model appends an `error` event and ends the run with
@@ -389,8 +398,8 @@ A number argument may arrive as a string. The description of `recall` lists the 
 - `(superchat-handoff TAPE &optional NAME on-done)`: ask the model, with no
   tools, for a summary of the `conversation` view and for what comes next,
   and append an anchor with them, its `:refs` the ids summarised. The
-  request is one `user` message holding `superchat-view-render` of the view
-  and the question, so it has no tool turns a provider could refuse. It
+  request is one `user` message holding `superchat-view-render` of the view,
+  cut to `superchat-context-chars`, and the question, so it has no tool turns a provider could refuse. It
   returns the handle of the request. NAME is the
   topic name, default `"handoff"`. ON-DONE is called with the anchor, or with
   nil when the model failed (an `error` event is appended then).
@@ -432,8 +441,13 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
   recent timeline of the current buffer's scope, or a new one. With a prefix
   argument, always a new one. It enables the plugins of `superchat-plugins`
   that are not enabled yet.
-- `(superchat-chat-open TAPE)` → the chat buffer of timeline TAPE, made and
-  rendered when there is none. It does not display it.
+- `(superchat-chat-open TAPE &optional SCOPE)` → the chat buffer of timeline
+  TAPE, made and rendered when there is none. It does not display it. SCOPE
+  is for a timeline with no entry yet: the buffer keeps it and gives it to
+  `superchat-run` with the first request. A chat buffer's scope is its
+  timeline's scope, never whatever `default-directory` happens to be; every
+  command that needs a scope (`/new`, `/resume`, `/topic`, `/recall`,
+  `/notes`) uses that.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
@@ -450,7 +464,7 @@ Built-in commands, and no others:
 | `/new` | a new timeline in the same scope as this buffer's timeline, in a new buffer |
 | `/resume` | choose a timeline from the `timelines` view with `completing-read` and open it |
 | `/fork` | fork at the entry at point, open the new timeline |
-| `/handoff [name]` | `superchat-handoff`; refused while a run is active |
+| `/handoff [name]` | `superchat-handoff`; refused while a run is active; the mode line shows `[running]` until it is over, and `C-c C-k` cancels it |
 | `/topic name` | open the `topic` view of that name in a read-only buffer |
 | `/recall query` | open the `search` view in a read-only buffer |
 | `/notes` | open the `notes` view in a read-only buffer |
