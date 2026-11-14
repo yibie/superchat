@@ -186,16 +186,32 @@ Whatever the tool or the user does, the result is an entry, never a signal."
  :args '((:name "pattern" :type string :description "grep pattern" :required t)
          (:name "path" :type string :description "File or directory to search, default the project"))
  :function (lambda (args)
+             ;; Emacs waits for a tool, so a search must not run on: it
+             ;; stops at 101 matching lines or after ten seconds.
              (with-temp-buffer
-               (let* ((status (process-file "grep" nil t nil "-rn" "-e" (plist-get args :pattern)
-                                            (or (plist-get args :path) ".")))
-                      (lines (split-string (buffer-string) "\n" t)))
-                 (cond ((> (length lines) 100)
-                        (format "%s\n[%d more matching lines not shown]"
-                                (string-join (take 100 lines) "\n") (- (length lines) 100)))
-                       (lines (string-join lines "\n"))
-                       ((eq status 1) "No matches.")
-                       (t (error "grep exited with status %s" status)))))))
+               (let* ((process (make-process
+                                :name "superchat-search" :buffer (current-buffer)
+                                :command (list "grep" "-rnIs" "--exclude-dir=.git"
+                                               "-e" (plist-get args :pattern)
+                                               (or (plist-get args :path) "."))
+                                :connection-type 'pipe :noquery t
+                                :sentinel #'ignore :file-handler t))
+                      (deadline (+ (float-time) 10)))
+                 (while (and (process-live-p process) (< (float-time) deadline)
+                             (<= (count-lines (point-min) (point-max)) 100))
+                   (accept-process-output process 0.1))
+                 (let* ((cut (process-live-p process))
+                        (status (and (not cut) (process-exit-status process)))
+                        (lines (split-string (buffer-string) "\n" t)))
+                   (delete-process process)
+                   (cond ((> (length lines) 100)
+                          (format "%s\n[more matching lines not shown]"
+                                  (string-join (take 100 lines) "\n")))
+                         (cut (format "%s\n[stopped after 10 seconds: give a narrower path]"
+                                      (string-join lines "\n")))
+                         (lines (string-join lines "\n"))
+                         ((eq status 1) "No matches.")
+                         (t (error "grep exited with status %s" status))))))))
 
 ;;; Writing
 

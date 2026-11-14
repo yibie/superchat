@@ -341,7 +341,7 @@ Built-in tools, and no others:
 | `read_file` | read | `path`, `start` opt, `count` opt | lines of a file with line numbers; at most 400 lines a call |
 | `read_buffer` | read | `buffer`, `start` opt, `count` opt | the same for a buffer |
 | `list_buffers` | read | none | name, mode, file and size of the user's buffers (no names starting with a space) |
-| `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, at most 100 matching lines |
+| `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, skipping `.git` and binary files; it is stopped at 100 matching lines or after 10 seconds, and the result says which |
 | `edit_buffer` | write | `buffer`, `old`, `new` | replace OLD by NEW in a buffer; OLD must occur exactly once, case and overlapping occurrences counted; does not save |
 | `write_file` | write | `path`, `content` | create or replace a file, through a buffer, and save it |
 | `save_buffer` | write | `buffer` | save |

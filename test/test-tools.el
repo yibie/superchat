@@ -271,7 +271,7 @@
     (should (string-match-p "No matches" (superchat-test-tools--ok "search_files" :pattern "zzz")))
     (superchat-test-tools--write dir "many.txt" (mapconcat (lambda (_) "hit") (number-sequence 1 150) "\n"))
     (let ((text (superchat-test-tools--ok "search_files" :pattern "hit" :path "many.txt")))
-      (should (string-match-p "50 more matching lines" text))
+      (should (string-match-p "more matching lines not shown" text))
       (should (= 100 (length (seq-filter (lambda (l) (string-match-p ":hit$" l))
                                          (split-string text "\n"))))))))
 
