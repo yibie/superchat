@@ -37,8 +37,8 @@ A model is required."
 
 (defcustom superchat-llm-reasoning nil
   "How much the model reasons.
-Nil means it does not.  Otherwise a pi-ai thinking level; pi-ai clamps it to
-what the model has."
+Nil means it does not.  Otherwise a thinking level of the bridge, which
+clamps it to what the model has."
   :type '(choice (const nil) (const minimal) (const low) (const medium)
                  (const high) (const xhigh) (const max)))
 

@@ -6,10 +6,10 @@
 (require 'json)
 (require 'superchat-llm)
 ;; Loaded here so that the `let' of their variables binds them dynamically.
-(require 'llm-pi-ai-http)
-(require 'llm-pi-ai-utils-retry)
+(require 'superchat-bridge-http)
+(require 'superchat-bridge-utils-retry)
 
-;; The provider is a real pi-ai provider whose API is a stub: it records what
+;; The provider is a real the bridge provider whose API is a stub: it records what
 ;; it was given and returns the event stream the script says, at once or from
 ;; a timer.  Script entry: (:text S :thinking S :calls ((ID NAME ARGS)...)
 ;; :deltas LIST :stop S :error S :later BOOL :raise BOOL).
@@ -20,42 +20,42 @@
 
 (defun test-llm--message (model spec)
   "The final assistant message of MODEL that script entry SPEC describes."
-  (llm-pi-ai-make-assistant-message
+  (superchat-bridge-make-assistant-message
    :content (append
              (when-let* ((thinking (plist-get spec :thinking)))
-               (list (llm-pi-ai-make-thinking-content
+               (list (superchat-bridge-make-thinking-content
                       :thinking thinking :thinking-signature "reasoning_content")))
              (when-let* ((text (plist-get spec :text)))
-               (list (llm-pi-ai-make-text-content :text text)))
+               (list (superchat-bridge-make-text-content :text text)))
              (mapcar (pcase-lambda (`(,id ,name ,args))
-                       (llm-pi-ai-make-tool-call :id id :name name :arguments args))
+                       (superchat-bridge-make-tool-call :id id :name name :arguments args))
                      (plist-get spec :calls)))
-   :api (llm-pi-ai-model-api model) :provider (llm-pi-ai-model-provider model)
-   :model (llm-pi-ai-model-id model)
-   :usage (llm-pi-ai-make-usage :cost (llm-pi-ai-make-cost))
+   :api (superchat-bridge-model-api model) :provider (superchat-bridge-model-provider model)
+   :model (superchat-bridge-model-id model)
+   :usage (superchat-bridge-make-usage :cost (superchat-bridge-make-cost))
    :stop-reason (or (plist-get spec :stop) (if (plist-get spec :calls) "toolUse" "stop"))
    :error-message (plist-get spec :error)
    :timestamp 1))
 
 (defun test-llm--emit (stream message deltas)
   "Push the events of MESSAGE, with text DELTAS, to STREAM and end it."
-  (llm-pi-ai-event-stream-push stream (llm-pi-ai-make-event :type "start" :partial message))
+  (superchat-bridge-event-stream-push stream (superchat-bridge-make-event :type "start" :partial message))
   (dolist (delta deltas)
-    (llm-pi-ai-event-stream-push
-     stream (llm-pi-ai-make-event :type "text_delta" :content-index 0
+    (superchat-bridge-event-stream-push
+     stream (superchat-bridge-make-event :type "text_delta" :content-index 0
                                   :delta delta :partial message)))
-  (let ((reason (llm-pi-ai-assistant-message-stop-reason message)))
-    (llm-pi-ai-event-stream-push
+  (let ((reason (superchat-bridge-assistant-message-stop-reason message)))
+    (superchat-bridge-event-stream-push
      stream (if (member reason '("error" "aborted"))
-                (llm-pi-ai-make-event :type "error" :reason reason :error message)
-              (llm-pi-ai-make-event :type "done" :reason reason :message message))))
-  (llm-pi-ai-event-stream-end stream message))
+                (superchat-bridge-make-event :type "error" :reason reason :error message)
+              (superchat-bridge-make-event :type "done" :reason reason :message message))))
+  (superchat-bridge-event-stream-end stream message))
 
 (defun test-llm--respond (model context options)
   "The stub API: record the request, answer from `test-llm--script'."
   (push (list :model model :context context :options options) test-llm--calls)
   (let* ((spec (pop test-llm--script))
-         (stream (llm-pi-ai-create-assistant-message-event-stream))
+         (stream (superchat-bridge-create-assistant-message-event-stream))
          (message (test-llm--message model spec))
          (deltas (or (plist-get spec :deltas)
                      (and (plist-get spec :text) (list (plist-get spec :text))))))
@@ -67,20 +67,20 @@
     stream))
 
 (defun test-llm--provider (&optional id)
-  "A pi-ai provider ID (default \"stub\") with two models and the stub API."
-  (llm-pi-ai-create-provider
+  "A bridge provider ID (default \"stub\") with two models and the stub API."
+  (superchat-bridge-create-provider
    :id (or id "stub") :name "Stub" :base-url "http://stub.test"
-   :auth (llm-pi-ai-make-provider-auth
-          :api-key (llm-pi-ai-make-api-key-auth
+   :auth (superchat-bridge-make-provider-auth
+          :api-key (superchat-bridge-make-api-key-auth
                     :name "none" :resolve (lambda (_c _k _s) (list :auth nil))))
    :models (mapcar (lambda (model)
-                     (llm-pi-ai-make-model
+                     (superchat-bridge-make-model
                       :id model :name model :api "test-api" :provider (or id "stub")
                       :base-url "http://stub.test" :input '("text")
-                      :reasoning t :cost (llm-pi-ai-make-model-cost)
+                      :reasoning t :cost (superchat-bridge-make-model-cost)
                       :context-window 10000 :max-tokens 1000))
                    '("model-a" "model-b"))
-   :api (llm-pi-ai-make-provider-streams :stream #'test-llm--respond
+   :api (superchat-bridge-make-provider-streams :stream #'test-llm--respond
                                          :stream-simple #'test-llm--respond)))
 
 (defmacro test-llm-with (script &rest body)
@@ -114,12 +114,12 @@
 
 (defun test-llm--sent (&optional n)
   "The messages of the Nth newest request of the stub (default the newest)."
-  (llm-pi-ai-context-messages (plist-get (nth (or n 0) test-llm--calls) :context)))
+  (superchat-bridge-context-messages (plist-get (nth (or n 0) test-llm--calls) :context)))
 
 (defun test-llm--args-hash ()
-  "Arguments as pi-ai parses them: a hash table with nested object, array, false."
-  (llm-pi-ai-json-object "path" "a.el" "count" 5
-                         "opts" (llm-pi-ai-json-object "deep" t "off" :false)
+  "Arguments as the bridge parses them: a hash table with nested object, array, false."
+  (superchat-bridge-json-object "path" "a.el" "count" 5
+                         "opts" (superchat-bridge-json-object "deep" t "off" :false)
                          "list" ["x" "y"]))
 
 (ert-deftest superchat-llm-text-deltas-and-done ()
@@ -157,15 +157,15 @@
                      '(:text :calls :model))))))
 
 (ert-deftest superchat-llm-unparsable-arguments-come-back-as-nil-args ()
-  (let ((bad (llm-pi-ai-make-tool-call :id "c1" :name "t" :arguments (llm-pi-ai-json-object)
+  (let ((bad (superchat-bridge-make-tool-call :id "c1" :name "t" :arguments (superchat-bridge-json-object)
                                        :arguments-error "not an object")))
     (test-llm-with (list '(:text "x"))
       (cl-letf (((symbol-function 'test-llm--message)
                  (let ((orig (symbol-function 'test-llm--message)))
                    (lambda (model spec)
                      (let ((m (funcall orig model spec)))
-                       (setf (llm-pi-ai-message-content m) (list bad)
-                             (llm-pi-ai-assistant-message-stop-reason m) "toolUse")
+                       (setf (superchat-bridge-message-content m) (list bad)
+                             (superchat-bridge-assistant-message-stop-reason m) "toolUse")
                        m)))))
         (let ((r (test-llm--ask (list (test-llm--user "hi")))))
           (should (equal (plist-get (car (plist-get r :done)) :calls)
@@ -188,7 +188,7 @@
     (let ((r (test-llm--ask (list (test-llm--user "hi")))))
       (superchat-llm-cancel (plist-get r :handle))
       (test-llm--settle)
-      (should (llm-pi-ai-abort-signal-aborted-p
+      (should (superchat-bridge-abort-signal-aborted-p
                (plist-get (plist-get (car test-llm--calls) :options) :signal)))
       (should-not (plist-get r :pieces))
       (should-not (plist-get r :done))
@@ -200,7 +200,7 @@
       (superchat-llm-cancel (plist-get r :handle))
       (should (= (length (plist-get r :done)) 1))
       (should-not (plist-get r :errors))
-      (should-not (llm-pi-ai-abort-signal-aborted-p
+      (should-not (superchat-bridge-abort-signal-aborted-p
                    (plist-get (plist-get (car test-llm--calls) :options) :signal))))))
 
 (ert-deftest superchat-llm-start-time-signal-goes-to-on-error ()
@@ -209,7 +209,7 @@
       (should (= (length (plist-get r :errors)) 1))
       (should (string-match-p "Boom at start" (car (plist-get r :errors))))
       (should-not (plist-get r :done))))
-  ;; a message pi-ai cannot be given fails inside the module, same route
+  ;; a message the bridge cannot be given fails inside the module, same route
   (test-llm-with nil
     (let ((r (test-llm--ask (list '(:role system :text "x")))))
       (should (= (length (plist-get r :errors)) 1))
@@ -257,10 +257,10 @@
   (test-llm-with (list '(:text "x") '(:text "y"))
     (let ((r (test-llm--ask (list (test-llm--user "hi")) :model "model-b")))
       (should (equal (plist-get (car (plist-get r :done)) :model) "model-b"))
-      (should (equal (llm-pi-ai-model-id (plist-get (car test-llm--calls) :model))
+      (should (equal (superchat-bridge-model-id (plist-get (car test-llm--calls) :model))
                      "model-b")))
     (test-llm--ask (list (test-llm--user "hi")))
-    (should (equal (llm-pi-ai-model-id (plist-get (car test-llm--calls) :model))
+    (should (equal (superchat-bridge-model-id (plist-get (car test-llm--calls) :model))
                    "model-a"))
     (should-error (test-llm--ask (list (test-llm--user "hi")) :model "model-z")
                   :type 'user-error)))
@@ -294,16 +294,16 @@
                                     (:name "all" :type boolean :required t)))
                             (:name "list_buffers" :description "List" :args nil)))
     (let* ((system (car (test-llm--sent)))
-           (tools (llm-pi-ai-system-message-tools-added system)))
-      (should (equal (mapcar #'llm-pi-ai-tool-name tools) '("read_file" "list_buffers")))
-      (should (equal (llm-pi-ai-tool-description (car tools)) "Read a file"))
-      (should (equal (llm-pi-ai-tool-parameters (car tools))
+           (tools (superchat-bridge-system-message-tools-added system)))
+      (should (equal (mapcar #'superchat-bridge-tool-name tools) '("read_file" "list_buffers")))
+      (should (equal (superchat-bridge-tool-description (car tools)) "Read a file"))
+      (should (equal (superchat-bridge-tool-parameters (car tools))
                      '((type . "object")
                        (properties (path (type . "string") (description . "File"))
                                    (count (type . "number") (description . "Lines"))
                                    (all (type . "boolean") (description . "")))
                        (required . ["path" "all"]))))
-      (should (equal (llm-pi-ai-tool-parameters (cadr tools))
+      (should (equal (superchat-bridge-tool-parameters (cadr tools))
                      '((type . "object") (properties)))))))
 
 (defun test-llm--replay (call-id)
@@ -321,11 +321,11 @@
     (let ((first test-llm--last))
       (test-llm--ask (test-llm--replay "call_1"))
       (let* ((sent (test-llm--sent))
-             (assistant (cl-find-if #'llm-pi-ai-assistant-message-p sent)))
+             (assistant (cl-find-if #'superchat-bridge-assistant-message-p sent)))
         (should (eq assistant first))
-        (should (cl-some #'llm-pi-ai-thinking-content-p
-                         (llm-pi-ai-message-content assistant)))
-        (should (cl-some #'llm-pi-ai-tool-result-message-p sent))))))
+        (should (cl-some #'superchat-bridge-thinking-content-p
+                         (superchat-bridge-message-content assistant)))
+        (should (cl-some #'superchat-bridge-tool-result-message-p sent))))))
 
 (ert-deftest superchat-llm-kept-message-is-dropped-after-a-user-message ()
   (test-llm-with (list '(:text "ok" :thinking "I should read"
@@ -334,29 +334,29 @@
     (test-llm--ask (list (test-llm--user "hi")))
     (let ((first test-llm--last))
       (test-llm--ask (append (test-llm--replay "call_1") (list (test-llm--user "again"))))
-      (let ((assistant (cl-find-if #'llm-pi-ai-assistant-message-p (test-llm--sent))))
+      (let ((assistant (cl-find-if #'superchat-bridge-assistant-message-p (test-llm--sent))))
         (should-not (eq assistant first))
-        (should-not (cl-some #'llm-pi-ai-thinking-content-p
-                             (llm-pi-ai-message-content assistant)))
-        (should (equal (llm-pi-ai-tool-call-id
-                        (cl-find-if #'llm-pi-ai-tool-call-p
-                                    (llm-pi-ai-message-content assistant)))
+        (should-not (cl-some #'superchat-bridge-thinking-content-p
+                             (superchat-bridge-message-content assistant)))
+        (should (equal (superchat-bridge-tool-call-id
+                        (cl-find-if #'superchat-bridge-tool-call-p
+                                    (superchat-bridge-message-content assistant)))
                        "call_1"))))))
 
 (ert-deftest superchat-llm-unkept-assistant-is-built-as-the-models-own ()
   (test-llm-with (list '(:text "x"))
     (test-llm--ask (test-llm--replay "call_7"))
     (let* ((model (plist-get (car test-llm--calls) :model))
-           (assistant (cl-find-if #'llm-pi-ai-assistant-message-p (test-llm--sent)))
-           (call (cl-find-if #'llm-pi-ai-tool-call-p (llm-pi-ai-message-content assistant))))
-      (should (equal (list (llm-pi-ai-assistant-message-api assistant)
-                           (llm-pi-ai-assistant-message-provider assistant)
-                           (llm-pi-ai-assistant-message-model assistant)
-                           (llm-pi-ai-assistant-message-stop-reason assistant))
-                     (list (llm-pi-ai-model-api model) "stub" "model-a" "toolUse")))
-      (should (equal (llm-pi-ai-tool-call-name call) "read_file"))
-      (should (equal (llm-pi-ai-text-content-text
-                      (car (llm-pi-ai-message-content (cl-find-if #'llm-pi-ai-tool-result-message-p
+           (assistant (cl-find-if #'superchat-bridge-assistant-message-p (test-llm--sent)))
+           (call (cl-find-if #'superchat-bridge-tool-call-p (superchat-bridge-message-content assistant))))
+      (should (equal (list (superchat-bridge-assistant-message-api assistant)
+                           (superchat-bridge-assistant-message-provider assistant)
+                           (superchat-bridge-assistant-message-model assistant)
+                           (superchat-bridge-assistant-message-stop-reason assistant))
+                     (list (superchat-bridge-model-api model) "stub" "model-a" "toolUse")))
+      (should (equal (superchat-bridge-tool-call-name call) "read_file"))
+      (should (equal (superchat-bridge-text-content-text
+                      (car (superchat-bridge-message-content (cl-find-if #'superchat-bridge-tool-result-message-p
                                                                   (test-llm--sent)))))
                      "contents")))))
 
@@ -366,13 +366,13 @@
 (ert-deftest superchat-llm-deepseek-gets-its-reasoning-back ()
   (let* ((requests nil)
          (process-environment (list "DEEPSEEK_API_KEY=dummy" "HOME=/nonexistent"))
-         (llm-pi-ai-retry-run-at-time-function (lambda (&rest _) nil))
-         (llm-pi-ai-retry-cancel-timer-function #'ignore)
-         (llm-pi-ai-http-start-function
+         (superchat-bridge-retry-run-at-time-function (lambda (&rest _) nil))
+         (superchat-bridge-retry-cancel-timer-function #'ignore)
+         (superchat-bridge-http-start-function
           (lambda (_args _config stdin on-output on-exit)
             (setq requests (append requests (list (list stdin on-output on-exit))))
             #'ignore))
-         (superchat-llm-providers '(("deepseek" . llm-pi-ai-deepseek-provider)))
+         (superchat-llm-providers '(("deepseek" . superchat-bridge-deepseek-provider)))
          (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
          (superchat-llm-reasoning 'high) (superchat-llm--models nil)
          (superchat-llm--kept nil)

@@ -20,7 +20,7 @@ An Emacs package with three uses:
 - Product code: **6,000 lines in total**, counted by `wc -l` over the `.el`
   files at the repository root. Tests are not counted. Each file has its own
   cap in the module table. `scripts/check.sh` fails when a cap is exceeded.
-- Emacs 30.1 or later. Dependencies: `curl`, the `pi-ai/` directory of this repository, and what Emacs ships with
+- Emacs 30.1 or later. Dependencies: `curl`, the `bridge/` directory of this repository, and what Emacs ships with
   (`sqlite`, `project`, `cl-lib`, `subr-x`, `json`). Nothing else.
 - Every file starts with `;;; NAME.el --- ... -*- lexical-binding: t; -*-` and
   byte-compiles with no warnings.
@@ -104,7 +104,7 @@ function. A JSON false is nil.
 |---|---|---|
 | `superchat-tape.el` | 550 | the database, append, read, search |
 | `superchat-view.el` | 500 | the view registry and the built-in views |
-| `superchat-llm.el` | 450 | the only file that knows pi-ai |
+| `superchat-llm.el` | 450 | the only file that knows the bridge |
 | `superchat-tools.el` | 800 | the tool registry, running a tool, the built-in tools |
 | `superchat-permission.el` | 250 | levels, the decision for one tool call, asking |
 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
@@ -212,9 +212,9 @@ Built-in views:
 
 ## superchat-llm.el
 
-The only file that requires `llm-pi-ai` (the port of pi's AI package kept in
-`pi-ai/`; its own plan and rules are in `pi-ai/`). It translates between
-neutral messages and pi-ai, and never runs a tool. Nothing in Superchat
+The only file that requires `superchat-bridge` (the port of pi's AI package kept in
+`bridge/`; its own plan and rules are in `bridge/`). It translates between
+neutral messages and the bridge, and never runs a tool. Nothing in Superchat
 requires `llm.el`.
 
 - `(superchat-llm-request MESSAGES &key system tools model on-text on-done on-error)`
@@ -224,7 +224,7 @@ requires `llm.el`.
     `(:role tool :call-id ID :name NAME :text S)`.
   - TOOLS: a list of `(:name S :description S :args ARGS)`, each of ARGS
     `(:name S :type string|number|boolean :description S :required BOOL)`.
-    They become pi-ai tools with a JSON-schema object as parameters.
+    They become the bridge tools with a JSON-schema object as parameters.
   - ON-TEXT is called with each piece of streamed text. ON-DONE is called
     once with `(:text S :calls CALLS :model S)`. ON-ERROR is called once
     with a string. Exactly one of ON-DONE and ON-ERROR is called, unless the
@@ -238,7 +238,7 @@ requires `llm.el`.
   - A request waits ten minutes for the response to start and is tried up to
     two more times when the provider says to try again, as pi's own client
     does.
-  - A response that ends with pi-ai's stop reason `error` goes to ON-ERROR
+  - A response that ends with the bridge's stop reason `error` goes to ON-ERROR
     with its error message; `aborted` calls neither; every other stop reason
     goes to ON-DONE.
   - A signal raised while the request is started is delivered through
@@ -250,10 +250,10 @@ requires `llm.el`.
     with the error's message. An error raised by ON-DONE or ON-ERROR is the
     caller's to catch: it is not delivered anywhere.
   - The model's reasoning is never on the Tape and never in ON-DONE. This
-    module keeps, in memory, the whole pi-ai assistant message of a response
+    module keeps, in memory, the whole the bridge assistant message of a response
     that made calls, by the id and name of every call. When MESSAGES holds an
     assistant message with exactly those calls, the kept message is sent in
-    its place, so the provider gets its reasoning back as pi-ai sends it. A
+    its place, so the provider gets its reasoning back as the bridge sends it. A
     request whose last message is from the user drops what is kept for the
     calls in its MESSAGES: no provider wants the reasoning of an earlier
     turn, and another conversation's turn in progress keeps its own. At most
@@ -265,23 +265,23 @@ requires `llm.el`.
   - One request is one model response. When the model asks for tools the
     calls come back in ON-DONE; the caller runs them and makes another
     request with the results appended to MESSAGES.
-- `(superchat-llm-cancel HANDLE)`: aborts the request through pi-ai's abort
+- `(superchat-llm-cancel HANDLE)`: aborts the request through the bridge's abort
   signal.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
-  function of no arguments that returns a pi-ai provider. It starts with
-  `("deepseek" . llm-pi-ai-deepseek-provider)`; a plugin adds to it. The
-  pi-ai models collection is made from it on first use.
-- It calls pi-ai only through what `pi-ai/lisp` files provide as public
+  function of no arguments that returns a bridge provider. It starts with
+  `("deepseek" . superchat-bridge-deepseek-provider)`; a plugin adds to it. The
+  the bridge models collection is made from it on first use.
+- It calls the bridge only through what `bridge/lisp` files provide as public
   functions (no `--` name).
 
 The provider is `superchat-llm-provider`, a name in `superchat-llm-providers`;
 the model is `superchat-llm-model`, one of that provider's model ids; the API
-key is found by pi-ai (for DeepSeek, the environment variable
+key is found by the bridge (for DeepSeek, the environment variable
 `DEEPSEEK_API_KEY`). Tests never touch the network: `superchat-llm-request-function`
 (a `defvar`, default `#'superchat-llm--request`) is what `superchat-llm-request`
 calls, and `test/helper.el` replaces it. The tests of this file give
 `superchat-llm-providers` a provider whose API is a stub that returns scripted
-pi-ai event streams.
+The bridge event streams.
 
 ## superchat-permission.el
 
@@ -542,9 +542,9 @@ Package header, `defgroup superchat`, the user options and the constant
 `superchat-tape-file` (nil, meaning `tape.sqlite` in that directory), `superchat-llm-provider` (nil; a name such as `"deepseek"`; using Superchat
 without one is an error that says how to set it), `superchat-llm-model` (nil;
 a model id of that provider such as `"deepseek-flash"`; required),
-`superchat-llm-reasoning` (nil: the model does not reason; else one of pi-ai's
+`superchat-llm-reasoning` (nil: the model does not reason; else one of the bridge's
 thinking levels `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, a symbol,
-which pi-ai clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
+which the bridge clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
 (120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
