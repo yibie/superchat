@@ -182,8 +182,13 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
   (let* ((blocks (superchat-bridge-message-content message))
          (calls (cl-loop for block in blocks
                          when (superchat-bridge-tool-call-p block)
-                         ;; A provider may leave the id out; a result needs one.
-                         do (when (string-empty-p (or (superchat-bridge-tool-call-id block) ""))
+                         ;; A provider may leave the id out, or count from
+                         ;; call_0 again in each response; a result needs an
+                         ;; id, and a kept message one no other has.
+                         do (when (let ((id (or (superchat-bridge-tool-call-id block) "")))
+                                    (or (string-empty-p id)
+                                        (cl-some (lambda (kept) (assoc id (car kept)))
+                                                 superchat-llm--kept)))
                               (setf (superchat-bridge-tool-call-id block)
                                     (make-temp-name "call_")))
                          and collect (list :id (superchat-bridge-tool-call-id block)

@@ -234,7 +234,8 @@ requires `llm.el`.
     gave it and `:args` as a plist with keyword keys, also a call that names
     no known tool or lacks an argument: the caller judges. A call whose
     arguments the provider sent as text that is not a JSON object comes back
-    with `:args` nil. A call the provider gave no id gets one made here.
+    with `:args` nil. A call the provider gave no id, or an id that a kept
+    message already has, gets one made here.
   - A request waits ten minutes for the response to start and is tried up to
     two more times when the provider says to try again, as pi's own client
     does.

@@ -294,5 +294,123 @@
           (should (string-match-p "\\`POST /x" seen)))
       (delete-process server))))
 
+;;; Config file lifetime and curl's own error text, with real curl
+
+(defun superchat-bridge-http-test--listener (on-data)
+  "A throwaway listener on 127.0.0.1; ON-DATA is called with (CONN SEEN).
+Return it, or skip the test when no port can be bound."
+  (let ((seen nil))
+    (condition-case nil
+        (make-network-process
+         :name "superchat-bridge-http-test-listener" :server t :host "127.0.0.1"
+         :service t :family 'ipv4 :coding 'binary :noquery t
+         :filter (lambda (conn string)
+                   (setq seen (concat seen string))
+                   (funcall on-data conn seen)))
+      (error (ert-skip "cannot bind a local port")))))
+
+(ert-deftest superchat-bridge-http-test-real-curl-config-file-gone-at-first-chunk ()
+  "The curl config file, which holds the secrets, is deleted before the first chunk."
+  (skip-unless (executable-find "curl"))
+  (let* ((superchat-bridge-http--config-files nil)
+         (server (superchat-bridge-http-test--listener
+                  (lambda (conn seen)
+                    (when (string-search "\r\n\r\n" seen)
+                      (process-send-string conn "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nhello")
+                      (delete-process conn)))))
+         (port (process-contact server :service))
+         file exists-at-chunk chunks done)
+    (unwind-protect
+        (progn
+          (superchat-bridge-http-request
+           :url (format "http://127.0.0.1:%d/" port)
+           :headers '(("Authorization" . "Bearer S")) :timeout 10
+           :on-chunk (lambda (c)
+                       (unless chunks (setq exists-at-chunk (file-exists-p file)))
+                       (push c chunks))
+           :on-done (lambda (r) (setq done r)))
+          (setq file (car superchat-bridge-http--config-files))
+          (should (and file (file-exists-p file)))
+          (superchat-bridge-http-test--wait (lambda () done))
+          (should (eq (plist-get done :status) 200))
+          (should (equal (apply #'concat (reverse chunks)) "hello"))
+          (should (eq exists-at-chunk nil))
+          (should-not (file-exists-p file)))
+      (delete-process server))))
+
+(ert-deftest superchat-bridge-http-test-real-curl-closed-without-response ()
+  "A server that closes without a response gives curl's text, not Emacs's."
+  (skip-unless (executable-find "curl"))
+  (let* ((server (superchat-bridge-http-test--listener
+                  (lambda (conn _seen) (delete-process conn))))
+         (port (process-contact server :service))
+         done)
+    (unwind-protect
+        (progn
+          (superchat-bridge-http-request
+           :url (format "http://127.0.0.1:%d/" port) :method "POST" :body "{}" :timeout 10
+           :on-done (lambda (r) (setq done r)))
+          (superchat-bridge-http-test--wait (lambda () done))
+          (should (eq (plist-get done :error) 'network))
+          (should (string-match-p "curl: (" (plist-get done :message)))
+          (should-not (string-match-p "Process\\|finished" (plist-get done :message))))
+      (delete-process server))))
+
+(ert-deftest superchat-bridge-http-test-config-files-empty-after-every-ending ()
+  (skip-unless (executable-find "curl"))
+  (let* ((superchat-bridge-http--config-files nil)
+         (server (superchat-bridge-http-test--listener
+                  (lambda (conn seen)
+                    ;; /ok answers, /hang never does
+                    (when (and (string-search "\r\n\r\n" seen)
+                               (string-match-p "\\`GET /ok" seen))
+                      (process-send-string conn "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nx")
+                      (delete-process conn)))))
+         (port (process-contact server :service)))
+    (unwind-protect
+        (progn
+          ;; ended normally
+          (let (done)
+            (superchat-bridge-http-request
+             :url (format "http://127.0.0.1:%d/ok" port) :timeout 10
+             :on-done (lambda (r) (setq done r)))
+            (should (= (length superchat-bridge-http--config-files) 1))
+            (superchat-bridge-http-test--wait (lambda () done))
+            (should (eq (plist-get done :status) 200))
+            (should-not superchat-bridge-http--config-files))
+          ;; aborted while curl waits for the answer
+          (let* (done
+                 (handle (superchat-bridge-http-request
+                          :url (format "http://127.0.0.1:%d/hang" port) :timeout 10
+                          :on-done (lambda (r) (setq done r)))))
+            (should (= (length superchat-bridge-http--config-files) 1))
+            (superchat-bridge-http-abort handle)
+            (should (eq (plist-get done :error) 'aborted))
+            (should-not superchat-bridge-http--config-files))
+          ;; the process fails to start, after the file was written
+          (let (done (file nil))
+            (cl-letf (((symbol-function 'make-process)
+                       (lambda (&rest _)
+                         (setq file (car superchat-bridge-http--config-files))
+                         (error "Cannot spawn"))))
+              (superchat-bridge-http-request :url "http://127.0.0.1:1/"
+                                      :on-done (lambda (r) (setq done r))))
+            (superchat-bridge-http-test--wait (lambda () done))
+            (should file)
+            (should (eq (plist-get done :error) 'network))
+            (should-not superchat-bridge-http--config-files)
+            (should-not (file-exists-p file))))
+      (delete-process server))))
+
+(ert-deftest superchat-bridge-http-test-kill-emacs-hook-deletes-listed-files ()
+  (let* ((file (make-temp-file "superchat-bridge-curl-test-"))
+         (superchat-bridge-http--config-files (list file)))
+    (unwind-protect
+        (progn
+          (should (memq #'superchat-bridge-http--delete-config-files kill-emacs-hook))
+          (superchat-bridge-http--delete-config-files)
+          (should-not (file-exists-p file)))
+      (when (file-exists-p file) (delete-file file)))))
+
 (provide 'superchat-bridge-http-test)
 ;;; superchat-bridge-http-test.el ends here

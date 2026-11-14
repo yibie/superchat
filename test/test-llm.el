@@ -417,5 +417,266 @@
         (should (equal (alist-get 'tool_call_id result) "call_a"))
         (should (equal (alist-get 'content result) "*scratch*"))))))
 
+;; Defects a reviewer found: each test below fails without its fix.
+
+(defun test-llm--tool-call-of (message)
+  (cl-find-if #'superchat-bridge-tool-call-p (superchat-bridge-message-content message)))
+
+(defun test-llm--assistants ()
+  "The assistant messages of the newest request of the stub."
+  (cl-remove-if-not #'superchat-bridge-assistant-message-p (test-llm--sent)))
+
+(defun test-llm--thinking-of (message)
+  (when-let* ((block (cl-find-if #'superchat-bridge-thinking-content-p
+                                 (superchat-bridge-message-content message))))
+    (superchat-bridge-thinking-content-thinking block)))
+
+(defun test-llm--on-text-raises (later)
+  "Ask with an ON-TEXT that signals on the first delta; LATER pushes from a timer."
+  (test-llm-with (list (list :text "abc" :deltas '("a" "b" "c") :later later))
+    (let* ((texts nil) (done nil) (errors nil)
+           (handle (superchat-llm-request
+                    (list (test-llm--user "hi"))
+                    :on-text (lambda (s) (push s texts) (error "bad %s" s))
+                    :on-done (lambda (x) (push x done))
+                    :on-error (lambda (x) (push x errors)))))
+      (test-llm--settle)
+      (should (equal errors '("bad a")))
+      (should-not done)
+      (should (equal texts '("a")))
+      (should (superchat-bridge-abort-signal-aborted-p
+               (plist-get (plist-get (car test-llm--calls) :options) :signal)))
+      (should (plist-get handle :finished)))))
+
+(ert-deftest superchat-llm-on-text-error-aborts-and-reaches-on-error-at-once ()
+  (test-llm--on-text-raises nil))
+
+(ert-deftest superchat-llm-on-text-error-aborts-and-reaches-on-error-from-a-timer ()
+  (test-llm--on-text-raises t))
+
+(ert-deftest superchat-llm-rebuilt-arguments-are-json-objects-and-arrays ()
+  (test-llm-with (list '(:text "x"))
+    (test-llm--ask
+     (list (test-llm--user "hi")
+           (list :role 'assistant :text ""
+                 :calls (list (list :id "c1" :name "t"
+                                    :args '(:arr ((:k 1) (:k 2)) :nested (("a" "b"))
+                                            :f nil :n 3 :s ":kw" :obj (:x "y") :zh "中文"))
+                              (list :id "c2" :name "u" :args nil)))
+           (list :role 'tool :call-id "c1" :name "t" :text "r1")
+           (list :role 'tool :call-id "c2" :name "u" :text "r2")))
+    (let* ((assistant (car (test-llm--assistants)))
+           (calls (cl-remove-if-not #'superchat-bridge-tool-call-p
+                                    (superchat-bridge-message-content assistant)))
+           (args (superchat-bridge-tool-call-arguments (car calls)))
+           (parsed (json-parse-string
+                    (json-serialize args :false-object :false :null-object :null)
+                    :object-type 'alist :array-type 'list
+                    :false-object :false :null-object :null)))
+      (should (hash-table-p args))
+      (should (equal (alist-get 'arr parsed) '(((k . 1)) ((k . 2)))))
+      (should (equal (alist-get 'nested parsed) '(("a" "b"))))
+      (should (eq (alist-get 'f parsed) :false))
+      (should (equal (alist-get 'n parsed) 3))
+      (should (equal (alist-get 's parsed) ":kw"))
+      (should (equal (alist-get 'obj parsed) '((x . "y"))))
+      (should (equal (alist-get 'zh parsed) "中文"))
+      (let ((empty (superchat-bridge-tool-call-arguments (cadr calls))))
+        (should (hash-table-p empty))
+        (should (equal (json-serialize empty) "{}"))))))
+
+(ert-deftest superchat-llm-rebuilt-empty-arguments-reach-the-provider-as-an-object ()
+  ;; the same through the real DeepSeek request body
+  (let* ((requests nil)
+         (process-environment (list "DEEPSEEK_API_KEY=dummy" "HOME=/nonexistent"))
+         (superchat-bridge-http-start-function
+          (lambda (_args _config stdin _out _exit)
+            (push stdin requests) #'ignore))
+         (superchat-llm-providers '(("deepseek" . superchat-bridge-deepseek-provider)))
+         (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request))
+    (test-llm--ask (test-llm--replay "c1"))
+    (test-llm--ask (list (test-llm--user "hi")
+                         (list :role 'assistant :text ""
+                               :calls (list (list :id "c1" :name "t" :args nil)))
+                         (list :role 'tool :call-id "c1" :name "t" :text "r")))
+    (let* ((body (json-parse-string (car requests) :object-type 'alist))
+           (assistant (cl-find "assistant" (append (alist-get 'messages body) nil)
+                               :key (lambda (m) (alist-get 'role m)) :test #'equal)))
+      (should (equal (alist-get 'arguments
+                                (alist-get 'function (aref (alist-get 'tool_calls assistant) 0)))
+                     "{}")))))
+
+(defun test-llm--two-responses-one-turn (id)
+  "Two responses of one turn whose first call is ID each; return both
+finished messages and the messages the third request sent."
+  (test-llm-with (list (list :thinking "T1" :calls `((,id "read_file" nil)))
+                       (list :thinking "T2" :calls `((,id "read_file" nil)))
+                       '(:text "fin"))
+    (let (first second ids)
+      (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+        (setq first test-llm--last)
+        (push (plist-get (car (plist-get (car (plist-get r :done)) :calls)) :id) ids))
+      (let ((r (test-llm--ask (test-llm--replay (car ids)))))
+        (setq second test-llm--last)
+        (push (plist-get (car (plist-get (car (plist-get r :done)) :calls)) :id) ids))
+      (test-llm--ask
+       (list (test-llm--user "hi")
+             (list :role 'assistant :text ""
+                   :calls (list (list :id (nth 1 ids) :name "read_file" :args nil)))
+             (list :role 'tool :call-id (nth 1 ids) :name "read_file" :text "r1")
+             (list :role 'assistant :text ""
+                   :calls (list (list :id (car ids) :name "read_file" :args nil)))
+             (list :role 'tool :call-id (car ids) :name "read_file" :text "r2")))
+      (list first second (nreverse ids) (test-llm--assistants)))))
+
+(ert-deftest superchat-llm-empty-provider-ids-get-generated-ids-each-replay-its-own ()
+  (pcase-let ((`(,first ,second ,ids ,sent) (test-llm--two-responses-one-turn "")))
+    (should (cl-every (lambda (id) (and (stringp id) (not (string-empty-p id)))) ids))
+    (should-not (equal (car ids) (cadr ids)))
+    ;; Tape-side id, the kept struct's id: one and the same
+    (should (equal (superchat-bridge-tool-call-id (test-llm--tool-call-of first)) (car ids)))
+    (should (equal (superchat-bridge-tool-call-id (test-llm--tool-call-of second)) (cadr ids)))
+    (should (equal (mapcar #'test-llm--thinking-of sent) '("T1" "T2")))
+    (should (eq (car sent) first))
+    (should (eq (cadr sent) second))))
+
+(ert-deftest superchat-llm-same-provider-id-twice-each-replay-its-own ()
+  ;; "call_0" in two responses of one turn: the second gets an id of its own.
+  (pcase-let ((`(,first ,second ,ids ,sent) (test-llm--two-responses-one-turn "call_0")))
+    (should (equal (car ids) "call_0"))
+    (should-not (equal (cadr ids) "call_0"))
+    (should (equal (mapcar #'test-llm--thinking-of sent) '("T1" "T2")))
+    (should (eq (car sent) first))
+    (should (eq (cadr sent) second))))
+
+(ert-deftest superchat-llm-kept-message-needs-the-same-names-and-count ()
+  (dolist (calls '(((:id "c1" :name "other" :args nil))
+                   ((:id "c1" :name "read_file" :args nil) (:id "c2" :name "x" :args nil))))
+    (test-llm-with (list '(:thinking "T" :calls (("c1" "read_file" nil)))
+                         '(:text "x"))
+      (test-llm--ask (list (test-llm--user "hi")))
+      (let ((first test-llm--last))
+        (test-llm--ask (list (test-llm--user "hi")
+                             (list :role 'assistant :text "" :calls calls)))
+        (let ((assistant (car (test-llm--assistants))))
+          (should-not (eq assistant first))
+          (should-not (test-llm--thinking-of assistant))))))
+  ;; the kept one has two calls, the Tape one
+  (test-llm-with (list '(:thinking "T" :calls (("c1" "read_file" nil) ("c2" "x" nil)))
+                       '(:text "x"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let ((first test-llm--last))
+      (test-llm--ask (list (test-llm--user "hi")
+                           (list :role 'assistant :text ""
+                                 :calls '((:id "c1" :name "read_file" :args nil)))))
+      (should-not (eq (car (test-llm--assistants)) first)))))
+
+(ert-deftest superchat-llm-another-conversations-user-turn-keeps-this-ones-message ()
+  (test-llm-with (list '(:thinking "TA" :calls (("call_a" "read_file" nil)))
+                       '(:text "b")
+                       '(:text "a2")
+                       '(:text "a3"))
+    (test-llm--ask (list (test-llm--user "hi A")))
+    (let ((a test-llm--last))
+      ;; conversation B starts a turn: its MESSAGES have none of A's calls
+      (test-llm--ask (list (test-llm--user "hi B")))
+      (should (= (length superchat-llm--kept) 1))
+      ;; A's next round still sends the kept struct itself
+      (test-llm--ask (test-llm--replay "call_a"))
+      (should (eq (car (test-llm--assistants)) a))
+      ;; A's own next user turn drops it
+      (test-llm--ask (append (test-llm--replay "call_a") (list (test-llm--user "again"))))
+      (should-not (eq (car (test-llm--assistants)) a))
+      (should-not superchat-llm--kept))))
+
+(ert-deftest superchat-llm-kept-table-holds-at-most-64 ()
+  (test-llm-with (cl-loop for i below 70
+                          collect (list :calls (list (list (format "id_%d" i) "t" nil))))
+    (dotimes (_ 70) (test-llm--ask (list (test-llm--user "hi"))))
+    (should (= (length superchat-llm--kept) 64))
+    ;; newest first: the oldest six are gone
+    (should (equal (caar (car superchat-llm--kept)) '("id_69" . "t")))
+    (should-not (assoc '(("id_5" . "t")) superchat-llm--kept))
+    (should (assoc '(("id_6" . "t")) superchat-llm--kept))))
+
+(ert-deftest superchat-llm-unknown-reasoning-value-is-a-user-error ()
+  (test-llm-with nil
+    (let* ((superchat-llm-reasoning 'bogus)
+           (err (should-error (test-llm--ask (list (test-llm--user "hi")))
+                              :type 'user-error)))
+      (dolist (word '("bogus" "minimal" "low" "medium" "high" "xhigh" "max"))
+        (should (string-match-p word (cadr err))))
+      (should-not test-llm--calls))))
+
+(ert-deftest superchat-llm-missing-api-key-is-a-user-error-before-any-curl ()
+  (let* ((started nil)
+         (process-environment (list "HOME=/nonexistent"))
+         (superchat-bridge-http-start-function
+          (lambda (&rest _) (setq started t) #'ignore))
+         (superchat-llm-providers '(("deepseek" . superchat-bridge-deepseek-provider)))
+         (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request)
+         (err (should-error (test-llm--ask (list (test-llm--user "hi"))) :type 'user-error)))
+    (should (string-match-p "DEEPSEEK_API_KEY" (cadr err)))
+    (should-not started)))
+
+(ert-deftest superchat-llm-options-carry-the-timeout-and-retries ()
+  (test-llm-with (list '(:text "x"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let ((options (plist-get (car test-llm--calls) :options)))
+      (should (equal (plist-get options :timeout-ms) 600000))
+      (should (equal (plist-get options :max-retries) 2)))))
+
+(ert-deftest superchat-llm-deepseek-429-retry-after-0-then-200 ()
+  (let* ((starts 0) (requests nil) (timers nil)
+         (process-environment (list "DEEPSEEK_API_KEY=dummy" "HOME=/nonexistent"))
+         (superchat-bridge-retry-run-at-time-function
+          ;; the 600 s response timeout is never run; only the short backoff
+          (lambda (secs _repeat fn) (when (< secs 100) (push fn timers)) fn))
+         (superchat-bridge-retry-cancel-timer-function #'ignore)
+         (superchat-bridge-http-start-function
+          (lambda (_args _config _stdin on-output on-exit)
+            (cl-incf starts)
+            (push (list on-output on-exit) requests)
+            #'ignore))
+         (superchat-llm-providers '(("deepseek" . superchat-bridge-deepseek-provider)))
+         (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request)
+         (r (test-llm--ask (list (test-llm--user "hi")))))
+    (should (= starts 1))
+    (pcase-let ((`(,on-output ,on-exit) (car requests)))
+      (funcall on-output
+               (encode-coding-string
+                (concat "HTTP/1.1 429 Too Many Requests\r\nretry-after: 0\r\n"
+                        "Content-Type: application/json\r\n\r\n"
+                        "{\"error\":{\"message\":\"slow down\"}}")
+                'utf-8))
+      (funcall on-exit 0 ""))
+    (should-not (plist-get r :done))
+    (should-not (plist-get r :errors))
+    (let ((end (+ (float-time) 3)))
+      (while (and (< starts 2) (< (float-time) end))
+        (while timers (funcall (pop timers)))
+        (accept-process-output nil 0.01)))
+    (should (= starts 2))
+    (pcase-let ((`(,on-output ,on-exit) (car requests)))
+      (funcall on-output
+               (encode-coding-string
+                (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+                        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}\n\n"
+                        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+                        "data: [DONE]\n\n")
+                'utf-8))
+      (funcall on-exit 0 ""))
+    (test-llm--settle)
+    (should-not (plist-get r :errors))
+    (should (= (length (plist-get r :done)) 1))
+    (should (equal (plist-get (car (plist-get r :done)) :text) "hi"))
+    (should (= starts 2))))
+
 (provide 'test-llm)
 ;;; test-llm.el ends here
