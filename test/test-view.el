@@ -144,6 +144,13 @@
     (should (equal (superchat-test-view--texts (superchat-view 'timelines :limit 2))
                    '("b-first" "a-first")))))
 
+(ert-deftest superchat-view-timelines-skip-a-timeline-with-no-user-entry ()
+  (superchat-test-with-tape
+    (superchat-test-view--add "a" 'user "a-first")
+    (superchat-test-view--add "n" 'note "only a note" :data '(:title "t"))
+    (should (equal (superchat-test-view--texts (superchat-view 'timelines :limit 1))
+                   '("a-first")))))
+
 (ert-deftest superchat-view-sources ()
   (superchat-test-with-tape
     (let* ((a (superchat-test-view--add "a" 'user "first"))

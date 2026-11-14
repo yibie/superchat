@@ -720,3 +720,50 @@ finished messages and the messages the third request sent."
 
 (provide 'test-llm)
 ;;; test-llm.el ends here
+
+(ert-deftest superchat-llm-first-entry-of-a-name-counts ()
+  (test-llm-with nil
+    (let ((mk (lambda (m)
+                (lambda ()
+                  (superchat-bridge-openai-compatible-provider
+                   :id "dup" :base-url "http://h/v1" :models (list m)))))
+          (superchat-llm-provider "dup"))
+      (setq superchat-llm-providers
+            (list (cons "dup" (funcall mk "first")) (cons "dup" (funcall mk "second"))))
+      (should (equal (superchat-llm-model-ids) '("first"))))))
+
+(ert-deftest superchat-llm-changed-entry-is-seen-at-the-next-request ()
+  (test-llm-with nil
+    (let ((entry (cons "dup" (lambda () (test-llm--provider "dup"))))
+          (superchat-llm-provider "dup"))
+      (setq superchat-llm-providers (list entry))
+      (should (equal (superchat-llm-model-ids) '("model-a" "model-b")))
+      (setcdr entry (lambda ()
+                      (superchat-bridge-openai-compatible-provider
+                       :id "dup" :base-url "http://h/v1" :models '("z"))))
+      (should (equal (superchat-llm-model-ids) '("z"))))))
+
+(ert-deftest superchat-llm-missing-key-without-variable-names-is-a-user-error ()
+  (let* ((process-environment (list "HOME=/nonexistent"))
+         (mk (lambda (id auth)
+               (cons id (lambda ()
+                          (superchat-bridge-create-provider
+                           :id id :base-url "http://h/v1" :auth auth
+                           :models (list (superchat-bridge--compatible-model
+                                          id "http://h/v1" "m"))
+                           :api (superchat-bridge-openai-completions-api))))))
+         (superchat-llm-providers
+          (list (funcall mk "p1" (superchat-bridge-make-provider-auth
+                                  :api-key (superchat-bridge-make-api-key-auth
+                                            :name "k" :resolve (lambda (&rest _) nil))))
+                (funcall mk "p2" (superchat-bridge-make-provider-auth))))
+         (superchat-llm-model "m") (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-reasoning nil))
+    (dolist (id '("p1" "p2"))
+      (let* ((superchat-llm-provider id)
+             (err (should-error (superchat-llm--request
+                                 (list (test-llm--user "hi"))
+                                 :on-done #'ignore :on-error #'ignore)
+                                :type 'user-error)))
+        (should (string-match-p id (cadr err)))
+        (should-not (string-match-p "set  in\\|set  or" (cadr err)))))))

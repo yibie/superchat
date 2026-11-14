@@ -127,19 +127,19 @@
 (defun superchat-view--timelines (args)
   "Per timeline, newest first: its latest anchor, else its first user entry."
   (let ((scope (plist-get args :scope)))
-    (delq nil
-          (mapcar (lambda (row) (and (car row) (superchat-tape-get (car row))))
-                  (superchat-tape-select
-                   (concat "SELECT COALESCE("
-                           "(SELECT MAX(id) FROM entry WHERE tape = e.tape AND kind = 'anchor'),"
-                           "(SELECT MIN(id) FROM entry WHERE tape = e.tape AND kind = 'user'))"
-                           " FROM entry e WHERE tape NOT IN "
-                           "(SELECT tape FROM entry WHERE kind = 'user'"
-                           " AND json_extract(data, '$.ephemeral') = 1)"
-                           (if scope " AND scope = ?" "")
-                           " GROUP BY tape ORDER BY MAX(id) DESC LIMIT ?")
-                   (append (and scope (list scope))
-                           (list (or (plist-get args :limit) 30))))))))
+    (mapcar (lambda (row) (superchat-tape-get (car row)))
+            (superchat-tape-select
+             (concat "SELECT COALESCE("
+                     "(SELECT MAX(id) FROM entry WHERE tape = e.tape AND kind = 'anchor'),"
+                     "(SELECT MIN(id) FROM entry WHERE tape = e.tape AND kind = 'user'))"
+                     " FROM entry e WHERE tape IN (SELECT tape FROM entry"
+                     " WHERE kind IN ('anchor', 'user')) AND tape NOT IN "
+                     "(SELECT tape FROM entry WHERE kind = 'user'"
+                     " AND json_extract(data, '$.ephemeral') = 1)"
+                     (if scope " AND scope = ?" "")
+                     " GROUP BY tape ORDER BY MAX(id) DESC LIMIT ?")
+             (append (and scope (list scope))
+                     (list (or (plist-get args :limit) 30)))))))
 
 (defun superchat-view--sources (args)
   "The entries named by the refs of entry :id."

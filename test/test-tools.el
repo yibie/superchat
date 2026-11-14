@@ -581,5 +581,39 @@ sets `stopped' and cancels the timer."
     (let ((text (superchat-test-tools--ok "eval_elisp" :code "(make-string 50 ?a)")))
       (should-not (string-match-p "left out" text)))))
 
+(ert-deftest superchat-tools-output-is-never-held-without-limit ()
+  (superchat-test-tools--in-scope
+    (let ((superchat-tool-max-chars 100) (superchat-shell-seconds 5) (start (float-time)))
+      (let ((text (superchat-test-tools--ok "shell" :command "yes 0123456789")))
+        (should (< (- (float-time) start) 3))
+        (should (string-match-p "cut" text))
+        (should (< (length text) 400)))
+      (should-not (superchat-test-tools--live-processes)))))
+
+(ert-deftest superchat-tools-search-output-is-cut-too ()
+  (superchat-test-tools--in-scope
+    (let ((superchat-tool-max-chars 100))
+      (with-temp-file (expand-file-name "big.txt" dir) (insert (make-string 5000 ?x) "\n"))
+      (let ((text (superchat-test-tools--ok "search_files" :pattern "x")))
+        (should (string-match-p "cut" text))
+        (should (< (length text) 600))))))
+
+(ert-deftest superchat-tools-a-process-that-cannot-start-leaves-no-buffer ()
+  (superchat-test-tools--in-scope
+    (let ((shell-file-name "/nonexistent/sh") (before (buffer-list)))
+      (should (plist-get (plist-get (superchat-test-tools--call "shell" :command "echo hi") :data)
+                         :error))
+      (should-not (seq-find (lambda (b) (and (not (memq b before))
+                                             (string-match-p "superchat-process" (buffer-name b))))
+                            (buffer-list))))
+    (delete-directory dir)
+    (let ((before (buffer-list)))
+      (should (plist-get (plist-get (superchat-test-tools--call "shell" :command "echo hi") :data)
+                         :error))
+      (should-not (seq-find (lambda (b) (and (not (memq b before))
+                                             (string-match-p "superchat-process" (buffer-name b))))
+                            (buffer-list))))
+    (make-directory dir)))
+
 (provide 'test-tools)
 ;;; test-tools.el ends here

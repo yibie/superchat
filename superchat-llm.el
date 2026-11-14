@@ -45,11 +45,17 @@ it led to until the turn is answered.  At most 64 are kept.")
                  (cl-every (lambda (a b) (and (equal (car a) (car b))
                                               (eq (cdr a) (cdr b))))
                            old superchat-llm-providers))
-      (let ((models (superchat-bridge-create-models)))
+      (let ((models (superchat-bridge-create-models)) (seen nil))
         (dolist (entry superchat-llm-providers)
-          (superchat-bridge-models-set-provider models (funcall (cdr entry))))
+          ;; The first entry of a name counts.
+          (unless (member (car entry) seen)
+            (push (car entry) seen)
+            (superchat-bridge-models-set-provider models (funcall (cdr entry)))))
+        ;; Copy the entries, not only the list: `setcdr' on one is seen.
         (setq superchat-llm--models
-              (cons (copy-sequence superchat-llm-providers) models)))))
+              (cons (mapcar (lambda (e) (cons (car e) (cdr e)))
+                            superchat-llm-providers)
+                    models)))))
   (cdr superchat-llm--models))
 
 (defun superchat-llm-model-ids ()
@@ -223,13 +229,16 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
                 superchat-llm-reasoning))
   (let* ((pi-model (superchat-llm--find-model (or model superchat-llm-model)))
          (_ (unless (superchat-bridge-models-get-auth (superchat-llm--models) pi-model)
-              (user-error "No API key for %s: set %s in the environment and restart Emacs, or `setenv' it"
-                          superchat-llm-provider
-                          (string-join
-                           (superchat-bridge-provider-env-vars
-                            (superchat-bridge-models-get-provider
-                             (superchat-llm--models) superchat-llm-provider))
-                           " or "))))
+              (let* ((provider (superchat-bridge-models-get-provider
+                                (superchat-llm--models) superchat-llm-provider))
+                     (key (superchat-bridge-provider-auth-api-key
+                           (superchat-bridge-provider-auth provider)))
+                     (vars (and key (superchat-bridge-api-key-auth-env-vars key))))
+                (if vars
+                    (user-error "No API key for %s: set %s in the environment and restart Emacs, or `setenv' it"
+                                superchat-llm-provider (string-join vars " or "))
+                  (user-error "Provider %s is not configured: its credentials cannot be found"
+                              superchat-llm-provider)))))
          (abort (superchat-bridge-make-abort-signal))
          (handle (list :cancelled nil :finished nil :abort abort))
          (stream nil))

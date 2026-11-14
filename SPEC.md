@@ -335,8 +335,10 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   tool's function runs, for the tools that need it.
 - `(superchat-tool-remove NAME)`, `(superchat-tool-specs &optional NAMES)` →
   the list `superchat-llm-request` takes.
-- `(superchat-tool-call TAPE CALL ON-RESULT)` → nil, or a function of no
-  arguments that stops a tool still running. It decides
+- `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED)` → nil, or
+  a function of no arguments that stops a tool still running. CANCELLED is
+  a function of no arguments; when it returns non-nil after the user was
+  asked, the tool does not run and its result is `Cancelled.`. It decides
   permission, asks when needed, runs the function with `default-directory`
   set to the timeline's scope (the user's home directory for `"home"`),
   appends the result as a `tool` entry and calls ON-RESULT with that entry,
@@ -432,8 +434,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
      `assistant` entry goes together with the `tool` entries that answer
      it. In their place stands one `user` message, `[N earlier entries of
      this conversation are left out of this request; recall and tape_query
-     can read them.]`. Nothing is removed from the Tape and no event is
-     appended.
+     can read them.]`. When leaving entries out would not make the request
+     smaller than sending all of them, all are sent. Nothing is removed
+     from the Tape and no event is appended.
   2. `superchat-llm-request` with `superchat-context-system` and the tool
      specs. TOOLS is a list of names, or nil for every tool, or `none`.
   3. On done: append the `assistant` entry. If it has calls, run each with

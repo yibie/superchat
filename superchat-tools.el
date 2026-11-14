@@ -88,9 +88,10 @@ asked about or denied.  Return nil to run, or the text that says why not."
       (format "Permission denied: %s is a %s tool and the level is %s."
               name (plist-get tool :class) (superchat-permission-level tape)))))
 
-(defun superchat-tools--start (tape call finish)
+(defun superchat-tools--start (tape call finish cancelled)
   "Start CALL for timeline TAPE.  FINISH is called with (TEXT ERRORP) once.
-Return the tool's stop function or nil.  May signal."
+CANCELLED is nil or a function that says whether the caller gave up while the
+user was asked.  Return the tool's stop function or nil.  May signal."
   (let* ((name (plist-get call :name))
          (args (plist-get call :args))
          (tool (superchat-tools--get name))
@@ -108,6 +109,7 @@ Return the tool's stop function or nil.  May signal."
                        t)
               nil)
      (why (funcall finish why t) nil)
+     ((and cancelled (funcall cancelled)) (funcall finish "Cancelled." t) nil)
      (t
       (let ((done (lambda (value &optional message)
                     (cond (message (funcall finish (format "Error: %s" message) t))
@@ -121,8 +123,10 @@ Return the tool's stop function or nil.  May signal."
           (funcall done (funcall (plist-get tool :function) args))
           nil))))))
 
-(defun superchat-tool-call (tape call on-result)
+(defun superchat-tool-call (tape call on-result &optional cancelled)
   "Run CALL, (:id S :name S :args PLIST), for timeline TAPE.
+CANCELLED, a function of no arguments, is asked once the user has answered:
+when it says yes the tool does not run and its result is `Cancelled.'.
 Append the result as a tool entry and call ON-RESULT with it once: before this
 returns for a synchronous tool, later for an asynchronous one.  Return nil, or
 a function that stops the tool: then nothing is appended and ON-RESULT is
@@ -143,7 +147,7 @@ not called.  Whatever the tool or the user does, the result is an entry."
                 (fail (text)
                   (setq finished t pending (cons text t))))
       (condition-case err (setq stop (let ((inhibit-quit nil))
-                                       (superchat-tools--start tape call #'finish)))
+                                       (superchat-tools--start tape call #'finish cancelled)))
         (error (fail (format "Error: %s" (error-message-string err))))
         (quit (fail "Interrupted by the user.")))
       (setq starting nil)
@@ -221,10 +225,12 @@ not called.  Whatever the tool or the user does, the result is an entry."
 
 (defun superchat-tools--spawn (command seconds finish &optional enough)
   "Run COMMAND, a list, with no input.  Call FINISH once with the output and
-why it ended: the exit status, `timeout' after SECONDS, or `enough' when
-ENOUGH, called with the output so far, says so.  Return a function that kills
-the process and cancels the timer; FINISH is then not called."
+why it ended: the exit status, `timeout' after SECONDS, `cut' when the output
+passed a few times `superchat-tool-max-chars', or `enough' when ENOUGH, called
+with the output so far, says so.  Return a function that kills the process and
+cancels the timer; FINISH is then not called.  The buffer is killed always."
   (let* ((buffer (generate-new-buffer " *superchat-process*" t))
+         (limit (* 4 superchat-tool-max-chars))
          (ended nil) timer process)
     (cl-flet ((end (why)
                 (unless ended
@@ -234,19 +240,24 @@ the process and cancels the timer; FINISH is then not called."
                   (let ((output (with-current-buffer buffer (buffer-string))))
                     (kill-buffer buffer)
                     (when why (funcall finish output why))))))
-      (setq process
-            (make-process
-             :name "superchat-process" :buffer buffer :command command
-             :connection-type 'pipe :noquery t :file-handler t
-             :filter (lambda (process text)
-                       (when (buffer-live-p (process-buffer process))
-                         (with-current-buffer (process-buffer process)
-                           (goto-char (point-max))
-                           (insert text)
-                           (when (and enough (funcall enough)) (end 'enough)))))
-             :sentinel (lambda (process _)
-                         (unless (process-live-p process)
-                           (end (process-exit-status process))))))
+      (condition-case err
+          (setq process
+                (make-process
+                 :name "superchat-process" :buffer buffer :command command
+                 :connection-type 'pipe :noquery t :file-handler t
+                 :filter (lambda (process text)
+                           (when (buffer-live-p (process-buffer process))
+                             (with-current-buffer (process-buffer process)
+                               (goto-char (point-max))
+                               (insert text)
+                               (cond ((> (buffer-size) limit)
+                                      (delete-region (1+ limit) (point-max))
+                                      (end 'cut))
+                                     ((and enough (funcall enough)) (end 'enough))))))
+                 :sentinel (lambda (process _)
+                             (unless (process-live-p process)
+                               (end (process-exit-status process))))))
+        (error (kill-buffer buffer) (signal (car err) (cdr err))))
       (setq timer (run-at-time seconds nil (lambda () (end 'timeout))))
       (process-send-eof process)
       (lambda ()
@@ -269,7 +280,10 @@ the process and cancels the timer; FINISH is then not called."
               10
               (lambda (output why)
                 (let ((lines (split-string output "\n" t)))
-                  (cond ((> (length lines) 100)
+                  (cond ((eq why 'cut)
+                         (funcall done (format "[output cut at %d characters]\n%s"
+                                               (length output) (string-join lines "\n"))))
+                        ((> (length lines) 100)
                          (funcall done (format "%s\n[more matching lines not shown]"
                                                (string-join (take 100 lines) "\n"))))
                         ((eq why 'timeout)
@@ -367,11 +381,15 @@ the process and cancels the timer; FINISH is then not called."
               (list shell-file-name "-c" (plist-get args :command))
               superchat-shell-seconds
               (lambda (output why)
-                (funcall done (concat output
-                                      (if (eq why 'timeout)
-                                          (format "\n[timed out after %d seconds and killed]"
-                                                  superchat-shell-seconds)
-                                        (format "\n[exit status %d]" why))))))))
+                (funcall done (if (eq why 'cut)
+                                  ;; Up front: the cut of the whole result keeps the head.
+                                  (format "[output cut at %d characters; the command was stopped]\n%s"
+                                          (length output) output)
+                                (concat output
+                                        (if (eq why 'timeout)
+                                            (format "\n[timed out after %d seconds and killed]"
+                                                    superchat-shell-seconds)
+                                          (format "\n[exit status %d]" why)))))))))
 
 (provide 'superchat-tools)
 ;;; superchat-tools.el ends here

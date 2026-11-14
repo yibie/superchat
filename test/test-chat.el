@@ -516,6 +516,15 @@ tool `echo', and no chat buffers left behind."
       (should-not (superchat-tape-entries
                    :tape (superchat-test-chat--tape-of (current-buffer)))))))
 
+(ert-deftest superchat-chat-note-from-a-chat-buffer-uses-its-scope ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "ta" "/chat-scope/")))
+      (with-current-buffer buffer
+        (setq default-directory superchat-test-chat--dir)
+        (superchat-note "kept in the chat scope"))
+      (should (equal (plist-get (car (superchat-tape-entries :kinds '(note))) :scope)
+                     "/chat-scope/")))))
+
 (ert-deftest superchat-chat-command-records-origin ()
   (superchat-test-chat--with
     (let ((file (expand-file-name "a.el" superchat-test-chat--dir))

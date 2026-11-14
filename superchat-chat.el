@@ -312,7 +312,9 @@ With a prefix argument NEW, start a new timeline."
   "Keep TEXT as a note of this buffer's scope, as the model's note tool does."
   (interactive (list (read-string "Note: ")))
   (when (string-empty-p (string-trim text)) (user-error "A note needs text"))
-  (let ((scope (superchat-tape-scope-of default-directory)))
+  (let ((scope (if superchat-chat--tape
+                   (superchat-chat--scope)
+                 (superchat-tape-scope-of default-directory))))
     (superchat-recall-note (or (superchat-chat-recent-tape scope) (superchat-tape-new-name))
                            (superchat-chat--title text) text nil scope)))
 
