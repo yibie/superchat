@@ -1094,7 +1094,6 @@ as prompt characters and reserved after conversion to tokens."
            (model (or target-model
                       superchat-llm-model
                       (and backend
-                           (fboundp 'superchat--provider-chat-model)
                            (condition-case nil
                                (superchat--provider-chat-model backend)
                              (error nil)))
@@ -3893,7 +3892,6 @@ requests until it receives text, bounded by
                        (funcall run-active-p))
                   (if (and (<= cut-off-streak unknown-tool-retry-limit)
                            (not final-answer-requested)
-                           (fboundp 'superchat--llm-drop-dangling-tool-use)
                            (fboundp 'llm-chat-prompt-append-response))
                       (progn
                         (superchat--llm-drop-dangling-tool-use real-prompt)
@@ -3920,15 +3918,13 @@ requests until it receives text, bounded by
                  ;; provider has already appended an assistant tool-use
                  ;; record, so remove that dangling record, append the exact
                  ;; llm.el error as a user-role correction, and resend.
-                 ((and (fboundp 'superchat--llm-tool-protocol-error-p)
-                       (superchat--llm-tool-protocol-error-p type)
+                 ((and (superchat--llm-tool-protocol-error-p type)
                        (not final-answer-requested)
                        (not evidence-contract)
                        (not completed)
                        (funcall run-active-p)
                        (< tool-error-retries
                           unknown-tool-retry-limit)
-                       (fboundp 'superchat--llm-drop-dangling-tool-use)
                        (fboundp 'llm-chat-prompt-append-response))
                   (cl-incf tool-error-retries)
                   (superchat--llm-drop-dangling-tool-use real-prompt)

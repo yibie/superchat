@@ -88,21 +88,19 @@ Each value is a plist with `:artifacts' and `:active-artifact-id'.")
 
 (defun superchat-artifact-board--tool-context ()
   "Return the current Tool Executor context plist, or nil."
-  (when (and (boundp 'superchat--tool-execution-context)
-             (listp superchat--tool-execution-context))
+  (when (listp superchat--tool-execution-context)
     superchat--tool-execution-context))
 
 (defun superchat-artifact-board--bound-workspace-id ()
   "Return the current buffer's Session Workspace ID, or nil."
-  (when (and (boundp 'superchat--workspace-binding)
-             (listp superchat--workspace-binding))
+  (when (listp superchat--workspace-binding)
     (plist-get superchat--workspace-binding :id)))
 
 (defun superchat-artifact-board--session-id (&optional workspace)
   "Return the best available Session ID for audit events.
 WORKSPACE is the current workspace plist."
   (or (plist-get (superchat-artifact-board--tool-context) :session-id)
-      (and (boundp 'superchat--session-id) superchat--session-id)
+      superchat--session-id
       (plist-get workspace :session-id)))
 
 ;;;###autoload
@@ -1037,8 +1035,7 @@ EXPECTED-REVISION.  WORKSPACE-ID targets another logical workspace."
 
 (defun superchat-artifact-board--projected-artifacts (workspace-id)
   "Return projected artifacts for WORKSPACE-ID from Tape."
-  (when (and (fboundp 'superchat-db-tape-select)
-             (fboundp 'superchat-projection-replay))
+  (when (fboundp 'superchat-projection-replay)
     ;; ponytail: O(workspace events) replay keeps the schema unchanged; promote
     ;; envelope indexes only after measured workspace replay latency.
     (let* ((rows (superchat-service-call nil 'tape 'select

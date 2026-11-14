@@ -853,7 +853,7 @@ call counter survive across the event loop."
                      (superchat-preset-name preset)
                      (format-time-string "%Y%m%d-%H%M%S")
                      (random 65536)))
-         (parent-context (bound-and-true-p superchat--tool-execution-context))
+         (parent-context superchat--tool-execution-context)
          ;; A delegated agent's permission scope is fixed when it starts and
          ;; cannot be widened from inside: it runs under its parent's sandbox
          ;; mode and nobody is asked on its behalf.
@@ -949,7 +949,7 @@ built by `superchat--subagent-make-context')."
 (defun superchat--subagent-tool-context (ctx &optional block)
   "Return the shared executor context for sub-agent CTX."
   (let* ((runtime-context
-          (bound-and-true-p superchat--tool-execution-context))
+          superchat--tool-execution-context)
          (identity (plist-get ctx :runtime-identity)))
     (list :session-id (plist-get ctx :session-id)
           :turn-id (or (and identity (aref identity 1))
@@ -1595,7 +1595,7 @@ id, or nil when no execution can come of it, which the user is told."
 CALLBACK is the tool call's own: it gets the sub-agent's id, or the reason
 nothing was started.  The report later starts a new execution in the
 conversation that asked (`superchat--subagent-queue-report')."
-  (let ((session (or (plist-get (bound-and-true-p superchat--tool-execution-context)
+  (let ((session (or (plist-get superchat--tool-execution-context
                                 :session-id)
                      (bound-and-true-p superchat--session-id)))
         (limit (max 1 superchat-subagent-parallel-max)))

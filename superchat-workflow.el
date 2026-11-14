@@ -100,9 +100,7 @@
 
 (defcustom superchat-workflow-directory
   (expand-file-name "workflow/"
-                    (if (boundp 'superchat-data-directory)
-                        superchat-data-directory
-                      (expand-file-name "superchat/" user-emacs-directory)))
+                    superchat-data-directory)
   "Directory containing .workflow recipe files.
 Each file is a linear list of steps, one per line.
 Blank lines and `#' comment lines are skipped.
@@ -558,8 +556,7 @@ consumed without resolving WORKFLOW-NAME again."
              (session-id
               (or (and (buffer-live-p view-buffer)
                        (buffer-local-value 'superchat--session-id view-buffer))
-                  (and (boundp 'superchat--session-id)
-                       superchat--session-id))))
+                  superchat--session-id)))
         (unless (and (stringp session-id) (not (string-empty-p session-id)))
           (user-error "Workflow requires an existing Session"))
         (let ((correlation-id
@@ -995,9 +992,7 @@ Returns a list of imported skill names."
                         superchat-skills-directory
                       (expand-file-name
                        "skills/"
-                       (if (boundp 'superchat-data-directory)
-                           superchat-data-directory
-                         (expand-file-name "superchat/" user-emacs-directory))))))
+                       superchat-data-directory))))
         (imported '()))
     (unless (file-directory-p legacy-dir)
       (user-error "%s is not a directory" legacy-dir))

@@ -111,7 +111,6 @@ other context fields captured at Run start."
   (let* ((context (copy-sequence runtime-context))
          (run-id (plist-get context :run-id))
          (entry (and run-id
-                     (fboundp 'superchat-runtime--entry)
                      (superchat-runtime--entry run-id)))
          (envelope (and entry (plist-get entry :context-envelope))))
     (if (and envelope (listp envelope))
@@ -609,7 +608,7 @@ so the wrapper is handed out as a closure rather than rebuilt per tool."
         (counter (cons 0 nil))
         (runtime-context
          (copy-sequence
-          (bound-and-true-p superchat--tool-execution-context))))
+          superchat--tool-execution-context)))
     (lambda (tool)
       ;; A synthesized descriptor can be wrapped on a later provider round,
       ;; after the original Runtime dynamic binding has unwound.  Keep the

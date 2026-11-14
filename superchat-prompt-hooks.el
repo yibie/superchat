@@ -687,7 +687,6 @@ retired hook did once the ref was already stripped from clean-input."
     (when file-path
       (let* ((file-exists (file-exists-p file-path))
              (image-info (and file-exists
-                              (fboundp 'superchat--image-attachment-info)
                               (ignore-errors
                                 (superchat--image-attachment-info file-path))))
              (textual-file (and file-exists

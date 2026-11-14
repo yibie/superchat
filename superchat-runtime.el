@@ -3349,7 +3349,7 @@ Explicit profiles retain precedence over the global tools switch."
       (when (listp selection) (setq request (plist-put request :tools tools)))
       (if (or (eq selection 'none)
               (and selection (not (member "ask_user" tools)))
-              (and (null selection) (not (bound-and-true-p superchat-llm-tools-enabled))))
+              (and (null selection) (not superchat-llm-tools-enabled)))
           (setq config nil)
         (unless (and (not (plist-member request :prepared-tools))
                      (null (plist-get request :tool-wrapper))
@@ -4641,7 +4641,7 @@ signalling instead would escape the transport rather than let the Run settle."
                      (list :tools (nth 5 args) :input (nth 0 args)
                            :surface (bound-and-true-p superchat--last-surface)
                            :input-core
-                           (and (plist-get (bound-and-true-p superchat--tool-execution-context)
+                           (and (plist-get superchat--tool-execution-context
                                            :input-operation)
                                 (list :operation
                                       (plist-get superchat--tool-execution-context :input-operation))))
@@ -4943,7 +4943,7 @@ same mistake twice changes what the model is told."
 (defun superchat-runtime--brake-stops-p (streak)
   "Return non-nil when the failure brake stops at STREAK failures in a row."
   (and (memq 'superchat-tool-failure-brake-hook
-             (bound-and-true-p superchat-tool-loop-hooks))
+             superchat-tool-loop-hooks)
        (natnump superchat-tool-failure-brake)
        (> superchat-tool-failure-brake 0)
        (>= streak superchat-tool-failure-brake)))

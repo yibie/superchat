@@ -2163,8 +2163,7 @@ buffer that happens to be current when a tool runs may show another
 Workspace's conversation.  Nil is never read as \"every conversation\": a
 caller that gets nil searches nothing."
   (let ((session-id
-         (or (and (boundp 'superchat--tool-execution-context)
-                  (plist-get superchat--tool-execution-context :session-id))
+         (or (plist-get superchat--tool-execution-context :session-id)
              (and (boundp 'superchat--session-id) superchat--session-id))))
     (and (stringp session-id) (not (string-empty-p session-id)) session-id)))
 
@@ -2175,9 +2174,7 @@ by signaling an error.
 The query is not kept to a Workspace: it reads every conversation's rows.
 That is why nothing Superchat ships offers this tool (see
 `superchat-tools--sql-offered-p')."
-  (if (fboundp 'superchat-db-tape-select)
-      (superchat-tools--rows-to-json (superchat-db-tape-select query))
-    "Error: tape database is not available."))
+  (superchat-tools--rows-to-json (superchat-db-tape-select query)))
 
 (defun superchat-tool-memory-search (query)
   "Search the conversation tape for QUERY and return matches as JSON.

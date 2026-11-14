@@ -1699,7 +1699,7 @@ or replaced still completes durably without ever declaring the Sink dead."
                   (let ((run-id (plist-get run :run-id)))
                     (unless (gethash run-id waiting-seen)
                       (puthash run-id t waiting-seen)
-                      (when (fboundp 'superchat--update-status)
+                      (progn
                         (superchat--response-region-begin transcript-owner t)
                         (superchat--update-status
                          "Prefill / waiting first token… 0s" transcript-owner)))))

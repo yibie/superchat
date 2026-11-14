@@ -178,8 +178,7 @@ or want to force a fresh model list from the provider API."
                                                                 (t (format "%s" name)))))
                                                         (format "%s" backend))))))
          (raw-models (or superchat-manual-models
-                         (and (fboundp 'superchat--get-available-models)
-                              (superchat--get-available-models))
+                         (superchat--get-available-models)
                          '()))
          (models (mapcar (lambda (model)
                            (concat "@" (if (symbolp model) (symbol-name model) model)))

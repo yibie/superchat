@@ -37,6 +37,7 @@
 (defvar superchat-lang)
 (defvar superchat--prompt-start)
 (defvar superchat--current-command)
+(defvar superchat--preview-origin-data) ; defined below
 (defvar superchat--active-preset)
 (defvar superchat--active-preset-scope)
 (defvar superchat--active-topology)
@@ -182,16 +183,15 @@ file paths.  An optional `:START' or `:START-END' suffix records the
 line range for inline reading."
   (let ((file-path (superchat-parser-extract-file-path input)))
     (when file-path
-      (when (fboundp 'superchat-parser-extract-file-range)
-        (let ((range (superchat-parser-extract-file-range input)))
-          (if range
-              (setf (alist-get file-path superchat--context-file-ranges
-                               nil nil #'equal)
-                    range)
-            (setq superchat--context-file-ranges
-                  (assoc-delete-all file-path
-                                    superchat--context-file-ranges
-                                    #'equal)))))
+      (let ((range (superchat-parser-extract-file-range input)))
+        (if range
+            (setf (alist-get file-path superchat--context-file-ranges
+                             nil nil #'equal)
+                  range)
+          (setq superchat--context-file-ranges
+                (assoc-delete-all file-path
+                                  superchat--context-file-ranges
+                                  #'equal))))
       file-path)))
 
 (defun superchat--format-retrieved-memories (memories)
@@ -456,8 +456,7 @@ producer's generated request) adds nothing at all."
   (when (and view (not (plist-get plan :emacs-origin-data)))
     (plist-put plan :emacs-origin-data
                (superchat--resolve-origin-data
-                view (and (boundp 'superchat--preview-origin-data)
-                          superchat--preview-origin-data))))
+                view superchat--preview-origin-data)))
   plan)
 
 (defun superchat--origin-context (plan)
@@ -804,7 +803,7 @@ draft are copies, so the busy Run's own streaming -- which lands above the
 prompt, never in the draft -- moves them with the text they point at."
   (let* ((live superchat--prompt-start)
          (prompt (and (markerp live) (copy-marker live nil)))
-         (owner (if (bound-and-true-p superchat--runtime-transcript-owner)
+         (owner (if superchat--runtime-transcript-owner
                     superchat--runtime-transcript-owner
                   :pending))
          (response-state (cdr (assq owner superchat--response-region-states)))
@@ -1636,9 +1635,7 @@ is non-nil.  An error in one does not stop the message.")
           (put-text-property superchat--prompt-start end-of-input 'read-only t)
           (put-text-property superchat--prompt-start end-of-input
                              'superchat-role 'user)
-          (if (fboundp 'superchat--response-region-consume-prompt)
-              (superchat--response-region-consume-prompt)
-            (setq superchat--prompt-start nil)))
+          (superchat--response-region-consume-prompt))
         (superchat--prepare-for-response)
         ;; ── Step D: Topic lifecycle hooks + core pipeline ──
         (let* ((prepared (superchat--with-chat-execution-scope
@@ -1703,12 +1700,10 @@ is non-nil.  An error in one does not stop the message.")
            ;; Skill invocation (>skill-name)
            (skill
             (let* ((skipped-command
-                    (and (fboundp 'superchat-parser-command)
-                         (superchat-parser-command (or clean-input ""))))
+                    (superchat-parser-command (or clean-input "")))
                    (result
-                    (when (fboundp 'superchat-skills-invoke)
-                      (superchat--with-chat-execution-scope
-                        (superchat-skills-invoke skill clean-input prepared)))))
+                    (superchat--with-chat-execution-scope
+                      (superchat-skills-invoke skill clean-input prepared))))
               (when skipped-command
                 (message "/%s 未作为命令执行，已当作普通文字"
                          (car skipped-command)))

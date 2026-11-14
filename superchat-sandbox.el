@@ -87,7 +87,7 @@ keeps the two knob defaults in charge, which is the old behavior."
   :set (lambda (symbol value)
          ;; Fail at set time, not in the tool-decision path.  During early
          ;; load the levels are not defined yet; the readers then validate.
-         (when (and value (fboundp 'superchat-permission-level))
+         (when value
            (superchat-permission-level value))
          (set-default symbol value))
   :group 'superchat)
@@ -202,8 +202,7 @@ location judged."
 The directory holds the Tape, published Artifacts and the approval ledger of
 agent-written tools, so it is outside every workspace even when a workspace
 root happens to contain it."
-  (when (and (boundp 'superchat-data-directory)
-             (stringp superchat-data-directory)
+  (when (and (stringp superchat-data-directory)
              (not (string-empty-p superchat-data-directory)))
     (file-name-as-directory
      (superchat-sandbox-canonical-path superchat-data-directory))))

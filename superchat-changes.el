@@ -125,7 +125,6 @@ user who acts on it now: no tool is running and the `changes' row is on."
   (when (and (buffer-modified-p buffer)
              (buffer-file-name buffer)
              (null superchat--tool-execution-context)
-             (fboundp 'superchat-plugin-row-active-p)
              (superchat-plugin-row-active-p 'changes))
     (delete-dups (mapcar #'car (superchat-changes--marks buffer)))))
 
@@ -179,7 +178,7 @@ The Tape is read once however many RUN-IDS there are: one Run is asked for
 by name, several are picked out of every delegation on record.  Asking
 once per Run made the unsaved list of a long conversation take as long as
 its Runs times the whole Tape."
-  (when (and run-ids (fboundp 'superchat-db-tape-select))
+  (when run-ids
     (if (null (cdr run-ids))
         (delete-dups
          (mapcar (lambda (row) (if (consp row) (car row) row))

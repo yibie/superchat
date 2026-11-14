@@ -109,6 +109,8 @@
 (autoload 'superchat--cmd-agents "superchat-agents-panel")
 (autoload 'superchat-agents-panel-show "superchat-agents-panel" nil t)
 
+(defvar superchat-mode)                ; defined by define-minor-mode below
+
 (defconst superchat-version "1.4.0"
   "Current Superchat package version.")
 
@@ -213,8 +215,7 @@ Also initializes the SQLite database (tape + memory storage)."
     (unless (file-directory-p command-dir)
       (make-directory command-dir t)))
   ;; Initialize SQLite database (lazy: schema created on first open)
-  (when (fboundp 'superchat-db-open)
-    (ignore-errors (superchat-db-open))))
+  (ignore-errors (superchat-db-open)))
 
 (defcustom superchat-prompt-file-extensions
   '("prompt" "org" "txt" "md")
@@ -531,19 +532,18 @@ thereafter."
 
 (defun superchat--mcp-status-segment ()
   "Return the live MCP health segment, or nil when no source is available."
-  (when (fboundp 'superchat-mcp-health-summary)
-    (when-let* ((summary (ignore-errors (superchat-mcp-health-summary)))
-                (servers (plist-get summary :servers))
-                (ok (plist-get summary :ok))
-                (degraded (plist-get summary :degraded)))
-      (propertize
-       (format "MCP %d ok/%d degraded" ok degraded)
-       'face (if (> degraded 0)
-                 'superchat-status-warning-face
-               'superchat-status-active-face)
-               'help-echo (format "%d MCP server%s: %d healthy, %d degraded"
-                         servers (if (= servers 1) "" "s")
-                         ok degraded)))))
+  (when-let* ((summary (ignore-errors (superchat-mcp-health-summary)))
+              (servers (plist-get summary :servers))
+              (ok (plist-get summary :ok))
+              (degraded (plist-get summary :degraded)))
+    (propertize
+     (format "MCP %d ok/%d degraded" ok degraded)
+     'face (if (> degraded 0)
+               'superchat-status-warning-face
+             'superchat-status-active-face)
+     'help-echo (format "%d MCP server%s: %d healthy, %d degraded"
+                        servers (if (= servers 1) "" "s")
+                        ok degraded))))
 
 (defun superchat--mode-line-safe-string (value)
   "Escape literal percent signs in formatted mode-line VALUE.
@@ -734,15 +734,13 @@ become a third recurrence."
         (superchat--update-status
          (superchat--thinking-status-message
           status
-          (and (fboundp 'superchat--response-region-reasoning-latest)
-               (superchat--response-region-reasoning-latest
-                (plist-get status :transcript-owner))))
+          (superchat--response-region-reasoning-latest
+           (plist-get status :transcript-owner)))
          (plist-get status :transcript-owner))
       ;; A renderer-only caller can still receive a reasoning delta before
       ;; Runtime has published a status; keep the latest line visible without
       ;; inventing elapsed or cost data.
-      (when (and (stringp owner)
-                 (fboundp 'superchat--response-region-reasoning-latest))
+      (when (stringp owner)
         (let ((latest (superchat--response-region-reasoning-latest owner)))
           (when latest
             (superchat--update-status
@@ -908,12 +906,10 @@ until `superchat-resume'.  Pauses only take effect between model
 rounds, never mid-stream."
   (interactive)
   (let ((active-run-id
-         (and (boundp 'superchat--active-run-id)
-              superchat--active-run-id))
+         superchat--active-run-id)
         (pending superchat--pending-send-request))
     (cond
      ((not (and active-run-id
-                (fboundp 'superchat-runtime-active-runs)
                 (member active-run-id
                         (superchat-runtime-active-runs))))
       (message "No active Run to pause."))
@@ -935,8 +931,7 @@ The steer message is recorded and queued by Runtime before the stashed
 round continues."
   (interactive)
   (cond
-   ((not (and (boundp 'superchat--pause-requested)
-              superchat--pause-requested))
+   ((not superchat--pause-requested)
    (message "Nothing paused."))
    (t
     (let* ((steer (string-trim
@@ -991,7 +986,7 @@ round continues."
 (defun superchat--track-active-run (handle)
   "Record HANDLE as the chat buffer's active Run.  Returns HANDLE."
   (when (listp handle)
-    (let ((buffer (if (bound-and-true-p superchat-mode)
+    (let ((buffer (if superchat-mode
                       (current-buffer)
                     (get-buffer-create superchat-buffer-name))))
       (with-current-buffer buffer
@@ -1015,7 +1010,6 @@ STATUS is the Runtime public status plist the `turn-completed' Event
 carries.  `superchat-buffer-name' is bound to the Run's own buffer, so the selected window's
 buffer is compared against it."
   (when (and (listp status)
-             (fboundp 'superchat-runtime--terminal-p)
              (superchat-runtime--terminal-p (plist-get status :status))
              (plist-get status :run-id))
     (superchat--input-refresh-terminal-groups status)
@@ -1023,8 +1017,7 @@ buffer is compared against it."
     (let ((undelivered (or (plist-get status :undelivered-steer-count) 0))
           (view-buffer (window-buffer (selected-window)))
           (run-buffer
-           (and (boundp 'superchat-buffer-name)
-                superchat-buffer-name
+           (and superchat-buffer-name
                 (get-buffer superchat-buffer-name))))
       (cond
        ((> undelivered 0)
@@ -1035,14 +1028,13 @@ buffer is compared against it."
        ;; What runs on the butler's Session says what it has to say by itself,
        ;; and has nothing to say more often than not.
        ((equal (plist-get status :session-id)
-               (bound-and-true-p superchat-butler-session-id)))
+               superchat-butler-session-id))
        ((not (eq view-buffer run-buffer))
         (message "superchat: run %s %s (session %s)"
                  (plist-get status :run-id)
                  (plist-get status :status)
                  (plist-get status :session-id))))
-      (when (and (boundp 'superchat--status-refresh-timer)
-                 (not (> (length (superchat-runtime-active-runs)) 0)))
+      (when (not (> (length (superchat-runtime-active-runs)) 0))
         (superchat--cancel-status-refresh-timer)))))
 
 (superchat-define-plugin chat-run-notices
@@ -1397,7 +1389,7 @@ View, or an execution with no transcript of its own there."
 
 (defun superchat--approval-asked-at (run-id)
   "When the open approval question of RUN-ID was asked, or nil."
-  (and run-id (fboundp 'superchat-approval-open-questions)
+  (and run-id
        (plist-get (cl-find run-id (superchat-approval-open-questions)
                            :key (lambda (question) (plist-get question :run-id))
                            :test #'equal)
@@ -1484,7 +1476,7 @@ Destroyed panels do not provide discovery of ended questions."
   "Find the unique ordinary Run projected into exact VIEW before tracking.
 Use public statuses, including opted-in control-active terminal Runs.  Never
 choose by recency or Session alone.  Ambiguous ownership leaves all Runs alone."
-  (when (and (bound-and-true-p superchat-mode)
+  (when (and superchat-mode
              superchat--response-region-current-owner
              (superchat--input-view-p view superchat--session-id))
     (let ((candidates
@@ -1521,16 +1513,14 @@ cancel that owner without retargeting its continuation.  Before a submission
 returns its tracking handle, use only a unique ordinary Run matching this
 owned View's Session and current opaque transcript owner."
   (interactive)
-  (let ((buffer (if (bound-and-true-p superchat-mode)
+  (let ((buffer (if superchat-mode
                     (current-buffer)
                   (get-buffer-create superchat-buffer-name))))
     (with-current-buffer buffer
       (let* ((active-run-id
-              (and (boundp 'superchat--active-run-id)
-                   superchat--active-run-id))
+              superchat--active-run-id)
              (active-runs
-              (and (fboundp 'superchat-runtime-active-runs)
-                   (superchat-runtime-active-runs)))
+              (superchat-runtime-active-runs))
              (pending superchat--pending-send-request)
              (pending-owner-run-id
               (and (superchat--pending-pause-valid-p pending)
@@ -1752,7 +1742,6 @@ overwrite unsent prompt text."
       (goto-char prompt)
       (insert (nth 3 (car rows))))))
 
-(defvar superchat-mode)                ; defined by define-minor-mode below
 (defvar-local superchat--assistant-response-start-marker nil)
 (defvar-local superchat--assistant-response-end-marker nil)
 (defvar-local superchat--response-region-persistent-marker nil)
@@ -1933,7 +1922,6 @@ CAPABILITY and SOURCE provide the legacy lookup fallback."
         ;; ponytail: O(n) only while restoring a renamed Profile; add an
         ;; index if real Skill counts make this measurable.
         (and (not (equal source "builtin"))
-             (fboundp 'superchat-skills-get-available)
              (cl-loop
               for name in (superchat-skills-get-available)
               for preset = (ignore-errors (superchat-skills-load name))
@@ -1959,7 +1947,7 @@ mode-off vetoes publication just like a killed owner does."
   (and (buffer-live-p owner)
        (with-current-buffer owner
          (and (not superchat--preset-switch-aborted)
-              (or (not require-mode-p) (bound-and-true-p superchat-mode))
+              (or (not require-mode-p) superchat-mode)
               (eq superchat--active-preset-scope expected-scope)))))
 
 (defun superchat--assert-preset-owner (owner require-mode-p expected-scope)
@@ -2154,7 +2142,7 @@ terminal delivery and makes activation failure leave the old Scope usable."
             (and preset (superchat-preset-source preset)
                  (symbol-name (superchat-preset-source preset))))
            (owner-mode-p (with-current-buffer owner
-                           (bound-and-true-p superchat-mode)))
+                           superchat-mode))
            (old-scope (with-current-buffer owner superchat--active-preset-scope))
            (same-p (with-current-buffer owner
                      (superchat--same-preset-activation-p preset)))
@@ -2493,8 +2481,7 @@ Returns:
            ;; when the server connects, so appending a fresh
            ;; `superchat-mcp-get-tools' here would count every one of
            ;; them twice -- and query the hub again to do it.
-           (when (fboundp 'superchat-get-llm-tools)
-             (superchat-get-llm-tools)))))
+           (superchat-get-llm-tools))))
     (cond
      ;; Ollama + tool calling = non-streaming
      ((and (superchat--is-ollama-backend-p)
@@ -2625,8 +2612,7 @@ M1: the Tape is the authority, so a reader asks the derivation instead of the
 in-buffer list.  `superchat--conversation-history' remains a per-View cache of
 the same rows -- it is never read as an authority.  SESSION-ID defaults to
 this View's Session; nil returns nil rather than another Session's history."
-  (let ((sid (or session-id (and (boundp 'superchat--session-id)
-                                 superchat--session-id))))
+  (let ((sid (or session-id superchat--session-id)))
     (when (and (stringp sid) (not (string-empty-p sid)))
       (let ((limit (and (integerp superchat-conversation-history-limit)
                         (> superchat-conversation-history-limit 0)
@@ -2722,8 +2708,7 @@ Supports multiple file extensions defined in `superchat-prompt-file-extensions`.
 Parses filenames in format 'TITLE-PURPOSE.prompt' to register 'TITLE' as the command."
   (superchat--ensure-directories)
   ;; Ensure superchat--user-commands is a hash table before clearing
-  (unless (and (boundp 'superchat--user-commands)
-               (hash-table-p superchat--user-commands))
+  (unless (hash-table-p superchat--user-commands)
     (setq superchat--user-commands (make-hash-table :test 'equal)))
   (clrhash superchat--user-commands)
   (let ((command-dir (superchat--command-dir)))
@@ -2990,8 +2975,7 @@ Implements `completion-at-point-functions' for corfu/company integration."
      ((string-match "\\(>[a-zA-Z0-9_-]*\\)$" text)
       (let* ((symbol-start (match-beginning 0))
              (completion-start (+ prompt-start symbol-start)))
-        `(,completion-start ,end ,(when (fboundp 'superchat-skills-completion-list)
-                                           (superchat-skills-completion-list))
+        `(,completion-start ,end ,(superchat-skills-completion-list)
           . (metadata (category . superchat-skills)))))
      ;; --- File path completion (#path) ---
      ((string-match "\\(#[^[:space:]]*\\)$" text)
@@ -3079,21 +3063,18 @@ Studio server varies."
                          ((null backend) "UNCONFIGURED")
                          ((fboundp 'llm-name) (superchat--provider-name backend))
                          (t "unknown")))
-         (model (or (and (fboundp 'superchat--provider-chat-model)
-                         (condition-case nil
-                             (superchat--provider-chat-model backend)
-                           (error nil)))
+         (model (or (condition-case nil
+                        (superchat--provider-chat-model backend)
+                      (error nil))
                     superchat-llm-model
                     "default"))
          (streaming superchat-llm-streaming)
-         (tools (when (fboundp 'superchat-get-llm-tools)
-                  (superchat-get-llm-tools)))
+         (tools (superchat-get-llm-tools))
          ;; MCP tools are registered like any other tool, so they are
          ;; already inside TOOLS.  Counting them from the registry --
          ;; rather than collecting the hub a second time -- is what keeps
          ;; the report from presenting one tool as two.
-         (mcp-tools (when (fboundp 'superchat-mcp-registered-tool-names)
-                      (superchat-mcp-registered-tool-names)))
+         (mcp-tools (superchat-mcp-registered-tool-names))
          (content
           (concat
            "Backend: llm.el\n"
@@ -3236,7 +3217,7 @@ unaffected either way — it comes from the Turn's own parsed file
 reference, not from this tracking list, so this Turn's prompt still
 receives the file's content regardless of where this function runs."
   (message "superchat: Tracking file for context: %s" file-path)
-  (when (and file-path (file-exists-p file-path) (bound-and-true-p superchat-mode))
+  (when (and file-path (file-exists-p file-path) superchat-mode)
     (make-local-variable 'superchat--current-context-files)
     (cl-pushnew file-path superchat--current-context-files :test #'equal)))
 
@@ -3367,7 +3348,7 @@ CACHE-PRIMARY retains the existing primary cache behavior after consent."
   (interactive)
   (superchat-plugin-require-active-row 'chat)
   (let* ((primary-name superchat-buffer-name)
-         (target (if (bound-and-true-p superchat-mode)
+         (target (if superchat-mode
                      (current-buffer)
                    (or (get-buffer superchat-buffer-name)
                        (superchat--ensure-chat-view superchat-buffer-name))))
@@ -3473,8 +3454,7 @@ View (`superchat--session-cache-view-p')."
                            (insert-file-contents cache-file)
                            (buffer-string))))
             (message "Superchat: Processing cached session from last exit...")
-            (let ((request (when (fboundp 'superchat-memory-summarize-session-history)
-                              (superchat-memory-summarize-session-history history))))
+            (let ((request (superchat-memory-summarize-session-history history)))
               (if request
                   (progn
                     (delete-file cache-file)
@@ -3546,9 +3526,8 @@ View (`superchat--session-cache-view-p')."
          (json-array-type 'list)
          (json-key-type 'symbol)
          (meta (ignore-errors (json-read-from-string (or (nth 4 row) ""))))
-         (event (and (fboundp 'superchat-view--object-get)
-                     (superchat-view--object-get
-                      meta '(event_type event-type)))))
+         (event (superchat-view--object-get
+                 meta '(event_type event-type))))
     (or event (nth 1 row))))
 
 (defun superchat--session-row-runtime-audit-p (row)
@@ -3962,7 +3941,6 @@ audit rows keep their collapsed line."
                  (json-read-from-string (or (nth 4 row) "")))))
            (payload-get (meta key)
              (and meta
-                  (fboundp 'superchat-view--object-get)
                   (let ((payload (superchat-view--object-get meta '(payload))))
                     (and payload
                          (superchat-view--object-get payload (list key))))))
@@ -4079,7 +4057,6 @@ audit rows keep their collapsed line."
                 ((when-let* ((material
                               (and (equal "attachment.added"
                                           (superchat--session-row-event-type row))
-                                   (fboundp 'superchat-tape--request-admitted-material-text)
                                    (superchat-tape--request-admitted-material-text row))))
                    (insert "\n** Injected material\n" material "\n")
                    (close-assistant)
@@ -4101,8 +4078,7 @@ audit rows keep their collapsed line."
         ;; derivation keeps the cache a regenerated view rather than a second
         ;; authority, so a compaction or an expansion is reflected here instead
         ;; of depending on which rows this walk happened to visit.
-        (when (fboundp 'superchat--refresh-history-cache)
-          (superchat--refresh-history-cache))))))
+        (superchat--refresh-history-cache)))))
 
 (defun superchat--session-active-run-p (session-id)
   "Return non-nil when SESSION-ID still has a live, process-local Run."
@@ -4122,7 +4098,6 @@ observed in the same Emacs while that Run is still current must be left
 untouched -- otherwise the false seal could later be contradicted by the
 Run's real terminal fact (S22-fix-1)."
   (when (and (stringp session-id)
-             (fboundp 'superchat-runtime-reconcile-session)
              (not (superchat--session-active-run-p session-id)))
     (ignore-errors (superchat-runtime-reconcile-session session-id))))
 
@@ -4420,14 +4395,12 @@ programmatically to launch with a specific preset."
                             nil t))))
   (superchat-plugin-require-active-row 'chat)
   ;; Keep legacy prompt substitution aligned with the active language.
-  (when (fboundp 'superchat-executor-initialize)
-    (superchat-executor-initialize :lang superchat-lang))
+  (superchat-executor-initialize :lang superchat-lang)
   (superchat--ensure-directories)
   (superchat--load-user-commands)
   ;; Load the stored tools a person approved, each into its Workspace.
   ;; Silent; the others are listed by `superchat-pending', not asked about.
-  (when (fboundp 'superchat-synthesis-rehydrate)
-    (ignore-errors (superchat-synthesis-rehydrate)))
+  (ignore-errors (superchat-synthesis-rehydrate))
   (superchat--process-cached-session-on-startup)
   (let* ((source (current-buffer))
          (primary (get-buffer superchat-buffer-name))
@@ -4564,7 +4537,7 @@ name, reported as facts plus `:dead' rather than as silence.")
 Both major modes count: the chat View and the request inspector are
 Superchat-owned surfaces, never an editing source for themselves."
   (with-current-buffer (or buffer (current-buffer))
-    (or (bound-and-true-p superchat-mode)
+    (or superchat-mode
         (derived-mode-p 'superchat-request-mode))))
 
 (defun superchat--origin-remember (view snapshot)
@@ -5340,7 +5313,6 @@ View is already open and has its own buffer-local value."
            1 nil
            (lambda ()
              (when (and (buffer-live-p (get-buffer superchat-buffer-name))
-                        (boundp 'superchat-llm-backend)
                         superchat-llm-backend
                         (fboundp 'llm-models))
                (condition-case nil
@@ -5378,9 +5350,7 @@ View is already open and has its own buffer-local value."
 Uses the built-in `transient' library (Emacs 28+) when available;
 falls back to a `completing-read' text menu otherwise."
   (interactive)
-  (if (fboundp 'superchat--dispatch-menu-transient)
-      (call-interactively #'superchat--dispatch-menu-transient)
-    (superchat--fallback-dispatch)))
+  (call-interactively #'superchat--dispatch-menu-transient))
 
 (defun superchat--dispatch-menu-transient ()
   "Stub replaced at runtime when transient is available."
@@ -5449,8 +5419,7 @@ falls back to a `completing-read' text menu otherwise."
 (defun superchat--transient-switch-model ()
   "Prompt for a model and switch to it."
   (interactive)
-  (let ((models (and (fboundp 'superchat--get-available-models)
-                     (superchat--get-available-models))))
+  (let ((models (superchat--get-available-models)))
     (if models
         (let ((model (completing-read "Switch to model: " models nil t)))
           (unless (string-empty-p model)
@@ -5476,8 +5445,7 @@ falls back to a `completing-read' text menu otherwise."
 An active preset with an explicit reasoning value still takes precedence
 for turns that use that preset."
   (interactive)
-  (let* ((preset (and (boundp 'superchat--active-preset)
-                      superchat--active-preset))
+  (let* ((preset superchat--active-preset)
          (preset-reasoning
           (and preset
                (superchat-preset-reasoning preset)))
@@ -5508,8 +5476,7 @@ for turns that use that preset."
 (defun superchat--transient-pick-skill ()
   "Prompt for an agentic skill and insert >skill-name."
   (interactive)
-  (if-let* ((skills (and (fboundp 'superchat-skills-completion-list)
-                        (superchat-skills-completion-list))))
+  (if-let* ((skills (superchat-skills-completion-list)))
       (let ((skill (completing-read "Skill: " skills nil t)))
         (unless (string-empty-p skill)
           (insert ">" skill " ")))
@@ -5812,23 +5779,20 @@ the model decides on its own to attach or look up."
 ARGS is the search query."
   (if (and args (> (length args) 0))
       (let* ((trimmed (string-trim args))
-             (session-id (when (boundp 'superchat--session-id) superchat--session-id))
+             (session-id superchat--session-id)
              (search-limit 20)
-             (scope (if (boundp 'superchat-memory-recall-scope)
-                        superchat-memory-recall-scope
-                      'all))
+             (scope superchat-memory-recall-scope)
              (tape-rows
-              (when (fboundp 'superchat-view-search)
-                (cond
-                 ((eq scope 'session)
-                  (superchat-view-search trimmed session-id search-limit))
-                 ((fboundp 'superchat-db-tape-search-prioritized)
-                  ;; Current-Session rows are fetched first, in the query
-                  ;; itself, so they cannot be starved out of SEARCH-LIMIT
-                  ;; by better-ranked rows from other Sessions.
-                  (superchat-db-tape-search-prioritized
-                   trimmed session-id search-limit nil))
-                 (t (superchat-view-search trimmed nil search-limit)))))
+              (cond
+               ((eq scope 'session)
+                (superchat-view-search trimmed session-id search-limit))
+               ((fboundp 'superchat-db-tape-search-prioritized)
+                ;; Current-Session rows are fetched first, in the query
+                ;; itself, so they cannot be starved out of SEARCH-LIMIT
+                ;; by better-ranked rows from other Sessions.
+                (superchat-db-tape-search-prioritized
+                 trimmed session-id search-limit nil))
+               (t (superchat-view-search trimmed nil search-limit))))
              (tape-mems (mapcar #'superchat-view-row-to-memory-plist tape-rows))
              (selected-anchor-ids
               (mapcar #'car
@@ -5836,8 +5800,7 @@ ARGS is the search query."
                        (lambda (row) (equal "anchor" (nth 3 row)))
                        tape-rows)))
              (legacy-mems
-              (when (and (fboundp 'superchat-memory-retrieve)
-                         (< (length tape-mems) search-limit))
+              (when (< (length tape-mems) search-limit)
                 (cl-remove-if
                  (lambda (memory)
                    (let ((anchor-id
@@ -5863,7 +5826,7 @@ Also updates the Memory projection when its compatibility bridge is enabled."
   (let ((trimmed (string-trim (or args ""))))
     (if (> (length trimmed) 0)
         (let ((title (superchat-memory-compose-title trimmed))
-              (session-id (or (when (boundp 'superchat--session-id) superchat--session-id)
+              (session-id (or superchat--session-id
                               (format-time-string "%Y%m%d-%H%M%S-")))
               entry-id
               anchor-id)
@@ -5879,9 +5842,7 @@ Also updates the Memory projection when its compatibility bridge is enabled."
                                      (title . ,title))
                              :topic "remember")))
           ;; Compatibility Memory projection.
-          (when (and (fboundp 'superchat-memory-capture-explicit)
-                     (boundp 'superchat-memory-legacy-writes-enabled)
-                     superchat-memory-legacy-writes-enabled)
+          (when superchat-memory-legacy-writes-enabled
             (superchat-memory-capture-explicit
              trimmed title
              :remember-session-id session-id
@@ -5895,9 +5856,7 @@ Also updates the Memory projection when its compatibility bridge is enabled."
 
 (defun superchat--cmd-skill-install (_cmd args _input _lang _target-model)
   (if (and args (> (length args) 0))
-      (if (fboundp 'superchat-skills-install)
-          (superchat-skills-install args)
-        '(:type :echo :content "Skills system not loaded."))
+      (superchat-skills-install args)
     '(:type :echo :content "Usage: /skill-install user/repo[@branch]")))
 
 (defun superchat--cmd-commands (_cmd _args _input _lang _target-model)
@@ -5909,8 +5868,7 @@ With ARGS (a skill name), load and activate that skill as the session preset.
 Without ARGS, report the current active preset if it is an agent."
   (let ((skill-name (string-trim (or args ""))))
     (if (string-empty-p skill-name)
-        (if (and (boundp 'superchat--active-preset)
-                 superchat--active-preset
+        (if (and superchat--active-preset
                  (superchat-preset-agent-p superchat--active-preset))
             `(:type :echo
               :content ,(format "Already in agent mode: %s"

@@ -34,6 +34,7 @@
 (defvar superchat--session-id nil)
 (defvar superchat--conversation-history nil)
 (defvar superchat-buffer-name nil)
+(defvar superchat-compact--in-flight)   ; defined below
 (defvar superchat-tape-tool-observation-note)
 (defvar superchat-context-message-count nil)
 (defvar superchat-context-max-chars nil)
@@ -74,7 +75,7 @@ keep-recent boundary."
 
 (defun superchat-compact--ensure-session-id ()
   "Return the already-bound `superchat--session-id', if any."
-  (and (boundp 'superchat--session-id) superchat--session-id))
+  superchat--session-id)
 
 (defun superchat-compact--session-buffer (session-id)
   "Return a live buffer safely identified as SESSION-ID's View, or nil.
@@ -94,9 +95,9 @@ foreign Session's buffer for the caller to compact."
       (cond
        ((and named (buffer-live-p named)
              (with-current-buffer named
-               (equal session-id (bound-and-true-p superchat--session-id))))
+               (equal session-id superchat--session-id)))
         named)
-       ((equal session-id (bound-and-true-p superchat--session-id))
+       ((equal session-id superchat--session-id)
         (current-buffer))))))
 
 ;; ═══════════════════════════════════════════════════════════
@@ -145,7 +146,7 @@ Anchor is recorded as expanded, which makes `superchat-view-derive-messages'
 return its sources again; the in-buffer list is then refreshed from that
 derivation as a cache.  Repeating the operation is a no-op."
   (let* ((sid (or session-id
-                  (and (boundp 'superchat--session-id) superchat--session-id)))
+                  superchat--session-id))
          (anchor (when sid (superchat-service-call nil 'session 'anchor-latest sid))))
     (when anchor
       (let* ((entries (superchat-service-call nil 'session 'expand-anchor sid anchor))
@@ -226,8 +227,7 @@ Turn proceeds unchanged and later Turns start from the Anchor."
   "Return the current effective context character budget.
 Use the prepared turn's recorded budget when no one-shot TARGET-MODEL is
 present; recovery compaction with a target model derives its own budget."
-  (let* ((turn (and (boundp 'superchat--current-turn)
-                    superchat--current-turn))
+  (let* ((turn superchat--current-turn)
          (stored (and (not target-model)
                       turn
                       (plist-get (superchat-turn-state turn)
@@ -257,8 +257,7 @@ start (context contract, amendment 2026-09-25, Recovery).  A failed read
 of either signals; the View is never assembled without its exclusions."
   (apply #'superchat-service-call nil 'session 'assemble-view
          session-id
-         :max-entries (and (boundp 'superchat-context-message-count)
-                           superchat-context-message-count)
+         :max-entries superchat-context-message-count
          :max-chars (superchat-compact--context-budget)
          :expanded-anchor-ids
          (vconcat superchat--expanded-compaction-anchor-ids)
@@ -288,12 +287,11 @@ runs in another buffer, not the View that owns the Run."
   (let* ((resume (plist-get details :resume-function))
          (fail (plist-get details :fail-function))
          (session-id (or (plist-get details :session-id)
-                          (and (boundp 'superchat--session-id)
-                               superchat--session-id)))
+                          superchat--session-id))
          (buffer (and session-id (superchat-compact--session-buffer session-id)))
          (in-flight (and buffer (buffer-live-p buffer)
                          (with-current-buffer buffer
-                           (bound-and-true-p superchat-compact--in-flight)))))
+                           superchat-compact--in-flight))))
     (when (and superchat-handoff-auto-enabled
                (functionp resume)
                (functionp fail)
@@ -540,8 +538,7 @@ both rows; it is placed at the outcome row's position and takes part in the
 recent window like any message.  Rows the Session replaced with
 `turn.superseded' are skipped; a failed supersession-index read signals, so
 compaction never summarizes history that still contains replaced turns."
-  (let* ((session-id (and (boundp 'superchat--session-id)
-                          superchat--session-id))
+  (let* ((session-id superchat--session-id)
          (superseded (and session-id
                           (superchat-service-call nil 'session 'superseded-ids session-id)))
          (anchor (and session-id
@@ -811,8 +808,7 @@ the Run was in flight are preserved by ID in front of the new Anchor."
         (message "Session %s compacted; anchor kept on tape." session-id)
       (with-current-buffer buffer
         (if (not (equal session-id
-                        (and (boundp 'superchat--session-id)
-                             superchat--session-id)))
+                        superchat--session-id))
             (message "Session %s compacted; history changed, anchor kept on tape only."
                      session-id)
           ;; M1: the Anchor is already on the Tape, so the model-visible
@@ -966,8 +962,7 @@ optional one-shot model override for the compaction Run."
   (let ((count (superchat-compact--expand-anchor)))
     (cond
      ((null count)
-      (let* ((session-id (and (boundp 'superchat--session-id)
-                              superchat--session-id))
+      (let* ((session-id superchat--session-id)
              (anchor (and session-id
                           (superchat-service-call nil 'session 'anchor-latest
                            session-id))))
@@ -989,8 +984,7 @@ With no ARGS, open the latest log.  A positive integer selects that sequence."
   (let* ((argument (string-trim (or args "")))
          (number (and (string-match-p "\\`[1-9][0-9]*\\'" argument)
                       (string-to-number argument)))
-         (session-id (and (boundp 'superchat--session-id)
-                          superchat--session-id))
+         (session-id superchat--session-id)
          (file
           (cond
            ((string-empty-p argument)

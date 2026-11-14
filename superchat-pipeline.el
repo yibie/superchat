@@ -70,8 +70,7 @@ symbol; a registered string would otherwise pass the `memq' validation in
     (error "Surface %S is already registered" symbol))
   (setq superchat-pipeline--surfaces
         (append superchat-pipeline--surfaces (list symbol)))
-  (when (fboundp 'superchat-plugin-record-undo)
-    (superchat-plugin-record-undo (lambda () (superchat-unregister-surface symbol))))
+  (superchat-plugin-record-undo (lambda () (superchat-unregister-surface symbol)))
   symbol)
 
 (defun superchat-unregister-surface (symbol)

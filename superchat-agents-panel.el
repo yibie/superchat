@@ -68,7 +68,7 @@
     (pcase (widget-get widget :panel-action)
       (:cancel-subagent
        (let ((id (widget-get widget :target-id)))
-         (when (and id (fboundp 'superchat-subagent-cancel))
+         (when id
            (superchat-subagent-cancel id))))
       (:pause-main
        (superchat-agents-panel--call-main-action widget 'superchat-pause))
@@ -162,8 +162,7 @@ The paused flag selects Resume; the Run's Tape history remains reachable."
 (defun superchat-agents-panel--frame ()
   "Build the panel frame from the live control planes.
 Covers the selected session's main Run and running sub-agents."
-  (let* ((entries (and (fboundp 'superchat-subagent-running)
-                       (superchat-subagent-running)))
+  (let* ((entries (superchat-subagent-running))
          (main (superchat-agents-panel--main-run-row))
          (subagent-rows (mapcar #'superchat-agents-panel--row entries)))
     (list

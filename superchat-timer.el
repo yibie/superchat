@@ -1504,8 +1504,7 @@ It is on record first, like any timer, and the user is told nothing yet."
 ;;;; Arming -----------------------------------------------------------------------------
 
 (defun superchat-timer--active-p ()
-  (and (fboundp 'superchat-plugin-row-active-p)
-       (superchat-plugin-row-active-p 'timers)))
+  (superchat-plugin-row-active-p 'timers))
 
 (defun superchat-timer--with-elfeed ()
   "Make what comes into elfeed an event a rule can start on.

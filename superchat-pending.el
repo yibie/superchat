@@ -597,8 +597,7 @@ Nothing is sent (`superchat-butler-bring')."
 (defun superchat-pending-refresh ()
   "Read everything again."
   (interactive)
-  (when (fboundp 'superchat-changes-notices-reload)
-    (ignore-errors (superchat-changes-notices-reload)))
+  (ignore-errors (superchat-changes-notices-reload))
   (when-let* ((buffer (get-buffer superchat-pending-buffer-name)))
     (with-current-buffer buffer
       (when (derived-mode-p 'superchat-pending-mode)

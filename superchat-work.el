@@ -825,8 +825,7 @@ and when the last one did.")
 (defun superchat-work--now () (funcall superchat-work-now-function))
 
 (defun superchat-work--wake-active-p ()
-  (and (fboundp 'superchat-plugin-row-active-p)
-       (superchat-plugin-row-active-p 'work-records)))
+  (superchat-plugin-row-active-p 'work-records))
 
 (defun superchat-work--session-ran-p (session-id)
   "Non-nil when an execution ever started in SESSION-ID, by its Tape."
@@ -1186,8 +1185,7 @@ The execution itself ended as it ended; what is missing is the record's
 account of it, which `superchat-work-settle-missing' writes later; SESSION
 is remembered as owed one."
   (when session (puthash session t superchat-work--owed))
-  (when (fboundp 'superchat-event-record-fault)
-    (superchat-event-record-fault 'work-outcome id 'work-records condition))
+  (superchat-event-record-fault 'work-outcome id 'work-records condition)
   (message "superchat: work record %s has no outcome for execution %s yet: %s"
            id run (error-message-string condition)))
 
@@ -1726,15 +1724,13 @@ first."
       (condition-case err
           (superchat-work--drive session status)
         (error
-         (when (fboundp 'superchat-event-record-fault)
-           (superchat-event-record-fault 'work-round run 'work-records err))
+         (superchat-event-record-fault 'work-round run 'work-records err)
          (message "superchat: the work did not go on: %s"
                   (error-message-string err))))
       (condition-case err
           (superchat-work--report-woken run status)
         (error
-         (when (fboundp 'superchat-event-record-fault)
-           (superchat-event-record-fault 'work-report run 'work-records err))
+         (superchat-event-record-fault 'work-report run 'work-records err)
          (message "superchat: the main conversation was not told how execution %s ended: %s"
                   run (error-message-string err)))))))
 
