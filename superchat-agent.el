@@ -42,6 +42,55 @@
   "The messages for ENTRIES; events and notes are left out."
   (delq nil (mapcar #'superchat-agent--message entries)))
 
+(defun superchat-agent--size (messages)
+  "The size of MESSAGES: their texts together.  The handoff check and the
+budget of a request both use this."
+  (cl-loop for m in messages sum (length (plist-get m :text))))
+
+(defun superchat-agent--groups (entries)
+  "ENTRIES in lists: an assistant entry with every tool, event and note entry
+up to the next entry of another kind, and every other entry alone."
+  (let (groups)
+    (dolist (e entries)
+      (if (and (memq (plist-get e :kind) '(tool event note)) groups
+               (eq (plist-get (car (last (car groups))) :kind) 'assistant))
+          (push e (car groups))
+        (push (list e) groups)))
+    (nreverse (mapcar #'nreverse groups))))
+
+(defun superchat-agent--standin (n)
+  "The message that stands for N entries left out of a request."
+  (list :role 'user
+        :text (format (concat "[%d earlier entries of this conversation are left out of "
+                             "this request; recall and tape_query can read them.]")
+                       n)))
+
+(defun superchat-agent--fit (entries user-id)
+  "The messages for ENTRIES within `superchat-context-chars'.
+The oldest groups go first, except an anchor, the entry USER-ID and the latest
+assistant entry with its results.  One stand-in message takes the place of the
+oldest group left out, so every call stays with its results and the list
+still starts with what the first entry said."
+  (let* ((groups (mapcar (lambda (g) (list g (superchat-agent--messages g)))
+                         (superchat-agent--groups entries)))
+         (latest (cl-find-if (lambda (g) (eq (plist-get (caar g) :kind) 'assistant))
+                             groups :from-end t))
+         (size (cl-loop for g in groups sum (superchat-agent--size (cadr g))))
+         (dropped 0) gone)
+    (dolist (g groups)
+      (when (and (cadr g) (not (eq g latest))
+                 (> (+ size (if gone (length (plist-get (superchat-agent--standin dropped) :text)) 0))
+                    superchat-context-chars)
+                 (cl-notany (lambda (e) (or (eq (plist-get e :kind) 'anchor)
+                                            (eql (plist-get e :id) user-id)))
+                            (car g)))
+        (cl-decf size (superchat-agent--size (cadr g)))
+        (cl-incf dropped (length (cadr g)))
+        (push g gone)))
+    (cl-loop for g in groups
+             if (not (memq g gone)) append (cadr g)
+             else if (eq g (car (last gone))) collect (superchat-agent--standin dropped))))
+
 (defun superchat-agent--emit (run)
   "Give ON-ENTRY every entry appended to the timeline since the last call."
   (dolist (entry (superchat-tape-entries :tape (plist-get run :tape)
@@ -74,6 +123,7 @@ that ON-DONE may start the next one."
 (defun superchat-agent--fail (run why)
   "Record WHY as an error event and end RUN with status error."
   (when (superchat-agent--live run)
+    (setf (plist-get run :error) why)
     (unwind-protect (superchat-agent--add run 'event why :data (list :type "error"))
       (superchat-agent--finish run 'error))))
 
@@ -105,6 +155,7 @@ another request; then this handle is stale and is not kept."
     (cl-incf (plist-get run :rounds))
     (superchat-agent--add run 'assistant (plist-get response :text)
                           :data (list :model (plist-get response :model) :calls calls))
+    (setf (plist-get run :text) (plist-get response :text))
     (if (null calls)
         (when (superchat-agent--live run)
           (superchat-agent--finish run 'done))
@@ -150,7 +201,8 @@ meanwhile; :stop stops a tool that is still running."
 (defun superchat-agent--step (run)
   "Make the next request of RUN."
   (let* ((tape (plist-get run :tape))
-         (messages (superchat-agent--messages (superchat-view 'conversation :tape tape)))
+         (messages (superchat-agent--fit (superchat-view 'conversation :tape tape)
+                                         (plist-get run :user-id)))
          (tools (plist-get run :tools)))
     (superchat-agent--emit run)
     (cond
@@ -175,37 +227,47 @@ meanwhile; :stop stops a tool that is still running."
                      :on-error (lambda (why) (when (superchat-agent--live run)
                                                (superchat-agent--fail run why))))))))))))
 
-(defun superchat-agent--begin (run text origin scope &optional failed)
+(defun superchat-agent--user-data (run)
+  "The data of the user entry of RUN."
+  (append (and (plist-get run :origin) (list :origin (plist-get run :origin)))
+          (and (plist-get run :ephemeral) (list :ephemeral t))))
+
+(defun superchat-agent--begin (run text scope &optional failed)
   "Append the user entry of RUN and make its first request, or end the run
 with an error when FAILED.  SCOPE is that of the first entry of a timeline."
   (setf (plist-get run :unsent) nil)
-  (superchat-agent--add run 'user text
-                        :data (and origin (list :origin origin)) :scope scope)
+  (setf (plist-get run :user-id)
+        (plist-get (superchat-agent--add run 'user text
+                                         :data (superchat-agent--user-data run) :scope scope)
+                   :id))
   (if failed
       (superchat-agent--finish run 'error)
     (superchat-agent--step run)))
 
-(cl-defun superchat-run (tape text &key scope origin tools system model on-text on-entry on-done)
+(cl-defun superchat-run (tape text &key scope origin tools system model ephemeral
+                              on-text on-entry on-done)
   "Append TEXT as a user entry of timeline TAPE and answer it; return the run.
 SCOPE is that of a new timeline's first entry, by default that of
 `default-directory'.
 TOOLS is a list of tool names, nil for every tool, or `none'.  SYSTEM is
 extra text for the system prompt.  ON-TEXT gets streamed text, ON-ENTRY each
-entry appended, ON-DONE the run, once, with :status done, cancelled or error."
+entry appended, ON-DONE the run, once, with :status done, cancelled or error,
+:text the last answer of this run and, for error, :error.  EPHEMERAL marks
+the user entry: the timeline is one question, not a conversation."
   (when (gethash tape superchat-agent--runs)
     (error "Timeline %s is busy with a run or a handoff" tape))
   (let* ((last (car (superchat-tape-entries :tape tape :newest t :limit 1)))
          (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil :stop nil
-                    :unsent nil :text text :origin origin
+                    :unsent nil :request text :origin origin :ephemeral ephemeral
+                    :text nil :error nil :user-id nil
                     :seen (if last (plist-get last :id) 0)
                     :tools tools :system system :model model
                     :on-text on-text :on-entry on-entry :on-done on-done)))
     (puthash tape run superchat-agent--runs)
     (superchat-agent--guard
      run (lambda ()
-           (if (and last (> (cl-loop for m in (superchat-agent--messages
-                                               (superchat-view 'conversation :tape tape))
-                                     sum (length (plist-get m :text)))
+           (if (and last (> (superchat-agent--size
+                  (superchat-agent--messages (superchat-view 'conversation :tape tape)))
                             superchat-context-chars))
                ;; The anchor goes in before the user entry, so the request stays after it.
                (progn
@@ -218,10 +280,10 @@ entry appended, ON-DONE the run, once, with :status done, cancelled or error."
                            (when (superchat-agent--live run)
                              (superchat-agent--guard
                               run (lambda ()
-                                    (superchat-agent--begin run text origin nil
+                                    (superchat-agent--begin run text nil
                                                             (not anchor))))))))))
              (superchat-agent--begin
-              run text origin
+              run text
               (unless last (or scope (superchat-tape-scope-of default-directory)))))))
     run))
 
@@ -262,9 +324,8 @@ apart from the call with id EXCEPT, which is running and will have one."
           (progn
             ;; Cancelled during the handoff before the user entry: write it down first.
             (when (plist-get run :unsent)
-              (superchat-agent--add run 'user (plist-get run :text)
-                                    :data (and (plist-get run :origin)
-                                               (list :origin (plist-get run :origin)))))
+              (superchat-agent--add run 'user (plist-get run :request)
+                                    :data (superchat-agent--user-data run)))
             (dolist (call (superchat-agent--unanswered tape (plist-get run :calling)))
               (superchat-agent--add run 'tool "Cancelled."
                                     :data (list :call-id (plist-get call :id)

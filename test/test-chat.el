@@ -435,7 +435,8 @@ tool `echo', and no chat buffers left behind."
 (ert-deftest superchat-chat-recent-tape-past-many-inline-timelines ()
   (superchat-test-chat--with
     (superchat-tape-append "20240101-a" 'user "old" :scope "s/")
-    (dotimes (i 150) (superchat-tape-append (format "inline:%d" i) 'user "i" :scope "s/"))
+    (dotimes (i 150)
+      (superchat-tape-append (format "e%d" i) 'user "i" :scope "s/" :data '(:ephemeral t)))
     (should (equal (superchat-chat-recent-tape "s/") "20240101-a"))))
 
 (ert-deftest superchat-chat-topic-recall-notes-commands ()
@@ -489,16 +490,16 @@ tool `echo', and no chat buffers left behind."
                        "deepseek-v4-pro")))
       (should-not (buffer-local-value 'superchat-chat--model (superchat-chat-open "t2"))))))
 
-(ert-deftest superchat-chat-recent-tape-ignores-inline ()
+(ert-deftest superchat-chat-recent-tape-ignores-ephemeral ()
   (superchat-test-chat--with
     (let ((p (expand-file-name "p/" superchat-test-chat--dir))
           (q (expand-file-name "q/" superchat-test-chat--dir)))
       (superchat-tape-append "20240101-a" 'user "old" :scope p)
-      (superchat-tape-append "inline:p" 'user "inline" :scope p)
+      (superchat-tape-append "e-p" 'user "ephemeral" :scope p :data '(:ephemeral t))
       (superchat-tape-append "other" 'user "x" :scope q)
       (should (equal (superchat-chat-recent-tape p) "20240101-a"))
       (superchat-tape-append "20240102-b" 'user "newer" :scope p)
-      (superchat-tape-append "inline:p" 'user "inline again")
+      (superchat-tape-append "e-p" 'assistant "again")
       (should (equal (superchat-chat-recent-tape p) "20240102-b")))))
 
 (ert-deftest superchat-chat-command-reuses-recent-timeline ()

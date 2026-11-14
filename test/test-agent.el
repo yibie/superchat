@@ -668,5 +668,142 @@
                                              :text))))
       (superchat-tool-remove "bad"))))
 
+(ert-deftest superchat-agent-ephemeral-run-is-not-a-conversation ()
+  (superchat-test-agent--with
+    (superchat-test-script (list '(:text "plums") '(:text "kept"))
+      (superchat-run "e" "ephemeral plums question" :ephemeral t)
+      (superchat-run "n" "normal question"))
+    (should (eq (plist-get (plist-get (car (superchat-tape-entries :tape "e")) :data) :ephemeral) t))
+    (should-not (plist-get (plist-get (car (superchat-tape-entries :tape "n")) :data) :ephemeral))
+    (should (equal (mapcar (lambda (e) (plist-get e :tape)) (superchat-view 'timelines))
+                   '("n")))
+    (should (member "e" (mapcar (lambda (e) (plist-get e :tape))
+                                (superchat-view 'search :query "plums"))))))
+
+(ert-deftest superchat-agent-result-text-and-error ()
+  (superchat-test-agent--with
+    (let (runs)
+      (superchat-test-script
+          (list '(:text "Hello")
+                (list :text "first" :calls (list (superchat-test-agent--call "c1" "echo" :x "a")))
+                '(:text "last answer")
+                '(:error "model broke"))
+        (dolist (tape '("a" "b" "c"))
+          (superchat-run tape "go" :on-done (lambda (r) (push r runs)))))
+      (setq runs (nreverse runs))
+      (should (equal (mapcar (lambda (r) (plist-get r :status)) runs) '(done done error)))
+      (should (equal (plist-get (nth 0 runs) :text) "Hello"))
+      (should (equal (plist-get (nth 1 runs) :text) "last answer"))
+      (should-not (plist-get (nth 1 runs) :error))
+      (should-not (plist-get (nth 2 runs) :text))
+      (should (equal (plist-get (nth 2 runs) :error) "model broke")))))
+
+(ert-deftest superchat-agent-result-text-nil-when-cancelled-early ()
+  (superchat-test-agent--with
+    (let ((superchat-test-agent--seen nil) result
+          (superchat-llm-request-function (superchat-test-agent--silent)))
+      (superchat-run "t" "go" :on-done (lambda (r) (setq result r)))
+      (superchat-cancel "t")
+      (should (eq (plist-get result :status) 'cancelled))
+      (should-not (plist-get result :text)))))
+
+(defun superchat-test-agent--well-formed (messages)
+  "Every tool message answers an earlier call, every call has its result."
+  (cl-loop for (m . later) on messages
+           when (eq (plist-get m :role) 'tool)
+           do (should (cl-some (lambda (a) (cl-some (lambda (c) (equal (plist-get c :id)
+                                                                      (plist-get m :call-id)))
+                                                    (plist-get a :calls)))
+                               (cl-subseq messages 0 (- (length messages) (length later) 1))))
+           when (eq (plist-get m :role) 'assistant)
+           do (dolist (c (plist-get m :calls))
+                (should (cl-some (lambda (r) (and (eq (plist-get r :role) 'tool)
+                                                  (equal (plist-get r :call-id) (plist-get c :id))))
+                                 later)))))
+
+(defun superchat-test-agent--rounds (n)
+  "N scripted responses that call echo with a long argument, then an answer."
+  (append (cl-loop for i below n
+                   collect (list :text (format "round %d of the work, some words" i)
+                                 :calls (list (superchat-test-agent--call
+                                               (format "c%d" i) "echo" :x (make-string 100 ?x)))))
+          (list '(:text "finished"))))
+
+(ert-deftest superchat-agent-budget-leaves-out-the-oldest ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 700))
+      (superchat-tape-append "t" 'anchor "SUM" :scope "home"
+                             :data '(:name "n" :summary "SUM" :next ""))
+      (let (requests (left-out nil))
+        (superchat-test-script (superchat-test-agent--rounds 9)
+          (superchat-run "t" "go")
+          (setq requests (reverse superchat-test-requests)))
+        (should (= (length requests) 10))
+        (cl-loop
+         for request in requests for k from 0
+         for m = (plist-get request :messages)
+         for standin = (seq-find (lambda (x) (string-match-p "earlier entries" (plist-get x :text))) m)
+         do
+         ;; the entries on the Tape when request K was made: anchor, user, K rounds of two
+         (should (<= (superchat-agent--size m) 700))
+         (should (string-prefix-p "Summary of the conversation so far:" (plist-get (nth 0 m) :text)))
+         (should (equal (plist-get (nth 1 m) :text) "go"))
+         (superchat-test-agent--well-formed m)
+         (if (null standin)
+             (should (= (length m) (+ 2 (* 2 k))))
+           (setq left-out t)
+           (should (eq (nth 2 m) standin))
+           (should (string-match-p
+                    (format "\\`\\[%d earlier entries of this conversation are left out of this request; recall and tape_query can read them\\.\\]\\'"
+                            (- (+ 2 (* 2 k)) (1- (length m))))
+                    (plist-get standin :text)))
+           ;; the latest assistant entry and its result stay
+           (should (equal (plist-get (car (last m)) :call-id) (format "c%d" (1- k))))))
+        (should left-out)
+        (should (equal (mapcar (lambda (e) (plist-get e :kind)) (superchat-tape-entries :tape "t"))
+                       (append '(anchor user) (apply #'append (make-list 9 '(assistant tool)))
+                               '(assistant))))))))
+
+(ert-deftest superchat-agent-budget-over-the-bound-only-by-what-is-kept ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 10))
+      (superchat-test-script (superchat-test-agent--rounds 2)
+        (superchat-run "t" "go")
+        (let ((m (plist-get (car superchat-test-requests) :messages)))
+          (should (equal (mapcar (lambda (x) (plist-get x :role)) m)
+                         '(user user assistant tool)))
+          (superchat-test-agent--well-formed m))))))
+
+;; Two results of one response, with a permission event between the call
+;; and them, leave together.
+(ert-deftest superchat-agent-budget-keeps-all-results-of-a-response-together ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 150)
+          (superchat-default-level 'ask)
+          (superchat-permission-ask-function (lambda (&rest _) 'allow)))
+      (superchat-test-script
+          (list `(:calls (,(superchat-test-agent--call "a" "poke")
+                          ,(superchat-test-agent--call "b" "echo" :x (make-string 300 ?x))
+                          ,(superchat-test-agent--call "c" "echo" :x "s")))
+                `(:calls (,(superchat-test-agent--call "d" "echo" :x "t")))
+                '(:text "done"))
+        (superchat-run "t" "go")
+        (should (= (length superchat-test-requests) 3))
+        (dolist (request superchat-test-requests)
+          (superchat-test-agent--well-formed (plist-get request :messages)))
+        (should (seq-find (lambda (x) (string-match-p "left out" (plist-get x :text)))
+                          (plist-get (car superchat-test-requests) :messages)))))))
+
+(ert-deftest superchat-agent-request-under-the-bound-is-unchanged ()
+  (superchat-test-agent--with
+    (superchat-test-script (superchat-test-agent--rounds 3)
+      (superchat-run "t" "go")
+      (let ((m (plist-get (car superchat-test-requests) :messages)))
+        (should (= (length m) 7))
+        (should-not (seq-find (lambda (x) (string-match-p "left out" (plist-get x :text))) m))
+        (should (equal (mapcar (lambda (x) (plist-get x :role)) m)
+                       '(user assistant tool assistant tool assistant tool)))))
+    (should (= (length (superchat-tape-entries :tape "t")) 8))))
+
 (provide 'test-agent)
 ;;; test-agent.el ends here

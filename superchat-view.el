@@ -133,7 +133,9 @@
                    (concat "SELECT COALESCE("
                            "(SELECT MAX(id) FROM entry WHERE tape = e.tape AND kind = 'anchor'),"
                            "(SELECT MIN(id) FROM entry WHERE tape = e.tape AND kind = 'user'))"
-                           " FROM entry e WHERE tape NOT LIKE 'inline:%'"
+                           " FROM entry e WHERE tape NOT IN "
+                           "(SELECT tape FROM entry WHERE kind = 'user'"
+                           " AND json_extract(data, '$.ephemeral') = 1)"
                            (if scope " AND scope = ?" "")
                            " GROUP BY tape ORDER BY MAX(id) DESC LIMIT ?")
                    (append (and scope (list scope))

@@ -77,19 +77,10 @@ The region stays as it is."
     (when (overlay-buffer overlay)
       (if (eq status 'done)
           (superchat-inline--show
-           overlay (superchat-inline--unfence
-                    (plist-get (car (superchat-tape-entries
-                                     :tape (plist-get run :tape) :kinds '(assistant)
-                                     :newest t :limit 1))
-                               :text)))
+           overlay (superchat-inline--unfence (plist-get run :text)))
         (delete-overlay overlay)
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
-                 (if (eq status 'error)
-                     (plist-get (car (superchat-tape-entries
-                                      :tape (plist-get run :tape) :kinds '(event)
-                                      :newest t :limit 1))
-                                :text)
-                   ""))))))
+                 (if (eq status 'error) (plist-get run :error) ""))))))
 
 ;;;###autoload
 (defun superchat-rewrite (instruction)
@@ -97,7 +88,7 @@ The region stays as it is."
 The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inline-accept] accepts it, \\[superchat-inline-discard] discards it."
   (interactive (list (progn (superchat-inline--region)
                             (read-string "Rewrite how: "))))
-  (let* ((tape (concat "inline:" (superchat-tape-new-name)))
+  (let* ((tape (superchat-tape-new-name))
          (text (superchat-inline--region))
          (overlay (make-overlay (region-beginning) (region-end)))
          (started nil))
@@ -110,7 +101,7 @@ The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inli
     (unwind-protect
         (progn
           (superchat-run tape (format "%s\n\n%s" instruction text)
-                         :tools 'none :system superchat-inline--system
+                         :tools 'none :ephemeral t :system superchat-inline--system
                          :origin (superchat-inline--origin)
                          :on-text (lambda (piece)
                                     (when (overlay-buffer overlay)

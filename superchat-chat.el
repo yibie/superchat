@@ -255,11 +255,13 @@ SCOPE is the scope of a timeline that has no entry yet."
         (current-buffer))))
 
 (defun superchat-chat-recent-tape (scope)
-  "The most recently active timeline of SCOPE that is not an inline one, or nil."
+  "The most recently active timeline of SCOPE that is not ephemeral, or nil."
   ;; Not the `timelines' view: it answers with the first entry of each timeline
   ;; and has a limit, and this needs only the newest name.
   (caar (superchat-tape-select
-         (concat "SELECT tape FROM entry WHERE scope = ? AND tape NOT LIKE 'inline:%'"
+         (concat "SELECT tape FROM entry WHERE scope = ? AND tape NOT IN"
+                 " (SELECT tape FROM entry WHERE kind = 'user'"
+                 " AND json_extract(data, '$.ephemeral') = 1)"
                  " GROUP BY tape ORDER BY MAX(id) DESC LIMIT 1")
          (list scope))))
 
@@ -292,12 +294,44 @@ With a prefix argument NEW, start a new timeline."
       (goto-char (point-min)))
     (pop-to-buffer (current-buffer))))
 
+(defun superchat-chat--show-entries (title entries)
+  "Show ENTRIES, rendered, in a read-only buffer named after TITLE."
+  (superchat-chat--show title (if entries (superchat-view-render entries) "No entries.")))
+
 (defun superchat-chat--show-view (title argument &rest args)
   "Show the view that ARGS name under TITLE; ARGUMENT must not be empty."
   (when (string-empty-p argument) (user-error "/%s needs an argument" title))
-  (let ((entries (apply #'superchat-view args)))
-    (superchat-chat--show (format "%s %s" title argument)
-                          (if entries (superchat-view-render entries) "No entries."))))
+  (superchat-chat--show-entries (format "%s %s" title argument) (apply #'superchat-view args)))
+
+(defun superchat-chat--title (text)
+  "The title of a note TEXT: its first 60 characters."
+  (substring text 0 (min 60 (length text))))
+
+;;;###autoload
+(defun superchat-note (text)
+  "Keep TEXT as a note of this buffer's scope, as the model's note tool does."
+  (interactive (list (read-string "Note: ")))
+  (when (string-empty-p (string-trim text)) (user-error "A note needs text"))
+  (let ((scope (superchat-tape-scope-of default-directory)))
+    (superchat-recall-note (or (superchat-chat-recent-tape scope) (superchat-tape-new-name))
+                           (superchat-chat--title text) text nil scope)))
+
+;;;###autoload
+(defun superchat-recall (query)
+  "Show what the Tape has on QUERY in this buffer's scope.
+With no QUERY, show the notes."
+  (interactive (list (read-string "Recall (empty for notes): ")))
+  (let ((scope (superchat-tape-scope-of default-directory)))
+    (if (string-empty-p query)
+        (superchat-chat--show-entries "notes" (superchat-view 'notes :scope scope))
+      (superchat-chat--show-entries
+       (format "recall %s" query) (superchat-view 'search :query query :scope scope)))))
+
+(defun superchat-chat--note (text)
+  "Append TEXT as a note to this timeline and show it."
+  (when (string-empty-p text) (user-error "/note needs text"))
+  (superchat-chat--add (superchat-recall-note superchat-chat--tape (superchat-chat--title text)
+                                              text nil (superchat-chat--scope))))
 
 (defun superchat-chat--resume (_)
   "Choose a timeline of this scope and open it."
@@ -374,6 +408,8 @@ With a prefix argument NEW, start a new timeline."
  "notes" (lambda (_) (superchat-chat--show-view "notes" "of this scope" 'notes
                                                 :scope (superchat-chat--scope)))
  "Show the notes of this scope.")
+(superchat-command-define "note" #'superchat-chat--note
+                          "text. Keep TEXT as a note, as the note tool does.")
 (superchat-command-define "level" #'superchat-chat--level
                           "[read-only|ask|auto] Show or set the permission level.")
 (superchat-command-define "model" #'superchat-chat--model-command

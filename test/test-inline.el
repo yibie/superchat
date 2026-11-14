@@ -48,7 +48,8 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
           (should-not (string-match-p "alpha" text)))))
     (let* ((tape (plist-get (car (superchat-tape-entries)) :tape))
            (user (car (superchat-tape-entries :tape tape :kinds '(user)))))
-      (should (string-prefix-p "inline:" tape))
+      (should-not (string-match-p "inline" tape))
+      (should (plist-get (plist-get user :data) :ephemeral))
       (should (equal (plist-get (plist-get (plist-get user :data) :origin) :mode)
                      "fundamental-mode"))
       (should (equal (plist-get (plist-get (plist-get user :data) :origin) :file)
@@ -137,7 +138,7 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
                2))
     (should (= 2 (length (seq-uniq (mapcar (lambda (e) (plist-get e :tape))
                                            (superchat-tape-entries))))))
-    (should (string-prefix-p "inline:" (plist-get (car (superchat-tape-entries)) :tape)))))
+    (should-not (superchat-view 'timelines))))
 
 (ert-deftest superchat-inline-active-run-accept-refused-discard-cancels ()
   (superchat-test-inline--with "alpha beta gamma"

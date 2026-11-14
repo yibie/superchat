@@ -52,6 +52,12 @@ The limit is part of the statement, so a runaway query stops at the database."
              (and (null rows) (list "[no rows]")))
      "\n")))
 
+(defun superchat-recall-note (tape title text &optional refs scope)
+  "Append a note TITLE, TEXT citing the entry ids REFS to timeline TAPE.
+SCOPE is needed only when TAPE has no entry yet.  The model and the person
+write notes through this one function."
+  (superchat-tape-append tape 'note text :data (list :title title) :refs refs :scope scope))
+
 (defun superchat-recall--note (args)
   "Append the note described by ARGS to the current timeline; one line."
   (let* ((ids (mapcar #'string-to-number
@@ -60,9 +66,8 @@ The limit is part of the statement, so a runaway query stops at the database."
     (when bad
       (error "Not entries: %s" (mapconcat #'number-to-string bad ", ")))
     (format "Note saved as #%d."
-            (plist-get (superchat-tape-append
-                        superchat-tool-tape 'note (plist-get args :text)
-                        :data (list :title (plist-get args :title)) :refs ids)
+            (plist-get (superchat-recall-note superchat-tool-tape (plist-get args :title)
+                                              (plist-get args :text) ids)
                        :id))))
 
 (superchat-tool-define
