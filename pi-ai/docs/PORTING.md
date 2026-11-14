@@ -10,25 +10,36 @@
 |------|------|------|------|
 | `src/types.ts` | `lisp/llm-pi-ai-types.el` | done | 语义核心：Message / AssistantMessage / 事件 / Usage / ToolCall / 错误；测试 `test/llm-pi-ai-types-test.el` |
 | `src/utils/event-stream.ts` | `lisp/llm-pi-ai-event-stream.el` | done | 事件流、`result` 承诺、`done`/`error` 终止；测试 `test/llm-pi-ai-event-stream-test.el`（20/20 通过） |
-| `src/models.ts` | `lisp/llm-pi-ai-models.el` | todo | `createProvider` / `createModels` / Models 集合 |
+| `src/models.ts` | `lisp/llm-pi-ai-models.el` | wip | Tier 1 部分已完成（测试 `test/llm-pi-ai-models-test.el`）：`createProvider`（仅 `api`）、`calculateCost`、`getSupportedThinkingLevels`、`clampThinkingLevel`、`hasApi`、`modelsAreEqual`，`createModels` 的 `setProvider`/`deleteProvider`/`clearProviders`/`getProviders`/`getProvider`/`getModels`/`getModel`/`getAuth`/`stream`/`streamSimple`（含 `applyAuth`、`transformHeaders`）。同文件内含 `src/api/lazy.ts` 的 `lazyStream`/`lazyApi`/`ProviderStreams`（该文件尚无归属）。未移植：modelsStore、`refresh`/`fetchModels`/publication、`checkAuth`/`getAvailable*`/`login`/`logout`/OAuth、`getAllModels`/`getModelsOfType`/`getModelOfType`、`complete*`、deferred、`generateImages`、`classify`、`filterModels`、`images`/`classifiers`、telemetry、`identity` 选项及 OpenCode 会话头 |
 | `src/models-store.ts` | `lisp/llm-pi-ai-models-store.el` | todo | 持久化模型目录接口 + 内存实现 |
-| `src/model-catalog.ts` | `lisp/llm-pi-ai-model-catalog.el` | todo | 远端目录读取 |
-| `src/utils/retry.ts` | `lisp/llm-pi-ai-utils-retry.el` | todo | |
-| `src/utils/overflow.ts` | `lisp/llm-pi-ai-utils-overflow.el` | todo | 上下文溢出检测 |
+| `src/model-catalog.ts` | `lisp/llm-pi-ai-model-catalog.el` | done | `flattenChatModelCatalog`/`Image`/`Classifier` 及读取 `data/<provider>.json` 转结构体；类型体操（`ChatModelCatalog` 等）不移植；测试 `test/llm-pi-ai-model-catalog-test.el`。上游 `model-catalog-types.test.ts` 只测 TS 类型，未译 |
+| `src/utils/retry.ts` | `lisp/llm-pi-ai-utils-retry.el` | done | `retryAssistantCall` 改为回调 + `run-at-time`（计时器函数是变量，测试不真等）；`isRetryableAssistantError`、`retryDelayMs`、`RetryPolicy`（struct）。Emacs 正则无 lookbehind，状态码一条改为手工检查。测试 `test/llm-pi-ai-utils-retry-test.el`（22 个，译自 `test/retry.test.ts`；期望值部分由 node 跑源码取得）。回调不 await |
+| `src/utils/overflow.ts` | `lisp/llm-pi-ai-utils-overflow.el` | done | `isContextOverflow`、`isRecoverableLength`、`getOverflowPatterns`；26 条正则译为 Emacs 正则。测试 `test/llm-pi-ai-utils-overflow-test.el`（10 个，译自 `test/overflow.test.ts`） |
+| `src/utils/sanitize-unicode.ts` | `lisp/llm-pi-ai-utils-sanitize-unicode.el` | done | `sanitizeSurrogates`：Emacs 字符串里的孤立代理字符 U+D800..U+DFFF；另有 `llm-pi-ai-string-trim-js`、`llm-pi-ai-utf16-length`（源码没有，JS `trim`/`length` 的等价物）。测试 3 个，期望值由 node 取得 |
+| `src/utils/hash.ts` | `lisp/llm-pi-ai-utils-hash.el` | done | `shortHash`，对 UTF-16 码元做 32 位运算，输出与源码逐字相同；测试 3 个，期望值全部由 node 运行源码取得 |
+| `src/utils/headers.ts` | `lisp/llm-pi-ai-utils-headers.el` | done | `headersToRecord`（输入为 HTTP 层的 alist）、`providerHeadersToRecord`；测试 2 个，期望值由 node 取得 |
+| `src/utils/error-body.ts` | `lisp/llm-pi-ai-utils-error-body.el` | done | `normalizeProviderError` / `formatProviderError` / `truncateErrorText` / `safeJsonStringify`；SDK 错误对象改为 plist（键见文件头）；测试 15 个，译自 `test/error-body.test.ts` |
+| `src/utils/provider-retry.ts` | `lisp/llm-pi-ai-utils-provider-retry.el` | done | `retryProviderRequest`，回调 + 计时器，延迟、次数、`retry-after(-ms)`、`x-should-retry`、`noRetryStatuses`、中止行为均保留；测试 15 个，译自 `test/provider-retry.test.ts` |
 | `src/utils/json-parse.ts` | `lisp/llm-pi-ai-utils-json-parse.el` | done | 宽容 JSON 解析（修复 + 流式前缀）；测试 `test/llm-pi-ai-utils-json-parse-test.el`（35/35 通过，取自上游 commit 的 `test/json-parse.test.ts` 加移植补充） |
 | `src/utils/text.ts` | `lisp/llm-pi-ai-utils-text.el` | done | `contentText` / `getSystemMessageText` / `renderSystemMessageUpdate`；上游无 `text.test.ts`，测试 `test/llm-pi-ai-utils-text-test.el`（12/12 通过，期望值由 node 直接跑 `text.ts` 取得），首切依赖 |
 | `src/utils/validation.ts` | `lisp/llm-pi-ai-utils-validation.el` | todo | |
-| `src/utils/transcript.ts` | `lisp/llm-pi-ai-utils-transcript.el` | todo | |
+| `src/utils/transcript.ts` | `lisp/llm-pi-ai-utils-transcript.el` | wip | 仅 `createInitialSystemMessage`、`normalizeContext`（Models.stream 需要）；其余回放函数未移植；测试在 `test/llm-pi-ai-utils-misc-test.el` |
 | `src/utils/identity.ts` | `lisp/llm-pi-ai-utils-identity.el` | todo | |
 | `src/utils/uuid.ts` | `lisp/llm-pi-ai-utils-uuid.el` | todo | |
 | `src/utils/estimate.ts` | `lisp/llm-pi-ai-utils-estimate.el` | todo | |
 | `src/utils/typebox-helpers.ts` | `lisp/llm-pi-ai-utils-typebox.el` | todo | `StringEnum` → plist schema |
 | `src/utils/diagnostics.ts` | `lisp/llm-pi-ai-utils-diagnostics.el` | todo | |
 | `src/providers/faux.ts` | `lisp/llm-pi-ai-provider-faux.el` | todo | 无网络的端到端验证 |
-| `src/api/transform-messages.ts` | `lisp/llm-pi-ai-api-transform-messages.el` | todo | provider 通用逻辑 |
+| `src/api/transform-messages.ts` | `lisp/llm-pi-ai-api-transform-messages.el` | done | `transformMessages`、`splitErrorToolResultImages`；测试 `test/llm-pi-ai-api-transform-messages-test.el`（11 个，译自 `transform-messages-*.test.ts` 与 `lax-message-content.test.ts`） |
 | `src/compat.ts`（仅 `isModelType` 等被核心用到的谓词） | — | 见 §4 | 其余不移植 |
-| `src/env-api-keys.ts` | `lisp/llm-pi-ai-env-api-keys.el` | todo | 环境变量键名常量 |
+| `src/env-api-keys.ts` | `lisp/llm-pi-ai-auth.el` | done | `findEnvKeys`/`getEnvApiKey`，并入 auth 文件；无 Google ADC 结果缓存、无 Bun `/proc` 兜底；测试 `test/llm-pi-ai-auth-test.el`（译自 `env-api-keys.test.ts`） |
+| `src/auth/types.ts`、`context.ts`、`helpers.ts`（仅 `envApiKeyAuth` 的 resolve）、`resolve.ts`（仅 API key 路径）、`credential-store.ts`（内存版，无 promise 链） | `lisp/llm-pi-ai-auth.el` | wip | OAuth（`OAuthAuth`、`lazyOAuth`、`refreshStoredOAuthCredential`、`resolveStoredOAuth`）、`login`/`check`、`AuthPrompt`/`AuthEvent`/`AuthInteraction`/`LoginOptions` 未移植；stored OAuth 凭据会使解析返回 nil；测试 `test/llm-pi-ai-auth-test.el` |
+| `src/utils/abort.ts` | `lisp/llm-pi-ai-utils-abort.el` | done | `AbortController`+`AbortSignal` 合为一个结构体；`raceWithAbortSignal` 为同步版；测试 `test/llm-pi-ai-utils-abort-test.el` |
+| `src/utils/models-error.ts` | `lisp/llm-pi-ai-utils-models-error.el` | done | `ModelsError` 为 error 符号 `llm-pi-ai-models-error`，data 为 (消息 code cause)；`formatThrownValue`（`diagnostics.ts` 未移植）以 `llm-pi-ai-error-message-text` 代替；测试 `test/llm-pi-ai-utils-models-error-test.el` |
+| `src/utils/provider-env.ts` | `lisp/llm-pi-ai-utils-provider-env.el` | done | 无 Bun `/proc/self/environ` 兜底；测试在 `test/llm-pi-ai-utils-misc-test.el` |
+| `src/utils/model-operations.ts` | `lisp/llm-pi-ai-utils-model-operations.el` | wip | 仅 `assertChatModel`（`getModelType`/`isModelType` 已在 types.el）；image/classifier 的 assert 与 error-result 未移植 |
 | `src/images.ts` | `lisp/llm-pi-ai-images.el` | todo | 图像生成入口（Tier 2，见 §2b） |
+| 无上游（上游用 `openai` npm 客户端） | `lisp/llm-pi-ai-http.el` | done | HTTP 缝：`make-process` + curl（见 `docs/HTTP.md`）；`llm-pi-ai-http-request`/`-abort`、`llm-pi-ai-sse-parser`；请求头与 URL 走 `-K` 配置文件（0600，退出即删），正文走 stdin；测试 `test/llm-pi-ai-http-test.el` |
 
 ## 2. API 实现（Tier 1 / 2）
 
@@ -78,7 +89,7 @@ Provider 文件基本是 `createProvider` 的参数表（如 `deepseek.ts` 仅 5
 
 | 上游 | Lisp | 状态 |
 |------|------|------|
-| `src/providers/deepseek.ts` | `lisp/llm-pi-ai-provider-deepseek.el` | todo（Tier 1） |
+| `src/providers/deepseek.ts`（+ `deepseek.models.ts`，读 `data/deepseek.json`） | `lisp/llm-pi-ai-provider-deepseek.el` | wip（Tier 1：用桩 API 的测试通过；等 `llm-pi-ai-api-openai-completions.el`，见文件头说明的接口） |
 | `src/providers/anthropic.ts` | `lisp/llm-pi-ai-provider-anthropic.el` | todo（Tier 1） |
 | `src/providers/openai.ts` | `lisp/llm-pi-ai-provider-openai.el` | todo |
 | `src/providers/google.ts` | `lisp/llm-pi-ai-provider-google.el` | todo |
