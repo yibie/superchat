@@ -766,7 +766,7 @@
 
 (ert-deftest superchat-agent-budget-over-the-bound-only-by-what-is-kept ()
   (superchat-test-agent--with
-    (let ((superchat-context-chars 10))
+    (let ((superchat-context-chars 200))
       (superchat-test-script (superchat-test-agent--rounds 2)
         (superchat-run "t" "go")
         (let ((m (plist-get (car superchat-test-requests) :messages)))
@@ -778,7 +778,7 @@
 ;; and them, leave together.
 (ert-deftest superchat-agent-budget-keeps-all-results-of-a-response-together ()
   (superchat-test-agent--with
-    (let ((superchat-context-chars 150)
+    (let ((superchat-context-chars 400)
           (superchat-default-level 'ask)
           (superchat-permission-ask-function (lambda (&rest _) 'allow)))
       (superchat-test-script
@@ -1150,7 +1150,11 @@
 (defun superchat-test-agent--idle ()
   "Wait until the model, the tool timers and every run are quiet."
   (superchat-test-drain)
-  (accept-process-output nil 0.12)
+  ;; A tool timer still alive could still answer; wait for it, not for a fixed time.
+  (with-timeout (2 (error "The tool timer did not finish"))
+    (while (memq superchat-test-agent--timer timer-list)
+      (accept-process-output nil 0.01)))
+  (accept-process-output nil 0.01)
   (superchat-test-drain))
 
 (defun superchat-test-agent--next-request-ok (tape)
@@ -1395,6 +1399,139 @@ entry PRED recognises; check what every way of ending owes."
         (superchat-test-agent--with
           (superchat-test-agent--with-slowx
             (superchat-test-agent--matrix-case (car kind) (cdr kind) action)))))))
+
+;;; The budget follows the model.
+
+(defmacro superchat-test-agent--with-windows (&rest body)
+  "BODY with provider \"cw\" (models m8: 8000, m2: 2000) set as the default
+model m8 and `superchat-context-chars' nil."
+  (declare (indent 0))
+  `(let ((superchat-llm--models nil)
+         (superchat-llm-providers
+          (list (cons "cw" (lambda ()
+                             (superchat-bridge-openai-compatible-provider
+                              :id "cw" :base-url "http://localhost:1/v1"
+                              :models '((:id "m8" :context-window 8000)
+                                        (:id "m2" :context-window 2000)))))))
+         (superchat-llm-provider "cw") (superchat-llm-model "m8")
+         (superchat-context-chars nil))
+     ,@body))
+
+(ert-deftest superchat-agent-budget-function ()
+  (superchat-test-agent--with-windows
+    (should (= (superchat-agent--budget) 4000))
+    (should (= (superchat-agent--budget "m2") 1000))
+    (should (= (superchat-agent--budget "unknown") 120000))
+    (let ((superchat-context-chars 500))
+      (should (= (superchat-agent--budget) 500))
+      (should (= (superchat-agent--budget "m2") 500))))
+  ;; The scripted model has no window: no provider is set.
+  (let ((superchat-context-chars nil) (superchat-llm-provider nil))
+    (should (= (superchat-agent--budget) 120000))))
+
+(ert-deftest superchat-agent-budget-of-the-model-of-the-run ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (dolist (tape '("a" "b"))
+        (superchat-tape-append tape 'user (make-string 1500 ?a) :scope "home")
+        (superchat-tape-append tape 'assistant "ok" :data '(:model "x")))
+      ;; 1500 characters: under the 4000 of m8, over the 1000 of m2.
+      (superchat-test-script (list '(:text "fine"))
+        (superchat-run "a" "next")
+        (should (= (length superchat-test-requests) 1)))
+      (superchat-test-script (list '(:text "S\nNEXT: n") '(:text "fine"))
+        (superchat-run "b" "next" :model "m2")
+        (should (= (length superchat-test-requests) 2))
+        (should (equal (mapcar (lambda (r) (plist-get r :model)) superchat-test-requests)
+                       '("m2" "m2")))
+        (should (superchat-tape-entries :tape "b" :kinds '(anchor)))))))
+
+(ert-deftest superchat-agent-derived-budget-leaves-out-and-stays-well-formed ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let (left-out)
+        (superchat-test-script (superchat-test-agent--rounds 24)
+          (superchat-run "t" "go")
+          (should (= (length superchat-test-requests) 25))
+          (dolist (request (reverse superchat-test-requests))
+            (let ((m (plist-get request :messages)))
+              (should (<= (superchat-agent--size m) 4000))
+              (superchat-test-agent--well-formed m)
+              (when (seq-find (lambda (x) (string-match-p "earlier entries" (plist-get x :text))) m)
+                (setq left-out t))))
+          (should-not (superchat-run-active "t")))
+        (should left-out)
+        ;; Nothing was left out while the whole fitted.
+        (should-not (seq-find (lambda (x) (string-match-p "earlier entries" (plist-get x :text)))
+                              (plist-get (car (last superchat-test-requests)) :messages)))))))
+
+(defun superchat-test-agent--refusal (budget size)
+  "Run a first message of SIZE characters at BUDGET; return (RUN . REQUESTS)."
+  (let ((superchat-context-chars budget) run)
+    (superchat-test-script (list '(:text "answer"))
+      (setq run (superchat-run "t" (make-string size ?u)))
+      (cons run (length superchat-test-requests)))))
+
+(ert-deftest superchat-agent-refuses-over-twice-the-budget ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let* ((res (superchat-test-agent--refusal 100 201))
+             (run (car res)))
+        (should (= (cdr res) 0))
+        (should (eq (plist-get run :status) 'error))
+        (should (equal (plist-get run :error)
+                       "This request needs 201 characters; the budget for m8 is 100. Raise `superchat-context-chars' or start a new conversation."))
+        (should-not (superchat-run-active "t"))
+        (should (equal (mapcar #'car (superchat-test-agent--entries "t")) '(user event)))
+        (should (equal (cdr (cadr (superchat-test-agent--entries "t")))
+                       (plist-get run :error))))))
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let ((res (superchat-test-agent--refusal 100 200)))
+        (should (= (cdr res) 1))
+        (should (eq (plist-get (car res) :status) 'done))))))
+
+(ert-deftest superchat-agent-refuses-a-later-round-too ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let ((superchat-context-chars 100) run)
+        ;; Round 1's result (300 characters) is the latest, so it is kept.
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "echo" :x (make-string 300 ?x)))))
+          (setq run (superchat-run "t" "go"))
+          (should (= (length superchat-test-requests) 1)))
+        (should (eq (plist-get run :status) 'error))
+        (should (string-match-p "budget for m8 is 100" (plist-get run :error)))
+        (should-not (superchat-run-active "t"))
+        (should (equal (mapcar #'car (superchat-test-agent--entries "t"))
+                       '(user assistant tool event)))))))
+
+(ert-deftest superchat-agent-the-run-after-a-refusal-recovers ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let ((superchat-context-chars 100) (huge (make-string 500 ?H)) runs)
+        (superchat-test-script (list '(:text "S\nNEXT: n") '(:text "fine"))
+          ;; 1: refused.  2: its handoff cuts the huge entry out of the
+          ;; summary (the oldest are dropped first), then the run is answered.
+          (push (superchat-run "t" huge) runs)
+          (should (= (length superchat-test-requests) 0))
+          (push (superchat-run "t" "next") runs)
+          (let ((handoff (plist-get (car (last superchat-test-requests)) :messages)))
+            (should (= (length superchat-test-requests) 2))
+            (should-not (string-match-p "HHH" (plist-get (car handoff) :text)))
+            (should (<= (length (plist-get (car handoff) :text)) 600)))
+          (should (eq (plist-get (car runs) :status) 'done))
+          (let ((m (plist-get (car superchat-test-requests) :messages)))
+            (should (equal (mapcar (lambda (x) (plist-get x :role)) m) '(user user)))
+            (should (string-prefix-p "Summary of the conversation so far:" (plist-get (car m) :text)))
+            (should (equal (plist-get (cadr m) :text) "next"))))
+        (should (eq (plist-get (cadr runs) :status) 'error))
+        ;; A huge message again: refused again, and the one after recovers again.
+        (superchat-test-script (list '(:text "S2\nNEXT: n") '(:text "fine again"))
+          (should (eq (plist-get (superchat-run "t" huge) :status) 'error))
+          (should (= (length superchat-test-requests) 0))
+          (should (eq (plist-get (superchat-run "t" "small") :status) 'done))
+          (should (= (length superchat-test-requests) 2)))))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here

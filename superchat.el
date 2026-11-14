@@ -46,9 +46,11 @@ clamps it to what the model has."
   "The permission level of a conversation that has not set one."
   :type '(choice (const read-only) (const ask) (const auto)))
 
-(defcustom superchat-context-chars 120000
-  "How long a conversation's messages may be before a handoff is made."
-  :type 'natnum)
+(defcustom superchat-context-chars nil
+  "How many characters of conversation one request may carry.
+Nil follows the model: half of its context window, or 120000 when the
+model has no window in the data.  A number is used as it is."
+  :type '(choice (const :tag "Follow the model" nil) natnum))
 
 (defcustom superchat-max-rounds 40
   "How many model responses one run may take."

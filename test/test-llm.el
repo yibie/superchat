@@ -729,6 +729,38 @@ finished messages and the messages the third request sent."
       (should (string-match-p "broken" (cadr err)))
       (should (string-match-p "plugin broke" (cadr err))))))
 
+(defmacro test-llm--with-window-provider (&rest body)
+  "BODY with a provider \"cw\" whose models have windows of 8000 and 2000."
+  (declare (indent 0))
+  `(let ((superchat-llm--models nil)
+         (superchat-llm-providers
+          (list (cons "cw" (lambda ()
+                             (superchat-bridge-openai-compatible-provider
+                              :id "cw" :base-url "http://localhost:1/v1"
+                              :models '((:id "m8" :context-window 8000)
+                                        (:id "m2" :context-window 2000)
+                                        (:id "m0" :context-window 0))))))))
+     ,@body))
+
+(ert-deftest superchat-llm-context-window ()
+  (let ((superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash"))
+    (should (= (superchat-llm-context-window) 1000000))
+    (should-not (superchat-llm-context-window "no-such-model"))
+    (let ((superchat-llm-model nil))
+      (should-not (superchat-llm-context-window))
+      (should (= (superchat-llm-context-window "deepseek-flash") 1000000))))
+  (test-llm--with-window-provider
+    (let ((superchat-llm-provider "cw") (superchat-llm-model "m2"))
+      (should (= (superchat-llm-context-window "m8") 8000))
+      (should (= (superchat-llm-context-window) 2000))
+      (should-not (superchat-llm-context-window "m0"))
+      (should-not (superchat-llm-context-window "nope"))))
+  (let ((superchat-llm-provider nil) (superchat-llm-model "deepseek-flash"))
+    (should-not (superchat-llm-context-window))
+    (should-not (superchat-llm-context-window "deepseek-flash")))
+  (let ((superchat-llm-provider "no-such-provider"))
+    (should-not (superchat-llm-context-window "deepseek-flash"))))
+
 (provide 'test-llm)
 ;;; test-llm.el ends here
 

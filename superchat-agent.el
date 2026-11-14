@@ -38,6 +38,15 @@
                                          (concat "\n\nWhat comes next:\n" next)
                                        ""))))))))
 
+(defun superchat-agent--budget (&optional model)
+  "The budget in characters of a run of MODEL (default `superchat-llm-model').
+`superchat-context-chars' when a number; else half the model's context
+window, a token counting as a character; else 120000."
+  (cond ((numberp superchat-context-chars) superchat-context-chars)
+        ((superchat-llm-context-window model)
+         (floor (superchat-llm-context-window model) 2))
+        (t 120000)))
+
 (defun superchat-agent--messages (entries)
   "The messages for ENTRIES; events and notes are left out."
   (delq nil (mapcar #'superchat-agent--message entries)))
@@ -68,15 +77,16 @@ up to the next entry of another kind, and every other entry alone."
                              "this request; recall and tape_query can read them.]")
                        n)))
 
-(defun superchat-agent--fit (entries user-id)
-  "The messages for ENTRIES within `superchat-context-chars'.
+(defun superchat-agent--fit (entries user-id &optional budget)
+  "The messages for ENTRIES within BUDGET (default `superchat-agent--budget').
 The oldest groups go first, except an anchor, the entry USER-ID and the latest
 assistant entry with its results.  One stand-in message takes the place of the
 oldest group left out, so every call stays with its results and the list
 still starts with what the first entry said.  The stand-in counts toward the
 size; when leaving out what can be left out would not make the request
 smaller than it is, nothing is left out."
-  (let* ((groups (mapcar (lambda (g) (list g (superchat-agent--messages g)))
+  (let* ((budget (or budget (superchat-agent--budget)))
+         (groups (mapcar (lambda (g) (list g (superchat-agent--messages g)))
                          (superchat-agent--groups entries)))
          (latest (cl-find-if (lambda (g) (eq (plist-get (caar g) :kind) 'assistant))
                              groups :from-end t))
@@ -88,7 +98,7 @@ smaller than it is, nothing is left out."
                           0))))
       (dolist (g groups)
         (when (and (cadr g) (not (eq g latest))
-                   (> (total) superchat-context-chars)
+                   (> (total) budget)
                    (cl-notany (lambda (e) (or (eq (plist-get e :kind) 'anchor)
                                               (eql (plist-get e :id) user-id)))
                               (car g)))
@@ -240,12 +250,21 @@ stops a tool that is still running."
 (defun superchat-agent--step (run)
   "Make the next request of RUN."
   (let* ((tape (plist-get run :tape))
+         (budget (superchat-agent--budget (plist-get run :model)))
          (messages (superchat-agent--fit (superchat-view 'conversation :tape tape)
-                                         (plist-get run :user-id)))
+                                         (plist-get run :user-id) budget))
+         (size (superchat-agent--size messages))
          (tools (plist-get run :tools)))
-    (if (>= (plist-get run :rounds) superchat-max-rounds)
-        (superchat-agent--end
-         run 'error (format "Stopped: %d model responses without an answer." superchat-max-rounds))
+    (cond
+     ((>= (plist-get run :rounds) superchat-max-rounds)
+      (superchat-agent--end
+       run 'error (format "Stopped: %d model responses without an answer." superchat-max-rounds)))
+     ((> size (* 2 budget))
+      (superchat-agent--end
+       run 'error
+       (format "This request needs %d characters; the budget for %s is %d. Raise `superchat-context-chars' or start a new conversation."
+               size (or (plist-get run :model) superchat-llm-model) budget)))
+     (t
       (superchat-agent--guard
        run (lambda ()
              (superchat-agent--track
@@ -264,7 +283,7 @@ stops a tool that is still running."
                                   (superchat-agent--guard
                                    run (lambda () (superchat-agent--respond run response)))))
                      :on-error (lambda (why) (when (superchat-agent--live run)
-                                               (superchat-agent--end run 'error why)))))))))))
+                                               (superchat-agent--end run 'error why))))))))))))
 
 (defun superchat-agent--add-user (run scope)
   "Append the user entry of RUN, if it is unsent.  SCOPE is for the first
@@ -313,7 +332,7 @@ the user entry: the timeline is one question, not a conversation."
      run (lambda ()
            (if (and last (> (superchat-agent--size
                   (superchat-agent--messages (superchat-view 'conversation :tape tape)))
-                            superchat-context-chars))
+                            (superchat-agent--budget model)))
                ;; The anchor goes in before the user entry, so the request stays after it.
                (progn
                  (setf (plist-get run :unsent) t)
@@ -368,7 +387,7 @@ left `superchat-agent--runs' (it was cancelled) is dropped."
   (let ((entries (superchat-view 'conversation :tape tape)))
     (superchat-llm-request
      (list (list :role 'user
-                 :text (concat (superchat-view-render entries superchat-context-chars) "\n\n"
+                 :text (concat (superchat-view-render entries (superchat-agent--budget model)) "\n\n"
                                superchat-agent--summary-question)))
      :model model
      :on-done (lambda (response)

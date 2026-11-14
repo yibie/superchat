@@ -94,6 +94,17 @@ A `user-error' says what to set when either is unset or unknown."
                       (format "No model for %s" superchat-llm-provider))
                     (string-join known ", ")))))
 
+(defun superchat-llm-context-window (&optional model)
+  "The context window in tokens of MODEL of `superchat-llm-provider'.
+MODEL defaults to `superchat-llm-model'.  Nil when the data has none, or
+the provider or model is unset or unknown: the request reports those."
+  (let ((id (or model superchat-llm-model)))
+    (when (and (stringp superchat-llm-provider) (stringp id))
+      (let ((window (when-let* ((m (superchat-bridge-models-get-model
+                                    (superchat-llm--models) superchat-llm-provider id)))
+                      (superchat-bridge-model-context-window m))))
+        (and (numberp window) (> window 0) window)))))
+
 (defun superchat-llm--now ()
   "Milliseconds since the epoch."
   (floor (* 1000 (float-time))))
