@@ -316,8 +316,8 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   `:async t`. Its FUNCTION is then called with the plist and a function
   DONE, and returns at once: either nothing, or a function of no arguments
   that stops the work. It calls DONE exactly once, later or before it
-  returns, with the result string, or with `(error MESSAGE)` data as a
-  second argument: `(funcall DONE nil "what went wrong")`. A signal raised
+  returns, with the result string, or for an error with nil and the
+  message: `(funcall DONE nil "what went wrong")`. A signal raised
   before it returns counts as an error result. Emacs stays usable while an
   asynchronous tool runs. `shell` and `search_files` are asynchronous; the
   others are plain Lisp and return at once (`eval_elisp` runs Lisp, which

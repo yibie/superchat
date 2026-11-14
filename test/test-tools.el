@@ -23,9 +23,16 @@
              (kill-buffer b)))
          (delete-directory dir t)))))
 
+(defun superchat-test-tools--await (tape call)
+  "Run CALL on TAPE and wait for its entry."
+  (let (entry)
+    (superchat-tool-call tape call (lambda (e) (setq entry e)))
+    (superchat-test-wait (lambda () entry))
+    entry))
+
 (defun superchat-test-tools--call (name &rest args)
   "Call tool NAME with ARGS on timeline \"t\"; the tool entry."
-  (superchat-tool-call "t" (list :id "c1" :name name :args args)))
+  (superchat-test-tools--await "t" (list :id "c1" :name name :args args)))
 
 (defun superchat-test-tools--ok (name &rest args)
   "The text of a successful call."
@@ -43,6 +50,10 @@
   (let ((file (expand-file-name name dir)))
     (with-temp-file file (insert text))
     file))
+
+(defun superchat-test-tools--live-processes ()
+  (cl-remove-if-not (lambda (p) (string-prefix-p "superchat-process" (process-name p)))
+                    (process-list)))
 
 (ert-deftest superchat-tools-specs-shape ()
   (let ((all (superchat-tool-specs)))
@@ -134,7 +145,7 @@
 
 (ert-deftest superchat-tools-call-entry-shape ()
   (superchat-test-tools--in-scope
-    (let ((entry (superchat-tool-call "t" '(:id "id9" :name "eval_elisp" :args (:code "(+ 1 2)")))))
+    (let ((entry (superchat-test-tools--await "t" '(:id "id9" :name "eval_elisp" :args (:code "(+ 1 2)")))))
       (should (eq (plist-get entry :kind) 'tool))
       (should (equal (plist-get entry :tape) "t"))
       (should (equal (plist-get entry :data) '(:call-id "id9" :name "eval_elisp" :error nil)))
@@ -203,10 +214,10 @@
     (superchat-permission-set "u" 'ask)
     (let* ((asks 0)
            (superchat-permission-ask-function (lambda (&rest _) (cl-incf asks) 'always)))
-      (superchat-tool-call "t" '(:id "a" :name "eval_elisp" :args (:code "1")))
-      (superchat-tool-call "t" '(:id "b" :name "eval_elisp" :args (:code "1")))
+      (superchat-test-tools--await "t" '(:id "a" :name "eval_elisp" :args (:code "1")))
+      (superchat-test-tools--await "t" '(:id "b" :name "eval_elisp" :args (:code "1")))
       (should (= asks 1))
-      (superchat-tool-call "u" '(:id "c" :name "eval_elisp" :args (:code "1")))
+      (superchat-test-tools--await "u" '(:id "c" :name "eval_elisp" :args (:code "1")))
       (should (= asks 2)))))
 
 (ert-deftest superchat-tools-scope-is-default-directory ()
@@ -215,8 +226,8 @@
                    (prin1-to-string dir)))
     (superchat-tape-append "h" 'user "go" :scope "home")
     (superchat-permission-set "h" 'auto)
-    (should (equal (plist-get (superchat-tool-call "h" '(:id "x" :name "eval_elisp"
-                                                         :args (:code "default-directory")))
+    (should (equal (plist-get (superchat-test-tools--await
+                                "h" '(:id "x" :name "eval_elisp" :args (:code "default-directory")))
                               :text)
                    (prin1-to-string (expand-file-name "~/"))))))
 
@@ -379,7 +390,187 @@
     (let ((superchat-shell-seconds 1) (start (float-time)))
       (should (string-match-p "timed out after 1 seconds"
                               (superchat-test-tools--ok "shell" :command "echo early; sleep 5")))
-      (should (< (- (float-time) start) 4)))))
+      (should (< (- (float-time) start) 4))
+      (should-not (superchat-test-tools--live-processes)))))
+
+(defmacro superchat-test-tools--with-async (&rest body)
+  "BODY with async tool `later': DONE from a 0.1 s timer; its stop function
+sets `stopped' and cancels the timer."
+  (declare (indent 0))
+  `(let ((stopped nil))
+     (superchat-tool-define
+      "later" :class 'read :async t
+      :function (lambda (_ done)
+                  (let ((timer (run-at-time 0.1 nil (lambda () (funcall done "late")))))
+                    (lambda () (setq stopped t) (cancel-timer timer)))))
+     (unwind-protect (progn ,@body)
+       (superchat-tool-remove "later"))))
+
+(ert-deftest superchat-tools-async-result-comes-later ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--with-async
+      (let (got)
+        (let ((stop (superchat-tool-call "t" '(:id "a" :name "later" :args nil)
+                                         (lambda (e) (push e got)))))
+          (should (functionp stop))
+          (should-not got)
+          (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))
+          (superchat-test-wait (lambda () got))
+          (should (equal (plist-get (car got) :text) "late"))
+          (should (equal (plist-get (car got) :data) '(:call-id "a" :name "later" :error nil)))
+          (should (equal (superchat-tape-entries :tape "t" :kinds '(tool)) got))
+          (should-not stopped)
+          ;; A stop after the result does nothing.
+          (funcall stop)
+          (should-not stopped))))))
+
+(ert-deftest superchat-tools-async-error-and-bad-results ()
+  (superchat-test-tools--in-scope
+    (let (done-fn)
+      (superchat-tool-define "err" :class 'read :async t
+                             :function (lambda (_ done) (setq done-fn done) nil))
+      (superchat-tool-define "boom" :class 'read :async t
+                             :function (lambda (_ _done) (error "No start")))
+      (superchat-tool-define "num" :class 'read :async t
+                             :function (lambda (_ done) (funcall done 42) nil))
+      (superchat-tool-define "sync-done" :class 'read :async t
+                             :function (lambda (_ done) (funcall done nil "right away") nil))
+      (superchat-tool-define "twice" :class 'read :async t
+                             :function (lambda (_ done) (funcall done "one") (funcall done "two") nil))
+      (unwind-protect
+          (progn
+            (let (got)
+              (should (functionp (superchat-tool-call "t" '(:id "e" :name "err" :args nil)
+                                                      (lambda (e) (push e got)))))
+              (funcall done-fn nil "it failed")
+              (funcall done-fn "again")
+              (should (= (length got) 1))
+              (should (equal (plist-get (car got) :text) "Error: it failed"))
+              (should (eq (plist-get (plist-get (car got) :data) :error) t)))
+            (should (string-match-p "No start" (superchat-test-tools--err "boom")))
+            (should (string-match-p "42" (superchat-test-tools--err "num")))
+            (should (equal (superchat-test-tools--err "sync-done") "Error: right away"))
+            (should (equal (superchat-test-tools--ok "twice") "one"))
+            (should-not (cl-find "two" (superchat-tape-entries :tape "t" :kinds '(tool))
+                                 :key (lambda (e) (plist-get e :text)) :test #'equal)))
+        (dolist (n '("err" "boom" "num" "sync-done" "twice")) (superchat-tool-remove n))))))
+
+(ert-deftest superchat-tools-async-result-callback-signal-is-not-the-tools-error ()
+  (superchat-test-tools--in-scope
+    (superchat-tool-define "now" :class 'read :async t
+                           :function (lambda (_ done) (funcall done "fine") nil))
+    (unwind-protect
+        (progn
+          (should-error (superchat-tool-call "t" '(:id "a" :name "now" :args nil)
+                                             (lambda (_) (error "mine"))))
+          (should (= 1 (length (superchat-tape-entries :tape "t" :kinds '(tool))))))
+      (superchat-tool-remove "now"))))
+
+(ert-deftest superchat-tools-async-stop-before-the-result ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--with-async
+      (let ((got nil))
+        (let ((stop (superchat-tool-call "t" '(:id "a" :name "later" :args nil)
+                                         (lambda (e) (push e got)))))
+          (funcall stop)
+          (should stopped))
+        (let ((end (+ (float-time) 0.3)))
+          (while (< (float-time) end) (accept-process-output nil 0.05)))
+        (should-not got)
+        (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))))
+    ;; A tool that ignores the stop: its late DONE is dropped all the same.
+    (let (done-fn got)
+      (superchat-tool-define "deaf" :class 'read :async t
+                             :function (lambda (_ done) (setq done-fn done) nil))
+      (unwind-protect
+          (let ((stop (superchat-tool-call "t" '(:id "d" :name "deaf" :args nil)
+                                           (lambda (e) (push e got)))))
+            (funcall stop)
+            (funcall done-fn "late")
+            (should-not got)
+            (should-not (superchat-tape-entries :tape "t" :kinds '(tool))))
+        (superchat-tool-remove "deaf")))))
+
+(ert-deftest superchat-tools-async-binds-the-tape-and-directory-while-starting ()
+  (superchat-test-tools--in-scope
+    (let (seen)
+      (superchat-tool-define "peek" :class 'read :async t
+                             :function (lambda (_ done)
+                                         (setq seen (list superchat-tool-tape default-directory inhibit-quit))
+                                         (funcall done "x") nil))
+      (unwind-protect
+          (let ((inhibit-quit t))
+            (superchat-test-tools--ok "peek")
+            (should (equal seen (list "t" dir nil))))
+        (superchat-tool-remove "peek")))))
+
+(ert-deftest superchat-tools-async-denied-and-missing-do-not-start ()
+  (superchat-test-tools--in-scope
+    (let ((started nil))
+      (superchat-tool-define "w" :class 'write :async t
+                             :args '((:name "x" :type string :required t))
+                             :function (lambda (_ done) (setq started t) (funcall done "no") nil))
+      (unwind-protect
+          (progn
+            (should (string-match-p "Missing" (superchat-test-tools--err "w")))
+            (superchat-permission-set "t" 'read-only)
+            (should (string-match-p "denied" (superchat-test-tools--err "w" :x "1")))
+            (should-not started))
+        (superchat-tool-remove "w")))))
+
+(ert-deftest superchat-tools-shell-does-not-block-emacs ()
+  (superchat-test-tools--in-scope
+    (let (got fired)
+      (let ((stop (superchat-tool-call "t" '(:id "s" :name "shell" :args (:command "sleep 0.3; echo hi"))
+                                       (lambda (e) (setq got e)))))
+        (should (functionp stop))
+        (should-not got)
+        (run-at-time 0.05 nil (lambda () (setq fired (not got))))
+        (superchat-test-wait (lambda () got))
+        (should fired))
+      (should (equal (plist-get got :text) "hi\n\n[exit status 0]"))
+      (should-not (superchat-test-tools--live-processes)))))
+
+(ert-deftest superchat-tools-shell-stop-kills-the-process ()
+  (superchat-test-tools--in-scope
+    (let (got)
+      (let ((stop (superchat-tool-call "t" '(:id "s" :name "shell" :args (:command "sleep 3"))
+                                       (lambda (e) (setq got e)))))
+        (should (= 1 (length (superchat-test-tools--live-processes))))
+        (funcall stop)
+        (should-not (superchat-test-tools--live-processes))
+        (let ((end (+ (float-time) 0.2)))
+          (while (< (float-time) end) (accept-process-output nil 0.05)))
+        (should-not got)
+        (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))))))
+
+(ert-deftest superchat-tools-shell-runs-in-the-scope ()
+  (superchat-test-tools--in-scope
+    (let ((default-directory temporary-file-directory))
+      (should (string-match-p (regexp-quote (directory-file-name dir))
+                              (superchat-test-tools--ok "shell" :command "pwd"))))))
+
+(ert-deftest superchat-tools-search-does-not-block-emacs ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "needle\n")
+    (let (got)
+      (superchat-tool-call "t" '(:id "s" :name "search_files" :args (:pattern "needle"))
+                           (lambda (e) (setq got e)))
+      (should-not got)
+      (superchat-test-wait (lambda () got))
+      (should (string-match-p "a.txt:1:needle" (plist-get got :text))))
+    (should (string-match-p "grep exited" (superchat-test-tools--err "search_files" :pattern "x"
+                                                                     :path "missing")))))
+
+(ert-deftest superchat-tools-search-stop-kills-grep ()
+  (superchat-test-tools--in-scope
+    (let (got)
+      (let ((stop (superchat-tool-call "t" '(:id "s" :name "search_files" :args (:pattern "x"))
+                                       (lambda (e) (setq got e)))))
+        (should (= 1 (length (superchat-test-tools--live-processes))))
+        (funcall stop)
+        (should-not (superchat-test-tools--live-processes))
+        (should-not got)))))
 
 (ert-deftest superchat-tools-long-results-are-cut ()
   (superchat-test-tools--in-scope

@@ -501,5 +501,152 @@
           (should-not (string-match-p "AAAA" text))
           (should (string-match-p "left out" text)))))))
 
+;; An asynchronous tool: DONE from a 0.2 s timer, or later by hand.
+(defvar superchat-test-agent--stopped nil "How many times the slow tool was stopped.")
+(defvar superchat-test-agent--done nil "DONE of the slow tool's latest call.")
+
+(defmacro superchat-test-agent--with-slow (seconds &rest body)
+  "BODY with tool `slow', which answers \"slow\" after SECONDS (nil: never by itself)."
+  (declare (indent 1))
+  `(let ((superchat-test-agent--stopped 0) (superchat-test-agent--done nil))
+     (superchat-tool-define
+      "slow" :class 'read :async t :description "Slow"
+      :function (lambda (_ done)
+                  (setq superchat-test-agent--done done)
+                  (let ((timer (when ,seconds
+                                 (run-at-time ,seconds nil (lambda () (funcall done "slow"))))))
+                    (lambda ()
+                      (cl-incf superchat-test-agent--stopped)
+                      (when timer (cancel-timer timer))))))
+     (unwind-protect (progn ,@body)
+       (superchat-tool-remove "slow"))))
+
+(ert-deftest superchat-agent-async-tool-then-sync-tool-in-order ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow 0.2
+      (let (status entries)
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "slow")
+                            ,(superchat-test-agent--call "c2" "echo" :x "two")))
+                  '(:text "all done"))
+          (let ((run (superchat-run "t" "go"
+                                    :on-entry (lambda (e) (push (plist-get e :text) entries))
+                                    :on-done (lambda (r) (setq status (plist-get r :status))))))
+            ;; Returned before the first result: Emacs was not held.
+            (should (eq (plist-get run :status) 'running))
+            (should (eq (superchat-run-active "t") run))
+            (should (= (length superchat-test-requests) 1))
+            (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))
+            (superchat-test-wait (lambda () status)))
+          (should (eq status 'done))
+          (should (equal (mapcar #'cdr (superchat-test-agent--entries "t"))
+                         '("go" "" "slow" "echo:two" "all done")))
+          (should (equal (nreverse entries) '("go" "" "slow" "echo:two" "all done")))
+          (should (equal (mapcar (lambda (m) (plist-get m :role))
+                                 (plist-get (car superchat-test-requests) :messages))
+                         '(user assistant tool tool)))
+          (should (= (length superchat-test-requests) 2))
+          (should-not (superchat-run-active "t")))))))
+
+(ert-deftest superchat-agent-second-run-is-refused-while-a-tool-runs ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow nil
+      (superchat-test-script
+          (list `(:calls (,(superchat-test-agent--call "c1" "slow"))) '(:text "x"))
+        (superchat-run "t" "go")
+        (should (superchat-run-active "t"))
+        (should-error (superchat-run "t" "again"))
+        (should-error (superchat-handoff "t"))
+        (superchat-cancel "t")
+        (should-not (superchat-run-active "t"))))))
+
+(ert-deftest superchat-agent-cancel-while-an-async-tool-runs ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow nil
+      (let ((statuses nil) (superchat-test-async t))
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "slow")
+                            ,(superchat-test-agent--call "c2" "echo" :x "b")))
+                  '(:text "never"))
+          (superchat-run "t" "go" :on-done (lambda (r) (push (plist-get r :status) statuses)))
+          (superchat-test-wait (lambda () superchat-test-agent--done))
+          (superchat-cancel "t")
+          (should (= superchat-test-agent--stopped 1))
+          (should (equal statuses '(cancelled)))
+          (should-not (superchat-run-active "t"))
+          (should (equal (mapcar #'cdr (superchat-test-agent--entries "t"))
+                         '("go" "" "Cancelled." "Cancelled." "Cancelled by the user.")))
+          (let ((tools (superchat-tape-entries :tape "t" :kinds '(tool))))
+            (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :call-id)) tools)
+                           '("c1" "c2")))
+            (should (cl-every (lambda (e) (plist-get (plist-get e :data) :error)) tools)))
+          (should (equal (plist-get (plist-get (car (last (superchat-tape-entries :tape "t")))
+                                               :data)
+                                    :type)
+                         "cancelled"))
+          ;; A late answer changes nothing and starts nothing.
+          (let ((before (length (superchat-tape-entries :tape "t"))))
+            (funcall superchat-test-agent--done "late")
+            (superchat-test-drain)
+            (should (= before (length (superchat-tape-entries :tape "t"))))
+            (should (= (length superchat-test-requests) 1))
+            (should (equal statuses '(cancelled))))
+          ;; The timeline is free.
+          (superchat-test-script (list '(:text "again"))
+            (superchat-run "t" "next")
+            (superchat-test-drain)
+            (should-not (superchat-run-active "t"))))))))
+
+(ert-deftest superchat-agent-cancelled-run-does-not-start-the-next-call ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow 0.1
+      (let ((ran nil))
+        (superchat-tool-define "after" :class 'read :function (lambda (_) (setq ran t) "x"))
+        (unwind-protect
+            (superchat-test-script
+                (list `(:calls (,(superchat-test-agent--call "c1" "slow")
+                                ,(superchat-test-agent--call "c2" "after"))))
+              (superchat-run "t" "go")
+              (superchat-cancel "t")
+              (let ((end (+ (float-time) 0.3)))
+                (while (< (float-time) end) (accept-process-output nil 0.05)))
+              (should-not ran)
+              (should (= superchat-test-agent--stopped 1)))
+          (superchat-tool-remove "after"))))))
+
+(ert-deftest superchat-agent-signal-in-the-continuation-of-an-async-tool-ends-the-run ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow 0.1
+      (let (status)
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "slow"))) '(:text "never"))
+          (superchat-run "t" "go"
+                         :on-entry (lambda (e) (when (eq (plist-get e :kind) 'tool)
+                                                 (error "callback")))
+                         :on-done (lambda (r) (setq status (plist-get r :status))))
+          (should (superchat-run-active "t"))
+          ;; The signal leaves the timer; Emacs reports it there.
+          (superchat-test-wait (lambda () status))
+          (should (eq status 'error))
+          (should-not (superchat-run-active "t"))
+          (should (= (length superchat-test-requests) 1))
+          (should (equal (plist-get (plist-get (car (last (superchat-tape-entries :tape "t"))) :data)
+                                    :type)
+                         "error"))
+          (superchat-test-script (list '(:text "fine"))
+            (should (eq (plist-get (superchat-run "t" "again") :status) 'done))))))))
+
+(ert-deftest superchat-agent-async-tool-that-signals-is-an-error-result ()
+  (superchat-test-agent--with
+    (superchat-tool-define "bad" :class 'read :async t :function (lambda (_ _d) (error "no start")))
+    (unwind-protect
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "bad"))) '(:text "ok"))
+          (should (eq (plist-get (superchat-run "t" "go") :status) 'done))
+          (should (string-match-p "no start"
+                                  (plist-get (car (superchat-tape-entries :tape "t" :kinds '(tool)))
+                                             :text))))
+      (superchat-tool-remove "bad"))))
+
 (provide 'test-agent)
 ;;; test-agent.el ends here

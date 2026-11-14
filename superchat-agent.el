@@ -99,23 +99,51 @@ another request; then this handle is stale and is not kept."
 
 (defun superchat-agent--respond (run response)
   "Record RESPONSE, run its calls in order, make the next request."
-  (let ((tape (plist-get run :tape))
-        (calls (plist-get response :calls)))
+  (let ((calls (plist-get response :calls)))
     (cl-incf (plist-get run :rounds))
     (superchat-agent--add run 'assistant (plist-get response :text)
                           :data (list :model (plist-get response :model) :calls calls))
     (if (null calls)
         (when (superchat-agent--live run)
           (superchat-agent--finish run 'done))
-      (dolist (call calls)
-        (when (superchat-agent--live run)
-          ;; A cancel during the call must not add a second result for it.
-          (setf (plist-get run :calling) (plist-get call :id))
-          (superchat-tool-call tape call)
+      (superchat-agent--calls run calls))))
+
+(defun superchat-agent--calls (run calls)
+  "Run CALLS one after the other, each started from the result of the one
+before, then make the next request.  A tool may answer later; Emacs is free
+meanwhile.  :calling is the id of a call whose function has not returned, whose
+entry will be appended by `superchat-tool-call' even if the run is cancelled
+meanwhile; :stop stops a tool that is still running."
+  (when (superchat-agent--live run)
+    (if (null calls)
+        (superchat-agent--step run)
+      (let* ((call (car calls))
+             (seq (cl-incf (plist-get run :seq)))
+             (stop (progn
+                     (setf (plist-get run :calling) (plist-get call :id))
+                     (superchat-tool-call
+                      (plist-get run :tape) call
+                      (lambda (_)
+                        (when (= seq (plist-get run :seq))
+                          (cl-incf (plist-get run :seq))
+                          (setf (plist-get run :calling) nil)
+                          (setf (plist-get run :stop) nil)
+                          (if (superchat-agent--live run)
+                              (superchat-agent--guard
+                               run (lambda ()
+                                     (superchat-agent--emit run)
+                                     (superchat-agent--calls run (cdr calls))))
+                            ;; Cancelled while the function ran: its entry is the only result.
+                            (superchat-agent--emit run))))))))
+        (when (and stop (= seq (plist-get run :seq)))
           (setf (plist-get run :calling) nil)
-          (superchat-agent--emit run)))
-      (when (superchat-agent--live run)
-        (superchat-agent--step run)))))
+          (if (superchat-agent--live run)
+              (setf (plist-get run :stop) stop)
+            ;; Cancelled while the tool was starting: nobody else will stop it.
+            (funcall stop)
+            (superchat-tape-append (plist-get run :tape) 'tool "Cancelled."
+                                   :data (list :call-id (plist-get call :id)
+                                               :name (plist-get call :name) :error t))))))))
 
 (defun superchat-agent--step (run)
   "Make the next request of RUN."
@@ -165,7 +193,7 @@ entry appended, ON-DONE the run, once, with :status done, cancelled or error."
   (when (gethash tape superchat-agent--runs)
     (error "Timeline %s is busy with a run or a handoff" tape))
   (let* ((last (car (superchat-tape-entries :tape tape :newest t :limit 1)))
-         (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
+         (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil :stop nil
                     :unsent nil :text text :origin origin
                     :seen (if last (plist-get last :id) 0)
                     :tools tools :system system :model model
@@ -224,6 +252,9 @@ apart from the call with id EXCEPT, which is running and will have one."
       (setf (plist-get run :status) 'cancelled)
       (when-let* ((handle (plist-get run :handle)))
         (superchat-llm-cancel handle))
+      (when-let* ((stop (plist-get run :stop)))
+        (setf (plist-get run :stop) nil)
+        (funcall stop))
       ;; The run ends even when a callback signals on one of these entries.
       (unwind-protect
           (progn

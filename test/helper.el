@@ -86,5 +86,12 @@ A request cancelled meanwhile with `superchat-llm-cancel', which sets
     (while (> superchat-test--pending 0)
       (accept-process-output nil 0.01))))
 
+(defun superchat-test-wait (predicate &optional seconds)
+  "Wait until PREDICATE returns non-nil, for at most SECONDS (default 3):
+for a tool that answers from a timer or a process."
+  (with-timeout ((or seconds 3) (error "Waited for %S in vain" predicate))
+    (while (not (funcall predicate))
+      (accept-process-output nil 0.01))))
+
 (provide 'helper)
 ;;; helper.el ends here

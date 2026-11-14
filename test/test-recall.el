@@ -17,7 +17,9 @@
 
 (defun superchat-test-recall--call (name &rest args)
   "The tool entry of NAME called with ARGS."
-  (superchat-tool-call "t" (list :id "c" :name name :args args)))
+  (let (entry)
+    (superchat-tool-call "t" (list :id "c" :name name :args args) (lambda (e) (setq entry e)))
+    entry))
 
 (defun superchat-test-recall--ok (name &rest args)
   "Text of a call that must succeed."
