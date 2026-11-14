@@ -329,6 +329,10 @@ wait is refused rather than written and never acted on."
   (when (equal for "time")
     (unless (numberp until)
       (error "A wait for a time needs the time: in_minutes or at"))
+    ;; A time that has passed would take the record up again at once.
+    (unless (> until (superchat-work--now))
+      (error "The time to wait for (%s) has already passed, so this wait was not registered; give a time to come, with in_minutes above 0 or a later at"
+             (format-time-string "%Y-%m-%d %H:%M" until)))
     (unless (superchat-work--wake-active-p)
       (error "Taking work up again at a time is turned off in this Emacs (the work-records row is not mounted), so this wait was not registered and nothing will happen at that time; tell the user, or register wait_for user"))))
 

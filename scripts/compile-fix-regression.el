@@ -1975,6 +1975,23 @@ Stopped before that, deleting the copy alone would end it: it finds no script."
       (superchat-fix--delete-all)
       (cfix--no-copies))))
 
+;;;; A copy that is not whole ------------------------------------------------------
+;; `find -exec cp ... \;' does not fail when cp does, so a copy missing a file
+;; was handed over as the project.
+
+(ert-deftest compile-fix/a-copy-that-could-not-take-a-file-is-no-copy ()
+  (skip-unless (/= 0 (user-uid)))
+  (cfix--with nil (p)
+    (cfix--project p)
+    (wtimer--write p "locked.txt" "CFIX-LOCKED")
+    (set-file-modes (expand-file-name "locked.txt" p) #o000)
+    (unwind-protect
+        (let ((made (cfix--make-copy p)))
+          (should-not (plist-get made :dir))
+          (should (string-match-p "locked\\.txt" (plist-get made :why)))
+          (cfix--no-copies))
+      (set-file-modes (expand-file-name "locked.txt" p) #o600))))
+
 (provide 'compile-fix-regression)
 
 ;;; compile-fix-regression.el ends here

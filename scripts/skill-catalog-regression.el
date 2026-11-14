@@ -210,6 +210,41 @@ which is where the skills directory lives by default."
     (should (string-match-p "SC-JOURNAL-BODY"
                             (superchat-preset-skill-body (superchat-skills-load "journal"))))))
 
+;;;; A rule in the body is not the end of the frontmatter ------------------------
+;; The frontmatter was matched up to the last `---' line of the file, so a
+;; horizontal rule in a skill's body cut away everything above it and had the
+;; text between read as keys.
+
+(ert-deftest skill-catalog/a-rule-in-the-body-does-not-cut-the-body ()
+  (sc--with-skills (skills _extra)
+    (sc--write skills "ruled.md"
+               "---\nname: ruled\ndescription: Has rules.\n---\nSC-PART-ONE\n\n---\n\ntools: SC-NOT-A-KEY\nSC-PART-TWO\n\n---\n\nSC-PART-THREE\n")
+    (let* ((preset (superchat-skills-load "ruled"))
+           (body (superchat-preset-skill-body preset)))
+      (should (string-match-p "SC-PART-ONE" body))
+      (should (string-match-p "SC-PART-TWO" body))
+      (should (string-match-p "SC-PART-THREE" body))
+      (should (equal "Has rules." (superchat-preset-description preset)))
+      ;; A line of the body is not a key.
+      (should-not (superchat-preset-tools preset)))))
+
+(ert-deftest skill-catalog/a-rule-in-a-file-without-frontmatter-is-not-frontmatter ()
+  (sc--with-skills (skills _extra)
+    (sc--write skills "plain.md" "SC-INTRO\n\n---\nname: sneaky\n---\n\nSC-REST\n")
+    (let* ((preset (superchat-skills-load "plain"))
+           (body (superchat-preset-skill-body preset)))
+      (should (equal "plain" (superchat-preset-name preset)))
+      (should (string-match-p "SC-INTRO" body))
+      (should (string-match-p "SC-REST" body)))
+    (should-not (superchat-preset-parse-frontmatter
+                 "SC-INTRO\n\n---\nname: sneaky\n---\n\nSC-REST\n"))))
+
+(ert-deftest skill-catalog/frontmatter-with-nothing-in-it-leaves-the-whole-body ()
+  (sc--with-skills (skills _extra)
+    (sc--write skills "empty.md" "---\n---\nSC-ONLY-BODY\n")
+    (should (equal "SC-ONLY-BODY\n"
+                   (superchat-preset-skill-body (superchat-skills-load "empty"))))))
+
 (provide 'skill-catalog-regression)
 
 ;;; skill-catalog-regression.el ends here

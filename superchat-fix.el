@@ -146,7 +146,9 @@ It prints what is in the copy, separated by NUL."
      "cd \"$1\"\n"
      "find . -mindepth 1 -maxdepth 1 "
      (mapconcat (lambda (name) (concat "! -name " name)) names " ")
-     " -exec cp -cRPp {} \"$2\"/ \\;\n"
+     ;; `-exec ... +', not `\;': with `\;' find succeeds when cp fails, and
+     ;; a copy that lacks a file would be handed over as the project.
+     " -exec sh -c 'cp -cRPp \"$@\" \"$0\"/' \"$2\" {} +\n"
      (when names
        (concat "find \"$2\" -mindepth 1 \\( "
                (mapconcat (lambda (name) (concat "-name " name)) names " -o ")

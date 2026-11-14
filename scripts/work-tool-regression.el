@@ -222,6 +222,31 @@ answers that way when it is called directly (the tests below)."
         (should (equal "time" (plist-get (plist-get (superchat-work-get id) :waiting) :for)))
         (should (gethash id superchat-work--armed))))))
 
+;;;; A wait for a time that has passed ---------------------------------------------
+;; Such a wait was registered and its record taken up again at once, in a new
+;; conversation, where the model could register the same wait again.
+
+(ert-deftest work-tool/a-wait-for-a-time-that-has-passed-is-refused ()
+  (wrec--with nil (p)
+    (wrec--with-clock
+      (let* ((session (hm--session (wrec--view p)))
+             (id (superchat-work-start session "WTOOL-PAST")))
+        (should-error (superchat-work-wait session id "time" nil (- wrec--now 60)))
+        (should-error (superchat-work-wait session id "time" nil wrec--now))
+        (should-not (plist-get (superchat-work-get id) :waiting))
+        (should-not (gethash id superchat-work--armed))
+        ;; The tool says so and keeps nothing either.
+        (let ((answer (condition-case err
+                          (wtool--as session
+                            (superchat-work-tool "wait" id nil nil nil nil "time" nil
+                                                 nil nil 0 nil))
+                        (error (error-message-string err)))))
+          (should (string-match-p "already passed" answer)))
+        (should-not (plist-get (superchat-work-get id) :waiting))
+        ;; A time to come is kept as before.
+        (superchat-work-wait session id "time" nil (+ wrec--now 60))
+        (should (gethash id superchat-work--armed))))))
+
 (provide 'work-tool-regression)
 
 ;;; work-tool-regression.el ends here

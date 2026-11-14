@@ -276,14 +276,27 @@ have mounted a different composition than its file declares."
            item))
        (split-string inside "," nil)))))
 
+(defun superchat-preset-split-frontmatter (content)
+  "Return (RAW . BODY-START) for the frontmatter block of CONTENT, or nil.
+RAW is the text between the two `---' lines and BODY-START the index after
+the closing one.  The block is one only at the start of CONTENT, and it ends
+at the first `---' line after it: a later one is a horizontal rule of the body."
+  (when (and (stringp content)
+             (string-match "\\`[ \t\n]*---[ \t]*\n" content))
+    (let ((start (match-end 0)))
+      ;; From the opening line's own newline, so that a block with nothing
+      ;; in it is found too.
+      (when (string-match "\n---[ \t]*\\(?:\n\\|\\'\\)" content (1- start))
+        (cons (substring content start (max start (match-beginning 0)))
+              (match-end 0))))))
+
 (defun superchat-preset-parse-frontmatter (content)
   "Parse YAML frontmatter from CONTENT string.
 Returns an alist of (KEY . VALUE) pairs, or nil if no frontmatter block.
 Trims values, supports quoted strings, and supports
 `key: [\"a\", \"b\"]' list shorthand for list-valued keys."
-  (when (and (stringp content)
-             (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" content))
-    (let ((raw (match-string 1 content))
+  (when-let* ((split (superchat-preset-split-frontmatter content)))
+    (let ((raw (car split))
           (alist '()))
       (dolist (line (split-string raw "\n"))
         (cond
@@ -322,8 +335,8 @@ Trims values, supports quoted strings, and supports
   "Create a `superchat-preset' from SKILL.md CONTENT.
 Optional SOURCE-FILE records the file path.  Returns nil if no
 frontmatter block is present."
-  (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" content)
-    (let ((body-start (match-end 0))
+  (when-let* ((split (superchat-preset-split-frontmatter content)))
+    (let ((body-start (cdr split))
           (alist (superchat-preset-parse-frontmatter content)))
       (when alist
         (superchat-preset-from-plist

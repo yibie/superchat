@@ -3,19 +3,18 @@
 ;;; Commentary:
 ;; Magit hook: generate conventional-commit messages from staged diff
 ;; via a deterministic blocking LLM call (no tools).  Soft-depends on
-;; Magit — the command is only registered when Magit is loaded.
+;; Magit — the command says so when Magit is not loaded.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'superchat-plugin)
 (require 'superchat-service)
 
 ;; ── Forward declarations ──
 (defvar superchat-llm-backend)
 (declare-function magit-staged-files "magit" ())
-(declare-function magit-diff-staged "magit" (&optional files))
-(declare-function magit-git-string "magit" (&rest args))
 
 (defgroup superchat-magit nil
   "Magit integration for Superchat."
@@ -52,21 +51,28 @@ configured."
     (user-error "Magit is not loaded — cannot read staged diff"))
   (unless superchat-llm-backend
     (user-error "superchat-llm-backend is not configured"))
-  (let* ((staged (magit-staged-files))
-         (diff-text
-          (if staged
-              (condition-case nil
-                  (if (fboundp 'magit-diff-staged)
-                      (magit-diff-staged staged)
-                    ;; Fallback: magit-git-string
-                    (apply #'magit-git-string "diff" "--cached" staged))
-                (error nil))
+  (let* ((diff-text
+          (if (magit-staged-files)
+              (superchat-magit--staged-diff)
             (user-error "No staged changes")))
          (prompt (superchat-magit--build-prompt diff-text))
          (message-text (superchat-magit--call-llm prompt)))
     (if (and message-text (not (string-empty-p message-text)))
         (superchat-magit--deliver message-text)
       (user-error "LLM returned no commit message"))))
+
+(defun superchat-magit--staged-diff ()
+  "The staged diff of the repository of `default-directory', as text.
+Git is asked directly: `magit-diff-staged' shows a buffer and returns no
+text.  Signals when git fails or the diff is empty, so the model is never
+asked for a message about nothing."
+  (with-temp-buffer
+    (let ((status (process-file "git" nil t nil "diff" "--cached" "--no-color")))
+      (unless (eql 0 status)
+        (user-error "Reading the staged diff failed: %s" (string-trim (buffer-string))))
+      (when (string-blank-p (buffer-string))
+        (user-error "The staged diff is empty"))
+      (buffer-string))))
 
 (defun superchat-magit--build-prompt (diff)
   "Build the LLM prompt from DIFF."

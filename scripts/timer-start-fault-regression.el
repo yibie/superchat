@@ -326,5 +326,59 @@ The clock is then moved to the due time."
       (should (= 0 (hash-table-count superchat-timer--not-before)))
       (should (= 0 (hash-table-count superchat-timer--retries))))))
 
+;;;; A fire that signals -----------------------------------------------------------
+;; The Emacs timer of a timer is taken away before it fires.  When the fire
+;; signalled (the conversation could not be made, the Tape could not be
+;; written), nothing set it again, so a repeating timer was silent until the
+;; next Emacs.
+
+(defmacro tsf--fire-failing (text &rest body)
+  "Run BODY while firing the timer whose text is TEXT signals an error."
+  (declare (indent 1))
+  `(let ((real (symbol-function 'superchat-timer-fire)))
+     (cl-letf (((symbol-function 'superchat-timer-fire)
+                (lambda (timer occurrence)
+                  (if (equal ,text (plist-get timer :text))
+                      (error "TSF injected: fire fails")
+                    (funcall real timer occurrence)))))
+       ,@body)))
+
+(ert-deftest timer-fault/a-timer-whose-fire-signals-is-armed-again-not-at-once ()
+  (wtimer--with nil (p)
+    (let* ((view (with-current-buffer (wtimer--file p) (superchat)))
+           (session (wtimer--session view))
+           (id (plist-get (superchat-timer-create session 'reminder "TSF-R"
+                                                  (+ wtimer--now 60) 3600)
+                          :id)))
+      (setq wtimer--now (+ wtimer--now 60))
+      ;; It runs in an Emacs timer: the error is said, not signalled.
+      (tsf--fire-failing "TSF-R" (superchat-timer--due id))
+      (should-not (wtimer--fired-in session))
+      (let ((armed (gethash id superchat-timer--armed)))
+        (should (timerp armed))
+        ;; The occurrence is still due.  Trying it again at once would try
+        ;; without end while the fault lasts.
+        (should (> (float-time (time-subtract (timer--time armed) nil)) 5)))
+      ;; With the fault gone it fires that occurrence.
+      (superchat-timer--due id)
+      (should (equal '("TSF-R") (wtimer--fired-in session)))
+      (should (timerp (gethash id superchat-timer--armed))))))
+
+(ert-deftest timer-fault/one-timer-that-cannot-fire-does-not-keep-the-others-from-firing ()
+  (wtimer--with nil (p)
+    (let* ((view (with-current-buffer (wtimer--file p) (superchat)))
+           (session (wtimer--session view)))
+      (superchat-timer-create session 'reminder "TSF-BAD" (+ wtimer--now 30))
+      (superchat-timer-create session 'reminder "TSF-GOOD" (+ wtimer--now 60))
+      (superchat-timer-disarm-all)
+      (setq wtimer--now (+ wtimer--now 120))
+      (let ((fired (tsf--fire-failing "TSF-BAD" (superchat-timer-catch-up))))
+        (should (equal '("TSF-GOOD") (mapcar (lambda (f) (plist-get f :text)) fired))))
+      (should (equal '("TSF-GOOD") (wtimer--fired-in session)))
+      ;; The one that failed is still pending.
+      (should (equal '("TSF-BAD")
+                     (mapcar (lambda (timer) (plist-get timer :text))
+                             (superchat-timer-list)))))))
+
 (provide 'timer-start-fault-regression)
 ;;; timer-start-fault-regression.el ends here

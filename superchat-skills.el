@@ -304,8 +304,7 @@ Parses YAML frontmatter if present.  Returns nil if skill not found."
       (with-temp-buffer
         (insert-file-contents skill-file)
         (let* ((raw (buffer-string))
-               (body-start (when (string-match "^---\\s-*\n\\(\\(.\\|\n\\)*\\)---\\s-*\n" raw)
-                             (match-end 0)))
+               (body-start (cdr (superchat-preset-split-frontmatter raw)))
                (alist (when body-start (superchat-preset-parse-frontmatter raw)))
                (body (substring raw body-start))
                (name (or (cdr (assoc "name" alist)) skill-name))

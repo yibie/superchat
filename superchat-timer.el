@@ -1536,24 +1536,45 @@ The facts stay on the Tape."
                       (hash-table-keys superchat-timer--writing)))
     (superchat-timer--stop-command id)))
 
+(defvar superchat-timer-fire-retry-seconds 60
+  "How long a timer whose fire signalled waits before it is tried again.
+The occurrence may still be due then: without a wait it would be tried
+without end for as long as the fault lasts.")
+
+(defun superchat-timer--fire-safely (timer occurrence)
+  "Fire OCCURRENCE of TIMER; return what was done, or nil when it signalled.
+An error is said in the echo area.  It is not signalled: this runs in an
+Emacs timer, and the timers after this one are still to be fired."
+  (condition-case err
+      (superchat-timer-fire timer occurrence)
+    (error
+     (message "superchat: the %s %s (%s) did not fire: %s"
+              (plist-get timer :kind) (plist-get timer :id) (plist-get timer :text)
+              (error-message-string err))
+     nil)))
+
 (defun superchat-timer--due (id)
-  "The Emacs timer for ID went off: fire what is due now, arm the rest."
+  "The Emacs timer for ID went off: fire what is due now, arm the rest.
+A fire that signalled is armed again too, after
+`superchat-timer-fire-retry-seconds'."
   (remhash id superchat-timer--armed)
   (when-let* ((timer (cl-find id (superchat-timer-list)
                               :key (lambda (timer) (plist-get timer :id))
                               :test #'equal))
               (occurrence (superchat-timer--latest-occurrence
                            timer (superchat-timer--now))))
-    (superchat-timer-fire timer occurrence)
-    (when-let* ((again (cl-find id (superchat-timer-list)
-                                :key (lambda (timer) (plist-get timer :id))
-                                :test #'equal)))
-      (superchat-timer--arm again))))
+    (let ((fired (superchat-timer--fire-safely timer occurrence)))
+      (when-let* ((again (cl-find id (superchat-timer-list)
+                                  :key (lambda (timer) (plist-get timer :id))
+                                  :test #'equal)))
+        (superchat-timer--arm again
+                              (unless fired superchat-timer-fire-retry-seconds))))))
 
-(defun superchat-timer--arm (timer)
-  "Set an Emacs timer for TIMER's next occurrence."
+(defun superchat-timer--arm (timer &optional at-least)
+  "Set an Emacs timer for TIMER's next occurrence, AT-LEAST seconds from now."
   (let ((id (plist-get timer :id))
-        (delay (max 0 (- (plist-get timer :next-due) (superchat-timer--now)))))
+        (delay (max (or at-least 0)
+                    (- (plist-get timer :next-due) (superchat-timer--now)))))
     (superchat-timer--disarm id)
     (puthash id (run-at-time delay nil #'superchat-timer--due id)
              superchat-timer--armed)))
@@ -1568,8 +1589,9 @@ the fired plists."
   (superchat-timer-retry-tasks)
   (let ((now (superchat-timer--now)) fired)
     (dolist (timer (superchat-timer-list))
-      (when-let* ((occurrence (superchat-timer--latest-occurrence timer now)))
-        (push (superchat-timer-fire timer occurrence) fired)))
+      (when-let* ((occurrence (superchat-timer--latest-occurrence timer now))
+                  (done (superchat-timer--fire-safely timer occurrence)))
+        (push done fired)))
     (nreverse fired)))
 
 (defun superchat-timer-arm-all ()
