@@ -269,7 +269,9 @@ requires `llm.el`.
 - `(superchat-llm-cancel HANDLE)`: aborts the request through the bridge's abort
   signal.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
-  function of no arguments that returns a bridge provider. It starts with
+  function of no arguments that returns a bridge provider. When a name is
+  there twice the first entry counts, and a changed entry is seen at the
+  next request. It starts with
   one entry for each provider the bridge has (`"deepseek"`, `"groq"`,
   `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
   collection is made from it on first use.
@@ -355,6 +357,10 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   `Interrupted by the user.`
 - Results longer than `superchat-tool-max-chars` (20000) are cut, and the
   text says how many characters were left out.
+- A tool that reads from a process never holds more of its output than a
+  few times `superchat-tool-max-chars`: past that the process is stopped
+  and the result says the output was cut there. A process buffer is killed
+  whatever happens, also when the process cannot be started.
 
 Built-in tools, and no others:
 
@@ -418,7 +424,8 @@ A number argument may arrive as a string. The description of `recall` lists the 
   1. messages = the `conversation` view of TAPE turned into neutral
      messages. An anchor becomes a `user` message that begins
      `Summary of the conversation so far:`. `event` and `note` entries are
-     left out. When the texts of the messages together are longer than
+     left out. The size of a message is its text plus the printed
+     arguments of its calls. When the messages together are larger than
      `superchat-context-chars`, the oldest are left out of this request
      until the rest fits: never the anchor message, never the `user` entry
      of this run, never the latest `assistant` entry and its results; an
@@ -447,6 +454,22 @@ A number argument may arrive as a string. The description of `recall` lists the 
   with status `error`; the timeline is free again.
 - That holds when a callback the caller gave (ON-ENTRY, ON-TEXT) signals
   while the error event is being recorded: the run is ended first.
+- That also holds for `superchat-cancel`: when stopping the request or a
+  tool signals, the run still ends, with status `cancelled`.
+- A run that is cancelled while one of its calls is inside
+  `superchat-tool-call` (the user is being asked, or a plain tool is
+  running) keeps its timeline until that call returns: only then are the
+  missing results appended, the `cancelled` event appended and ON-DONE
+  called, so nothing of a cancelled run is ever appended after a later
+  run's entries. A tool whose permission question is answered after the
+  cancel does not run; its result is `Cancelled.`.
+- ON-ENTRY may cancel the run. Nothing more is requested or run after that,
+  and ON-DONE is still called exactly once.
+- The calls of one response are run in a loop, not by recursion: a response
+  with hundreds of calls is no deeper than one with two.
+- An entry `superchat-tool-call` appended (a permission event, a result) is
+  given to ON-ENTRY as soon as that call returns, also when the tool is
+  asynchronous and its result comes later.
 - `(superchat-run-active TAPE)` → the run or nil.
 - `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
   append a `cancelled` event and free the timeline. For a run: cancel the
@@ -476,7 +499,8 @@ A number argument may arrive as a string. The description of `recall` lists the 
   `user` entry is appended after the anchor, so the request is never behind
   the anchor. When that handoff fails, the `user` entry is appended all the
   same, after the error event, and the run ends with status `error`: what
-  the user wrote is never lost. There is no handoff in the middle of a run.
+  the user wrote is never lost. That holds too when starting the handoff
+  request signals. The handoff of a run uses the run's MODEL. There is no handoff in the middle of a run.
 - `(superchat-fork TAPE ENTRY-ID)` → a new timeline name whose first entry is
   an anchor: summary empty, `:refs` the ids of TAPE's `conversation` view up
   to ENTRY-ID, and the `tool` entries that answer the calls of every
