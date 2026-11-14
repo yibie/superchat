@@ -421,5 +421,71 @@
         (should (equal (superchat-test-agent--fork-messages (superchat-fork "t" at))
                        '(user assistant tool tool user)))))))
 
+;; A callback that always signals still cannot leave the run stuck.
+(ert-deftest superchat-agent-signalling-on-entry-ends-the-run ()
+  (superchat-test-agent--with
+    (let (status)
+      (superchat-test-script (list '(:text "x"))
+        (should-error (superchat-run "t" "go" :on-entry (lambda (_) (error "callback"))
+                                     :on-done (lambda (r) (setq status (plist-get r :status))))))
+      (should (eq status 'error))
+      (should-not (superchat-run-active "t"))
+      (superchat-test-script (list '(:text "fine"))
+        (should (eq (plist-get (superchat-run "t" "again") :status) 'done))))))
+
+(ert-deftest superchat-agent-cancel-a-pending-handoff ()
+  (superchat-test-agent--with
+    (let ((superchat-test-async t))
+      (superchat-tape-append "t" 'user "x" :scope "home")
+      (superchat-test-script (list '(:text "S") '(:text "S"))
+        (superchat-handoff "t")
+        (should (superchat-run-active "t"))
+        (superchat-cancel "t")
+        (should-not (superchat-run-active "t"))
+        (superchat-test-drain)
+        (should (equal (mapcar #'car (superchat-test-agent--entries "t")) '(user event)))
+        (superchat-handoff "t")
+        (superchat-test-drain)
+        (should (= 1 (length (superchat-tape-entries :tape "t" :kinds '(anchor)))))))))
+
+(ert-deftest superchat-agent-cancel-during-the-handoff-keeps-the-user-text ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 50) status)
+      (superchat-test-script (list '(:text "old"))
+        (superchat-run "t" (make-string 60 ?u)))
+      (let ((superchat-test-async t))
+        (superchat-test-script (list '(:text "S"))
+          (superchat-run "t" "second" :origin '(:buffer "b.el")
+                         :on-done (lambda (r) (setq status (plist-get r :status))))
+          (superchat-cancel "t")
+          (superchat-test-drain)))
+      (should (eq status 'cancelled))
+      (should (equal (mapcar #'car (superchat-test-agent--entries "t"))
+                     '(user assistant user event)))
+      (should (equal (plist-get (nth 2 (superchat-tape-entries :tape "t")) :text) "second"))
+      (should-not (superchat-run-active "t")))))
+
+(ert-deftest superchat-agent-scope-of-a-new-timeline ()
+  (superchat-test-agent--with
+    (superchat-test-script (list '(:text "a") '(:text "b") '(:text "c"))
+      (superchat-run "a" "go" :scope "/given/")
+      (superchat-run "b" "go")
+      (superchat-run "a" "again" :scope "/ignored/")
+      (should (equal (mapcar (lambda (e) (plist-get e :scope)) (superchat-tape-entries :tape "a"))
+                     '("/given/" "/given/" "/given/" "/given/")))
+      (should (equal (plist-get (car (superchat-tape-entries :tape "b")) :scope) "home")))))
+
+(ert-deftest superchat-agent-handoff-text-is-cut ()
+  (superchat-test-agent--with
+    (dolist (word '("AAAA" "BBBB" "CCCC"))
+      (superchat-tape-append "t" 'user (concat word (make-string 80 ?x)) :scope "home"))
+    (let ((superchat-context-chars 150))
+      (superchat-test-script (list '(:text "S"))
+        (superchat-handoff "t")
+        (let ((text (plist-get (car (plist-get (car superchat-test-requests) :messages)) :text)))
+          (should (string-match-p "CCCC" text))
+          (should-not (string-match-p "AAAA" text))
+          (should (string-match-p "left out" text)))))))
+
 (provide 'test-agent)
 ;;; test-agent.el ends here

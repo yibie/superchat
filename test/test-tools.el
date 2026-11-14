@@ -120,6 +120,18 @@
                (should (string-match-p "Missing" (superchat-test-tools--err "flag"))))
       (superchat-tool-remove "flag"))))
 
+(ert-deftest superchat-tools-quit-is-allowed-while-the-tool-runs ()
+  (superchat-test-tools--in-scope
+    (superchat-tool-define "seen" :class 'read
+                           :function (lambda (_) (format "%S" inhibit-quit)))
+    (superchat-tool-define "stop" :class 'read :function (lambda (_) (signal 'quit nil)))
+    (unwind-protect
+        (let ((inhibit-quit t))
+          (should (equal (superchat-test-tools--ok "seen") "nil"))
+          (should (equal (superchat-test-tools--err "stop") "Interrupted by the user."))
+          (should inhibit-quit))
+      (superchat-tool-remove "seen") (superchat-tool-remove "stop"))))
+
 (ert-deftest superchat-tools-call-entry-shape ()
   (superchat-test-tools--in-scope
     (let ((entry (superchat-tool-call "t" '(:id "id9" :name "eval_elisp" :args (:code "(+ 1 2)")))))

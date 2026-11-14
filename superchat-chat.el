@@ -19,6 +19,8 @@
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
 (defvar-local superchat-chat--model nil "Model for this buffer, or nil for the default.")
+(defvar-local superchat-chat--pending-scope nil
+  "Scope given to `superchat-chat-open', for a timeline with no entry yet.")
 (defvar-local superchat-chat--origin nil "Origin for the next request sent, or nil.")
 (defvar-local superchat-chat--input nil "Marker: where the input area starts.")
 (defvar-local superchat-chat--stream nil "Marker: where streamed text starts, or nil.")
@@ -37,6 +39,11 @@ FUNCTION is called with the rest of the line, in the chat buffer."
 (defun superchat-command-remove (name)
   "Remove slash command NAME."
   (setq superchat-chat--commands (assoc-delete-all name superchat-chat--commands)))
+
+(defun superchat-chat--scope ()
+  "The scope of this buffer: that of its timeline, else the one it was opened with."
+  (or (plist-get (car (superchat-tape-entries :tape superchat-chat--tape :limit 1)) :scope)
+      superchat-chat--pending-scope))
 
 ;;; Rendering
 
@@ -182,14 +189,18 @@ A line starting with / is a command.  Return nil when nothing was sent."
           (origin (or origin superchat-chat--origin)))
       (setq superchat-chat--origin nil)
       (unwind-protect
-          (superchat-run superchat-chat--tape text
+          (apply #'superchat-run superchat-chat--tape text
                          :origin origin :model superchat-chat--model
                          :on-text (superchat-chat--in tape #'superchat-chat--on-text)
                          :on-entry (superchat-chat--in tape #'superchat-chat--add)
                          :on-done (superchat-chat--in
                                    tape (lambda (_run)
                                             (superchat-chat--unstream)
-                                            (superchat-chat--mode-line))))
+                                            (superchat-chat--mode-line)))
+                         ;; The first request of a timeline fixes its scope.
+                         (and superchat-chat--pending-scope
+                              (not (superchat-tape-entries :tape tape :limit 1))
+                              (list :scope superchat-chat--pending-scope)))
         (superchat-chat--mode-line))
       t))))
 
@@ -214,8 +225,9 @@ A line starting with / is a command.  Return nil when nothing was sent."
   "Cancel the run of this timeline."
   (interactive)
   (if (superchat-run-active superchat-chat--tape)
-      (superchat-cancel superchat-chat--tape)
-    (message "No request is running")))
+      (progn (superchat-cancel superchat-chat--tape)
+             (superchat-chat--mode-line))
+    (message "Nothing is running in this conversation")))
 
 (defvar-keymap superchat-chat-mode-map
   "RET" #'superchat-chat--return
@@ -228,16 +240,13 @@ A line starting with / is a command.  Return nil when nothing was sent."
 
 ;;; Opening
 
-(defun superchat-chat-open (tape)
-  "The chat buffer of timeline TAPE, made and rendered when there is none."
+(defun superchat-chat-open (tape &optional scope)
+  "The chat buffer of timeline TAPE, made and rendered when there is none.
+SCOPE is the scope of a timeline that has no entry yet."
   (or (superchat-chat--buffer tape)
       (with-current-buffer (generate-new-buffer "*superchat: new*")
         (superchat-chat-mode)
-        (setq superchat-chat--tape tape)
-        ;; So that a new timeline started from here is in the same scope.
-        (when-let* ((scope (plist-get (car (superchat-tape-entries :tape tape :limit 1)) :scope))
-                    ((not (equal scope "home"))))
-          (setq default-directory scope))
+        (setq superchat-chat--tape tape superchat-chat--pending-scope scope)
         (superchat-chat--render)
         (superchat-chat--mode-line)
         (rename-buffer (superchat-chat--name tape) t)
@@ -245,6 +254,8 @@ A line starting with / is a command.  Return nil when nothing was sent."
 
 (defun superchat-chat-recent-tape (scope)
   "The most recently active timeline of SCOPE that is not an inline one, or nil."
+  ;; Not the `timelines' view: it answers with the first entry of each timeline
+  ;; and has a limit, and this needs only the newest name.
   (caar (superchat-tape-select
          (concat "SELECT tape FROM entry WHERE scope = ? AND tape NOT LIKE 'inline:%'"
                  " GROUP BY tape ORDER BY MAX(id) DESC LIMIT 1")
@@ -262,7 +273,7 @@ With a prefix argument NEW, start a new timeline."
          (tape (or (and (not new)
                         (superchat-chat-recent-tape (superchat-tape-scope-of default-directory)))
                    (superchat-tape-new-name)))
-         (buffer (superchat-chat-open tape)))
+         (buffer (superchat-chat-open tape (superchat-tape-scope-of default-directory))))
     (with-current-buffer buffer
       (setq superchat-chat--origin origin))
     (pop-to-buffer buffer)))
@@ -285,10 +296,6 @@ With a prefix argument NEW, start a new timeline."
   (let ((entries (apply #'superchat-view args)))
     (superchat-chat--show (format "%s %s" title argument)
                           (if entries (superchat-view-render entries) "No entries."))))
-
-(defun superchat-chat--scope ()
-  "The scope of this buffer."
-  (superchat-tape-scope-of default-directory))
 
 (defun superchat-chat--resume (_)
   "Choose a timeline of this scope and open it."
@@ -317,7 +324,9 @@ With a prefix argument NEW, start a new timeline."
                      (superchat-chat--in superchat-chat--tape
                                          (lambda (anchor)
                                            (superchat-chat--render)
-                                           (message (if anchor "Handoff made" "Handoff failed"))))))
+                                           (superchat-chat--mode-line)
+                                           (message (if anchor "Handoff made" "Handoff failed")))))
+  (superchat-chat--mode-line))
 
 (defun superchat-chat--level (name)
   "Show the permission level, or set it to NAME."
@@ -339,7 +348,8 @@ With a prefix argument NEW, start a new timeline."
                                    superchat-chat--commands "\n")))
 
 (superchat-command-define
- "new" (lambda (_) (pop-to-buffer (superchat-chat-open (superchat-tape-new-name))))
+ "new" (lambda (_)
+         (pop-to-buffer (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
  "Start a new timeline in this scope, in a new buffer.")
 (superchat-command-define "resume" #'superchat-chat--resume "Open another timeline of this scope.")
 (superchat-command-define "fork" #'superchat-chat--fork

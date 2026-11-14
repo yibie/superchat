@@ -133,7 +133,8 @@
                    (concat "SELECT COALESCE("
                            "(SELECT MAX(id) FROM entry WHERE tape = e.tape AND kind = 'anchor'),"
                            "(SELECT MIN(id) FROM entry WHERE tape = e.tape AND kind = 'user'))"
-                           " FROM entry e" (if scope " WHERE scope = ?" "")
+                           " FROM entry e WHERE tape NOT LIKE 'inline:%'"
+                           (if scope " AND scope = ?" "")
                            " GROUP BY tape ORDER BY MAX(id) DESC LIMIT ?")
                    (append (and scope (list scope))
                            (list (or (plist-get args :limit) 30))))))))

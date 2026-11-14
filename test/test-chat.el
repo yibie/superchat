@@ -375,9 +375,10 @@ tool `echo', and no chat buffers left behind."
                                  (superchat-tape-scope-of project))))
       (should (equal (superchat-tape-scope-of default-directory) "home"))
       (superchat-tape-append "p1" 'user "in the project" :scope project-scope)
+      (superchat-tape-append "h1" 'user "at home" :scope "home")
+      ;; Every chat is opened from inside the project, whatever its scope.
+      (setq default-directory project)
       (dolist (case (list (cons "p1" project-scope) (cons "h1" "home")))
-        (unless (equal (cdr case) project-scope)
-          (superchat-tape-append "h1" 'user "at home" :scope "home"))
         (let ((new (with-current-buffer (superchat-chat-open (car case))
                      (superchat-chat-send "/new")
                      (current-buffer))))
@@ -387,6 +388,47 @@ tool `echo', and no chat buffers left behind."
                                           :tape (superchat-test-chat--tape-of new)))
                                     :scope)
                          (cdr case))))))))
+
+(ert-deftest superchat-chat-scope-commands-use-the-timeline-scope ()
+  (superchat-test-chat--with
+    (superchat-tape-append "h1" 'user "at home topic" :scope "home")
+    (superchat-tape-append "p1" 'user "in the project topic" :scope "/proj/")
+    (setq default-directory (file-name-as-directory (expand-file-name "d" superchat-test-chat--dir)))
+    (make-directory default-directory)
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt choices &rest _) (setq offered (mapcar #'car choices)) (caar choices))))
+        (with-current-buffer (superchat-chat-open "h1") (superchat-chat-send "/resume")))
+      (should (= (length offered) 1))
+      (should (string-match-p "at home" (car offered))))))
+
+(ert-deftest superchat-chat-cancel-and-mode-line-of-a-handoff ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "a1"))
+        (with-current-buffer buffer (superchat-chat-send "one")))
+      (let ((superchat-test-async t))
+        (superchat-test-script (list '(:text "never") '(:text "Sum.\nNEXT: n"))
+          (with-current-buffer buffer
+            (superchat-chat-send "/handoff")
+            (should (equal mode-line-process " [running]"))
+            (call-interactively (key-binding (kbd "C-c C-k")))
+            (should-not mode-line-process))
+          (should-not (superchat-run-active "t1"))
+          (with-current-buffer buffer (superchat-chat-send "/handoff")
+                               (should (equal mode-line-process " [running]")))
+          (superchat-test-drain)
+          (should-not (buffer-local-value 'mode-line-process buffer))
+          (should (= (length (superchat-tape-entries :tape "t1" :kinds '(anchor))) 1)))))))
+
+(ert-deftest superchat-chat-cancel-with-nothing-running-says-so ()
+  (superchat-test-chat--with
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (f &rest a) (setq shown (apply #'format f a)))))
+        (with-current-buffer (superchat-chat-open "t1")
+          (call-interactively (key-binding (kbd "C-c C-k")))))
+      (should (string-match-p "Nothing is running" shown)))))
 
 (ert-deftest superchat-chat-recent-tape-past-many-inline-timelines ()
   (superchat-test-chat--with

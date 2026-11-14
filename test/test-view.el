@@ -131,6 +131,17 @@
     (should (equal (superchat-test-view--texts (superchat-view 'timelines :limit 1))
                    '("d-first")))))
 
+(ert-deftest superchat-view-timelines-leave-out-inline ()
+  (superchat-test-with-tape
+    (superchat-test-view--add "a" 'user "a-first")
+    (superchat-test-view--add "b" 'user "b-first")
+    (dotimes (i 3)
+      (superchat-test-view--add (format "inline:/p/%d" i) 'user (format "inline-%d" i)))
+    (should (equal (superchat-test-view--texts (superchat-view 'timelines))
+                   '("b-first" "a-first")))
+    (should (equal (superchat-test-view--texts (superchat-view 'timelines :limit 2))
+                   '("b-first" "a-first")))))
+
 (ert-deftest superchat-view-sources ()
   (superchat-test-with-tape
     (let* ((a (superchat-test-view--add "a" 'user "first"))

@@ -108,7 +108,7 @@ asked about or denied.  Return nil to run, or the text that says why not."
 (defun superchat-tool-call (tape call)
   "Run CALL, (:id S :name S :args PLIST), for timeline TAPE; return the tool entry.
 Whatever the tool or the user does, the result is an entry, never a signal."
-  (let ((result (condition-case err (superchat-tools--run tape call)
+  (let ((result (condition-case err (let ((inhibit-quit nil)) (superchat-tools--run tape call))
                   (error (cons (format "Error: %s" (error-message-string err)) t))
                   (quit (cons "Interrupted by the user." t)))))
     (superchat-tape-append tape 'tool (superchat-tools--cut (car result))

@@ -43,7 +43,7 @@
 The limit is part of the statement, so a runaway query stops at the database."
   (let* ((sql (string-trim-right (plist-get args :sql) "[ \t\n;]+"))
          (rows (superchat-tape-select
-                (format "SELECT * FROM (%s) LIMIT %d" sql (1+ superchat-recall--max-rows))))
+                (format "SELECT * FROM (%s\n) LIMIT %d" sql (1+ superchat-recall--max-rows))))
          (lines (mapcar (lambda (row) (json-serialize (vconcat row) :null-object nil))
                         (take superchat-recall--max-rows rows))))
     (string-join

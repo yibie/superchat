@@ -80,6 +80,8 @@
       (should (< (- (float-time) start) 2))
       (should (= 201 (length lines)))
       (should (string-match-p "more rows left out" (car (last lines)))))
+    (should (equal "[1]" (superchat-test-recall--ok "tape_query" :sql "SELECT 1 -- c")))
+    (should (equal "[2]" (superchat-test-recall--ok "tape_query" :sql "-- first\nSELECT 2")))
     (superchat-test-recall--err "tape_query" :sql "DELETE FROM entry")
     (superchat-test-recall--err "tape_query" :sql "SELECT * FROM nothing_here")
     (should (= 251 (caar (superchat-tape-select "SELECT COUNT(*) FROM entry WHERE kind = 'event'"))))))

@@ -14,7 +14,7 @@
            (second (superchat-tape-append
                     "t1" 'assistant "hi"
                     :refs (list (plist-get first :id)) :at 12.5
-                    :data '(:model "m" :calls ((:id "c1" :name "read_file" :args ((path . "x"))))))))
+                    :data '(:model "m" :calls ((:id "c1" :name "read_file" :args (:path "x")))))))
       (should (equal (superchat-tape-get (plist-get first :id)) first))
       (should (equal (plist-get first :kind) 'user))
       (should (equal (plist-get second :refs) (list (plist-get first :id))))

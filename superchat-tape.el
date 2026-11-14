@@ -58,13 +58,10 @@
 
 (defun superchat-tape--json (value)
   "VALUE ready for `json-serialize'.
-Plists and alists become objects, any other list an array."
+A plist becomes an object, any other list an array."
   (cond ((not (consp value)) value)
         ((keywordp (car value))
          (cl-loop for (k v) on value by #'cddr collect k collect (superchat-tape--json v)))
-        ((cl-every (lambda (e) (and (consp e) (symbolp (car e)) (not (listp (cdr e))))) value)
-         (cl-loop for (k . v) in value
-                  collect (intern (concat ":" (symbol-name k))) collect (superchat-tape--json v)))
         (t (vconcat (mapcar #'superchat-tape--json value)))))
 
 (defun superchat-tape--parse (json)
