@@ -34,6 +34,14 @@
   "Alist of (NAME . DOC) of every view."
   (mapcar (lambda (v) (cons (car v) (cddr v))) superchat-view--registry))
 
+(defun superchat-view--clip (text max)
+  "TEXT cut to at most MAX characters, ending in a mark that says how many
+were cut; TEXT itself when it fits."
+  (if (<= (length text) max)
+      text
+    (let ((keep (max 0 (- max (length (format "... [%d characters cut]" (length text)))))))
+      (format "%s... [%d characters cut]" (substring text 0 keep) (- (length text) keep)))))
+
 (defun superchat-view--cut (entry)
   "The text of ENTRY, a tool result cut to 400 characters."
   (let ((text (plist-get entry :text)))
@@ -46,11 +54,11 @@
   (if (> n 0) (format "[%d earlier entries left out]\n\n" n) ""))
 
 (defun superchat-view-render (entries &optional max-chars)
-  "ENTRIES as text.  Over MAX-CHARS the oldest are dropped and counted."
-  (let* ((blocks (mapcar (lambda (e)
-                           (format "#%d %s %s\n%s" (plist-get e :id) (plist-get e :kind)
-                                   (format-time-string "%F %R" (plist-get e :at))
-                                   (superchat-view--cut e)))
+  "ENTRIES as text.  Over MAX-CHARS the oldest are dropped and counted; a
+single block still over it has its text cut, with a mark saying so."
+  (let* ((blocks (mapcar (lambda (e) (format "#%d %s %s\n%s" (plist-get e :id) (plist-get e :kind)
+                                             (format-time-string "%F %R" (plist-get e :at))
+                                             (superchat-view--cut e)))
                          entries))
          (total (cl-loop for b in blocks sum (+ 2 (length b)) into n finally return (- n 2)))
          (dropped 0))
@@ -58,6 +66,9 @@
                 (> (+ total (length (superchat-view--omitted dropped))) max-chars))
       (cl-decf total (+ 2 (length (pop blocks))))
       (cl-incf dropped))
+    (when max-chars
+      (let ((room (- max-chars (length (superchat-view--omitted dropped)))))
+        (setq blocks (mapcar (lambda (b) (superchat-view--clip b (max 0 room))) blocks))))
     (concat (superchat-view--omitted dropped)
             (string-join blocks "\n\n"))))
 

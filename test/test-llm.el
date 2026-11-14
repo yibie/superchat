@@ -761,6 +761,17 @@ finished messages and the messages the third request sent."
   (let ((superchat-llm-provider "no-such-provider"))
     (should-not (superchat-llm-context-window "deepseek-flash"))))
 
+(ert-deftest superchat-llm-an-entry-that-signalled-is-tried-again ()
+  (test-llm-with nil
+    (let ((ready nil) (superchat-llm-provider "flaky"))
+      (setq superchat-llm-providers
+            (list (cons "flaky" (lambda ()
+                                  (unless ready (error "credentials not ready"))
+                                  (test-llm--provider "flaky")))))
+      (should-error (superchat-llm-model-ids) :type 'user-error)
+      (setq ready t)
+      (should (equal (superchat-llm-model-ids) '("model-a" "model-b"))))))
+
 (provide 'test-llm)
 ;;; test-llm.el ends here
 

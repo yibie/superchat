@@ -56,5 +56,15 @@
         (should (eq (superchat-permission-level "t") 'auto)))
       (should (= rows 0)))))
 
+(ert-deftest superchat-permission-level-works-before-the-tape-was-opened ()
+  (let* ((dir (file-name-as-directory (make-temp-file "superchat-perm-" t)))
+         (superchat-directory (expand-file-name "fresh/" dir)) (superchat-tape-file nil))
+    (unwind-protect
+        (progn (superchat-tape-close)
+               (should (eq (superchat-permission-level "x") superchat-default-level))
+               (should (eq (superchat-permission-decide "x" 'write) 'ask)))
+      (superchat-tape-close)
+      (delete-directory dir t))))
+
 (provide 'test-permission)
 ;;; test-permission.el ends here

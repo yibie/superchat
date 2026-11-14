@@ -48,8 +48,9 @@ window, a token counting as a character; else 120000."
         (t 120000)))
 
 (defun superchat-agent--messages (entries)
-  "The messages for ENTRIES; events and notes are left out."
-  (delq nil (mapcar #'superchat-agent--message entries)))
+  "The messages for ENTRIES; events, notes and orphan results are left out."
+  (delq nil (mapcar #'superchat-agent--message
+                    (cl-loop for g in (superchat-agent--groups entries) append g))))
 
 (defun superchat-agent--size (messages)
   "The size of MESSAGES: their texts and the printed arguments of their calls.
@@ -60,15 +61,39 @@ The handoff check and the budget of a request both use this."
                            sum (length (format "%S" (plist-get c :args)))))))
 
 (defun superchat-agent--groups (entries)
-  "ENTRIES in lists: an assistant entry with every tool, event and note entry
-up to the next entry of another kind, and every other entry alone."
+  "ENTRIES in lists: an assistant entry with the tool entries that answer its
+calls and every event and note entry up to the next entry of another kind, and
+every other entry alone.  A tool entry that answers no call of the assistant
+entry heading its group is in no group: no request ever has it."
   (let (groups)
     (dolist (e entries)
-      (if (and (memq (plist-get e :kind) '(tool event note)) groups
-               (eq (plist-get (car (last (car groups))) :kind) 'assistant))
-          (push e (car groups))
-        (push (list e) groups)))
+      (let* ((kind (plist-get e :kind)) (head (car (last (car groups)))))
+        (cond ((not (and (memq kind '(tool event note)) (eq (plist-get head :kind) 'assistant)))
+               (unless (eq kind 'tool) (push (list e) groups)))
+              ((or (not (eq kind 'tool))
+                   (cl-some (lambda (c) (equal (plist-get c :id)
+                                               (plist-get (plist-get e :data) :call-id)))
+                            (plist-get (plist-get head :data) :calls)))
+               (push e (car groups))))))
     (nreverse (mapcar #'nreverse groups))))
+
+(defun superchat-agent--grouped (entries)
+  "The groups of ENTRIES, each as (ENTRIES MESSAGES)."
+  (mapcar (lambda (g) (list g (delq nil (mapcar #'superchat-agent--message g))))
+          (superchat-agent--groups entries)))
+
+(defun superchat-agent--never-left-out (groups user-id)
+  "The members of GROUPS, from `superchat-agent--grouped', that a request
+always keeps: those with an anchor or the entry USER-ID, and the latest
+assistant entry with its results."
+  (let ((latest (cl-find-if (lambda (g) (eq (plist-get (caar g) :kind) 'assistant))
+                            groups :from-end t)))
+    (cl-remove-if-not
+     (lambda (g) (or (eq g latest)
+                     (cl-some (lambda (e) (or (eq (plist-get e :kind) 'anchor)
+                                              (eql (plist-get e :id) user-id)))
+                              (car g))))
+     groups)))
 
 (defun superchat-agent--standin (n)
   "The message that stands for N entries left out of a request."
@@ -86,10 +111,8 @@ still starts with what the first entry said.  The stand-in counts toward the
 size; when leaving out what can be left out would not make the request
 smaller than it is, nothing is left out."
   (let* ((budget (or budget (superchat-agent--budget)))
-         (groups (mapcar (lambda (g) (list g (superchat-agent--messages g)))
-                         (superchat-agent--groups entries)))
-         (latest (cl-find-if (lambda (g) (eq (plist-get (caar g) :kind) 'assistant))
-                             groups :from-end t))
+         (groups (superchat-agent--grouped entries))
+         (kept (superchat-agent--never-left-out groups user-id))
          (whole (cl-loop for g in groups sum (superchat-agent--size (cadr g))))
          (size whole) (dropped 0) gone)
     (cl-flet ((total ()
@@ -97,11 +120,7 @@ smaller than it is, nothing is left out."
                             (superchat-agent--size (list (superchat-agent--standin dropped)))
                           0))))
       (dolist (g groups)
-        (when (and (cadr g) (not (eq g latest))
-                   (> (total) budget)
-                   (cl-notany (lambda (e) (or (eq (plist-get e :kind) 'anchor)
-                                              (eql (plist-get e :id) user-id)))
-                              (car g)))
+        (when (and (cadr g) (not (memq g kept)) (> (total) budget))
           (cl-decf size (superchat-agent--size (cadr g)))
           (cl-incf dropped (length (cadr g)))
           (push g gone)))
@@ -148,7 +167,7 @@ as an error event, so that no step can keep the others from happening."
 WHY is the text of the error event.  In order, each step guarded by
 `superchat-agent--try': stop a tool still running; append `Cancelled.' for
 each call of this run without a result; append the user entry if it was never
-sent; append the event; free the timeline; give ON-ENTRY the new entries;
+sent; append the event; give ON-ENTRY the new entries; free the timeline;
 call ON-DONE.  Afterwards ON-ENTRY gets nothing."
   (unless (plist-get run :done)
     (let ((tape (plist-get run :tape))
@@ -157,7 +176,7 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
       (setf (plist-get run :done) t (plist-get run :status) status
             (plist-get run :error) why)
       (cl-flet ((user ()
-                  (superchat-agent--try tape (lambda () (superchat-agent--add-user run nil)))))
+                  (superchat-agent--try tape (lambda () (superchat-agent--add-user run)))))
         (unwind-protect
             (progn
               (when-let* ((stop (plist-get run :stop)))
@@ -177,8 +196,9 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
                  tape (lambda () (superchat-tape-append tape 'event (cdr event)
                                                         :data (list :type (car event))))))
               (user))
-          (remhash tape superchat-agent--runs)
+          ;; Free only now: ON-DONE may start the next run, ON-ENTRY may not.
           (unwind-protect (superchat-agent--emit run t)
+            (remhash tape superchat-agent--runs)
             (when-let* ((on-done (plist-get run :on-done)))
               (funcall on-done run))))))))
 
@@ -251,9 +271,13 @@ stops a tool that is still running."
   "Make the next request of RUN."
   (let* ((tape (plist-get run :tape))
          (budget (superchat-agent--budget (plist-get run :model)))
-         (messages (superchat-agent--fit (superchat-view 'conversation :tape tape)
-                                         (plist-get run :user-id) budget))
-         (size (superchat-agent--size messages))
+         (entries (superchat-view 'conversation :tape tape))
+         (messages (superchat-agent--fit entries (plist-get run :user-id) budget))
+         (size (superchat-agent--size
+                (cl-loop for g in (superchat-agent--never-left-out
+                                   (superchat-agent--grouped entries) (plist-get run :user-id))
+                         append (cadr g))))
+         (model (or (plist-get run :model) superchat-llm-model))
          (tools (plist-get run :tools)))
     (cond
      ((>= (plist-get run :rounds) superchat-max-rounds)
@@ -262,8 +286,11 @@ stops a tool that is still running."
      ((> size (* 2 budget))
       (superchat-agent--end
        run 'error
-       (format "This request needs %d characters; the budget for %s is %d. Raise `superchat-context-chars' or start a new conversation."
-               size (or (plist-get run :model) superchat-llm-model) budget)))
+       (format "This request needs %d characters; the budget %s is %d. %s"
+               size (if model (format "for %s" model) "with no model set") budget
+               (if (numberp superchat-context-chars)
+                   "Raise `superchat-context-chars' or start a new conversation."
+                 "Start a new conversation."))))
      (t
       (superchat-agent--guard
        run (lambda ()
@@ -285,24 +312,23 @@ stops a tool that is still running."
                      :on-error (lambda (why) (when (superchat-agent--live run)
                                                (superchat-agent--end run 'error why))))))))))))
 
-(defun superchat-agent--add-user (run scope)
-  "Append the user entry of RUN, if it is unsent.  SCOPE is for the first
-entry of a timeline."
+(defun superchat-agent--add-user (run)
+  "Append the user entry of RUN, if it is unsent."
   (when (plist-get run :unsent)
     (setf (plist-get run :unsent) nil)
     (setf (plist-get run :user-id)
           (plist-get (superchat-tape-append
-                      (plist-get run :tape) 'user (plist-get run :request) :scope scope
+                      (plist-get run :tape) 'user (plist-get run :request)
+                      :scope (plist-get run :scope)
                       :data (append (and (plist-get run :origin)
                                          (list :origin (plist-get run :origin)))
                                     (and (plist-get run :ephemeral) (list :ephemeral t))))
                      :id))))
 
-(defun superchat-agent--begin (run scope)
+(defun superchat-agent--begin (run)
   "Append the user entry of RUN and make its first request, unless ON-ENTRY
 ended the run on that entry."
-  (setf (plist-get run :unsent) t)
-  (superchat-agent--add-user run scope)
+  (superchat-agent--add-user run)
   (superchat-agent--emit run)
   (when (superchat-agent--live run)
     (superchat-agent--step run)))
@@ -323,7 +349,9 @@ the user entry: the timeline is one question, not a conversation."
          (id (if last (plist-get last :id) 0))
          ;; Every key is there from the start: `setf' of a missing one makes a new list.
          (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
-                    :stop nil :unsent nil :done nil :text nil :error nil :user-id nil
+                    ;; Unsent from the start: whatever signals, the user's text is written.
+                    :stop nil :unsent t :done nil :text nil :error nil :user-id nil
+                    :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
                     :request text :origin origin :ephemeral ephemeral :first id :seen id
                     :tools tools :system system :model model
                     :on-text on-text :on-entry on-entry :on-done on-done)))
@@ -331,25 +359,22 @@ the user entry: the timeline is one question, not a conversation."
     (superchat-agent--guard
      run (lambda ()
            (if (and last (> (superchat-agent--size
-                  (superchat-agent--messages (superchat-view 'conversation :tape tape)))
+                             (superchat-agent--messages (superchat-view 'conversation :tape tape)))
                             (superchat-agent--budget model)))
                ;; The anchor goes in before the user entry, so the request stays after it.
-               (progn
-                 (setf (plist-get run :unsent) t)
-                 (superchat-agent--track
-                  run (lambda ()
-                        (superchat-agent--summarise
-                         tape nil run
-                         (lambda (anchor &optional why)
-                           (superchat-agent--guard
-                            run (lambda ()
-                                  (if anchor
-                                      (superchat-agent--begin run nil)
-                                    (superchat-agent--end
-                                     run 'error (format "Handoff failed: %s" why))))))
-                         model))))
-             (superchat-agent--begin
-              run (unless last (or scope (superchat-tape-scope-of default-directory)))))))
+               (superchat-agent--track
+                run (lambda ()
+                      (superchat-agent--summarise
+                       tape nil run
+                       (lambda (anchor &optional why)
+                         (superchat-agent--guard
+                          run (lambda ()
+                                (if anchor
+                                    (superchat-agent--begin run)
+                                  (superchat-agent--end
+                                   run 'error (format "Handoff failed: %s" why))))))
+                       model)))
+             (superchat-agent--begin run))))
     run))
 
 (defun superchat-run-active (tape)
@@ -373,29 +398,52 @@ A run with a call inside `superchat-tool-call' ends when that call returns."
               (setf (plist-get run :status) 'cancelled)
             (superchat-agent--end run 'cancelled)))))))
 
-(defconst superchat-agent--summary-question
-  "Summarise this conversation so that someone who has not seen it can
+(defun superchat-agent--summary-question (budget)
+  "What a handoff asks the model: a summary of at most a quarter of BUDGET."
+  (format "Summarise this conversation so that someone who has not seen it can
 carry on: what was asked, what was done, what was found, what is open.
-Then write a line that starts with NEXT: and say what comes next.")
+Keep the summary under %d characters.
+Then write a line that starts with NEXT: and say what comes next."
+          (floor budget 4)))
+
+(defun superchat-agent--handoff-text (entries budget)
+  "ENTRIES rendered for a handoff within BUDGET.  The current anchor, when
+there is one, comes first and is never dropped; the entries after it are
+rendered to what is left, oldest dropped first."
+  (let* ((anchor (cl-find-if (lambda (e) (and (eq (plist-get e :kind) 'anchor)
+                                              (not (string-empty-p (plist-get e :text)))))
+                             entries :from-end t))
+         (head (and anchor (superchat-view-render (list anchor) budget)))
+         (rest (if anchor (cdr (memq anchor entries)) entries)))
+    (string-join (delq nil (list head (and rest (superchat-view-render
+                                                 rest (- budget (length head) 2)))))
+                 "\n\n")))
 
 (defun superchat-agent--summarise (tape name owner on-done &optional model)
   "Ask MODEL for the summary of TAPE and append the anchor NAME.
 Return the handle.  The conversation goes as one user message: a provider
 refuses tool turns when the request has no tools.  ON-DONE gets the anchor, or
 nil and why.  An answer that comes after OWNER, the run or handoff that asked,
-left `superchat-agent--runs' (it was cancelled) is dropped."
-  (let ((entries (superchat-view 'conversation :tape tape)))
+left `superchat-agent--runs' (it was cancelled) is dropped.  The summary and
+the next step are each cut to a quarter of the budget."
+  (let ((entries (superchat-view 'conversation :tape tape))
+        (budget (superchat-agent--budget model)))
     (superchat-llm-request
      (list (list :role 'user
-                 :text (concat (superchat-view-render entries (superchat-agent--budget model)) "\n\n"
-                               superchat-agent--summary-question)))
+                 :text (concat (superchat-agent--handoff-text entries budget) "\n\n"
+                               (superchat-agent--summary-question budget))))
      :model model
      :on-done (lambda (response)
                 (when (eq (gethash tape superchat-agent--runs) owner)
                   (let* ((text (plist-get response :text))
                          (split (string-match "^NEXT:[ \t]*" text))
-                         (summary (string-trim (if split (substring text 0 split) text)))
-                         (next (if split (string-trim (substring text (match-end 0))) ""))
+                         (after (and split (match-end 0)))
+                         (summary (superchat-view--clip
+                                   (string-trim (if split (substring text 0 split) text))
+                                   (floor budget 4)))
+                         (next (superchat-view--clip
+                                (if split (string-trim (substring text after)) "")
+                                (floor budget 4)))
                          (anchor (superchat-tape-append
                                   tape 'anchor summary
                                   :data (list :name (or name "handoff") :summary summary

@@ -36,6 +36,9 @@
 (defvar superchat-tape--connections (make-hash-table :test #'equal)
   "File name to its open connection.")
 
+(defvar superchat-tape--readers (make-hash-table :test #'equal)
+  "File name to its read-only connection, for `superchat-tape-select'.")
+
 (defun superchat-tape--file (file)
   "Absolute name of FILE, or of the configured Tape file."
   (expand-file-name (or file superchat-tape-file
@@ -52,9 +55,10 @@
             (puthash name db superchat-tape--connections))))))
 
 (defun superchat-tape-close ()
-  "Close every connection."
-  (maphash (lambda (_ db) (sqlite-close db)) superchat-tape--connections)
-  (clrhash superchat-tape--connections))
+  "Close every connection, the read-only ones too."
+  (dolist (table (list superchat-tape--connections superchat-tape--readers))
+    (maphash (lambda (_ db) (sqlite-close db)) table)
+    (clrhash table)))
 
 (defun superchat-tape--json (value)
   "VALUE ready for `json-serialize'.
@@ -147,16 +151,19 @@ With NEWEST and LIMIT, the last LIMIT entries."
 
 (defun superchat-tape-select (sql &optional args)
   "Rows answering the SELECT or WITH statement SQL, read-only.
-`sqlite-execute' is used because `sqlite-select' hides a refused write."
+The connection is a second one, kept per file.  `sqlite-execute' is used
+because `sqlite-select' hides a refused write."
   (unless (string-match-p "\\`[ \t\n]*\\(select\\|with\\)\\_>" (downcase sql))
     (error "Only SELECT and WITH statements are allowed"))
-  (let ((db (sqlite-open (superchat-tape--file nil))))
-    (unwind-protect
-        (progn (sqlite-execute db "PRAGMA query_only=ON")
-               ;; `sqlite-execute' answers a count, not nil, when no row matches.
-               (let ((rows (sqlite-execute db sql args)))
-                 (and (listp rows) rows)))
-      (sqlite-close db))))
+  (let* ((name (superchat-tape--file nil))
+         (db (or (gethash name superchat-tape--readers)
+                 (progn (superchat-tape-open)
+                        (let ((reader (sqlite-open name)))
+                          (sqlite-execute reader "PRAGMA query_only=ON")
+                          (puthash name reader superchat-tape--readers)))))
+         ;; `sqlite-execute' answers a count, not nil, when no row matches.
+         (rows (sqlite-execute db sql args)))
+    (and (listp rows) rows)))
 
 (defun superchat-tape-new-name ()
   "A fresh timeline name, YYYYMMDD-HHMMSS-xxxx."

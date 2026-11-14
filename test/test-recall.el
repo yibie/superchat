@@ -105,5 +105,12 @@
       (should (string-match-p "999" (superchat-test-recall--err "note" :title "x" :text "y" :sources "1,999")))
       (should (= 1 (length (superchat-tape-entries :kinds '(note))))))))
 
+(ert-deftest superchat-test-recall-one-huge-entry-is-cut-to-the-limit ()
+  (superchat-test-recall--with
+    (superchat-tape-append "t" 'note (make-string 30000 ?n) :data '(:title "big"))
+    (let ((text (superchat-test-recall--ok "recall" :view "notes")))
+      (should (<= (length text) 6000))
+      (should (string-match-p "characters cut" text)))))
+
 (provide 'test-recall)
 ;;; test-recall.el ends here

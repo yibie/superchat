@@ -145,5 +145,43 @@
   (superchat-test-with-tape
     (should-not (superchat-tape-select "SELECT id FROM entry WHERE id = ?" '(999)))))
 
+(ert-deftest superchat-tape-select-keeps-its-read-only-connection ()
+  (superchat-test-with-tape
+    (superchat-tape-append "t" 'user "one" :scope "home")
+    (let ((opens 0) (open (symbol-function 'sqlite-open)))
+      (cl-letf (((symbol-function 'sqlite-open)
+                 (lambda (&rest args) (cl-incf opens) (apply open args))))
+        (dotimes (_ 5) (superchat-tape-select "SELECT count(*) FROM entry")))
+      (should (<= opens 1))
+      (should-error (superchat-tape-select
+                     "WITH x AS (SELECT 1) INSERT INTO entry (tape, kind, scope, at) VALUES ('t','user','home',1)")))))
+
+(ert-deftest superchat-tape-select-opens-the-tape-when-it-is-not-open ()
+  (let* ((dir (file-name-as-directory (make-temp-file "superchat-sel-" t)))
+         (superchat-directory (expand-file-name "fresh/" dir)) (superchat-tape-file nil))
+    (unwind-protect
+        (progn (superchat-tape-close)
+               (should-not (superchat-tape-select "SELECT id FROM entry")))
+      (superchat-tape-close)
+      (delete-directory dir t))))
+
+(ert-deftest superchat-tape-select-never-reads-a-file-the-tape-no-longer-uses ()
+  (let* ((dir (file-name-as-directory (make-temp-file "superchat-sel-" t)))
+         (a (expand-file-name "a/" dir)) (b (expand-file-name "b/" dir))
+         (superchat-directory a) (superchat-tape-file nil))
+    (unwind-protect
+        (progn
+          (superchat-tape-append "t" 'user "in a" :scope "home")
+          (should (equal (superchat-tape-select "SELECT text FROM entry") '(("in a"))))
+          ;; Another file at once, then the first one made again from nothing.
+          (let ((superchat-directory b))
+            (should-not (superchat-tape-select "SELECT text FROM entry")))
+          (superchat-tape-close)
+          (delete-directory a t)
+          (superchat-tape-append "t" 'user "new a" :scope "home")
+          (should (equal (superchat-tape-select "SELECT text FROM entry") '(("new a")))))
+      (superchat-tape-close)
+      (delete-directory dir t))))
+
 (provide 'test-tape)
 ;;; test-tape.el ends here

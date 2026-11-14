@@ -43,9 +43,11 @@ signalled when the models collection was last built.")
   (mapcar (lambda (call) (cons (plist-get call :id) (plist-get call :name))) calls))
 
 (defun superchat-llm--models ()
-  "The bridge models collection, rebuilt when `superchat-llm-providers' changed."
+  "The bridge models collection, rebuilt when `superchat-llm-providers' changed
+or an entry signalled when it was built, so that a fixed cause is seen."
   (let ((old (car superchat-llm--models)))
-    (unless (and (= (length old) (length superchat-llm-providers))
+    (unless (and (not superchat-llm--failed)
+                 (= (length old) (length superchat-llm-providers))
                  (cl-every (lambda (a b) (and (equal (car a) (car b))
                                               (eq (cdr a) (cdr b))))
                            old superchat-llm-providers))

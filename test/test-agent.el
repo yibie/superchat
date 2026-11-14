@@ -1050,6 +1050,18 @@
       (should (eq (plist-get res :status) 'cancelled))
       (should (equal (plist-get res :text) "THE ANSWER")))))
 
+(defun superchat-test-agent--no-orphans (messages)
+  "Non-nil when every tool message of MESSAGES answers a call of the assistant
+message it follows, the other tool messages between them aside."
+  (let ((head nil) (ok t))
+    (dolist (m messages)
+      (if (eq (plist-get m :role) 'tool)
+          (unless (cl-some (lambda (c) (equal (plist-get c :id) (plist-get m :call-id)))
+                           (plist-get head :calls))
+            (setq ok nil))
+        (setq head m)))
+    ok))
+
 (defun superchat-test-agent--budget-case (tape budget)
   "Check `superchat-agent--fit' on TAPE with BUDGET: a list of problems."
   (let* ((superchat-context-chars budget)
@@ -1073,7 +1085,11 @@
          problems)
     (when (cl-set-difference protected (remq standin out) :test #'equal)
       (push "protected item missing" problems))
-    (when (cl-set-difference (delq nil (mapcar #'superchat-agent--message view))
+    (unless (superchat-test-agent--no-orphans out)
+      (push "a tool message that answers no call before it" problems))
+    (unless (superchat-test-agent--no-orphans (superchat-agent--messages view))
+      (push "an orphan in the whole conversation" problems))
+    (when (cl-set-difference (superchat-agent--messages view)
                              out :test #'equal)
       (unless standin (push "left out with no stand-in" problems)))
     (when (> (cl-count-if (lambda (m) (string-match-p "earlier entries" (plist-get m :text))) out) 1)
@@ -1102,11 +1118,17 @@
           (let ((tape (format "p%d" i)))
             (superchat-tape-append tape 'user (text) :scope "home")
             (dotimes (_ (random 7))
-              (pcase (random 8)
+              (pcase (random 11)
                 ((or 0 1) (superchat-tape-append tape 'user (text)))
                 (2 (superchat-tape-append tape 'anchor (text)
                                           :data '(:name "h" :summary "s" :next "")))
                 (3 (superchat-tape-append tape 'note (text) :data '(:title "t")))
+                ;; A result that answers nothing, and one that answers a call
+                ;; of an earlier response than the entry before it.
+                (8 (superchat-tape-append tape 'tool (text)
+                                          :data (list :call-id "stray" :name "echo")))
+                (9 (superchat-tape-append tape 'tool (text)
+                                          :data (list :call-id (format "c%d-1" i) :name "echo")))
                 (_ (let ((calls (cl-loop for k below (random 4)
                                          collect (list :id (format "c%d-%d" i (cl-incf n))
                                                        :name "echo" :args (list :x (text))))))
@@ -1117,7 +1139,10 @@
                          (superchat-tape-append tape 'event "p" :data '(:type "permission")))
                        (superchat-tape-append tape 'tool (text)
                                               :data (list :call-id (plist-get c :id)
-                                                          :name "echo")))))))
+                                                          :name "echo")))
+                     (when (zerop (random 4))
+                       (superchat-tape-append tape 'tool (text)
+                                              :data (list :call-id "stray" :name "echo")))))))
             (superchat-tape-append tape 'user (text))
             (dolist (budget '(50 300 900))
               (when-let* ((problems (superchat-test-agent--budget-case tape budget)))
@@ -1532,6 +1557,152 @@ model m8 and `superchat-context-chars' nil."
           (should (= (length superchat-test-requests) 0))
           (should (eq (plist-get (superchat-run "t" "small") :status) 'done))
           (should (= (length superchat-test-requests) 2)))))))
+
+(defun superchat-test-agent--first-text (requests)
+  "The text of the first message of the oldest of REQUESTS."
+  (plist-get (car (plist-get (car (last requests)) :messages)) :text))
+
+(ert-deftest superchat-agent-handoff-text-begins-with-the-current-anchor ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "old" :scope "home")
+    (superchat-tape-append "t" 'anchor "SECRET-EARLIER-SUMMARY"
+                           :data '(:name "h" :summary "SECRET-EARLIER-SUMMARY" :next ""))
+    (dotimes (i 8) (superchat-tape-append "t" 'user (format "e%d %s" i (make-string 200 ?.))))
+    (let ((superchat-context-chars 1000))
+      (superchat-test-script (list '(:text "S\nNEXT: n") '(:text "fine"))
+        (superchat-run "t" "go")
+        (let ((text (superchat-test-agent--first-text superchat-test-requests)))
+          (should (string-match-p "\\`#[0-9]+ anchor [^\n]*\nSECRET-EARLIER-SUMMARY" text))
+          (should (string-match-p "earlier entries left out" text))
+          (should (string-match-p "e7 " text))
+          (should-not (string-match-p "e0 " text)))))))
+
+(ert-deftest superchat-agent-handoff-text-is-cut-to-the-budget-when-one-entry-is-larger ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "small" :scope "home")
+    (superchat-tape-append "t" 'user (make-string 50000 ?B))
+    (let ((superchat-context-chars 1000))
+      (superchat-test-script (list '(:text "S\nNEXT: n"))
+        (superchat-handoff "t")
+        (let ((text (superchat-test-agent--first-text superchat-test-requests)))
+          (should (< (length text) 1500))
+          (should (string-match-p "characters cut" text)))))))
+
+(ert-deftest superchat-agent-the-summary-a-handoff-appends-is-a-quarter-of-the-budget ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user (make-string 1000 ?o) :scope "home")
+    (let ((superchat-context-chars 400))
+      (superchat-test-script
+          (list (list :text (concat (make-string 700 ?S) "\nNEXT: n")) '(:text "a1") '(:text "a2"))
+        (superchat-run "t" "q1")
+        (let ((anchor (car (superchat-tape-entries :tape "t" :kinds '(anchor)))))
+          (should (<= (length (plist-get anchor :text)) 100))
+          (should (<= (length (plist-get (plist-get anchor :data) :summary)) 100)))
+        ;; The question tells the model what to aim for.
+        (should (string-match-p "100 characters"
+                                (plist-get (car (plist-get (car (last superchat-test-requests))
+                                                           :messages))
+                                           :text)))
+        ;; No handoff before every run: the anchor is small enough.
+        (superchat-run "t" "q2")
+        (should (= (length superchat-test-requests) 3))
+        (should (= (length (superchat-tape-entries :tape "t" :kinds '(anchor))) 1))))))
+
+(ert-deftest superchat-agent-on-entry-cannot-start-a-run-while-the-ending-emits ()
+  (superchat-test-agent--with
+    (let (busy order second)
+      (superchat-test-script
+          (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                  '("c1" "c2")))
+                '(:text "second"))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (e)
+                                   (when (equal (plist-get e :text) "Cancelled.")
+                                     (push 'entry order)
+                                     (condition-case err (superchat-run "t" "early")
+                                       (error (push (cadr err) busy))))
+                                   (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                     (superchat-cancel "t")))
+                       :on-done (lambda (_)
+                                  (push 'done order)
+                                  (setq second (superchat-run "t" "after")))))
+      (should (= (length busy) 1))
+      (should (string-match-p "busy" (car busy)))
+      (should (eq (car (last order)) 'entry))
+      (should (eq (car order) 'done))
+      (should (eq (plist-get second :status) 'done))
+      (should (equal (mapcar #'cdr (cl-remove-if-not
+                                     (lambda (x) (eq (car x) 'user))
+                                     (superchat-test-agent--entries "t")))
+                     '("go" "after"))))))
+
+(ert-deftest superchat-agent-the-user-text-is-written-when-the-size-check-signals ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "earlier" :scope "home")
+    (let ((superchat-context-chars nil) res)
+      (cl-letf (((symbol-function 'superchat-llm-context-window)
+                 (lambda (&rest _) (error "window data broke"))))
+        (superchat-run "t" "MY TEXT" :on-done (lambda (r) (setq res r))))
+      (should (eq (plist-get res :status) 'error))
+      (should-not (superchat-run-active "t"))
+      (should (equal (plist-get (car (last (superchat-tape-entries :tape "t"))) :text)
+                     "MY TEXT")))))
+
+(ert-deftest superchat-agent-the-refusal-does-not-count-the-stand-in ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user (make-string 450 ?a) :scope "home")
+    (superchat-tape-append "t" 'user (make-string 450 ?b))
+    (let ((superchat-context-chars 1000) run)
+      (superchat-test-script (list '(:text "ok"))
+        ;; What is never left out is 1920 characters: under twice the budget.
+        (setq run (superchat-run "t" (make-string 1920 ?u)))
+        (should (= (length superchat-test-requests) 1))
+        (should (eq (plist-get run :status) 'done))))))
+
+(ert-deftest superchat-agent-the-refusal-says-which-model-and-what-to-raise ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars nil) (superchat-llm-provider nil) (superchat-llm-model nil)
+          run)
+      (superchat-test-script nil
+        (setq run (superchat-run "t" (make-string 250000 ?u))))
+      (should (eq (plist-get run :status) 'error))
+      (should (string-match-p "no model set" (plist-get run :error)))
+      (should-not (string-match-p "nil" (plist-get run :error)))
+      (should-not (string-match-p "superchat-context-chars" (plist-get run :error)))))
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (let (run)
+        (superchat-test-script nil
+          (setq run (superchat-run "t" (make-string 8100 ?u))))
+        (should (string-match-p "budget for m8 is 4000" (plist-get run :error)))
+        (should-not (string-match-p "superchat-context-chars" (plist-get run :error))))))
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 100) run)
+      (superchat-test-script nil
+        (setq run (superchat-run "t" (make-string 300 ?u))))
+      (should (string-match-p "Raise `superchat-context-chars'" (plist-get run :error))))))
+
+(ert-deftest superchat-agent-a-result-that-answers-no-call-never-reaches-the-model ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'tool "stray one" :scope "home"
+                           :data '(:call-id "x1" :name "echo"))
+    (superchat-tape-append "t" 'user "hi")
+    (superchat-tape-append "t" 'tool "stray two" :data '(:call-id "x2" :name "echo"))
+    (superchat-tape-append "t" 'assistant "" :data (list :model "m" :calls
+                                                         (list (superchat-test-agent--call
+                                                                "c1" "echo" :x "a"))))
+    (superchat-tape-append "t" 'tool "answer" :data '(:call-id "c1" :name "echo"))
+    (superchat-tape-append "t" 'tool "wrong" :data '(:call-id "zz" :name "echo"))
+    (superchat-tape-append "t" 'assistant "mid" :data '(:model "m"))
+    (superchat-tape-append "t" 'tool "late" :data '(:call-id "c1" :name "echo"))
+    (superchat-test-script (list '(:text "ok"))
+      (superchat-run "t" "go")
+      (let ((m (plist-get (car superchat-test-requests) :messages)))
+        (should (equal (mapcar (lambda (x) (plist-get x :call-id))
+                               (cl-remove-if-not (lambda (x) (eq (plist-get x :role) 'tool)) m))
+                       '("c1")))
+        (should (superchat-test-agent--no-orphans m))
+        (superchat-test-agent--well-formed m)))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here

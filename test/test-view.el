@@ -188,5 +188,20 @@
       (should-not (string-match-p "entry-1 " text))
       (should (equal (superchat-view-render entries (length full)) full)))))
 
+(ert-deftest superchat-view-render-cuts-a-single-block-over-the-limit ()
+  (superchat-test-with-tape
+    (let* ((big (superchat-tape-append "a" 'user (make-string 5000 ?w) :scope "/p/"))
+           (small (superchat-tape-append "a" 'user "tiny" :scope "/p/"))
+           (text (superchat-view-render (list big) 1000))
+           (two (superchat-view-render (list big small) 1000)))
+      (should (<= (length text) 1000))
+      (should (string-match-p (format "\\`#%d user " (plist-get big :id)) text))
+      (should (string-match-p "characters cut\\]\\'" text))
+      (should (string-match-p "w\\{100\\}" text))
+      ;; The newest block is the one that stays, whole when it fits.
+      (should (<= (length two) 1000))
+      (should (string-match-p "earlier entries left out\\]" two))
+      (should (string-suffix-p "tiny" two)))))
+
 (provide 'test-view)
 ;;; test-view.el ends here
