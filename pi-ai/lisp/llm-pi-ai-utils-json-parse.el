@@ -372,9 +372,9 @@ stands for.  Malformed JSON signals `json-parse-error'."
 
 (defun llm-pi-ai--char-byte-string (char)
   "Return CHAR as the text it is for, a byte or a character."
-  (if (and (<= 128 char 255) (not (string-as-unibyte (string char))))
-      (string (unibyte-char-to-multibyte char))
-    (string char)))
+  ;; The source of this port tested (not (string-as-unibyte ...)), which is
+  ;; never true, so the plain character was always the answer.
+  (string char))
 
 (defun llm-pi-ai--parse-json-text-slowly (text)
   "Parse TEXT as JSON with `json-read'.
@@ -495,7 +495,7 @@ nil, which is JSON's null."
         (llm-pi-ai-parse-json-with-repair
          (if (multibyte-string-p partial-json)
              partial-json
-           (string-make-multibyte partial-json)))
+           (with-no-warnings (string-make-multibyte partial-json))))
       (error
        (condition-case err
            (llm-pi-ai--partial-parse partial-json)

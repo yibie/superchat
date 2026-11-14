@@ -191,6 +191,7 @@ model's whole arguments text was not a valid JSON object, and
 ;;; Messages
 
 (llm-pi-ai-defstruct (llm-pi-ai-message
+                (:predicate nil)        ; `llm-pi-ai-message-p' is written below
                 (:constructor llm-pi-ai-make-message)
                 (:copier llm-pi-ai-copy-message))
   "The fields `SystemMessage', `UserMessage', `AssistantMessage' and
