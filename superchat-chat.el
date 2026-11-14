@@ -225,7 +225,9 @@ A line starting with / is a command.  Return nil when nothing was sent."
   "Cancel the run of this timeline."
   (interactive)
   (if (superchat-run-active superchat-chat--tape)
+      ;; A cancelled handoff has no callback to show its event: render it.
       (progn (superchat-cancel superchat-chat--tape)
+             (superchat-chat--render)
              (superchat-chat--mode-line))
     (message "Nothing is running in this conversation")))
 

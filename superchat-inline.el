@@ -129,7 +129,8 @@ The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inli
          (origin (superchat-inline--origin))
          (scope (superchat-tape-scope-of default-directory))
          (buffer (superchat-chat-open (or (superchat-chat-recent-tape scope)
-                                          (superchat-tape-new-name)))))
+                                          (superchat-tape-new-name))
+                                      scope)))
     (display-buffer buffer '(display-buffer-in-direction (direction . right)))
     (with-current-buffer buffer
       (superchat-chat-send (if region

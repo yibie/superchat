@@ -174,7 +174,7 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
   (let (opened sent)
     (cl-letf (((symbol-function 'superchat-chat-recent-tape) (lambda (_) recent))
               ((symbol-function 'superchat-chat-open)
-               (lambda (tape) (setq opened tape) (generate-new-buffer " *sc-chat*")))
+               (lambda (tape &optional _scope) (setq opened tape) (generate-new-buffer " *sc-chat*")))
               ((symbol-function 'superchat-chat-send)
                (lambda (text &optional origin) (setq sent (list text origin))))
               ((symbol-function 'display-buffer) (lambda (&rest _) nil)))

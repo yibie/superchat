@@ -224,17 +224,21 @@ apart from the call with id EXCEPT, which is running and will have one."
       (setf (plist-get run :status) 'cancelled)
       (when-let* ((handle (plist-get run :handle)))
         (superchat-llm-cancel handle))
-      ;; Cancelled during the handoff before the user entry: write it down first.
-      (when (plist-get run :unsent)
-        (superchat-agent--add run 'user (plist-get run :text)
-                              :data (and (plist-get run :origin)
-                                         (list :origin (plist-get run :origin)))))
-      (dolist (call (superchat-agent--unanswered tape (plist-get run :calling)))
-        (superchat-agent--add run 'tool "Cancelled."
-                              :data (list :call-id (plist-get call :id)
-                                          :name (plist-get call :name) :error t)))
-      (superchat-agent--add run 'event "Cancelled by the user." :data (list :type "cancelled"))
-      (superchat-agent--finish run 'cancelled)))))
+      ;; The run ends even when a callback signals on one of these entries.
+      (unwind-protect
+          (progn
+            ;; Cancelled during the handoff before the user entry: write it down first.
+            (when (plist-get run :unsent)
+              (superchat-agent--add run 'user (plist-get run :text)
+                                    :data (and (plist-get run :origin)
+                                               (list :origin (plist-get run :origin)))))
+            (dolist (call (superchat-agent--unanswered tape (plist-get run :calling)))
+              (superchat-agent--add run 'tool "Cancelled."
+                                    :data (list :call-id (plist-get call :id)
+                                                :name (plist-get call :name) :error t)))
+            (superchat-agent--add run 'event "Cancelled by the user."
+                                  :data (list :type "cancelled")))
+        (superchat-agent--finish run 'cancelled))))))
 
 (defconst superchat-agent--summary-question
   "Summarise this conversation so that someone who has not seen it can

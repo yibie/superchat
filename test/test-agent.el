@@ -433,6 +433,20 @@
       (superchat-test-script (list '(:text "fine"))
         (should (eq (plist-get (superchat-run "t" "again") :status) 'done))))))
 
+;; The same holds for a cancel: its own entries reach the callback too.
+(ert-deftest superchat-agent-signalling-on-entry-cannot-block-a-cancel ()
+  (superchat-test-agent--with
+    (let ((superchat-test-async t) (break nil) status)
+      (superchat-test-script (list '(:text "never"))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (_) (when break (error "callback")))
+                       :on-done (lambda (r) (setq status (plist-get r :status))))
+        (setq break t)
+        (should-error (superchat-cancel "t"))
+        (should (eq status 'cancelled))
+        (should-not (superchat-run-active "t"))
+        (superchat-test-drain)))))
+
 (ert-deftest superchat-agent-cancel-a-pending-handoff ()
   (superchat-test-agent--with
     (let ((superchat-test-async t))

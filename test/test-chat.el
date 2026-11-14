@@ -413,7 +413,9 @@ tool `echo', and no chat buffers left behind."
             (superchat-chat-send "/handoff")
             (should (equal mode-line-process " [running]"))
             (call-interactively (key-binding (kbd "C-c C-k")))
-            (should-not mode-line-process))
+            (should-not mode-line-process)
+            ;; The event is shown at once, as a fresh render would show it.
+            (should (string-match-p "Cancelled by the user" (buffer-string))))
           (should-not (superchat-run-active "t1"))
           (with-current-buffer buffer (superchat-chat-send "/handoff")
                                (should (equal mode-line-process " [running]")))
