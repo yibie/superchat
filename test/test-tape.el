@@ -25,6 +25,19 @@
       (should (equal (superchat-tape-get (plist-get second :id)) second))
       (should-not (superchat-tape-get 9999)))))
 
+(ert-deftest superchat-tape-data-list-shapes-round-trip ()
+  (superchat-test-with-tape
+    (let ((data '(:nums (1 2 3) :m (("a" "b")) :none nil
+                  :ps ((:x 1) (:x 2)) :s ("p" "q") :deep (:in (:l (4 5))))))
+      (should (equal (plist-get (superchat-tape-append "t" 'note "x" :scope "home" :data data)
+                                :data)
+                     data)))))
+
+(ert-deftest superchat-tape-kind-is-a-symbol ()
+  (superchat-test-with-tape
+    (should-error (superchat-tape-append "t" "user" "x" :scope "home"))
+    (should-error (superchat-tape-append "t" 1 "x" :scope "home"))))
+
 (ert-deftest superchat-tape-scope-defaults-to-timeline ()
   (superchat-test-with-tape
     (should-error (superchat-tape-append "t1" 'user "no scope"))

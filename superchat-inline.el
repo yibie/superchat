@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'diff-mode)
 (require 'superchat)
 (require 'superchat-tape)
 (require 'superchat-agent)
@@ -17,10 +18,6 @@
 (defconst superchat-inline--system
   "Answer with the replacement text only: no explanation, no remarks, and no
 code fence unless the fence is part of the replacement itself.")
-
-(defun superchat-inline--tape ()
-  "The timeline of inline requests for the scope of the current buffer."
-  (concat "inline:" (superchat-tape-scope-of default-directory)))
 
 (defun superchat-inline--origin ()
   "Where the request comes from: the current buffer and point."
@@ -63,7 +60,8 @@ code fence unless the fence is part of the replacement itself.")
       (insert text))))
 
 (defun superchat-inline-discard ()
-  "Discard the replacement; the region stays as it is."
+  "Discard the replacement, cancelling the run if it is active.
+The region stays as it is."
   (interactive)
   (let ((overlay (superchat-inline--overlay)))
     (superchat-cancel (overlay-get overlay 'superchat-tape))
@@ -79,7 +77,11 @@ code fence unless the fence is part of the replacement itself.")
     (when (overlay-buffer overlay)
       (if (eq status 'done)
           (superchat-inline--show
-           overlay (superchat-inline--unfence (overlay-get overlay 'superchat-text)))
+           overlay (superchat-inline--unfence
+                    (plist-get (car (superchat-tape-entries
+                                     :tape (plist-get run :tape) :kinds '(assistant)
+                                     :newest t :limit 1))
+                               :text)))
         (delete-overlay overlay)
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
                  (if (eq status 'error)
@@ -95,24 +97,29 @@ code fence unless the fence is part of the replacement itself.")
 The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inline-accept] accepts it, \\[superchat-inline-discard] discards it."
   (interactive (list (progn (superchat-inline--region)
                             (read-string "Rewrite how: "))))
-  (let* ((tape (superchat-inline--tape))
+  (let* ((tape (concat "inline:" (superchat-tape-new-name)))
          (text (superchat-inline--region))
-         (overlay (make-overlay (region-beginning) (region-end))))
-    (when (superchat-run-active tape)
-      (user-error "A rewrite is already running"))
+         (overlay (make-overlay (region-beginning) (region-end)))
+         (started nil))
     (deactivate-mark)
     (overlay-put overlay 'keymap superchat-inline-map)
     (overlay-put overlay 'superchat-tape tape)
     (overlay-put overlay 'help-echo "C-c C-c accepts, C-c C-k discards")
     (superchat-inline--show overlay "")
-    (superchat-run tape (format "%s\n\n%s" instruction text)
-                   :tools 'none :system superchat-inline--system
-                   :origin (superchat-inline--origin)
-                   :on-text (lambda (piece)
-                              (when (overlay-buffer overlay)
-                                (superchat-inline--show
-                                 overlay (concat (overlay-get overlay 'superchat-text) piece))))
-                   :on-done (lambda (run) (superchat-inline--end overlay run)))))
+    ;; No overlay may outlive a run that never started.
+    (unwind-protect
+        (progn
+          (superchat-run tape (format "%s\n\n%s" instruction text)
+                         :tools 'none :system superchat-inline--system
+                         :origin (superchat-inline--origin)
+                         :on-text (lambda (piece)
+                                    (when (overlay-buffer overlay)
+                                      (superchat-inline--show
+                                       overlay (concat (overlay-get overlay 'superchat-text)
+                                                       piece))))
+                         :on-done (lambda (run) (superchat-inline--end overlay run)))
+          (setq started t))
+      (unless started (delete-overlay overlay)))))
 
 ;;;###autoload
 (defun superchat-ask (question)

@@ -46,8 +46,9 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
           (should (string-match-p "shout" text))
           (should (string-match-p "beta" text))
           (should-not (string-match-p "alpha" text)))))
-    (let* ((tape (concat "inline:" (superchat-tape-scope-of default-directory)))
+    (let* ((tape (plist-get (car (superchat-tape-entries)) :tape))
            (user (car (superchat-tape-entries :tape tape :kinds '(user)))))
+      (should (string-prefix-p "inline:" tape))
       (should (equal (plist-get (plist-get (plist-get user :data) :origin) :mode)
                      "fundamental-mode"))
       (should (equal (plist-get (plist-get (plist-get user :data) :origin) :file)
@@ -114,18 +115,59 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
     (should-not (superchat-test-inline--overlay))
     (should (equal (buffer-string) "alpha beta gamma"))))
 
-(ert-deftest superchat-inline-second-rewrite-refused ()
+(ert-deftest superchat-inline-answer-without_streaming ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let ((superchat-llm-request-function
+           (lambda (_m &rest keys)
+             (funcall (plist-get keys :on-done) (list :text "BETA" :calls nil :model "m"))
+             (list :request nil))))
+      (superchat-rewrite "shout"))
+    (should (equal (superchat-test-inline--shown (superchat-test-inline--overlay)) "BETA"))))
+
+(ert-deftest superchat-inline-each-rewrite-has-own-timeline ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "ONE") '(:text "TWO"))
+      (superchat-rewrite "first")
+      (push-mark (point-min) t t)
+      (goto-char (+ (point-min) 5))
+      (superchat-rewrite "second")
+      (should (= (length (plist-get (car superchat-test-requests) :messages)) 1)))
+    (should (= (length (seq-filter (lambda (o) (overlay-get o 'superchat-text))
+                                   (overlays-in (point-min) (point-max))))
+               2))
+    (should (= 2 (length (seq-uniq (mapcar (lambda (e) (plist-get e :tape))
+                                           (superchat-tape-entries))))))
+    (should (string-prefix-p "inline:" (plist-get (car (superchat-tape-entries)) :tape)))))
+
+(ert-deftest superchat-inline-active-run-accept-refused-discard-cancels ()
   (superchat-test-inline--with "alpha beta gamma"
     (let ((superchat-llm-request-function (lambda (&rest _) (list :request nil))))
       (superchat-rewrite "shout")
       (let ((overlay (superchat-test-inline--overlay)))
-        (push-mark (point-min) t t)
-        (goto-char (+ (point-min) 5))
-        (should-error (superchat-rewrite "again") :type 'user-error)
         (goto-char (overlay-start overlay))
         (should-error (superchat-inline-accept) :type 'user-error)
         (superchat-inline-discard)
-        (should-not (superchat-test-inline--overlay))))))
+        (should-not (superchat-test-inline--overlay))
+        (should-not (superchat-run-active (overlay-get overlay 'superchat-tape)))))))
+
+(ert-deftest superchat-inline-failed-start-leaves-no-overlay ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (cl-letf (((symbol-function 'superchat-run) (lambda (&rest _) (error "no start"))))
+      (should-error (superchat-rewrite "shout")))
+    (should-not (superchat-test-inline--overlay))))
+
+(ert-deftest superchat-inline-async-request-to-accept ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let ((superchat-test-async t))
+      (superchat-test-script (list '(:text "BETA"))
+        (superchat-rewrite "shout")
+        (let ((overlay (superchat-test-inline--overlay)))
+          (goto-char (overlay-start overlay))
+          (should-error (superchat-inline-accept) :type 'user-error)
+          (superchat-test-drain)
+          (should (equal (buffer-string) "alpha beta gamma"))
+          (call-interactively #'superchat-inline-accept)
+          (should (equal (buffer-string) "alpha BETA gamma")))))))
 
 (defun superchat-test-inline--ask (recent)
   "Ask \"why?\" with the region active; return (OPENED SENT) of the fake chat."

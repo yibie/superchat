@@ -81,7 +81,7 @@
 (ert-deftest test-llm-plain-text ()
   (test-llm-with '((:chunks ("Hello")))
     (let ((r (test-llm--ask '((:role user :text "hi")) :system "be brief")))
-      (should (equal (plist-get r :done) '((:text "Hello" :calls nil :model "LLM"))))
+      (should (equal (plist-get r :done) '((:text "Hello" :calls nil :model "default"))))
       (should-not (plist-get r :error))
       (should (equal (plist-get (car test-llm--seen) :system) "be brief"))
       (should (equal (plist-get (car test-llm--seen) :interactions)
@@ -115,7 +115,7 @@
       (should (equal (mapcar (lambda (c) (plist-get c :name)) calls)
                      '("read_file" "list_buffers")))
       (should (equal (plist-get (car calls) :args) '(:path "a.el" :count 5)))
-      (should (equal (plist-get (cadr calls) :args) nil))
+      (should (equal (plist-get (cadr calls) :args) '(:all nil)))
       (should (stringp (plist-get (car calls) :id)))
       (should-not (equal (plist-get (car calls) :id) (plist-get (cadr calls) :id)))
       (should-not (plist-get r :error))
@@ -123,7 +123,7 @@
       (should (= 1 (length test-llm--seen)))
       (should (equal (plist-get (car test-llm--seen) :tools)
                      '(("read_file" ((:name "path" :type string :description "Where"
-                                      :optional nil)
+                                      :optional t)
                                      (:name "count" :type number :description nil
                                       :optional t)))
                        ("list_buffers" ((:name "all" :type boolean :description nil
@@ -185,6 +185,53 @@
         (funcall test-llm--deferred)
         (should-not calls)))))
 
+(ert-deftest test-llm-every-call-comes-back ()
+  (let ((tools '((:name "read_file" :description "Read"
+                  :args ((:name "path" :type string :required t)))))
+        (use (lambda (name args)
+               (make-llm-provider-utils-tool-use :id "p" :name name :args args))))
+    ;; An unknown tool beside a good call, and a call missing a required argument.
+    (test-llm-with (list (list :tool-uses (list (funcall use "nope" '((x . 1)))
+                                                (funcall use "read_file" nil))))
+      (let* ((r (test-llm--ask '((:role user :text "go")) :tools tools))
+             (calls (plist-get (car (plist-get r :done)) :calls)))
+        (should-not (plist-get r :error))
+        (should (equal (mapcar (lambda (c) (plist-get c :name)) calls)
+                       '("nope" "read_file")))
+        (should (equal (plist-get (car calls) :args) '(:x 1)))))
+    ;; llm.el refuses a response whose only call is unknown: a sentence, not Lisp data.
+    (test-llm-with (list (list :tool-uses (list (funcall use "nope" nil))))
+      (let ((r (test-llm--ask '((:role user :text "go")) :tools tools)))
+        (should-not (plist-get r :done))
+        (should (equal (plist-get r :error)
+                       '("The model asked for a tool that is not available: nope")))))))
+
+(ert-deftest test-llm-start-failure-reaches-on-error ()
+  (test-llm-with nil
+    (cl-letf (((symbol-function 'llm-chat-streaming)
+               (lambda (&rest _) (signal 'llm-provider-unconfigured '("no key")))))
+      (let ((r (test-llm--ask '((:role user :text "hi")))))
+        (should (= 1 (length (plist-get r :error))))
+        (should (string-match-p "no key" (car (plist-get r :error))))
+        (should-not (plist-get r :done))))))
+
+(cl-defstruct (test-llm-slotless (:include llm-standard-chat-provider)))
+
+(ert-deftest test-llm-model-needs-a-chat-model-slot ()
+  (let ((superchat-llm-provider (make-test-llm-slotless)))
+    (let ((r (test-llm--ask '((:role user :text "hi")) :model "m")))
+      (should (string-match-p "test-llm-slotless" (car (plist-get r :error)))))))
+
+(ert-deftest test-llm-only-the-first-callback-counts ()
+  (test-llm-with '((:chunks ("a") :defer t))
+    (let (calls)
+      (superchat-llm-request '((:role user :text "hi"))
+                             :on-done (lambda (_) (push 'done calls))
+                             :on-error (lambda (_) (push 'error calls)))
+      (funcall test-llm--deferred)
+      (funcall test-llm--deferred)
+      (should (equal calls '(done))))))
+
 (ert-deftest test-llm-needs-a-provider ()
   (let ((superchat-llm-provider nil))
     (let ((err (should-error (superchat-llm-request '((:role user :text "hi")))
@@ -208,12 +255,6 @@
     (should (eq 'handle (superchat-llm-request '((:role user :text "hi")) :system "s")))
     (should (equal (car got) '((:role user :text "hi"))))
     (should (equal (plist-get (cdr got) :system) "s"))))
-
-(ert-deftest test-llm-models ()
-  (let ((superchat-llm-provider nil) (superchat-llm-model "m"))
-    (should (equal (superchat-llm-models) '("m"))))
-  (let ((superchat-llm-provider (make-test-llm-provider)) (superchat-llm-model nil))
-    (should-not (superchat-llm-models))))
 
 (provide 'test-llm)
 ;;; test-llm.el ends here

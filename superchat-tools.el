@@ -88,7 +88,7 @@ asked about or denied.  Return nil to run, or the text that says why not."
   (let* ((name (plist-get call :name))
          (args (plist-get call :args))
          (tool (superchat-tools--get name))
-         (missing (cl-remove-if (lambda (a) (plist-get args (intern (concat ":" (plist-get a :name)))))
+         (missing (cl-remove-if (lambda (a) (plist-member args (intern (concat ":" (plist-get a :name)))))
                                 (cl-remove-if-not (lambda (a) (plist-get a :required))
                                                   (plist-get tool :args))))
          (scope (plist-get (car (superchat-tape-entries :tape tape :limit 1 :newest t)) :scope))
@@ -100,7 +100,10 @@ asked about or denied.  Return nil to run, or the text that says why not."
               t)
       (if-let* ((why (superchat-tools--permit tape name tool args)))
           (cons why t)
-        (cons (funcall (plist-get tool :function) args) nil)))))
+        (let ((value (funcall (plist-get tool :function) args)))
+          (if (stringp value)
+              (cons value nil)
+            (cons (format "Error: tool %s returned %S, not a string" name value) t)))))))
 
 (defun superchat-tool-call (tape call)
   "Run CALL, (:id S :name S :args PLIST), for timeline TAPE; return the tool entry.
@@ -203,22 +206,24 @@ Whatever the tool or the user does, the result is an entry, never a signal."
          (:name "old" :type string :description "Text to replace, exactly once" :required t)
          (:name "new" :type string :description "Replacement" :required t))
  :function (lambda (args)
-             (let ((old (plist-get args :old)) (new (plist-get args :new))
-                   (case-fold-search nil) (n 0))
+             (let ((old (plist-get args :old)) (new (plist-get args :new)) (n 0))
                (when (string-empty-p old) (error "OLD is empty"))
                (with-current-buffer (superchat-tools--buffer (plist-get args :buffer))
-                 (save-excursion
+                 (let ((case-fold-search nil))
+                  (save-excursion
                    (save-restriction
                      (widen)
                      (goto-char (point-min))
-                     (while (search-forward old nil t) (cl-incf n))
+                     (while (search-forward old nil t)
+                       (cl-incf n)
+                       (goto-char (1+ (match-beginning 0))))
                      (unless (= n 1)
                        (error "OLD occurs %d times in %s; it must occur exactly once" n (buffer-name)))
                      (goto-char (point-min))
                      (search-forward old)
                      (undo-boundary)
                      (replace-match new t t)
-                     (undo-boundary)))
+                     (undo-boundary))))
                  (format "Replaced 1 occurrence in %s; not saved." (buffer-name))))))
 
 (superchat-tool-define
@@ -261,8 +266,11 @@ Whatever the tool or the user does, the result is an entry, never a signal."
                  (goto-char (point-min))
                  (with-syntax-table emacs-lisp-mode-syntax-table
                    (while (progn (forward-comment (buffer-size)) (not (eobp)))
-                     (push (read (current-buffer)) forms))))
-               (let ((from (with-current-buffer log (point-max))))
+                     (push (condition-case err (read (current-buffer))
+                             (error (error "Cannot read the code after character %d: %s"
+                                           (point) (error-message-string err))))
+                           forms))))
+               (let ((from (with-current-buffer log (copy-marker (point-max)))))
                  (dolist (form (nreverse forms)) (setq value (eval form t)))
                  (concat (with-current-buffer log (buffer-substring-no-properties from (point-max)))
                          (prin1-to-string value))))))
@@ -275,8 +283,10 @@ Whatever the tool or the user does, the result is an entry, never a signal."
              (with-temp-buffer
                (let* ((process (make-process :name "superchat-shell" :buffer (current-buffer)
                                              :command (list shell-file-name "-c" (plist-get args :command))
-                                             :connection-type 'pipe :noquery t))
+                                             :connection-type 'pipe :noquery t
+                                             :sentinel #'ignore))
                       (deadline (+ (float-time) superchat-shell-seconds)))
+                 (process-send-eof process)
                  (while (and (process-live-p process) (< (float-time) deadline))
                    (accept-process-output process (max 0.01 (- deadline (float-time)))))
                  (prog1 (concat (buffer-string)

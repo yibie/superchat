@@ -80,6 +80,11 @@
     (let ((err (should-error (superchat-plugin-enable-configured))))
       (should (string-match-p "ghost" (error-message-string err))))))
 
+(ert-deftest superchat-plugin-unknown-keyword-is-an-error ()
+  (superchat-test-plugins
+    (should-error (superchat-plugin-define 'a :enabel #'ignore))
+    (should-error (superchat-plugin-enable 'a))))
+
 (ert-deftest superchat-plugin-enable-error-reaches-caller ()
   (superchat-test-plugins
     (superchat-plugin-define 'bad :enable (lambda () (error "Boom from bad")))

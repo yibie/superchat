@@ -39,15 +39,16 @@
                            superchat-recall--max-chars)))
 
 (defun superchat-recall--query (args)
-  "Rows of the read-only SQL in ARGS as JSON lines."
-  (let* ((rows (superchat-tape-select (plist-get args :sql)))
+  "Rows of the read-only SQL in ARGS as JSON lines.
+The limit is part of the statement, so a runaway query stops at the database."
+  (let* ((sql (string-trim-right (plist-get args :sql) "[ \t\n;]+"))
+         (rows (superchat-tape-select
+                (format "SELECT * FROM (%s) LIMIT %d" sql (1+ superchat-recall--max-rows))))
          (lines (mapcar (lambda (row) (json-serialize (vconcat row) :null-object nil))
                         (take superchat-recall--max-rows rows))))
     (string-join
      (append lines
-             (and (nthcdr superchat-recall--max-rows rows)
-                  (list (format "[%d rows left out]"
-                                (- (length rows) superchat-recall--max-rows))))
+             (and (nthcdr superchat-recall--max-rows rows) (list "[more rows left out]"))
              (and (null rows) (list "[no rows]")))
      "\n")))
 

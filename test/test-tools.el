@@ -100,6 +100,26 @@
     (let ((superchat-permission-ask-function (lambda (&rest _) (signal 'quit nil))))
       (should (equal (superchat-test-tools--err "eval_elisp" :code "1") "Interrupted by the user.")))))
 
+;; Overlapping counts are tested in edit-buffer; these cover the call itself.
+(ert-deftest superchat-tools-non-string-result-is-an-error ()
+  (superchat-test-tools--in-scope
+    (superchat-tool-define "num" :class 'read :function (lambda (_) 42))
+    (superchat-tool-define "nothing" :class 'read :function (lambda (_) nil))
+    (unwind-protect
+        (progn (should (string-match-p "42" (superchat-test-tools--err "num")))
+               (should (string-match-p "nil" (superchat-test-tools--err "nothing"))))
+      (superchat-tool-remove "num") (superchat-tool-remove "nothing"))))
+
+(ert-deftest superchat-tools-required-argument-present-whatever-its-value ()
+  (superchat-test-tools--in-scope
+    (superchat-tool-define "flag" :class 'read
+                           :args '((:name "on" :type boolean :description "d" :required t))
+                           :function (lambda (a) (format "%S" (plist-get a :on))))
+    (unwind-protect
+        (progn (should (equal (superchat-test-tools--ok "flag" :on nil) "nil"))
+               (should (string-match-p "Missing" (superchat-test-tools--err "flag"))))
+      (superchat-tool-remove "flag"))))
+
 (ert-deftest superchat-tools-call-entry-shape ()
   (superchat-test-tools--in-scope
     (let ((entry (superchat-tool-call "t" '(:id "id9" :name "eval_elisp" :args (:code "(+ 1 2)")))))
@@ -265,6 +285,20 @@
             (should (superchat-test-tools--err "edit_buffer" :buffer "nope" :old "a" :new "b")))
         (kill-buffer b)))))
 
+(ert-deftest superchat-tools-edit-buffer-counts-exactly ()
+  (superchat-test-tools--in-scope
+    (let ((b (generate-new-buffer "sc-case")))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (insert "Foo and foo aaa"))
+            (setq-local case-fold-search t)
+            (should (string-match-p "Replaced" (superchat-test-tools--ok
+                                                "edit_buffer" :buffer "sc-case" :old "Foo" :new "Bar")))
+            (should (string-match-p "2 times" (superchat-test-tools--err
+                                               "edit_buffer" :buffer "sc-case" :old "aa" :new "b")))
+            (should (equal (with-current-buffer b (buffer-string)) "Bar and foo aaa")))
+        (kill-buffer b)))))
+
 (ert-deftest superchat-tools-edit-buffer-does-not-save ()
   (superchat-test-tools--in-scope
     (let ((file (superchat-test-tools--write dir "f.txt" "hello\n")))
@@ -312,7 +346,9 @@
     (let ((text (superchat-test-tools--ok "eval_elisp" :code "(message \"hello %d\" 1)\n42")))
       (should (string-match-p "\\`hello 1\n42\\'" text)))
     (should (string-match-p "boom" (superchat-test-tools--err "eval_elisp" :code "(error \"boom\")")))
-    (should (superchat-test-tools--err "eval_elisp" :code "(unclosed"))))
+    (let ((text (superchat-test-tools--err "eval_elisp" :code "(+ 1 2)\n(unclosed")))
+      (should (string-match-p "Cannot read the code" text))
+      (should-not (string-match-p "killed buffer" text)))))
 
 (ert-deftest superchat-tools-shell ()
   (superchat-test-tools--in-scope
@@ -320,7 +356,10 @@
       (should (string-match-p "^hi$" text))
       (should (string-match-p (regexp-quote (directory-file-name dir)) text))
       (should (string-match-p "exit status 0" text)))
-    (should (string-match-p "exit status 3" (superchat-test-tools--ok "shell" :command "exit 3")))
+    (should (equal (superchat-test-tools--ok "shell" :command "exit 3") "\n[exit status 3]"))
+    (let ((start (float-time)))
+      (should (string-match-p "exit status 0" (superchat-test-tools--ok "shell" :command "cat")))
+      (should (< (- (float-time) start) 5)))
     (should (string-match-p "oops" (superchat-test-tools--ok "shell" :command "echo oops >&2")))))
 
 (ert-deftest superchat-tools-shell-time-limit ()

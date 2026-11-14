@@ -16,40 +16,51 @@
 (defvar superchat-llm-request-function #'superchat-llm--request
   "What `superchat-llm-request' calls.  Tests bind it to a scripted function.")
 
-(defun superchat-llm--tool (spec record)
+(defun superchat-llm--tool (spec)
   "The `llm-tool' for SPEC, a plist (:name :description :args).
-llm.el \"runs\" it by calling RECORD with the tool name and a plist of the
-arguments; nothing else happens, and the result is a constant."
-  (let ((names (mapcar (lambda (arg) (plist-get arg :name)) (plist-get spec :args))))
-    (make-llm-tool
-     :name (plist-get spec :name)
-     :description (plist-get spec :description)
-     :function (lambda (&rest values)
-                 (funcall record (plist-get spec :name)
-                          (cl-loop for name in names for value in values
-                                   when value
-                                   nconc (list (intern (concat ":" name)) value)))
-                 "recorded")
-     :args (mapcar (lambda (arg)
-                     (list :name (plist-get arg :name)
-                           :type (plist-get arg :type)
-                           :description (plist-get arg :description)
-                           :optional (not (plist-get arg :required))))
-                   (plist-get spec :args)))))
+llm.el \"runs\" it, which does nothing: the calls are read from the response.
+Every argument is optional for llm.el, which would refuse the whole response
+over a missing one; the caller judges the calls."
+  (make-llm-tool
+   :name (plist-get spec :name)
+   :description (plist-get spec :description)
+   :function (lambda (&rest _) "recorded")
+   :args (mapcar (lambda (arg)
+                   (list :name (plist-get arg :name)
+                         :type (plist-get arg :type)
+                         :description (plist-get arg :description)
+                         :optional t))
+                 (plist-get spec :args))))
 
 (defun superchat-llm--alist (plist)
   "PLIST (:path \"a\") as the alist ((path . \"a\")) that providers send."
   (cl-loop for (key value) on plist by #'cddr
            collect (cons (intern (substring (symbol-name key) 1)) value)))
 
-(defun superchat-llm--prompt (messages system tools record)
-  "An `llm-chat-prompt' that replays MESSAGES, with TOOLS recording into RECORD.
+(defun superchat-llm--plist (alist)
+  "ALIST ((path . \"a\")) as the plist (:path \"a\"); a nil value is kept."
+  (cl-loop for (key . value) in alist
+           nconc (list (intern (concat ":" (symbol-name key))) value)))
+
+(defun superchat-llm--explain (type message)
+  "A sentence for a person about llm.el refusing a response: TYPE, MESSAGE."
+  (pcase type
+    ((guard (stringp message)) message)
+    ('llm-tool-unknown-tool
+     (format "The model asked for a tool that is not available: %s"
+             (plist-get message :tool)))
+    ('llm-tool-unknown-argument
+     (format "The model gave tool %s an argument it does not have: %s"
+             (plist-get message :tool) (plist-get message :arg)))
+    (_ (format "The model's response was refused (%s)" type))))
+
+(defun superchat-llm--prompt (messages system tools)
+  "An `llm-chat-prompt' that replays MESSAGES, with TOOLS offered.
 Replay uses llm.el's interaction structs: an assistant turn whose content is
 a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
   (let ((prompt (llm-make-chat-prompt
                  "" :context system
-                 :tools (mapcar (lambda (spec) (superchat-llm--tool spec record))
-                                tools)))
+                 :tools (mapcar #'superchat-llm--tool tools)))
         (results nil))
     (setf (llm-chat-prompt-interactions prompt) nil)
     (cl-flet ((add (role content)
@@ -88,58 +99,67 @@ a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
 
 (defun superchat-llm--provider (model)
   "The provider, asked for MODEL when one is given."
-  (unless superchat-llm-provider
-    (user-error "No LLM provider: set `superchat-llm-provider', for example \
-(setq superchat-llm-provider (make-llm-openai :key \"...\"))"))
   (if model
-      (let ((provider (copy-sequence superchat-llm-provider)))
-        (setf (cl-struct-slot-value (type-of provider) 'chat-model provider)
-              model)
+      (let* ((provider (copy-sequence superchat-llm-provider))
+             (type (type-of provider)))
+        (unless (assq 'chat-model (cl-struct-slot-info type))
+          (user-error "Provider %s has no chat-model slot, so a model cannot be set"
+                      type))
+        (setf (cl-struct-slot-value type 'chat-model provider) model)
         provider)
     superchat-llm-provider))
 
 (cl-defun superchat-llm--request (messages &key system tools model
                                            on-text on-done on-error)
   "Ask the provider once.  Arguments as `superchat-llm-request'."
+  (unless superchat-llm-provider
+    (user-error "No LLM provider: set `superchat-llm-provider', for example \
+(setq superchat-llm-provider (make-llm-openai :key \"...\"))"))
   (let* ((model (or model superchat-llm-model))
-         (provider (superchat-llm--provider model))
-         (recorded nil)
-         (prompt (superchat-llm--prompt
-                  messages system tools
-                  (lambda (name args) (push (cons name args) recorded))))
          (handle (list :cancelled nil :finished nil :request nil))
          (seen 0))
     (cl-flet ((live (callback)
-                ;; A provider's callback may still fire after a cancel.
+                ;; A provider's callback may fire after a cancel, or twice.
                 (lambda (&rest args)
-                  (unless (plist-get handle :cancelled)
+                  (unless (or (plist-get handle :cancelled) (plist-get handle :finished))
                     (setf (plist-get handle :finished) t)
-                    (apply callback args)))))
-      (setf (plist-get handle :request)
-            (llm-chat-streaming
-             provider prompt
-             ;; Partial results are the accumulated text; the caller gets deltas.
-             (lambda (partial)
-               (let ((text (plist-get partial :text)))
-                 (when (and on-text text (> (length text) seen)
-                            (not (plist-get handle :cancelled)))
-                   (funcall on-text (substring text seen))
-                   (setq seen (length text)))))
-             (live (lambda (result)
-                     (funcall on-done
-                              (list :text (or (plist-get result :text) "")
-                                    :calls (mapcar
-                                            (lambda (call)
-                                              (list :id (make-temp-name "call_")
-                                                    :name (car call) :args (cdr call)))
-                                            (nreverse recorded))
-                                    :model (or model (llm-name provider))))))
-             (live (lambda (_type message)
-                     (funcall on-error (if (stringp message)
-                                           message
-                                         (format "%S" message)))))
-             t)))
-    handle))
+                    (apply callback args))))
+              (fail (message)
+                (setf (plist-get handle :finished) t)
+                (funcall on-error message)))
+      (condition-case err
+          (setf (plist-get handle :request)
+                (llm-chat-streaming
+                 (superchat-llm--provider model)
+                 (superchat-llm--prompt messages system tools)
+                 ;; Partial results are the accumulated text; the caller gets deltas.
+                 (lambda (partial)
+                   (let ((text (plist-get partial :text)))
+                     (when (and on-text text (> (length text) seen)
+                                (not (plist-get handle :cancelled)))
+                       (funcall on-text (substring text seen))
+                       (setq seen (length text)))))
+                 (live (lambda (result)
+                         (funcall on-done
+                                  (list :text (or (plist-get result :text) "")
+                                        ;; Documented: `tool-uses' lists every use.
+                                        :calls (mapcar
+                                                (lambda (use)
+                                                  (list :id (make-temp-name "call_")
+                                                        :name (plist-get use :name)
+                                                        :args (superchat-llm--plist
+                                                               (plist-get use :args))))
+                                                (plist-get result :tool-uses))
+                                        :model (or model "default")))))
+                 (live (lambda (type message)
+                         (funcall on-error (superchat-llm--explain type message))))
+                 t))
+        ;; Raised while starting.  After a callback ran, the error is the
+        ;; caller's own (inside ON-DONE, say) and is not turned into ON-ERROR.
+        (error (if (or (plist-get handle :cancelled) (plist-get handle :finished))
+                   (signal (car err) (cdr err))
+                 (fail (error-message-string err)))))
+      handle)))
 
 (cl-defun superchat-llm-request (messages &key system tools model
                                           on-text on-done on-error)
@@ -158,13 +178,6 @@ calls come back in ON-DONE and are never run here."
   (when-let* ((request (plist-get handle :request))
               ((not (plist-get handle :finished))))
     (llm-cancel-request request)))
-
-(defun superchat-llm-models ()
-  "Model names for completion: the provider's, else the configured one."
-  (if (and superchat-llm-provider
-           (memq 'model-list (llm-capabilities superchat-llm-provider)))
-      (llm-models superchat-llm-provider)
-    (and superchat-llm-model (list superchat-llm-model))))
 
 (provide 'superchat-llm)
 ;;; superchat-llm.el ends here

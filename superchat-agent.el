@@ -74,6 +74,14 @@ that ON-DONE may start the next one."
     (superchat-agent--add run 'event why :data (list :type "error"))
     (superchat-agent--finish run 'error)))
 
+(defun superchat-agent--guard (run thunk)
+  "Call THUNK; an error it signals ends RUN with an error event, so a run
+always ends.  When RUN has already ended the error belongs to the caller."
+  (condition-case err (funcall thunk)
+    (error (if (superchat-agent--live run)
+               (superchat-agent--fail run (error-message-string err))
+             (signal (car err) (cdr err))))))
+
 (defun superchat-agent--track (run thunk)
   "Call THUNK, which starts a request, and keep its handle for `superchat-cancel'.
 The request may already have answered, and the answer may have started
@@ -86,23 +94,29 @@ another request; then this handle is stale and is not kept."
 (defun superchat-agent--done (run response)
   "RUN's model answered with RESPONSE: record it, run its calls, go on."
   (when (superchat-agent--live run)
-    (let ((tape (plist-get run :tape))
-          (calls (plist-get response :calls)))
-      (cl-incf (plist-get run :rounds))
-      (superchat-agent--add run 'assistant (plist-get response :text)
-                            :data (list :model (plist-get response :model) :calls calls))
-      (if (null calls)
-          (when (superchat-agent--live run)
-            (superchat-agent--finish run 'done))
-        (dolist (call calls)
-          (when (superchat-agent--live run)
-            ;; A cancel during the call must not add a second result for it.
-            (setf (plist-get run :calling) (plist-get call :id))
-            (superchat-tool-call tape call)
-            (setf (plist-get run :calling) nil)
-            (superchat-agent--emit run)))
+    (superchat-agent--guard run (lambda () (superchat-agent--respond run response)))))
+
+(defun superchat-agent--respond (run response)
+  "Record RESPONSE, run its calls in order, make the next request."
+  (let ((tape (plist-get run :tape))
+        (calls (plist-get response :calls)))
+    (cl-incf (plist-get run :rounds))
+    (superchat-agent--add run 'assistant (plist-get response :text)
+                          :data (list :model (plist-get response :model) :calls calls))
+    (if (null calls)
         (when (superchat-agent--live run)
-          (superchat-agent--step run))))))
+          (superchat-agent--finish run 'done))
+      (dolist (call calls)
+        (when (superchat-agent--live run)
+          ;; A cancel during the call must not add a second result for it.
+          (setf (plist-get run :calling) (plist-get call :id))
+          ;; The callback of a real model runs in a timer, where C-g is off.
+          (let ((inhibit-quit nil))
+            (superchat-tool-call tape call))
+          (setf (plist-get run :calling) nil)
+          (superchat-agent--emit run)))
+      (when (superchat-agent--live run)
+        (superchat-agent--step run)))))
 
 (defun superchat-agent--step (run)
   "Make the next request of RUN."
@@ -115,28 +129,33 @@ another request; then this handle is stale and is not kept."
       (superchat-agent--fail
        run (format "Stopped: %d model responses without an answer." superchat-max-rounds)))
      (t
-      (superchat-agent--track
+      (superchat-agent--guard
        run (lambda ()
-             (superchat-llm-request
-              messages
-              :system (superchat-context-system tape (plist-get run :system))
-              :tools (unless (eq tools 'none) (superchat-tool-specs tools))
-              :model (plist-get run :model)
-              :on-text (lambda (text)
-                         (when-let* (((superchat-agent--live run))
-                                     (on-text (plist-get run :on-text)))
-                           (funcall on-text text)))
-              :on-done (lambda (response) (superchat-agent--done run response))
-              :on-error (lambda (why) (when (superchat-agent--live run)
-                                        (superchat-agent--fail run why))))))))))
+             (superchat-agent--track
+              run (lambda ()
+                    (superchat-llm-request
+                     messages
+                     :system (superchat-context-system tape (plist-get run :system))
+                     :tools (unless (eq tools 'none) (superchat-tool-specs tools))
+                     :model (plist-get run :model)
+                     :on-text (lambda (text)
+                                (when-let* (((superchat-agent--live run))
+                                            (on-text (plist-get run :on-text)))
+                                  (funcall on-text text)))
+                     :on-done (lambda (response) (superchat-agent--done run response))
+                     :on-error (lambda (why) (when (superchat-agent--live run)
+                                               (superchat-agent--fail run why))))))))))))
 
-(defun superchat-agent--begin (run text origin first)
-  "Append the user entry of RUN and make its first request.
-FIRST is non-nil for the first entry of a timeline, which needs a scope."
+(defun superchat-agent--begin (run text origin first &optional failed)
+  "Append the user entry of RUN and make its first request, or end the run
+with an error when FAILED.  FIRST is non-nil for the first entry of a
+timeline, which needs a scope."
   (superchat-agent--add run 'user text
                         :data (and origin (list :origin origin))
                         :scope (and first (superchat-tape-scope-of default-directory)))
-  (superchat-agent--step run))
+  (if failed
+      (superchat-agent--finish run 'error)
+    (superchat-agent--step run)))
 
 (cl-defun superchat-run (tape text &key origin tools system model on-text on-entry on-done)
   "Append TEXT as a user entry of timeline TAPE and answer it; return the run.
@@ -144,27 +163,30 @@ TOOLS is a list of tool names, nil for every tool, or `none'.  SYSTEM is
 extra text for the system prompt.  ON-TEXT gets streamed text, ON-ENTRY each
 entry appended, ON-DONE the run, once, with :status done, cancelled or error."
   (when (gethash tape superchat-agent--runs)
-    (error "Timeline %s already has a run" tape))
+    (error "Timeline %s is busy with a run or a handoff" tape))
   (let* ((last (car (superchat-tape-entries :tape tape :newest t :limit 1)))
          (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                     :seen (if last (plist-get last :id) 0)
                     :tools tools :system system :model model
                     :on-text on-text :on-entry on-entry :on-done on-done)))
     (puthash tape run superchat-agent--runs)
-    (if (and last (> (cl-loop for m in (superchat-agent--messages
-                                        (superchat-view 'conversation :tape tape))
-                              sum (length (plist-get m :text)))
-                     superchat-context-chars))
-        ;; The anchor goes in before the user entry, so the request stays after it.
-        (superchat-agent--track
-         run (lambda ()
-               (superchat-handoff
-                tape nil (lambda (anchor)
-                           (when (superchat-agent--live run)
-                             (if anchor
-                                 (superchat-agent--begin run text origin nil)
-                               (superchat-agent--finish run 'error)))))))
-      (superchat-agent--begin run text origin (not last)))
+    (superchat-agent--guard
+     run (lambda ()
+           (if (and last (> (cl-loop for m in (superchat-agent--messages
+                                               (superchat-view 'conversation :tape tape))
+                                     sum (length (plist-get m :text)))
+                            superchat-context-chars))
+               ;; The anchor goes in before the user entry, so the request stays after it.
+               (superchat-agent--track
+                run (lambda ()
+                      (superchat-agent--summarise
+                       tape nil
+                       (lambda (anchor)
+                         (when (superchat-agent--live run)
+                           (superchat-agent--guard
+                            run (lambda ()
+                                  (superchat-agent--begin run text origin nil (not anchor)))))))))
+             (superchat-agent--begin run text origin (not last)))))
     run))
 
 (defun superchat-run-active (tape)
@@ -184,7 +206,8 @@ apart from the call with id EXCEPT, which is running and will have one."
 
 (defun superchat-cancel (tape)
   "Cancel the run of timeline TAPE, if it has one."
-  (when-let* ((run (superchat-run-active tape)))
+  (when-let* ((run (superchat-run-active tape))
+              ((superchat-agent--live run)))
     (setf (plist-get run :status) 'cancelled)
     (when-let* ((handle (plist-get run :handle)))
       (superchat-llm-cancel handle))
@@ -195,22 +218,20 @@ apart from the call with id EXCEPT, which is running and will have one."
     (superchat-agent--add run 'event "Cancelled by the user." :data (list :type "cancelled"))
     (superchat-agent--finish run 'cancelled)))
 
-(defun superchat-agent--summary-request ()
-  "The user message that asks for a handoff."
-  (list :role 'user
-        :text "Summarise this conversation so that someone who has not seen it can
+(defconst superchat-agent--summary-question
+  "Summarise this conversation so that someone who has not seen it can
 carry on: what was asked, what was done, what was found, what is open.
-Then write a line that starts with NEXT: and say what comes next."))
+Then write a line that starts with NEXT: and say what comes next.")
 
-(defun superchat-handoff (tape &optional name on-done)
-  "Ask the model, with no tools, to summarise TAPE and say what comes next;
-append an anchor named NAME (default \"handoff\") with that.  Return the handle.
-ON-DONE gets the anchor, or nil when the model failed (an error event says so)."
-  (let* ((entries (superchat-view 'conversation :tape tape))
-         (messages (append (superchat-agent--messages entries)
-                           (list (superchat-agent--summary-request)))))
+(defun superchat-agent--summarise (tape name on-done)
+  "Ask for the summary of TAPE and append the anchor NAME; return the handle.
+The conversation goes as one user message: a provider refuses tool turns
+when the request has no tools.  ON-DONE gets the anchor, or nil."
+  (let ((entries (superchat-view 'conversation :tape tape)))
     (superchat-llm-request
-     messages
+     (list (list :role 'user
+                 :text (concat (superchat-view-render entries) "\n\n"
+                               superchat-agent--summary-question)))
      :on-done (lambda (response)
                 (let* ((text (plist-get response :text))
                        (split (string-match "^NEXT:[ \t]*" text))
@@ -220,19 +241,37 @@ ON-DONE gets the anchor, or nil when the model failed (an error event says so)."
                                 tape 'anchor summary
                                 :data (list :name (or name "handoff") :summary summary :next next)
                                 :refs (mapcar (lambda (e) (plist-get e :id)) entries))))
-                  (when on-done (funcall on-done anchor))))
+                  (funcall on-done anchor)))
      :on-error (lambda (why)
                  (superchat-tape-append tape 'event (format "Handoff failed: %s" why)
                                         :data (list :type "error"))
-                 (when on-done (funcall on-done nil))))))
+                 (funcall on-done nil)))))
+
+(defun superchat-handoff (tape &optional name on-done)
+  "Ask the model, with no tools, to summarise TAPE and say what comes next;
+append an anchor named NAME (default \"handoff\") with that.  Return the handle.
+ON-DONE gets the anchor, or nil when the model failed (an error event says so).
+The timeline is busy until then."
+  (when (gethash tape superchat-agent--runs)
+    (error "Timeline %s is busy with a run or a handoff" tape))
+  (puthash tape (list :tape tape :status 'handoff) superchat-agent--runs)
+  (condition-case err
+      (superchat-agent--summarise
+       tape name (lambda (anchor)
+                   (remhash tape superchat-agent--runs)
+                   (when on-done (funcall on-done anchor))))
+    (error (remhash tape superchat-agent--runs)
+           (signal (car err) (cdr err)))))
 
 (defun superchat-agent--fork-entries (tape entry-id)
-  "The conversation entries of TAPE up to ENTRY-ID, and the results of its calls."
+  "The conversation entries of TAPE up to ENTRY-ID, and the results of the
+calls of every assistant entry among them."
   (let* ((entries (superchat-view 'conversation :tape tape))
-         (last (cl-find entry-id entries :key (lambda (e) (plist-get e :id))))
-         (calls (mapcar (lambda (c) (plist-get c :id))
-                        (and (eq (plist-get last :kind) 'assistant)
-                             (plist-get (plist-get last :data) :calls)))))
+         (calls (cl-loop for e in entries
+                         when (and (eq (plist-get e :kind) 'assistant)
+                                   (<= (plist-get e :id) entry-id))
+                         append (mapcar (lambda (c) (plist-get c :id))
+                                        (plist-get (plist-get e :data) :calls)))))
     (cl-remove-if-not
      (lambda (e) (or (<= (plist-get e :id) entry-id)
                      (and (eq (plist-get e :kind) 'tool)

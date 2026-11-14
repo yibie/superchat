@@ -227,7 +227,8 @@
         (let ((request (car superchat-test-requests)))
           (should-not (plist-get request :tools))
           (should (equal (mapcar (lambda (m) (plist-get m :role)) (plist-get request :messages))
-                         '(user assistant user))))
+                         '(user)))
+          (should (string-match-p "first" (plist-get (car (plist-get request :messages)) :text))))
         (superchat-run "t" "second")
         (let ((messages (plist-get (car superchat-test-requests) :messages)))
           (should (string-prefix-p "Summary of the conversation so far:\nThe summary."
@@ -334,6 +335,91 @@
                          '(user assistant tool user)))
           (should (equal (plist-get (nth 2 messages) :call-id)
                          (plist-get (car (plist-get (nth 1 messages) :calls)) :id))))))))
+
+;; A run always ends: whatever is signalled becomes an error event.
+(ert-deftest superchat-agent-signals-end-the-run ()
+  (superchat-test-agent--with
+    (dolist (start (list (lambda () (superchat-test-script (list '(:text "x"))
+                                      (superchat-run "t" "go" :tools '("nope"))))
+                         (lambda () (let ((superchat-llm-request-function
+                                           (lambda (&rest _) (error "no network")))) 
+                                      (superchat-run "t" "go")))))
+      (let ((run (funcall start)))
+        (should (eq (plist-get run :status) 'error))
+        (should-not (superchat-run-active "t"))
+        (let ((last (car (last (superchat-tape-entries :tape "t")))))
+          (should (equal (plist-get (plist-get last :data) :type) "error")))))
+    (let ((entries (superchat-tape-entries :tape "t" :kinds '(event))))
+      (should (string-match-p "nope" (plist-get (car entries) :text)))
+      (should (string-match-p "no network" (plist-get (cadr entries) :text))))
+    (superchat-test-script (list '(:text "fine"))
+      (should (eq (plist-get (superchat-run "t" "again") :status) 'done)))))
+
+(ert-deftest superchat-agent-tool-runs-with-quit-enabled ()
+  (superchat-test-agent--with
+    (let ((superchat-test-async t) seen)
+      (superchat-tool-define "probe" :class 'read :description "Probe"
+                             :function (lambda (_) (setq seen (list inhibit-quit)) "ok"))
+      (unwind-protect
+          (superchat-test-script
+              (list `(:calls (,(superchat-test-agent--call "c1" "probe"))) '(:text "done"))
+            (superchat-run "t" "go")
+            (superchat-test-drain)
+            (should (equal seen '(nil)))
+            (should-not (superchat-run-active "t")))
+        (superchat-tool-remove "probe")))))
+
+(ert-deftest superchat-agent-handoff-occupies-its-timeline ()
+  (superchat-test-agent--with
+    (let ((superchat-test-async t))
+      (superchat-tape-append "t" 'user "x" :scope "home")
+      (superchat-test-script (list '(:text "S") '(:text "answer") '(:text "S2"))
+        (superchat-handoff "t" "one")
+        (should (superchat-run-active "t"))
+        (should-error (superchat-run "t" "y"))
+        (should-error (superchat-handoff "t" "two"))
+        (superchat-test-drain)
+        (should-not (superchat-run-active "t"))
+        (should (= 1 (length (superchat-tape-entries :tape "t" :kinds '(anchor)))))
+        (superchat-run "t" "y")
+        (should-error (superchat-handoff "t" "two"))
+        (superchat-test-drain)
+        (should-not (superchat-run-active "t"))
+        (superchat-handoff "t" "two")
+        (superchat-test-drain)
+        (should (= 2 (length (superchat-tape-entries :tape "t" :kinds '(anchor)))))))))
+
+(ert-deftest superchat-agent-failed-handoff-keeps-the-user-text ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 50) status)
+      (superchat-test-script (list '(:text "old") '(:error "down"))
+        (superchat-run "t" (make-string 60 ?u))
+        (superchat-run "t" "second" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (= (length superchat-test-requests) 2)))
+      (should (eq status 'error))
+      (should (equal (mapcar #'car (superchat-test-agent--entries "t"))
+                     '(user assistant event user)))
+      (should-not (superchat-run-active "t")))))
+
+(defun superchat-test-agent--fork-messages (fork)
+  "Roles of the first request of a run on FORK."
+  (superchat-test-script (list '(:text "ok"))
+    (superchat-run fork "next")
+    (mapcar (lambda (m) (plist-get m :role))
+            (plist-get (car superchat-test-requests) :messages))))
+
+(ert-deftest superchat-agent-fork-between-a-call-and-its-results ()
+  (superchat-test-agent--with
+    (let* ((calls (list (superchat-test-agent--call "c1" "echo" :x "a")
+                        (superchat-test-agent--call "c2" "echo" :x "b")))
+           (ids (list (plist-get (superchat-tape-append "t" 'user "q" :scope "home") :id)
+                      (plist-get (superchat-tape-append "t" 'assistant "" :data (list :calls calls)) :id)
+                      (plist-get (superchat-tape-append "t" 'event "asked" :data '(:type "permission")) :id)
+                      (plist-get (superchat-tape-append "t" 'tool "r1" :data '(:call-id "c1" :name "echo")) :id)
+                      (plist-get (superchat-tape-append "t" 'tool "r2" :data '(:call-id "c2" :name "echo")) :id))))
+      (dolist (at (list (nth 2 ids) (nth 3 ids)))
+        (should (equal (superchat-test-agent--fork-messages (superchat-fork "t" at))
+                       '(user assistant tool tool user)))))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here

@@ -57,13 +57,15 @@
   (clrhash superchat-tape--connections))
 
 (defun superchat-tape--json (value)
-  "VALUE, a plist or list, made ready for `json-serialize'."
-  (cond ((and (consp value) (keywordp (car value)))
+  "VALUE ready for `json-serialize'.
+Plists and alists become objects, any other list an array."
+  (cond ((not (consp value)) value)
+        ((keywordp (car value))
          (cl-loop for (k v) on value by #'cddr collect k collect (superchat-tape--json v)))
-        ((and (consp value) (consp (car value)) (keywordp (caar value)))
-         (vconcat (mapcar #'superchat-tape--json value)))
-        ((and (consp value) (stringp (car value))) (vconcat value))
-        (t value)))
+        ((cl-every (lambda (e) (and (consp e) (symbolp (car e)) (not (listp (cdr e))))) value)
+         (cl-loop for (k . v) in value
+                  collect (intern (concat ":" (symbol-name k))) collect (superchat-tape--json v)))
+        (t (vconcat (mapcar #'superchat-tape--json value)))))
 
 (defun superchat-tape--parse (json)
   "The Lisp value of the stored JSON string."
@@ -95,7 +97,7 @@
 (cl-defun superchat-tape-append (tape kind text &key data refs scope at)
   "Append an entry to timeline TAPE and return it.
 SCOPE defaults to that of TAPE's latest entry."
-  (unless (member (format "%s" kind) superchat-tape--kinds)
+  (unless (and (symbolp kind) (member (symbol-name kind) superchat-tape--kinds))
     (error "Unknown entry kind: %S" kind))
   (let ((scope (or scope
                    (caar (sqlite-select (superchat-tape-open)
@@ -105,7 +107,7 @@ SCOPE defaults to that of TAPE's latest entry."
         (db (superchat-tape-open)))
     (sqlite-execute db "INSERT INTO entry (tape, kind, text, data, refs, scope, at)
  VALUES (?, ?, ?, ?, ?, ?, ?)"
-                    (list tape (format "%s" kind) text
+                    (list tape (symbol-name kind) text
                           (json-serialize (superchat-tape--json data) :null-object nil)
                           (json-serialize (vconcat refs))
                           scope (float (or at (float-time)))))

@@ -71,7 +71,15 @@
     (dotimes (_ 250) (superchat-tape-append "t" 'event "e"))
     (let ((lines (split-string (superchat-test-recall--ok "tape_query" :sql "SELECT id FROM entry") "\n")))
       (should (= 201 (length lines)))
-      (should (string-match-p "rows left out" (car (last lines)))))
+      (should (string-match-p "more rows left out" (car (last lines)))))
+    (let* ((start (float-time))
+           (text (superchat-test-recall--ok
+                  "tape_query" :sql "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 100000) SELECT i FROM n;
+"))
+           (lines (split-string text "\n")))
+      (should (< (- (float-time) start) 2))
+      (should (= 201 (length lines)))
+      (should (string-match-p "more rows left out" (car (last lines)))))
     (superchat-test-recall--err "tape_query" :sql "DELETE FROM entry")
     (superchat-test-recall--err "tape_query" :sql "SELECT * FROM nothing_here")
     (should (= 251 (caar (superchat-tape-select "SELECT COUNT(*) FROM entry WHERE kind = 'event'"))))))

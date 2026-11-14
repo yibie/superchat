@@ -324,9 +324,75 @@ tool `echo', and no chat buffers left behind."
     (let ((superchat-llm-request-function #'superchat-test-chat--silent))
       (with-current-buffer (superchat-chat-open "t1")
         (superchat-chat-send "one")
-        (superchat-chat-send "/handoff")
+        (should-error (superchat-chat-send "/handoff") :type 'error)
         (superchat-cancel "t1"))
       (should-not (superchat-tape-entries :tape "t1" :kinds '(anchor))))))
+
+(ert-deftest superchat-chat-input-stays-when-the-timeline-is-busy ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "a1"))
+        (with-current-buffer buffer (superchat-chat-send "one")))
+      (let ((superchat-test-async t))
+        (superchat-test-script (list '(:text "Summary.\nNEXT: n"))
+          (with-current-buffer buffer (superchat-chat-send "/handoff"))
+          (superchat-test-chat--type buffer "next question")
+          (with-current-buffer buffer (superchat-chat--send-input))
+          (should (equal (superchat-test-chat--input buffer) "next question"))
+          (superchat-test-drain)))
+      (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1)))))
+
+(ert-deftest superchat-chat-entry-is-shown-once ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) (superchat-test-async t))
+      (superchat-test-script (list '(:text "Hello"))
+        (with-current-buffer buffer
+          (superchat-chat-send "hi")
+          (superchat-chat-send "/level auto"))
+        (superchat-test-drain))
+      (let ((text (superchat-test-chat--text buffer)))
+        (should (= (length (split-string text "Permission level: auto")) 2))
+        (kill-buffer buffer)
+        (should (equal text (superchat-test-chat--text (superchat-chat-open "t1"))))))))
+
+(ert-deftest superchat-chat-new-buffer-takes-over-a-running-run ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) (superchat-test-async t))
+      (superchat-test-script (list '(:text "Hello"))
+        (with-current-buffer buffer (superchat-chat-send "hi"))
+        (kill-buffer buffer)
+        (let ((again (superchat-chat-open "t1")))
+          (should (equal (buffer-local-value 'mode-line-process again) " [running]"))
+          (superchat-test-drain)
+          (should (equal (superchat-test-chat--text again)
+                         "▸ You\nhi\n\n▸ Assistant\nHello\n\n"))
+          (should-not (buffer-local-value 'mode-line-process again)))))))
+
+(ert-deftest superchat-chat-new-command-keeps-the-scope ()
+  (superchat-test-chat--with
+    (let* ((project (file-name-as-directory (expand-file-name "proj" superchat-test-chat--dir)))
+           (project-scope (progn (make-directory (expand-file-name ".git" project) t)
+                                 (superchat-tape-scope-of project))))
+      (should (equal (superchat-tape-scope-of default-directory) "home"))
+      (superchat-tape-append "p1" 'user "in the project" :scope project-scope)
+      (dolist (case (list (cons "p1" project-scope) (cons "h1" "home")))
+        (unless (equal (cdr case) project-scope)
+          (superchat-tape-append "h1" 'user "at home" :scope "home"))
+        (let ((new (with-current-buffer (superchat-chat-open (car case))
+                     (superchat-chat-send "/new")
+                     (current-buffer))))
+          (superchat-test-script (list '(:text "ok"))
+            (with-current-buffer new (superchat-chat-send "hello")))
+          (should (equal (plist-get (car (superchat-tape-entries
+                                          :tape (superchat-test-chat--tape-of new)))
+                                    :scope)
+                         (cdr case))))))))
+
+(ert-deftest superchat-chat-recent-tape-past-many-inline-timelines ()
+  (superchat-test-chat--with
+    (superchat-tape-append "20240101-a" 'user "old" :scope "s/")
+    (dotimes (i 150) (superchat-tape-append (format "inline:%d" i) 'user "i" :scope "s/"))
+    (should (equal (superchat-chat-recent-tape "s/") "20240101-a"))))
 
 (ert-deftest superchat-chat-topic-recall-notes-commands ()
   (superchat-test-chat--with

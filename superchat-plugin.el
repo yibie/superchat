@@ -2,6 +2,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'superchat)
 
 (defvar superchat-plugin--definitions nil
@@ -19,12 +20,13 @@
   (or (cdr (assq name superchat-plugin--definitions))
       (error "No plugin is defined with the name `%s'" name)))
 
-(defun superchat-plugin-define (name &rest keys)
-  "Define plugin NAME from KEYS :doc, :enable and :disable; do not enable it.
+(cl-defun superchat-plugin-define (name &key doc enable disable)
+  "Define plugin NAME with DOC, ENABLE and DISABLE; do not enable it.
 Redefining an enabled plugin disables the old definition first."
   (when (assq name superchat-plugin--definitions)
     (superchat-plugin-disable name))
-  (setf (alist-get name superchat-plugin--definitions) keys)
+  (setf (alist-get name superchat-plugin--definitions)
+        (list :doc doc :enable enable :disable disable))
   name)
 
 (defun superchat-plugin-enable (name)

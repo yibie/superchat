@@ -22,6 +22,7 @@
 (defvar-local superchat-chat--origin nil "Origin for the next request sent, or nil.")
 (defvar-local superchat-chat--input nil "Marker: where the input area starts.")
 (defvar-local superchat-chat--stream nil "Marker: where streamed text starts, or nil.")
+(defvar-local superchat-chat--shown 0 "Id of the latest entry shown; nothing at or below it is shown again.")
 
 (defvar superchat-chat--commands nil
   "Alist of (NAME FUNCTION . DOC), NAME without the slash.")
@@ -106,22 +107,23 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
          (placed (marker-position superchat-chat--input))
          (input (and placed (buffer-substring placed (point-max))))
          (tail (if (and placed (>= (point) placed)) (- (point-max) (point)) 0)))
-    (setq superchat-chat--stream nil)
+    (setq superchat-chat--stream nil superchat-chat--shown 0)
     (erase-buffer)
     (dolist (entry (superchat-view 'conversation :tape superchat-chat--tape))
+      (setq superchat-chat--shown (max superchat-chat--shown (plist-get entry :id)))
       (insert (superchat-chat--format entry)))
     (set-marker superchat-chat--input (point))
     (when input (insert input))
     (goto-char (- (point-max) tail))))
 
+(defun superchat-chat--line (text width)
+  "TEXT on one line, cut to WIDTH characters."
+  (truncate-string-to-width (replace-regexp-in-string "[\n\t]+" " " text) width))
+
 (defun superchat-chat--name (tape)
   "The buffer name for timeline TAPE."
   (let ((first (car (superchat-tape-entries :tape tape :kinds '(user) :limit 1))))
-    (format "*superchat: %s*"
-            (if first
-                (truncate-string-to-width
-                 (replace-regexp-in-string "[\n\t]+" " " (plist-get first :text)) 40)
-              "new"))))
+    (format "*superchat: %s*" (if first (superchat-chat--line (plist-get first :text) 40) "new"))))
 
 (defun superchat-chat--mode-line ()
   "Show [running] while the timeline has a run."
@@ -130,12 +132,14 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
 
 (defun superchat-chat--add (entry)
   "Show ENTRY, which was just appended to the timeline."
-  (superchat-chat--unstream)
-  (if (eq (plist-get entry :kind) 'anchor)
-      (superchat-chat--render)
-    (superchat-chat--insert (superchat-chat--format entry)))
-  (when (eq (plist-get entry :kind) 'user)
-    (rename-buffer (superchat-chat--name superchat-chat--tape) t))
+  (when (> (plist-get entry :id) superchat-chat--shown)
+    (superchat-chat--unstream)
+    (if (eq (plist-get entry :kind) 'anchor)
+        (superchat-chat--render)
+      (setq superchat-chat--shown (plist-get entry :id))
+      (superchat-chat--insert (superchat-chat--format entry)))
+    (when (eq (plist-get entry :kind) 'user)
+      (rename-buffer (superchat-chat--name superchat-chat--tape) t)))
   (superchat-chat--mode-line))
 
 (defun superchat-chat--on-text (text)
@@ -145,10 +149,16 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
     (superchat-chat--insert (superchat-chat--seal (propertize "▸ Assistant\n" 'face 'bold))))
   (superchat-chat--insert (superchat-chat--seal (copy-sequence text))))
 
-(defun superchat-chat--in (buffer function)
-  "A function that calls FUNCTION in BUFFER, if BUFFER is still alive."
+(defun superchat-chat--buffer (tape)
+  "The chat buffer of timeline TAPE, or nil."
+  (seq-find (lambda (b) (equal (buffer-local-value 'superchat-chat--tape b) tape))
+            (buffer-list)))
+
+(defun superchat-chat--in (tape function)
+  "A function that calls FUNCTION in the chat buffer of TAPE as it is when
+the function is called: a buffer killed and opened again gets the rest of a run."
   (lambda (&rest args)
-    (when (buffer-live-p buffer)
+    (when-let* ((buffer (superchat-chat--buffer tape)))
       (with-current-buffer buffer (apply function args)))))
 
 ;;; Sending
@@ -168,16 +178,16 @@ A line starting with / is a command.  Return nil when nothing was sent."
     (message "A request is still running; C-c C-k cancels it")
     nil)
    (t
-    (let ((buffer (current-buffer))
+    (let ((tape superchat-chat--tape)
           (origin (or origin superchat-chat--origin)))
       (setq superchat-chat--origin nil)
       (unwind-protect
           (superchat-run superchat-chat--tape text
                          :origin origin :model superchat-chat--model
-                         :on-text (superchat-chat--in buffer #'superchat-chat--on-text)
-                         :on-entry (superchat-chat--in buffer #'superchat-chat--add)
+                         :on-text (superchat-chat--in tape #'superchat-chat--on-text)
+                         :on-entry (superchat-chat--in tape #'superchat-chat--add)
                          :on-done (superchat-chat--in
-                                   buffer (lambda (_run)
+                                   tape (lambda (_run)
                                             (superchat-chat--unstream)
                                             (superchat-chat--mode-line))))
         (superchat-chat--mode-line))
@@ -188,11 +198,10 @@ A line starting with / is a command.  Return nil when nothing was sent."
   (interactive)
   (let ((text (string-trim (buffer-substring-no-properties superchat-chat--input
                                                            (point-max)))))
-    (unless (string-empty-p text)
-      (delete-region superchat-chat--input (point-max))
-      (unless (superchat-chat-send text)
-        (goto-char (point-max))
-        (insert text)))))
+    ;; The input goes only once the request is on its way: an error or a
+    ;; refusal leaves it where it was.  Entries are inserted above the marker.
+    (when (and (not (string-empty-p text)) (superchat-chat-send text))
+      (delete-region superchat-chat--input (point-max)))))
 
 (defun superchat-chat--return ()
   "Send on the last line of the input, else insert a newline."
@@ -221,20 +230,25 @@ A line starting with / is a command.  Return nil when nothing was sent."
 
 (defun superchat-chat-open (tape)
   "The chat buffer of timeline TAPE, made and rendered when there is none."
-  (or (seq-find (lambda (b) (equal (buffer-local-value 'superchat-chat--tape b) tape))
-                (buffer-list))
+  (or (superchat-chat--buffer tape)
       (with-current-buffer (generate-new-buffer "*superchat: new*")
         (superchat-chat-mode)
         (setq superchat-chat--tape tape)
+        ;; So that a new timeline started from here is in the same scope.
+        (when-let* ((scope (plist-get (car (superchat-tape-entries :tape tape :limit 1)) :scope))
+                    ((not (equal scope "home"))))
+          (setq default-directory scope))
         (superchat-chat--render)
+        (superchat-chat--mode-line)
         (rename-buffer (superchat-chat--name tape) t)
         (current-buffer))))
 
 (defun superchat-chat-recent-tape (scope)
   "The most recently active timeline of SCOPE that is not an inline one, or nil."
-  (when-let* ((entry (seq-find (lambda (e) (not (string-prefix-p "inline:" (plist-get e :tape))))
-                               (superchat-view 'timelines :scope scope :limit 100))))
-    (plist-get entry :tape)))
+  (caar (superchat-tape-select
+         (concat "SELECT tape FROM entry WHERE scope = ? AND tape NOT LIKE 'inline:%'"
+                 " GROUP BY tape ORDER BY MAX(id) DESC LIMIT 1")
+         (list scope))))
 
 ;;;###autoload
 (defun superchat (&optional new)
@@ -280,10 +294,7 @@ With a prefix argument NEW, start a new timeline."
   "Choose a timeline of this scope and open it."
   (let ((choices (mapcar (lambda (e)
                            (cons (format "%s  [%s]"
-                                         (truncate-string-to-width
-                                          (replace-regexp-in-string "[\n\t]+" " "
-                                                                    (plist-get e :text))
-                                          60 nil nil "…")
+                                         (superchat-chat--line (plist-get e :text) 60)
                                          (plist-get e :tape))
                                  (plist-get e :tape)))
                          (superchat-view 'timelines :scope (superchat-chat--scope)))))
@@ -301,14 +312,12 @@ With a prefix argument NEW, start a new timeline."
     (pop-to-buffer (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
 
 (defun superchat-chat--handoff (name)
-  "Summarise the conversation into an anchor named NAME."
-  (if (superchat-run-active superchat-chat--tape)
-      (message "A request is still running; C-c C-k cancels it")
-    (superchat-handoff superchat-chat--tape (and (not (string-empty-p name)) name)
-                       (superchat-chat--in (current-buffer)
-                                           (lambda (anchor)
-                                             (superchat-chat--render)
-                                             (message (if anchor "Handoff made" "Handoff failed")))))))
+  "Summarise the conversation into an anchor named NAME; an error when busy."
+  (superchat-handoff superchat-chat--tape (and (not (string-empty-p name)) name)
+                     (superchat-chat--in superchat-chat--tape
+                                         (lambda (anchor)
+                                           (superchat-chat--render)
+                                           (message (if anchor "Handoff made" "Handoff failed"))))))
 
 (defun superchat-chat--level (name)
   "Show the permission level, or set it to NAME."
