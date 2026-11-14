@@ -59,7 +59,7 @@ over a missing one; the caller judges the calls."
 Replay uses llm.el's interaction structs: an assistant turn whose content is
 a list of tool uses, then a `tool-results' turn, as llm.el writes them itself."
   (let ((prompt (llm-make-chat-prompt
-                 "" :context system
+                 "" :context system :reasoning superchat-llm-reasoning
                  :tools (mapcar #'superchat-llm--tool tools)))
         (results nil))
     (setf (llm-chat-prompt-interactions prompt) nil)

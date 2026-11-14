@@ -248,6 +248,14 @@
       (should (equal (plist-get (car test-llm--seen) :model) "small")))
     (should (equal (test-llm-provider-chat-model superchat-llm-provider) "base"))))
 
+(ert-deftest test-llm-reasoning-reaches-the-prompt ()
+  (test-llm-with '((:chunks ("a")) (:chunks ("b")))
+    (superchat-llm-request '((:role user :text "hi")) :on-done #'ignore)
+    (should-not (llm-chat-prompt-reasoning (car test-llm--prompts)))
+    (let ((superchat-llm-reasoning 'none))
+      (superchat-llm-request '((:role user :text "hi")) :on-done #'ignore))
+    (should (eq (llm-chat-prompt-reasoning (car test-llm--prompts)) 'none))))
+
 (ert-deftest test-llm-request-calls-the-request-function ()
   (let* ((got nil)
          (superchat-llm-request-function

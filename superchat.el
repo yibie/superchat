@@ -33,6 +33,13 @@
   "The model to ask for; nil means the provider's own."
   :type '(choice (const nil) string))
 
+(defcustom superchat-llm-reasoning nil
+  "How much the model reasons; nil means the provider's own setting.
+Reasoning text is not kept, so a provider that wants it sent back with
+tool calls (DeepSeek does) needs `none'."
+  :type '(choice (const nil) (const none) (const light)
+                 (const medium) (const maximum)))
+
 (defcustom superchat-default-level 'ask
   "The permission level of a conversation that has not set one."
   :type '(choice (const read-only) (const ask) (const auto)))

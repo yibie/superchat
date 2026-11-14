@@ -514,7 +514,10 @@ Package header, `defgroup superchat`, the user options and the constant
 `superchat-directory` (`superchat/` in the user's Emacs directory),
 `superchat-tape-file` (nil, meaning `tape.sqlite` in that directory), `superchat-llm-provider` (nil; using Superchat without
 one is an error that says how to set it), `superchat-llm-model` (nil: the
-provider's own), `superchat-default-level` (`ask`), `superchat-context-chars`
+provider's own), `superchat-llm-reasoning` (nil: the provider's own; else
+`none`, `light`, `medium` or `maximum`, passed to `llm-make-chat-prompt` as
+`:reasoning`. The Tape keeps no reasoning text, so a provider that wants its
+reasoning sent back with tool calls, such as DeepSeek, needs `none`), `superchat-default-level` (`ask`), `superchat-context-chars`
 (120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
