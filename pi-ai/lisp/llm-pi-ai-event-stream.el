@@ -302,7 +302,10 @@ a response that started elsewhere, e.g. a deferred result."
              (null (llm-pi-ai-assistant-message-duration-ms message))
              (let ((timestamp (llm-pi-ai-assistant-message-timestamp message)))
                (or (null timestamp)
-                   (>= timestamp (llm-pi-ai-event-stream-started-at stream)))))
+                   ;; `timestamp' is milliseconds, `started-at' seconds.
+                   (>= timestamp
+                       (floor (* 1000 (llm-pi-ai-event-stream-started-at
+                                       stream)))))))
     (setf (llm-pi-ai-assistant-message-duration-ms message)
           (max 0 (round (* 1000 (- (float-time)
                                    (llm-pi-ai-event-stream-started-at stream))))))

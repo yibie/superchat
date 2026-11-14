@@ -306,7 +306,7 @@
   (let* ((stream (llm-pi-ai-create-assistant-message-event-stream))
          (started (llm-pi-ai-event-stream-started-at stream)))
     (llm-pi-ai-event-stream-push
-     stream (llm-pi-ai-event-stream-test--done :api "a" :timestamp started))
+     stream (llm-pi-ai-event-stream-test--done :api "a" :timestamp (floor (* 1000 started))))
     (let ((duration (llm-pi-ai-assistant-message-duration-ms
                      (llm-pi-ai-event-stream-result stream))))
       (should (integer-or-marker-p duration))
@@ -317,7 +317,7 @@
   (let* ((stream (llm-pi-ai-create-assistant-message-event-stream))
          (started (llm-pi-ai-event-stream-started-at stream))
          (message (llm-pi-ai-make-assistant-message
-                   :api "a" :timestamp started :duration-ms 7)))
+                   :api "a" :timestamp (floor (* 1000 started)) :duration-ms 7)))
     (llm-pi-ai-event-stream-end stream message)
     (should (equal (llm-pi-ai-assistant-message-duration-ms
                     (llm-pi-ai-event-stream-result stream))
@@ -329,7 +329,7 @@
          (started (llm-pi-ai-event-stream-started-at stream)))
     (llm-pi-ai-event-stream-end stream
                                 (llm-pi-ai-make-assistant-message
-                                 :api "a" :timestamp (1- started)))
+                                 :api "a" :timestamp (- (floor (* 1000 started)) 1000)))
     (should-not (llm-pi-ai-assistant-message-duration-ms
                  (llm-pi-ai-event-stream-result stream)))))
 
@@ -337,9 +337,9 @@
   "Once a stream is done, a result passed to `end' is not timed."
   (let* ((stream (llm-pi-ai-create-assistant-message-event-stream))
          (started (llm-pi-ai-event-stream-started-at stream))
-         (late (llm-pi-ai-make-assistant-message :api "a" :timestamp started)))
+         (late (llm-pi-ai-make-assistant-message :api "a" :timestamp (floor (* 1000 started)))))
     (llm-pi-ai-event-stream-push
-     stream (llm-pi-ai-event-stream-test--done :api "a" :timestamp started))
+     stream (llm-pi-ai-event-stream-test--done :api "a" :timestamp (floor (* 1000 started))))
     (llm-pi-ai-event-stream-end stream late)
     (should-not (llm-pi-ai-assistant-message-duration-ms late))))
 
