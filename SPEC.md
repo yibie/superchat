@@ -466,6 +466,13 @@ A number argument may arrive as a string. The description of `recall` lists the 
   called, so nothing of a cancelled run is ever appended after a later
   run's entries. A tool whose permission question is answered after the
   cancel does not run; its result is `Cancelled.`.
+- However a run ends (done, error, cancelled, a callback that signals at any
+  entry): a tool of it that is still running is stopped; every call of its
+  responses has a result on the Tape, `Cancelled.` for one that got none,
+  before the run's last event; what the user wrote is on the Tape; ON-DONE
+  is called exactly once; and nothing of the run is appended and nothing is
+  given to its ON-ENTRY afterwards. A run only ever adds results for calls
+  of its own responses. There is one way a run ends, used by all of these.
 - ON-ENTRY may cancel the run. Nothing more is requested or run after that,
   and ON-DONE is still called exactly once.
 - The calls of one response are run in a loop, not by recursion: a response
