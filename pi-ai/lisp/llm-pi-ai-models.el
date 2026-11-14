@@ -84,7 +84,7 @@ plist."
 
 (defun llm-pi-ai--now-ms ()
   "Return the current time in milliseconds, like `Date.now()'."
-  (round (* 1000 (float-time))))
+  (floor (* 1000 (float-time))))
 
 (defun llm-pi-ai--setup-error-message (model err timestamp)
   "Return the error message for a setup of MODEL that failed with ERR.

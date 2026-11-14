@@ -25,6 +25,7 @@
 | `src/utils/validation.ts` | `lisp/llm-pi-ai-utils-validation.el` | todo | |
 | `src/utils/transcript.ts` | `lisp/llm-pi-ai-utils-transcript.el` | wip | 仅 `createInitialSystemMessage`、`normalizeContext`（Models.stream 需要）；其余回放函数未移植；测试在 `test/llm-pi-ai-utils-misc-test.el` |
 | `src/utils/identity.ts` | `lisp/llm-pi-ai-utils-identity.el` | todo | |
+| `src/index.ts` | `lisp/llm-pi-ai.el` | done | 入口只 `require` 源码 index 导出且 Lisp 已有的模块并 `provide`；源码 index 不导出 `stream`/`streamSimple`（走 `Models.stream`/`streamSimple`），所以不定义函数；provider 与 API 实现不在此加载（与源码一致）；测试 `llm-pi-ai-occ-test-entry-file-loads` |
 | `src/utils/uuid.ts` | `lisp/llm-pi-ai-utils-uuid.el` | todo | |
 | `src/utils/estimate.ts` | `lisp/llm-pi-ai-utils-estimate.el` | todo | |
 | `src/utils/typebox-helpers.ts` | `lisp/llm-pi-ai-utils-typebox.el` | todo | `StringEnum` → plist schema |
@@ -45,11 +46,11 @@
 
 | 上游 | Lisp | 状态 | 档位 |
 |------|------|------|------|
-| `src/api/openai-completions.ts` | `lisp/llm-pi-ai-api-openai-completions.el` | todo | Tier 1 |
+| `src/api/openai-completions.ts` | `lisp/llm-pi-ai-api-openai-completions.el` | done | Tier 1。`stream`、`streamSimple`、`convertMessages`、`buildParams`（全部 thinkingFormat 分支）、`convertTools`、`parseChunkUsage`、`mapStopReason`、`detectCompat`/`getCompat`（全部 provider 分支）、缓存控制、`reasoning_details` 重放、分块循环与事件；`openai` 客户端换成 `llm-pi-ai-http` + `llm-pi-ai-sse-parser`，`retryProviderRequest` 包住请求。`onPayload`/`onResponse`/`onProviderStreamEvent` 已移植（普通函数）。未移植（整块不做）：GitHub Copilot 动态头、客户端 identity 头（`utils/identity.ts` 未移植）、SDK 自带的 User-Agent/X-Stainless 头、`fetch` 选项、约束采样（`constrained-sampling.ts`：grammar 工具与 JSON-schema strict；带 `constrained-sampling` 的工具会使流以 `error` 事件结束）。`transcript.ts`/`estimate.ts`/`simple-options.ts` 中本文件用到的部分在文件内私有复制（`llm-pi-ai-oc--` 前缀），待那些文件有归属后移走。测试 `test/llm-pi-ai-api-openai-completions-test.el`（75 个，部分译自 `openai-completions-*.test.ts`，其余按源码行为写；经真实 DeepSeek provider 端到端）。上游 `openai-completions-tool-choice.test.ts`（1956 行，覆盖 toolChoice 的 provider 矩阵）、`-provider-stream-event`、`-vllm-priority` 的断言只部分译入 |
 | `src/api/anthropic-messages.ts` | `lisp/llm-pi-ai-api-anthropic-messages.el` | todo | Tier 1 |
 | `src/api/openai-responses.ts` | `lisp/llm-pi-ai-api-openai-responses.el` | todo | Tier 2 |
 | `src/api/openai-responses-shared.ts` | `lisp/llm-pi-ai-api-openai-responses-shared.el` | todo | Tier 2 |
-| `src/api/openai-prompt-cache.ts` | `lisp/llm-pi-ai-api-openai-prompt-cache.el` | todo | Tier 2 |
+| `src/api/openai-prompt-cache.ts` | `lisp/llm-pi-ai-api-openai-prompt-cache.el` | done | `clampOpenAIPromptCacheKey`；`buildParams` 对任何设了 `long` 保留期的模型都要用；测试在 `test/llm-pi-ai-api-openai-completions-test.el` |
 | `src/api/google-generative-ai.ts` | `lisp/llm-pi-ai-api-google-generative-ai.el` | todo | Tier 2 |
 | `src/api/google-shared.ts` | `lisp/llm-pi-ai-api-google-shared.el` | todo | Tier 2 |
 | `src/api/mistral-conversations.ts` | `lisp/llm-pi-ai-api-mistral-conversations.el` | todo | Tier 2 |
