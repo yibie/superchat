@@ -326,9 +326,9 @@ line is and how it went comes before it.")
          (bytes (alist-get 'bytes payload))
          (note (alist-get 'note payload))
          (no-note (alist-get 'note-failed payload))
-         (buffer (get-buffer-create superchat-butler-output-buffer-name)))
-    (unless payload
-      (user-error "What this command printed is not on record"))
+         (buffer (if payload
+                     (get-buffer-create superchat-butler-output-buffer-name)
+                   (user-error "What this command printed is not on record"))))
     (with-current-buffer buffer
       (superchat-butler-output-mode)
       (setq superchat-butler--output-of id)

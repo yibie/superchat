@@ -122,15 +122,17 @@ Results are cached for `superchat--model-list-cache-ttl' seconds
    ;; 3. Backend's `:chat-model' via `llm-models' cl-defgeneric
    ;;    NOTE: llm-models makes a synchronous HTTP request for real backends.
    ;;    We call it ONCE (not twice as before) and cache the result.
-   ((and superchat-llm-backend
-         (fboundp 'llm-models))
-    (let ((models (condition-case nil
-                      (llm-models superchat-llm-backend)
-                    (error nil))))
-      (when (listp models)
-        (setq superchat--model-list-cache
-              (cons (copy-sequence models) (float-time))))
-      (and (listp models) (copy-sequence models))))
+   ;;    A provider without an `llm-models' method signals; that and an
+   ;;    empty answer fall through to 4 instead of caching "no models".
+   ((when-let* ((models (and superchat-llm-backend
+                             (fboundp 'llm-models)
+                             (condition-case nil
+                                 (llm-models superchat-llm-backend)
+                               (error nil))))
+                ((listp models)))
+      (setq superchat--model-list-cache
+            (cons (copy-sequence models) (float-time)))
+      (copy-sequence models)))
    ;; 4. Fall back to the configured chat-model via the accessor
    ((and superchat-llm-backend
          (fboundp 'superchat--provider-chat-model)

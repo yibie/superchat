@@ -492,13 +492,13 @@ The returned `:artifact-id' is the stable target for
                (expand-file-name "superchat/" user-emacs-directory))))
          (path (expand-file-name (concat artifact-id ".txt") directory))
          (revision (superchat-artifact-board--content-hash content))
-         (role (cond ((symbolp role) role)
+         (role (cond ((null role) 'report)
+                     ((symbolp role) role)
                      ((and (stringp role)
                            (<= (length role) 64)
                            (string-match-p
                             "\\`[[:alnum:]_-]+\\'" role))
                       (intern (downcase role)))
-                     ((null role) 'report)
                      (t (error "Invalid Artifact role: %S" role))))
          (artifact
           (superchat-artifact-board--artifact-with-provenance
@@ -777,13 +777,13 @@ rewritten through `superchat-artifact-board-write' with revision tracking."
                (expand-file-name "superchat/" user-emacs-directory))))
          (path (expand-file-name (concat artifact-id ".txt") directory))
          (revision (superchat-artifact-board--content-hash content))
-         (role (cond ((symbolp role) role)
+         (role (cond ((null role) 'report)
+                     ((symbolp role) role)
                      ((and (stringp role)
                            (<= (length role) 64)
                            (string-match-p
                             "\\`[[:alnum:]_-]+\\'" role))
                       (intern (downcase role)))
-                     ((null role) 'report)
                      (t (error "Invalid Artifact role: %S" role))))
          (artifact
           (superchat-artifact-board--artifact-with-provenance

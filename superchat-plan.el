@@ -44,6 +44,12 @@
 (declare-function textui-update "textui" (buffer updater &rest keys))
 (declare-function textui-request-refresh "textui" (buffer))
 
+;; Both are let-bound or read here and defined in superchat.el.  Without the
+;; declarations a file compiled before superchat.el is loaded binds them
+;; lexically, and the functions called inside the `let' never see the value.
+(defvar superchat-buffer-name)
+(defvar superchat--session-id)
+
 (defgroup superchat-plan nil
   "Structured plans: propose, review, approve."
   :group 'superchat)

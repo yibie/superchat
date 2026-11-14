@@ -603,7 +603,6 @@ of 1 means sub-agents cannot delegate further."
 (declare-function llm-tool-args "llm" (tool))
 (declare-function llm-tool-async "llm" (tool))
 (declare-function llm-tool-function "llm" (tool))
-(declare-function superchat--agent-run-tool-hooks "superchat-agent-loop" (hooks &rest args))
 (declare-function superchat--agent-effective-guardrails "superchat-agent-loop" (&optional preset))
 (defvar superchat-agent-max-tool-calls)
 

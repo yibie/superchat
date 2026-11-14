@@ -38,7 +38,6 @@
 (declare-function superchat--origin-selection-render "superchat" (snapshot))
 
 (declare-function superchat-genui-action-names "superchat-genui" ())
-(declare-function superchat--normalize-file-path "superchat-dispatcher" (file-path))
 (declare-function superchat--textual-file-p "superchat-dispatcher" (path))
 (declare-function superchat--read-inline-file-content "superchat-dispatcher" (file-path))
 (declare-function superchat--render-inline-context "superchat-dispatcher" (file-path content))

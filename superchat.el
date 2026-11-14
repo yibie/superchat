@@ -108,8 +108,6 @@
 (autoload 'superchat--cmd-cancel-agent "superchat-subagent")
 (autoload 'superchat--cmd-agents "superchat-agents-panel")
 (autoload 'superchat-agents-panel-show "superchat-agents-panel" nil t)
-(autoload 'superchat-sessions "superchat-tape-browser" nil t)
-(autoload 'superchat-session-history "superchat-tape-browser" nil t)
 
 (defconst superchat-version "1.4.0"
   "Current Superchat package version.")
@@ -653,7 +651,6 @@ become a third recurrence."
 (defun superchat--header-line-run-state ()
   "Return the live Agent status projected into the chat header line."
   (let* ((projection (superchat--runtime-status-projection))
-         (run-id superchat--active-run-id)
          (status (superchat--runtime-status-for-current-run projection))
          (active (superchat--runtime-status-active-p projection status))
          (model (or (plist-get status :model)
@@ -1055,8 +1052,6 @@ buffer is compared against it."
 
 (defvar-local superchat--input-view nil
   "Exact originating View of this nonshipping input panel.")
-(defvar-local superchat--input-snapshot nil
-  "Detached presentation snapshot; Runtime owns pending input and settlement.")
 
 (defun superchat--input-view-p (view session)
   "Whether VIEW is still SESSION's exact owned Session View."
@@ -1827,10 +1822,6 @@ Profile whose identity differs from its Capability.")
 
 (defvar-local superchat--last-surface nil
   "Most recent request Surface reconstructed for this Session.")
-
-(defvar-local superchat--session-name nil
-  "Optional human-readable name for the current session.
-Can be set via slash commands or UI interactions.")
 
 (defconst superchat--team-topology-tool-names
   '("team_task" "team_message"
@@ -4335,7 +4326,6 @@ inside a chat surface, from Tape, or by branching starts with none."
                             session-ids nil t))))
   (superchat-plugin-require-active-row 'chat)
   (let* ((source (current-buffer))
-         (buffer-name (superchat--session-buffer-name session-id))
          (buffer (or (superchat-editor-workspace-buffer
                       session-id 'session-view)
                      (superchat--render-session-view session-id))))

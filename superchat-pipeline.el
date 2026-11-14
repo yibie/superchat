@@ -38,6 +38,12 @@
 (declare-function superchat-view-session-configuration "superchat-tape-view"
                   (session-id))
 
+;; Let-bound below for the functions called inside the `let'.  Without the
+;; declarations a file compiled before the defining module is loaded binds
+;; them lexically and the binding reaches nobody.
+(defvar superchat-runtime--dispatching-envelope)
+(defvar superchat-context-max-chars)
+
 (define-error 'superchat-envelope-invalid
   "Superchat pipeline: envelope does not satisfy the Request envelope contract")
 

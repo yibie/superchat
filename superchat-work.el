@@ -674,7 +674,7 @@ none that began in a conversation nobody opened."
            (unless id (error "Give the id of a work record"))
            (superchat-work-render (or (superchat-work-get id)
                                       (error "No work record %s" id))))
-          (_ (error "action must be start, update, wait, done or read"))))
+          (_ (error "action must be start, update, wait, resume, done or read"))))
     (error (format "Error: %s" (error-message-string err)))))
 
 ;;;; For the user (K11) ---------------------------------------------------------------

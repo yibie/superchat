@@ -44,11 +44,9 @@ through the existing owner-bearing response-region API.")
   "Maximum number of characters retained in one Thinking block.
 When the limit is reached, the renderer keeps the newest tail and inserts
 an explicit truncation notice at the front of the block.")
-(defvar superchat-file-ref-regexp)
 (defvar superchat-inline-file-content)
 (defvar superchat-inline-context-template)
 (defvar superchat-inline-max-bytes)
-(defvar superchat--context-files nil)
 (declare-function superchat--add-file-to-context "superchat" (file-path))
 (declare-function superchat--read-inline-file-content "superchat" (file-path))
 (declare-function superchat--render-inline-context "superchat" (file-path content))
@@ -1360,12 +1358,6 @@ simply dropped.  Always clears STATE's pending list."
                      'face 'font-lock-warning-face
                      'superchat-tool-call-id id)))))
   (plist-put state :pending-tool-calls nil))
-
-;; Compatibility entry point retained for callers from older integrations;
-;; all product call sites use `superchat--response-region-prepare'.
-(defun superchat--prepare-assistant-response-area ()
-  "Open an assistant region through the response-region API."
-  (superchat--response-region-prepare))
 
 ;; Compatibility entry point retained for older tests and integrations;
 ;; final and tool-round callers share `superchat--response-region-close'.

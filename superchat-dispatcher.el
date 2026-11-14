@@ -53,7 +53,6 @@
 (defvar superchat--ttft-start-time)
 (defvar superchat-show-ttft)
 (defvar superchat-show-ttft-breakdown)
-(defvar superchat-file-ref-regexp)
 (defvar superchat-inline-file-content)
 (defvar superchat-inline-context-template)
 (defvar superchat-inline-max-bytes)
@@ -170,18 +169,6 @@ new Preset before submission."
       (when (superchat-execution-scope-retired-p scope)
         (signal 'superchat-preset-request-scope-retired nil))
       scope)))
-
-(defun superchat--normalize-file-path (file-path)
-  "Normalize FILE-PATH: unescape spaces, strip quotes, expand, trim newline."
-  (when (and file-path (stringp file-path))
-    (let ((fp (replace-regexp-in-string "\\\\ " " " file-path)))
-      (when (and (>= (length fp) 2)
-                 (string= "\"" (substring fp 0 1))
-                 (string= "\"" (substring fp -1)))
-        (setq fp (substring fp 1 -1)))
-      (setq fp (expand-file-name fp))
-      (setq fp (replace-regexp-in-string "\n$" "" fp))
-      fp)))
 
 (defvar superchat--context-file-ranges nil
   "Alist of (path . (start . end)) line ranges for #-attached files.

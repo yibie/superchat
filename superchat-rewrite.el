@@ -890,12 +890,12 @@ target buffer without a prompt."
   "Return (CODE . LANG-TAG) for the org source block at point, or nil."
   (save-excursion
     (end-of-line)
-    (when (re-search-backward "^[ \\t]*#\\+begin_src\\s-*\\([a-z-]*\\)" nil t)
+    (when (re-search-backward "^[ \t]*#\\+begin_src\\s-*\\([a-z-]*\\)" nil t)
       (let ((lang-tag (or (match-string 1) "")))
         (forward-line 1)
         (let ((code-beg (point))
               (code-end (save-excursion
-                          (if (re-search-forward "^[ \\t]*#\\+end_src" nil t)
+                          (if (re-search-forward "^[ \t]*#\\+end_src" nil t)
                               (progn (beginning-of-line) (point))
                             (point-max)))))
           (when (> code-end code-beg)

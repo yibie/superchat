@@ -112,14 +112,6 @@ to the buffer-local `default-directory'."
 
 (declare-function llm-make-tool "llm")
 
-(eval-when-compile
-  (defvar gnutls-verify-error)
-  (defvar gnutls-min-prime-bits))
-
-(defconst superchat-tool--default-user-agent
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  "Default user-agent used for outbound HTTP requests made by Superchat tools.")
-
 ;;;---------------------------------------------
 ;;; Helper Functions
 ;;;---------------------------------------------

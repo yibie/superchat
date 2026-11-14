@@ -1422,7 +1422,8 @@ blocked (fail-closed).  The ranking is recorded on the Tape as an
 `experience.candidate-ranking.recorded' event under actor
 `experience-auto'.  With only the failed step observed (single-action
 tasks) the prefix cannot discriminate and the View stays blocked."
-  :type 'boolean)
+  :type 'boolean
+  :group 'superchat)
 
 (defun superchat-experience--ref-equal (a b)
   "True when event references A and B name the same event.
@@ -2135,14 +2136,16 @@ failed Runs whose behavior structurally matches successful recoveries."
 The verdict is a `experience.structure.recorded' Tape event with
 actor-id `experience-auto'.  Read-only evidence: it never changes
 behavior or judgments."
-  :type 'boolean)
+  :type 'boolean
+  :group 'superchat)
 
 (defcustom superchat-experience-auto-watchlist-threshold 3
   "Watchlist members to accumulate before alerting the user.
 The alert fires when Runs that failed while structurally matching the
 success history reach this count since the last alert.  nil disables
 watchlist alerts."
-  :type '(choice (const :tag "Disabled" nil) integer))
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'superchat)
 
 (defvar superchat-experience--watchlist-count 0
   "Watchlist members accumulated since the last alert.")

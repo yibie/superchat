@@ -655,10 +655,6 @@ If SESSION-ID is nil, search across all sessions."
 (defconst superchat-view--continuity-policy "continuity-v0/recent-first"
   "Selection policy identifier for context continuity v0.")
 
-(defconst superchat-view--continuity-recall-policy
-  "continuity-v0/explicit-selector"
-  "Selection policy identifier for explicit context recall.")
-
 (defun superchat-view--continuity-compact-anchor-p (record)
   "Return non-nil when RECORD is a typed compact Anchor."
   (superchat-view--compact-anchor-row-p (cdr record)))
@@ -1889,7 +1885,8 @@ assembled without its exclusions."
 
 (defun superchat-view-row-to-memory-plist (row)
   "Convert a tape ROW into the memory plist shape used by the prompt hook.
-ROW layout: (id session_id topic kind content meta created_at)."
+ROW layout: (id session_id topic kind content created_at), the columns
+the tape search queries select."
   (when row
     (list :id        (nth 0 row)
           :title     (or (nth 3 row) "")
@@ -1898,7 +1895,7 @@ ROW layout: (id session_id topic kind content meta created_at)."
           :mood      ""
           :tags      ""
           :type      "tape"
-          :timestamp (or (nth 6 row) ""))))
+          :timestamp (or (nth 5 row) ""))))
 
 (defun superchat-view--continuity-record-run-id (record)
   "Return the Runtime Run ID carried by continuity RECORD, or nil."

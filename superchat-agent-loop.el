@@ -127,10 +127,6 @@ other context fields captured at Run start."
 ;; `tools/post-execute' are the waterfalls that decide, wrap and filter it
 ;; (see `superchat-tool-execution.el').  Register listeners with `superchat-on'.
 
-(defun superchat--agent-run-tool-hooks (event &rest args)
-  "Emit tool lifecycle EVENT with ARGS (listener errors are recorded, not raised)."
-  (apply #'superchat-emit (superchat-execution-scope-resolve nil) event args))
-
 ;; ═══════════════════════════════════════════════════════════
 ;; Tool wrapping
 ;; ═══════════════════════════════════════════════════════════

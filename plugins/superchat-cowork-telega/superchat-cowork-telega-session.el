@@ -95,10 +95,6 @@
       superchat-cowork-telega--session)
      superchat-cowork-telega--sessions)))
 
-(defun superchat-cowork-telega--session-buffer-name (chat-id chat-title)
-  "Return the sidecar buffer name for CHAT-ID and CHAT-TITLE."
-  (format "*Cowork Telegram: %s [%s]*" chat-title chat-id))
-
 (defun superchat-cowork-telega--append-history (session role content)
   "Append ROLE and CONTENT to SESSION's bounded transcript."
   (let ((text (string-trim (or content ""))))

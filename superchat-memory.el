@@ -637,7 +637,7 @@ Returns the number of anchors created."
              (title (or (nth 1 mem) ""))
              (content (or (nth 2 mem) ""))
              (keywords (or (nth 3 mem) ""))
-             (created (or (nth 6 mem) "")))
+             (created (or (nth 5 mem) "")))
         (when (and content (not (string-empty-p content)))
           (superchat-tape-append-material
            sid "anchor" content

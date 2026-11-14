@@ -26,8 +26,6 @@
 (declare-function superchat-view-session-configuration "superchat-tape-view" (session-id))
 (declare-function superchat-editor-workspace-buffer "superchat-editor-workspace"
                   (session-id role &optional create))
-(declare-function superchat--agent-run-tool-hooks
-                  "superchat-agent-loop" (hooks &rest args))
 (declare-function superchat--extend-timeout "superchat"
                   (&optional transport-timer-owner))
 (declare-function superchat-runtime-transport-timer-owner

@@ -162,11 +162,8 @@ When CALLBACK is provided, it is called after servers start."
       (if (null servers)
           (message "No MCP servers configured. Please set `mcp-hub-servers'")
         (message "Starting %d MCP server(s)..." (length servers))
-        ;; Construct the list of server configs for the filtered subset
-        (let ((server-configs
-               (cl-remove-if-not
-                (lambda (entry) (member (car entry) servers))
-                mcp-hub-servers)))
+        ;; `mcp-hub-start-all-server' filters `mcp-hub-servers' by name.
+        (progn
           (condition-case err
               (mcp-hub-start-all-server
                ;; The tools of the servers that just connected belong on
@@ -175,7 +172,7 @@ When CALLBACK is provided, it is called after servers start."
                (lambda ()
                  (superchat-mcp-register-all-tools)
                  (when callback (funcall callback)))
-               server-configs t)
+               servers t)
             (error
              (message "Failed to start MCP servers: %s"
                       (error-message-string err)))))))))
@@ -208,7 +205,7 @@ When called interactively, prompts for the server name with completion."
                (lambda ()
                  (superchat-mcp-register-server-tools server-name)
                  (message "MCP server '%s' started" server-name))
-               (list entry)
+               (list server-name)
                t)
             (error
              (message "Failed to start MCP server '%s': %s"

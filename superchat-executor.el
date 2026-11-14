@@ -49,10 +49,14 @@ Return the processed prompt string."
                              (superchat-executor-context-user-input context))
                            ""))
          (result prompt))
-    ;; Replace $input
-    (setq result (replace-regexp-in-string "\\$input" actual-input result))
-    ;; Replace $lang
-    (setq result (replace-regexp-in-string "\\$lang" current-lang result))
+    ;; One literal pass: a backslash in the input is not a replacement
+    ;; escape, and a `$lang' the user typed is not substituted.
+    (setq result
+          (replace-regexp-in-string
+           "\\$\\(input\\|lang\\)"
+           (lambda (match)
+             (if (string= match "$input") actual-input current-lang))
+           result t t))
     result))
 
 ;;;-----------------------------------------------

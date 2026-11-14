@@ -35,9 +35,6 @@
 (declare-function llm-tool-async "llm" (tool))
 (defvar superchat--tool-execution-context)
 
-(defconst superchat-script-tool-name "elisp_script"
-  "The name of the script tool.")
-
 (defconst superchat-script-forbidden
   '(while number-sequence make-list make-string make-vector make-bool-vector)
   "Symbols a script may not mention, though `unsafep' would accept them.
