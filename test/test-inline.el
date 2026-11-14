@@ -1,0 +1,160 @@
+;;; test-inline.el --- tests for superchat-inline -*- lexical-binding: t; -*-
+
+;;; Code:
+
+(require 'helper)
+(require 'superchat-tape)
+(require 'superchat-agent)
+(require 'superchat-chat)
+(require 'superchat-inline)
+
+(defmacro superchat-test-inline--with (text &rest body)
+  "BODY in a buffer visiting a file in a temporary directory, with TEXT in it,
+the region over \"beta\" (the second word) and an instruction read as \"shout\"."
+  (declare (indent 1))
+  `(superchat-test-with-tape
+     (let* ((dir (file-name-as-directory (make-temp-file "sc-inline-" t)))
+            (default-directory dir)
+            (superchat-agent--runs (make-hash-table :test #'equal)))
+       (unwind-protect
+           (with-temp-buffer
+             (setq buffer-file-name (expand-file-name "a.txt" dir))
+             (transient-mark-mode 1)
+             (buffer-enable-undo)
+             (insert ,text)
+             (goto-char (point-min))
+             (search-forward "beta")
+             (push-mark (match-beginning 0) t t)
+             (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "shout")))
+               ,@body))
+         (delete-directory dir t)))))
+
+(defun superchat-test-inline--overlay ()
+  (seq-find (lambda (o) (overlay-get o 'superchat-text)) (overlays-in (point-min) (point-max))))
+
+(defun superchat-test-inline--shown (overlay)
+  (substring-no-properties (overlay-get overlay 'display)))
+
+(ert-deftest superchat-inline-request ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "BETA"))
+      (superchat-rewrite "shout")
+      (let ((request (car superchat-test-requests)))
+        (should (eq (plist-get request :tools) nil))
+        (should (string-match-p "replacement text only" (plist-get request :system)))
+        (let ((text (plist-get (car (plist-get request :messages)) :text)))
+          (should (string-match-p "shout" text))
+          (should (string-match-p "beta" text))
+          (should-not (string-match-p "alpha" text)))))
+    (let* ((tape (concat "inline:" (superchat-tape-scope-of default-directory)))
+           (user (car (superchat-tape-entries :tape tape :kinds '(user)))))
+      (should (equal (plist-get (plist-get (plist-get user :data) :origin) :mode)
+                     "fundamental-mode"))
+      (should (equal (plist-get (plist-get (plist-get user :data) :origin) :file)
+                     buffer-file-name))
+      (should (equal (mapcar (lambda (e) (plist-get e :kind))
+                             (superchat-tape-entries :tape tape))
+                     '(user assistant))))))
+
+(ert-deftest superchat-inline-overlay-then-accept ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "BETA"))
+      (superchat-rewrite "shout"))
+    (let ((overlay (superchat-test-inline--overlay)))
+      (should (equal (superchat-test-inline--shown overlay) "BETA"))
+      (should (equal (buffer-string) "alpha beta gamma"))
+      (goto-char (overlay-start overlay))
+      (undo-boundary)
+      (call-interactively #'superchat-inline-accept)
+      (undo-boundary)
+      (should (equal (buffer-string) "alpha BETA gamma"))
+      (should-not (superchat-test-inline--overlay))
+      (let ((last-command nil)) (undo))
+      (should (equal (buffer-string) "alpha beta gamma")))))
+
+(ert-deftest superchat-inline-discard ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "BETA"))
+      (superchat-rewrite "shout"))
+    (goto-char (overlay-start (superchat-test-inline--overlay)))
+    (call-interactively #'superchat-inline-discard)
+    (should-not (superchat-test-inline--overlay))
+    (should (equal (buffer-string) "alpha beta gamma"))))
+
+(ert-deftest superchat-inline-unwraps-fence ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "```elisp\n(foo)\n(bar)\n```\n"))
+      (superchat-rewrite "shout"))
+    (goto-char (overlay-start (superchat-test-inline--overlay)))
+    (call-interactively #'superchat-inline-accept)
+    (should (equal (buffer-string) "alpha (foo)\n(bar) gamma"))))
+
+(ert-deftest superchat-inline-accept-after-edit ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "BETA"))
+      (superchat-rewrite "shout"))
+    (let ((overlay (superchat-test-inline--overlay)))
+      (goto-char (1+ (overlay-start overlay)))
+      (insert "X")
+      (goto-char (overlay-start overlay))
+      (call-interactively #'superchat-inline-accept)
+      (should (equal (buffer-string) "alpha BETA gamma")))))
+
+(ert-deftest superchat-inline-needs-region ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (deactivate-mark)
+    (superchat-test-script (list '(:text "x"))
+      (should-error (superchat-rewrite "shout") :type 'user-error)
+      (should-not superchat-test-requests))))
+
+(ert-deftest superchat-inline-error-removes-overlay ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:error "boom"))
+      (superchat-rewrite "shout"))
+    (should-not (superchat-test-inline--overlay))
+    (should (equal (buffer-string) "alpha beta gamma"))))
+
+(ert-deftest superchat-inline-second-rewrite-refused ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let ((superchat-llm-request-function (lambda (&rest _) (list :request nil))))
+      (superchat-rewrite "shout")
+      (let ((overlay (superchat-test-inline--overlay)))
+        (push-mark (point-min) t t)
+        (goto-char (+ (point-min) 5))
+        (should-error (superchat-rewrite "again") :type 'user-error)
+        (goto-char (overlay-start overlay))
+        (should-error (superchat-inline-accept) :type 'user-error)
+        (superchat-inline-discard)
+        (should-not (superchat-test-inline--overlay))))))
+
+(defun superchat-test-inline--ask (recent)
+  "Ask \"why?\" with the region active; return (OPENED SENT) of the fake chat."
+  (let (opened sent)
+    (cl-letf (((symbol-function 'superchat-chat-recent-tape) (lambda (_) recent))
+              ((symbol-function 'superchat-chat-open)
+               (lambda (tape) (setq opened tape) (generate-new-buffer " *sc-chat*")))
+              ((symbol-function 'superchat-chat-send)
+               (lambda (text &optional origin) (setq sent (list text origin))))
+              ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
+      (call-interactively #'superchat-ask))
+    (list opened sent)))
+
+(ert-deftest superchat-inline-ask-recent-tape ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why?")))
+      (pcase-let ((`(,opened (,text ,origin)) (superchat-test-inline--ask "20240101-000000-abcd")))
+        (should (equal opened "20240101-000000-abcd"))
+        (should (string-prefix-p "why?" text))
+        (should (string-match-p "^> beta" text))
+        (should (equal (plist-get origin :file) buffer-file-name))))))
+
+(ert-deftest superchat-inline-ask-new-tape ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why?")))
+      (deactivate-mark)
+      (pcase-let ((`(,opened (,text ,_)) (superchat-test-inline--ask nil)))
+        (should (string-match-p "\\`[0-9]\\{8\\}-[0-9]\\{6\\}-" opened))
+        (should (equal text "why?"))))))
+
+(provide 'test-inline)
+;;; test-inline.el ends here
