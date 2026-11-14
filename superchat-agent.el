@@ -143,9 +143,9 @@ meanwhile; :stop stops a tool that is still running."
               (setf (plist-get run :stop) stop)
             ;; Cancelled while the tool was starting: nobody else will stop it.
             (funcall stop)
-            (superchat-tape-append (plist-get run :tape) 'tool "Cancelled."
-                                   :data (list :call-id (plist-get call :id)
-                                               :name (plist-get call :name) :error t))))))))
+            (superchat-agent--add run 'tool "Cancelled."
+                                  :data (list :call-id (plist-get call :id)
+                                              :name (plist-get call :name) :error t))))))))
 
 (defun superchat-agent--step (run)
   "Make the next request of RUN."

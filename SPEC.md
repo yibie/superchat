@@ -522,7 +522,7 @@ Built-in commands, and no others:
 | `/recall query` | open the `search` view in a read-only buffer |
 | `/notes` | open the `notes` view in a read-only buffer |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
-| `/model [name]` | show or set the model for this buffer |
+| `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
 | `/help` | list commands |
 
 ## superchat-inline.el

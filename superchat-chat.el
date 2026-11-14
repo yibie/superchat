@@ -340,6 +340,10 @@ With a prefix argument NEW, start a new timeline."
   "Show the model of this buffer, or set it to NAME."
   (if (string-empty-p name)
       (message "Model: %s" (or superchat-chat--model superchat-llm-model "not set"))
+    (let ((known (superchat-llm-model-ids)))
+      (unless (member name known)
+        (user-error "Unknown model %S of %s; one of: %s"
+                    name superchat-llm-provider (string-join known ", "))))
     (setq superchat-chat--model name)
     (message "Model of this buffer: %s" name)))
 

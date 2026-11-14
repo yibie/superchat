@@ -52,9 +52,9 @@ it led to until the turn is answered.  At most 64 are kept.")
               (cons (copy-sequence superchat-llm-providers) models)))))
   (cdr superchat-llm--models))
 
-(defun superchat-llm--find-model (id)
-  "The bridge model ID of `superchat-llm-provider'.
-A `user-error' says what to set when either is unset or unknown."
+(defun superchat-llm-model-ids ()
+  "The model ids of `superchat-llm-provider'.
+A `user-error' says what to set when it is unset or unknown."
   (let ((names (mapcar #'car superchat-llm-providers)))
     (unless (member superchat-llm-provider names)
       (user-error "%s; set `superchat-llm-provider' to one of: %s, for example (setq superchat-llm-provider %S)"
@@ -62,10 +62,16 @@ A `user-error' says what to set when either is unset or unknown."
                       (format "Unknown LLM provider %S" superchat-llm-provider)
                     "No LLM provider")
                   (string-join names ", ") (or (car names) "name"))))
-  (let* ((models (superchat-llm--models))
-         (known (mapcar #'superchat-bridge-model-id
-                        (superchat-bridge-models-get-models models superchat-llm-provider))))
-    (or (superchat-bridge-models-get-model models superchat-llm-provider id)
+  (mapcar #'superchat-bridge-model-id
+          (superchat-bridge-models-get-models (superchat-llm--models)
+                                              superchat-llm-provider)))
+
+(defun superchat-llm--find-model (id)
+  "The bridge model ID of `superchat-llm-provider'.
+A `user-error' says what to set when either is unset or unknown."
+  (let ((known (superchat-llm-model-ids)))
+    (or (superchat-bridge-models-get-model (superchat-llm--models)
+                                           superchat-llm-provider id)
         (user-error "%s; set `superchat-llm-model' to one of: %s"
                     (if id (format "Unknown model %S of %s" id superchat-llm-provider)
                       (format "No model for %s" superchat-llm-provider))
