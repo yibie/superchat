@@ -135,8 +135,11 @@ conversations with `recall`, queries the Tape with read-only SQL through
 `/recall`, `/notes` and `/note`. The model's reasoning is never stored.
 
 A long conversation is summarised before a new request when it has grown
-past `superchat-context-chars`; within one request, the oldest entries are
-left out when they do not fit, and the model is told how many.
+past the budget; within one request, the oldest entries are left out when
+they do not fit, and the model is told how many. The budget is half of the
+model's context window unless you set `superchat-context-chars`. A request
+that cannot be made to fit is not sent: the run ends with an error that
+says how large it was.
 
 ### Rules and skills
 
@@ -156,7 +159,7 @@ left out when they do not fit, and the model is told how many.
 | `superchat-llm-model` | nil | model id of that provider; required |
 | `superchat-llm-reasoning` | nil | nil for none, or `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `superchat-default-level` | `ask` | permission level of a new conversation |
-| `superchat-context-chars` | 120000 | how much conversation one request may carry |
+| `superchat-context-chars` | nil | how much conversation one request may carry; nil follows the model's context window, or give a number of characters |
 | `superchat-max-rounds` | 40 | model responses in one run before it stops |
 | `superchat-tool-max-chars` | 20000 | longest tool result kept |
 | `superchat-shell-seconds` | 60 | longest a `shell` command may run |

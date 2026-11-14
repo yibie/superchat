@@ -268,6 +268,9 @@ requires `llm.el`.
     request with the results appended to MESSAGES.
 - `(superchat-llm-cancel HANDLE)`: aborts the request through the bridge's abort
   signal.
+- `(superchat-llm-context-window &optional MODEL)` → the context window, in
+  tokens, of MODEL (default `superchat-llm-model`) of the provider, as the
+  bridge's model data gives it; nil when the data has none.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
   function of no arguments that returns a bridge provider. When a name is
   there twice the first entry counts, and a changed entry is seen at the
@@ -428,15 +431,20 @@ A number argument may arrive as a string. The description of `recall` lists the 
      `Summary of the conversation so far:`. `event` and `note` entries are
      left out. The size of a message is its text plus the printed
      arguments of its calls. When the messages together are larger than
-     `superchat-context-chars`, the oldest are left out of this request
+     the budget, the oldest are left out of this request
      until the rest fits: never the anchor message, never the `user` entry
      of this run, never the latest `assistant` entry and its results; an
      `assistant` entry goes together with the `tool` entries that answer
      it. In their place stands one `user` message, `[N earlier entries of
      this conversation are left out of this request; recall and tape_query
      can read them.]`. When leaving entries out would not make the request
-     smaller than sending all of them, all are sent. Nothing is removed
-     from the Tape and no event is appended.
+     smaller than sending all of them, all are sent, so a request may pass
+     the budget by the length of that sentence. Nothing is removed from
+     the Tape and no event is appended. When what is left is still more
+     than twice the budget (the entries that are never left out are that
+     large), no request is made: the run ends with status `error` and an
+     event that gives the size of the request, the budget, the model, and
+     says to raise `superchat-context-chars` or start a new conversation.
   2. `superchat-llm-request` with `superchat-context-system` and the tool
      specs. TOOLS is a list of names, or nil for every tool, or `none`.
   3. On done: append the `assistant` entry. If it has calls, run each with
@@ -480,6 +488,15 @@ A number argument may arrive as a string. The description of `recall` lists the 
 - An entry `superchat-tool-call` appended (a permission event, a result) is
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
+- The budget of a run, in characters, is `superchat-context-chars` when
+  that is a number. When it is nil, the budget follows the run's model:
+  half of `superchat-llm-context-window`, taking one token as one
+  character (about right for Chinese, cautious for English), the other
+  half being left for the system prompt, the tool specs, reasoning sent
+  back and the answer; 120000 when the model has no window in the data.
+  Twice the budget is then the whole window. The handoff before a run, the
+  text given to a handoff and the leaving out within a run all use this
+  one budget.
 - `(superchat-run-active TAPE)` → the run or nil.
 - `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
   append a `cancelled` event and free the timeline. For a run: cancel the
@@ -500,12 +517,12 @@ A number argument may arrive as a string. The description of `recall` lists the 
   tools, for a summary of the `conversation` view and for what comes next,
   and append an anchor with them, its `:refs` the ids summarised. The
   request is one `user` message holding `superchat-view-render` of the view,
-  cut to `superchat-context-chars`, and the question, so it has no tool turns a provider could refuse. It
+  cut to the budget, and the question, so it has no tool turns a provider could refuse. It
   returns the handle of the request. NAME is the
   topic name, default `"handoff"`. ON-DONE is called with the anchor, or with
   nil when the model failed (an `error` event is appended then).
 - When `superchat-run` is called and the timeline's messages are already
-  longer than `superchat-context-chars`, a handoff is made first, and the
+  larger than the budget, a handoff is made first, and the
   `user` entry is appended after the anchor, so the request is never behind
   the anchor. When that handoff fails, the `user` entry is appended all the
   same, after the error event, and the run ends with status `error`: what
@@ -630,7 +647,7 @@ a model id of that provider such as `"deepseek-flash"`; required),
 `superchat-llm-reasoning` (nil: the model does not reason; else one of the bridge's
 thinking levels `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, a symbol,
 which the bridge clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
-(120000), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
+(nil: follow the model's context window; or a number of characters), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
 ## Tests
