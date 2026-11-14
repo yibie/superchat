@@ -44,5 +44,17 @@
         (should (eq (superchat-permission-ask "shell" "ls") answer))))
     (should (equal (car seen) '("shell" "ls")))))
 
+(ert-deftest superchat-permission-level-is-one-query-for-the-newest-level ()
+  (superchat-test-with-tape
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (superchat-permission-set "t" 'auto)
+    (dotimes (_ 50) (superchat-tape-append "t" 'event "p" :data '(:type "permission")))
+    (let* ((rows 0) (entries (symbol-function 'superchat-tape-entries)))
+      (cl-letf (((symbol-function 'superchat-tape-entries)
+                 (lambda (&rest args)
+                   (let ((found (apply entries args))) (cl-incf rows (length found)) found))))
+        (should (eq (superchat-permission-level "t") 'auto)))
+      (should (= rows 0)))))
+
 (provide 'test-permission)
 ;;; test-permission.el ends here

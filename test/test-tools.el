@@ -615,5 +615,27 @@ sets `stopped' and cancels the timer."
                             (buffer-list))))
     (make-directory dir)))
 
+(ert-deftest superchat-tools-search-files-cut-keeps-the-line-cap ()
+  (superchat-test-tools--in-scope
+    ;; A small limit makes the output cut at 8000 characters, first.
+    (let ((superchat-tool-max-chars 2000))
+      (superchat-test-tools--write dir "big.txt"
+                                   (mapconcat (lambda (_) "hit") (number-sequence 1 3000) "\n"))
+      (let ((text (superchat-test-tools--ok "search_files" :pattern "hit" :path "big.txt")))
+        (should (string-match-p "output cut" text))
+        (should (= 100 (length (seq-filter (lambda (l) (string-match-p ":hit$" l))
+                                           (split-string text "\n")))))))))
+
+(ert-deftest superchat-tools-shell-notes-survive-the-cut ()
+  (superchat-test-tools--in-scope
+    (let ((text (superchat-test-tools--ok
+                 "shell" :command "head -c 30000 /dev/zero | tr '\\0' z; exit 3")))
+      (should (string-match-p "exit status 3" text)))
+    (let ((superchat-shell-seconds 1))
+      (should (string-match-p
+               "timed out after 1 seconds"
+               (superchat-test-tools--ok
+                "shell" :command "head -c 30000 /dev/zero | tr '\\0' z; sleep 5"))))))
+
 (provide 'test-tools)
 ;;; test-tools.el ends here

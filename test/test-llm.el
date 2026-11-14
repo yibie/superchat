@@ -718,6 +718,17 @@ finished messages and the messages the third request sent."
     (should (equal (plist-get (car (plist-get r :done)) :text) "hi"))
     (should (= starts 2))))
 
+(ert-deftest superchat-llm-a-provider-entry-that-signals-is-named-and-isolated ()
+  (test-llm-with (list '(:text "ok"))
+    (setq superchat-llm-providers
+          (cons (cons "broken" (lambda () (error "plugin broke"))) superchat-llm-providers))
+    (should (equal (superchat-llm-model-ids) '("model-a" "model-b")))
+    (should (equal (plist-get (test-llm--ask (list (test-llm--user "hi"))) :errors) nil))
+    (let* ((superchat-llm-provider "broken")
+           (err (should-error (superchat-llm-model-ids) :type 'user-error)))
+      (should (string-match-p "broken" (cadr err)))
+      (should (string-match-p "plugin broke" (cadr err))))))
+
 (provide 'test-llm)
 ;;; test-llm.el ends here
 

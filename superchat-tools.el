@@ -282,7 +282,8 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
                 (let ((lines (split-string output "\n" t)))
                   (cond ((eq why 'cut)
                          (funcall done (format "[output cut at %d characters]\n%s"
-                                               (length output) (string-join lines "\n"))))
+                                               (length output)
+                                               (string-join (take 100 lines) "\n"))))
                         ((> (length lines) 100)
                          (funcall done (format "%s\n[more matching lines not shown]"
                                                (string-join (take 100 lines) "\n"))))
@@ -381,15 +382,17 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
               (list shell-file-name "-c" (plist-get args :command))
               superchat-shell-seconds
               (lambda (output why)
-                (funcall done (if (eq why 'cut)
-                                  ;; Up front: the cut of the whole result keeps the head.
-                                  (format "[output cut at %d characters; the command was stopped]\n%s"
-                                          (length output) output)
-                                (concat output
-                                        (if (eq why 'timeout)
-                                            (format "\n[timed out after %d seconds and killed]"
-                                                    superchat-shell-seconds)
-                                          (format "\n[exit status %d]" why)))))))))
+                (let ((note (pcase why
+                              ('cut (format "[output cut at %d characters; the command was stopped]"
+                                            (length output)))
+                              ('timeout (format "[timed out after %d seconds and killed]"
+                                                superchat-shell-seconds))
+                              (_ (format "[exit status %d]" why)))))
+                  ;; Up front when the output is long: the cut of the whole result
+                  ;; keeps the head, and must not take the note.
+                  (funcall done (if (> (+ (length output) (length note)) superchat-tool-max-chars)
+                                    (concat note "\n" output)
+                                  (concat output "\n" note))))))))
 
 (provide 'superchat-tools)
 ;;; superchat-tools.el ends here

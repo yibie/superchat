@@ -34,6 +34,10 @@ response that made calls, by the (ID . NAME) of each call.  Memory only: the
 Tape keeps no reasoning, but some providers want it sent back with the calls
 it led to until the turn is answered.  At most 64 are kept.")
 
+(defvar superchat-llm--failed nil
+  "((NAME . MESSAGE) ...): entries of `superchat-llm-providers' whose function
+signalled when the models collection was last built.")
+
 (defun superchat-llm--call-key (calls)
   "What CALLS, a list of (:id :name ...), are kept under."
   (mapcar (lambda (call) (cons (plist-get call :id) (plist-get call :name))) calls))
@@ -45,12 +49,17 @@ it led to until the turn is answered.  At most 64 are kept.")
                  (cl-every (lambda (a b) (and (equal (car a) (car b))
                                               (eq (cdr a) (cdr b))))
                            old superchat-llm-providers))
+      (setq superchat-llm--failed nil)
       (let ((models (superchat-bridge-create-models)) (seen nil))
         (dolist (entry superchat-llm-providers)
           ;; The first entry of a name counts.
           (unless (member (car entry) seen)
             (push (car entry) seen)
-            (superchat-bridge-models-set-provider models (funcall (cdr entry)))))
+            ;; One broken entry must not take the others down.
+            (condition-case err
+                (superchat-bridge-models-set-provider models (funcall (cdr entry)))
+              (error (push (cons (car entry) (error-message-string err))
+                           superchat-llm--failed)))))
         ;; Copy the entries, not only the list: `setcdr' on one is seen.
         (setq superchat-llm--models
               (cons (mapcar (lambda (e) (cons (car e) (cdr e)))
@@ -68,9 +77,11 @@ A `user-error' says what to set when it is unset or unknown."
                       (format "Unknown LLM provider %S" superchat-llm-provider)
                     "No LLM provider")
                   (string-join names ", ") (or (car names) "name"))))
-  (mapcar #'superchat-bridge-model-id
-          (superchat-bridge-models-get-models (superchat-llm--models)
-                                              superchat-llm-provider)))
+  (let ((models (superchat-llm--models)))
+    (when-let* ((bad (assoc superchat-llm-provider superchat-llm--failed)))
+      (user-error "The entry %S of `superchat-llm-providers' failed: %s" (car bad) (cdr bad)))
+    (mapcar #'superchat-bridge-model-id
+            (superchat-bridge-models-get-models models superchat-llm-provider))))
 
 (defun superchat-llm--find-model (id)
   "The bridge model ID of `superchat-llm-provider'.

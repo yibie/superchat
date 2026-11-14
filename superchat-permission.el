@@ -6,7 +6,6 @@
 
 ;;; Code:
 
-(require 'seq)
 (require 'superchat)
 (require 'superchat-tape)
 
@@ -28,12 +27,16 @@
   "Called with a tool name and a summary; returns `allow', `deny' or `always'.")
 
 (defun superchat-permission-level (tape)
-  "The level of timeline TAPE: its latest level event, else the default."
-  (let ((event (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :type) "level"))
-                         (reverse (superchat-tape-entries :tape tape :kinds '(event))))))
-    (if event
-        (intern (plist-get (plist-get event :data) :level))
-      superchat-default-level)))
+  "The level of timeline TAPE: its latest level event, else the default.
+One query for the newest, because every tool call asks."
+  (if-let* ((level (caar (superchat-tape-select
+                          (concat "SELECT json_extract(data, '$.level') FROM entry"
+                                  " WHERE tape = ? AND kind = 'event'"
+                                  " AND json_extract(data, '$.type') = 'level'"
+                                  " ORDER BY id DESC LIMIT 1")
+                          (list tape)))))
+      (intern level)
+    superchat-default-level))
 
 (defun superchat-permission-set (tape level)
   "Append the event that makes LEVEL the level of timeline TAPE."

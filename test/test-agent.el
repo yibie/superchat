@@ -960,7 +960,8 @@
                          :on-entry (lambda (e) (when (equal (plist-get e :text) "hello")
                                                  (superchat-cancel "t")))
                          :on-done (lambda (r) (push (plist-get r :status) dones)))))
-      (should (equal dones '(cancelled)))
+      ;; The user entry comes while the run is ending with its error: too late to cancel.
+      (should (equal dones '(error)))
       (should-not (superchat-run-active "t")))
     (setq dones nil)
     (superchat-test-script (list '(:text "answer"))
@@ -1122,6 +1123,278 @@
               (when-let* ((problems (superchat-test-agent--budget-case tape budget)))
                 (push (list tape budget problems) bad)))))
         (should-not bad)))))
+
+;;; The fifth review: one way a run ends
+
+(defvar superchat-test-agent--timer nil "The timer of the tool `slowx'.")
+
+(defmacro superchat-test-agent--with-slowx (&rest body)
+  "BODY with an asynchronous tool `slowx' that answers from a 0.05 s timer."
+  `(progn
+     (setq superchat-test-agent--timer nil)
+     (superchat-tool-define
+      "slowx" :class 'read :async t :description "Slow"
+      :function (lambda (_ done)
+                  (let ((timer (run-at-time 0.05 nil (lambda () (funcall done "slow-done")))))
+                    (setq superchat-test-agent--timer timer)
+                    (lambda () (cancel-timer timer)))))
+     (superchat-tool-define
+      "slowask" :class 'write :async t :description "Slow, asks"
+      :function (lambda (_ done)
+                  (let ((timer (run-at-time 0.05 nil (lambda () (funcall done "slow-done")))))
+                    (setq superchat-test-agent--timer timer)
+                    (lambda () (cancel-timer timer)))))
+     (unwind-protect (progn ,@body)
+       (superchat-tool-remove "slowx") (superchat-tool-remove "slowask"))))
+
+(defun superchat-test-agent--idle ()
+  "Wait until the model, the tool timers and every run are quiet."
+  (superchat-test-drain)
+  (accept-process-output nil 0.12)
+  (superchat-test-drain))
+
+(defun superchat-test-agent--next-request-ok (tape)
+  "Start another run on TAPE; its request must be well formed."
+  (superchat-test-script (list '(:text "ans3"))
+    (let ((superchat-test-async nil))
+      (superchat-run tape "next")
+      (superchat-test-agent--well-formed (plist-get (car superchat-test-requests) :messages)))))
+
+(ert-deftest superchat-agent-on-entry-signal-on-a-permission-event-stops-the-tool ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slowx
+      (let ((superchat-test-async t) dones
+            (superchat-permission-ask-function (lambda (&rest _) 'allow)))
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "slowask"))) '(:text "x"))
+          (superchat-run "t" "go"
+                         :on-entry (lambda (e) (when (equal (plist-get (plist-get e :data) :type)
+                                                            "permission")
+                                                 (error "display broke")))
+                         :on-done (lambda (r) (push (plist-get r :status) dones)))
+          (superchat-test-agent--idle))
+        (should (equal dones '(error)))
+        (should-not (memq superchat-test-agent--timer timer-list))
+        (should-not (eq (plist-get (car (last (superchat-tape-entries :tape "t"))) :kind) 'tool))
+        (should (equal (mapcar #'cdr (cl-remove-if-not (lambda (x) (eq (car x) 'tool))
+                                                       (superchat-test-agent--entries "t")))
+                       '("Cancelled.")))))))
+
+(ert-deftest superchat-agent-a-run-adds-results-only-for-its-own-calls ()
+  (superchat-test-agent--with
+    (let ((superchat-test-async t) dones)
+      (superchat-test-script
+          (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                  '("c1" "c2" "c3")))
+                '(:text "never") '(:text "ans3"))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (e) (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                               (error "display broke")))
+                       :on-done (lambda (r) (push (plist-get r :status) dones)))
+        (superchat-test-drain)
+        (superchat-run "t" "second")
+        (superchat-cancel "t")
+        (superchat-test-drain)
+        (should (equal dones '(error)))
+        (let ((types (superchat-test-agent--types "t")))
+          ;; Run 1 owes c2 and c3 before its error; run 2 owes nothing.
+          (should (equal types '(user assistant tool tool tool error user cancelled))))
+        (superchat-run "t" "third")
+        (superchat-test-drain)
+        (superchat-test-agent--well-formed (plist-get (car superchat-test-requests) :messages))))))
+
+(ert-deftest superchat-agent-failed-handoff-with-a-signalling-on-entry-keeps-the-user-text ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user (make-string 500 ?x) :scope "home")
+    (let ((superchat-context-chars 100) dones)
+      (superchat-test-script (list '(:error "boom"))
+        (condition-case nil
+            (superchat-run "t" "MY TEXT"
+                           :on-entry (lambda (e) (when (eq (plist-get e :kind) 'event)
+                                                   (error "display broke")))
+                           :on-done (lambda (r) (push (plist-get r :status) dones)))
+          (error nil)))
+      (should (equal dones '(error)))
+      (should-not (superchat-run-active "t"))
+      (should (equal (plist-get (car (last (superchat-tape-entries :tape "t" :kinds '(user))))
+                                :text)
+                     "MY TEXT")))))
+
+(ert-deftest superchat-agent-ended-run-gives-its-on-entry-nothing-more ()
+  (superchat-test-agent--with
+    (let ((superchat-permission-ask-function
+           (lambda (&rest _) (superchat-cancel "t") 'allow))
+          seen dones)
+      (superchat-test-script
+          (list `(:calls (,(superchat-test-agent--call "c1" "poke"))) '(:text "ans2"))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (e) (push (plist-get e :id) seen))
+                       :on-done (lambda (r) (push (plist-get r :status) dones)
+                                  (superchat-run "t" "second")))
+        (should (equal dones '(cancelled)))
+        (should (= (apply #'max seen)
+                   (plist-get (car (superchat-tape-entries :tape "t" :kinds '(event) :limit 1
+                                                           :newest t))
+                              :id)))))))
+
+(ert-deftest superchat-agent-signal-on-an-entry-mid-calls-leaves-no-call-unanswered ()
+  (superchat-test-agent--with
+    (let (dones)
+      (superchat-test-script
+          (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                  '("c1" "c2" "c3"))))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (e) (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                               (error "display broke")))
+                       :on-done (lambda (r) (push (plist-get r :status) dones))))
+      (should (equal dones '(error)))
+      (should (equal (superchat-test-agent--types "t")
+                     '(user assistant tool tool tool error))))))
+
+(ert-deftest superchat-agent-signal-on-the-first-cancelled-result-ends-the-cancel ()
+  (superchat-test-agent--with
+    (let (dones)
+      (superchat-test-script
+          (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                  '("c1" "c2" "c3"))))
+        (condition-case nil
+            (superchat-run "t" "go"
+                           :on-entry (lambda (e)
+                                       (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                         (superchat-cancel "t"))
+                                       (when (equal (plist-get e :text) "Cancelled.")
+                                         (error "display broke")))
+                           :on-done (lambda (r) (push (plist-get r :status) dones)))
+          (error nil)))
+      (should (equal dones '(cancelled)))
+      (should (equal (superchat-test-agent--types "t")
+                     '(user assistant tool tool tool cancelled))))))
+
+(ert-deftest superchat-agent-a-cancel-that-cannot-stop-the-request-drops-its-answer ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user (make-string 500 ?x) :scope "home")
+    (let ((superchat-context-chars 100) (superchat-test-async t) dones)
+      (superchat-test-script (list '(:text "SUM\nNEXT: n") '(:text "ans"))
+        (cl-letf (((symbol-function 'superchat-llm-cancel) (lambda (_) (error "cancel broke"))))
+          (superchat-run "t" "MY TEXT" :on-done (lambda (r) (push (plist-get r :status) dones)))
+          (superchat-cancel "t"))
+        (superchat-test-agent--idle))
+      (should (equal dones '(cancelled)))
+      (should (equal (superchat-test-agent--types "t") '(user error user cancelled)))
+      (should-not (superchat-tape-entries :tape "t" :kinds '(anchor))))))
+
+(ert-deftest superchat-agent-a-cancelled-handoff-drops-its-late-answer ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "hello" :scope "home")
+    (let ((superchat-test-async t) got)
+      (superchat-test-script (list '(:text "SUM\nNEXT: n"))
+        (cl-letf (((symbol-function 'superchat-llm-cancel) (lambda (_) (error "cancel broke"))))
+          (superchat-handoff "t" nil (lambda (a) (push a got)))
+          (superchat-cancel "t"))
+        (superchat-test-agent--idle))
+      (should-not got)
+      (should-not (superchat-tape-entries :tape "t" :kinds '(anchor))))))
+
+(ert-deftest superchat-agent-a-throw-out-of-a-tool-call-ends-the-run ()
+  (superchat-test-agent--with
+    (let ((superchat-permission-ask-function (lambda (&rest _) (throw 'out 'thrown)))
+          dones)
+      (superchat-test-script
+          (list `(:calls (,(superchat-test-agent--call "c1" "poke")
+                          ,(superchat-test-agent--call "c2" "echo" :x "a"))))
+        (should (eq (catch 'out
+                      (superchat-run "t" "go"
+                                     :on-done (lambda (r) (push (list (plist-get r :status)
+                                                                      (plist-get r :error))
+                                                                dones))))
+                    'thrown)))
+      (should (equal (mapcar #'car dones) '(error)))
+      (should (string-match-p "interrupted" (cadr (car dones))))
+      (should-not (superchat-run-active "t"))
+      (should (equal (superchat-test-agent--types "t")
+                     '(user assistant tool tool error))))))
+
+(defconst superchat-test-agent--matrix-kinds
+  `((user . ,(lambda (e) (eq (plist-get e :kind) 'user)))
+    (assistant-with-calls . ,(lambda (e) (and (eq (plist-get e :kind) 'assistant)
+                                              (plist-get (plist-get e :data) :calls))))
+    (permission . ,(lambda (e) (equal (plist-get (plist-get e :data) :type) "permission")))
+    (first-result . ,(lambda (e) (equal (plist-get (plist-get e :data) :call-id) "c1")))
+    (async-result . ,(lambda (e) (equal (plist-get (plist-get e :data) :call-id) "c2")))
+    (last-result . ,(lambda (e) (equal (plist-get (plist-get e :data) :call-id) "c3")))
+    (error-event . ,(lambda (e) (equal (plist-get (plist-get e :data) :type) "error")))
+    (cancelled-event . ,(lambda (e) (equal (plist-get (plist-get e :data) :type) "cancelled")))
+    (final-assistant . ,(lambda (e) (and (eq (plist-get e :kind) 'assistant)
+                                         (not (plist-get (plist-get e :data) :calls))))))
+  "Entry kind and what recognises it; the callback acts on the first match.")
+
+(defun superchat-test-agent--matrix-case (kind pred action)
+  "Run one run whose ON-ENTRY does ACTION (`signal' or `cancel') on the first
+entry PRED recognises; check what every way of ending owes."
+  (let ((superchat-test-async t) dones seen hit
+        (superchat-permission-ask-function (lambda (&rest _) 'allow)))
+    (superchat-test-script
+        (list `(:calls (,(superchat-test-agent--call "c1" "poke")
+                        ,(superchat-test-agent--call "c2" "slowx")
+                        ,(superchat-test-agent--call "c3" "echo" :x "b")))
+              (if (eq kind 'error-event) '(:error "model broke") '(:text "ans2")))
+      (condition-case nil
+          (progn
+            (superchat-run
+             "t" "go"
+             :on-entry (lambda (e)
+                         (push (plist-get e :id) seen)
+                         (when (and (not hit) (funcall pred e))
+                           (setq hit t)
+                           (if (eq action 'signal) (error "display broke") (superchat-cancel "t"))))
+             :on-done (lambda (r)
+                        (push (list (plist-get r :status)
+                                    (plist-get (car (superchat-tape-entries :tape "t" :newest t :limit 1))
+                                               :id)
+                                    (and (memq superchat-test-agent--timer timer-list) t))
+                              dones)))
+            (when (eq kind 'cancelled-event)
+              (superchat-test-wait (lambda () superchat-test-agent--timer))
+              (superchat-cancel "t")))
+        (error nil))
+      (superchat-test-agent--idle)
+      (should hit)
+      ;; ON-DONE once; the timeline is free; no tool is still running.
+      (should (= (length dones) 1))
+      (should-not (superchat-run-active "t"))
+      (should-not (nth 2 (car dones)))
+      (let* ((end (nth 1 (car dones)))
+             (mine (cl-remove-if (lambda (e) (> (plist-get e :id) end))
+                                 (superchat-tape-entries :tape "t")))
+             (ids (cl-loop for e in mine
+                           when (eq (plist-get e :kind) 'assistant)
+                           append (mapcar (lambda (c) (plist-get c :id))
+                                          (plist-get (plist-get e :data) :calls))))
+             (last-event (apply #'max (cons 0 (mapcar (lambda (e) (plist-get e :id))
+                                                      (cl-remove-if-not
+                                                       (lambda (e) (member (plist-get (plist-get e :data) :type)
+                                                                           '("error" "cancelled")))
+                                                       mine))))))
+        (should (eq (plist-get (car (last mine)) :kind) 'event))
+        (dolist (id ids)
+          (let ((results (cl-remove-if-not (lambda (e) (equal (plist-get (plist-get e :data) :call-id) id))
+                                           mine)))
+            (should (= (length results) 1))
+            (should (< (plist-get (car results) :id) last-event))))
+        ;; A following run: well formed, and nothing of run 1 after its end.
+        (superchat-test-agent--next-request-ok "t")
+        (superchat-test-agent--idle)
+        (should (equal (plist-get (nth (length mine) (superchat-tape-entries :tape "t")) :text)
+                       "next"))
+        (should (<= (apply #'max seen) end))))))
+
+(ert-deftest superchat-agent-every-way-of-ending-owes-the-same ()
+  (dolist (kind superchat-test-agent--matrix-kinds)
+    (dolist (action '(signal cancel))
+      (ert-info ((format "%s x %s" (car kind) action))
+        (superchat-test-agent--with
+          (superchat-test-agent--with-slowx
+            (superchat-test-agent--matrix-case (car kind) (cdr kind) action)))))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here
