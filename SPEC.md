@@ -311,16 +311,31 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   ARGS has the shape `superchat-llm-request` takes. DESCRIPTION is a string,
   or a function of no arguments returning one, called each time the specs
   are asked for. FUNCTION is called with one plist of arguments and returns
-  a string, or signals an error. Tools are synchronous.
+  a string, or signals an error.
+- A tool that waits for something outside Emacs (a process) is defined with
+  `:async t`. Its FUNCTION is then called with the plist and a function
+  DONE, and returns at once: either nothing, or a function of no arguments
+  that stops the work. It calls DONE exactly once, later or before it
+  returns, with the result string, or with `(error MESSAGE)` data as a
+  second argument: `(funcall DONE nil "what went wrong")`. A signal raised
+  before it returns counts as an error result. Emacs stays usable while an
+  asynchronous tool runs. `shell` and `search_files` are asynchronous; the
+  others are plain Lisp and return at once (`eval_elisp` runs Lisp, which
+  cannot be made asynchronous: `C-g` interrupts it).
 - `superchat-tool-tape` (a `defvar`): bound to the timeline name while a
   tool's function runs, for the tools that need it.
 - `(superchat-tool-remove NAME)`, `(superchat-tool-specs &optional NAMES)` →
   the list `superchat-llm-request` takes.
-- `(superchat-tool-call TAPE CALL)` → the `tool` entry it appended. It decides
+- `(superchat-tool-call TAPE CALL ON-RESULT)` → nil, or a function of no
+  arguments that stops a tool still running. It decides
   permission, asks when needed, runs the function with `default-directory`
   set to the timeline's scope (the user's home directory for `"home"`),
-  appends the result, and for an `ask` or `deny` decision appends a
-  `permission` event first. A denied call, an unknown tool, a missing
+  appends the result as a `tool` entry and calls ON-RESULT with that entry,
+  exactly once: before it returns for a synchronous tool, later for an
+  asynchronous one. For an `ask` or `deny` decision it appends a
+  `permission` event first. When the returned function is called before the
+  result came, the tool is stopped, nothing is appended and ON-RESULT is
+  never called; a result that comes after that is dropped. A denied call, an unknown tool, a missing
   required argument and an error signalled by the function all become a
   `tool` entry with `:error t` whose text says what happened; so does a
   function that returns something that is not a string. A required argument
@@ -341,12 +356,12 @@ Built-in tools, and no others:
 | `read_file` | read | `path`, `start` opt, `count` opt | lines of a file with line numbers; at most 400 lines a call |
 | `read_buffer` | read | `buffer`, `start` opt, `count` opt | the same for a buffer |
 | `list_buffers` | read | none | name, mode, file and size of the user's buffers (no names starting with a space) |
-| `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, skipping `.git` and binary files; it is stopped at 100 matching lines or after 10 seconds, and the result says which |
+| `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, skipping `.git` and binary files; it is stopped at 100 matching lines or after 10 seconds, and the result says which; asynchronous |
 | `edit_buffer` | write | `buffer`, `old`, `new` | replace OLD by NEW in a buffer; OLD must occur exactly once, case and overlapping occurrences counted; does not save |
 | `write_file` | write | `path`, `content` | create or replace a file, through a buffer, and save it |
 | `save_buffer` | write | `buffer` | save |
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order, return the last value printed, with what was printed to `*Messages*` meanwhile |
-| `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else |
+| `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else; asynchronous |
 
 A path is relative to the scope. A file a tool edits is edited through its
 buffer, so the user can undo it.
@@ -395,8 +410,10 @@ A number argument may arrive as a string. The description of `recall` lists the 
   2. `superchat-llm-request` with `superchat-context-system` and the tool
      specs. TOOLS is a list of names, or nil for every tool, or `none`.
   3. On done: append the `assistant` entry. If it has calls, run each with
-     `superchat-tool-call` in order, then go to 1. If it has none, the run
-     is over.
+     `superchat-tool-call`, one after the other in order, each started when
+     the one before has its result, then go to 1. If it has none, the run
+     is over. The run does not block Emacs while an asynchronous tool
+     works: the user can type, switch buffers and cancel.
   ON-TEXT gets streamed text. ON-ENTRY gets each entry as it is appended.
   ON-DONE gets the run once, with `:status` `done`, `cancelled` or `error`.
 - At most one run per timeline. `superchat-run` on a timeline that has one is
@@ -412,8 +429,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
 - `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
   append a `cancelled` event and free the timeline. For a run: cancel the
   request, append a `cancelled` event,
-  call ON-DONE with `cancelled`. Tool calls of the current response that
-  have not started are not run. So that the timeline stays well formed, a
+  call ON-DONE with `cancelled`. A tool that is running is stopped through
+  the function `superchat-tool-call` returned. Tool calls of the current
+  response that have not started are not run. So that the timeline stays well formed, a
   `tool` entry with `:error t` and the text `Cancelled.` is appended for
   each call that has no result. When the run was cancelled before its `user`
   entry was appended (during the handoff that comes first), the `user`
