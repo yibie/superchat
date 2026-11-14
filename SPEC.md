@@ -234,21 +234,34 @@ requires `llm.el`.
     gave it and `:args` as a plist with keyword keys, also a call that names
     no known tool or lacks an argument: the caller judges. A call whose
     arguments the provider sent as text that is not a JSON object comes back
-    with `:args` nil.
+    with `:args` nil. A call the provider gave no id gets one made here.
+  - A request waits ten minutes for the response to start and is tried up to
+    two more times when the provider says to try again, as pi's own client
+    does.
   - A response that ends with pi-ai's stop reason `error` goes to ON-ERROR
     with its error message; `aborted` calls neither; every other stop reason
     goes to ON-DONE.
   - A signal raised while the request is started is delivered through
     ON-ERROR; `superchat-llm-request` itself signals a `user-error` only when
-    `superchat-llm-provider` or the model is not set or not known, and the
-    message says how to set it and which are known.
+    `superchat-llm-provider` or the model is not set or not known, when
+    `superchat-llm-reasoning` is not one of its values, or when the provider
+    has no API key; the message says what to set.
+  - When ON-TEXT signals, the request is aborted and ON-ERROR is called once
+    with the error's message. An error raised by ON-DONE or ON-ERROR is the
+    caller's to catch: it is not delivered anywhere.
   - The model's reasoning is never on the Tape and never in ON-DONE. This
     module keeps, in memory, the whole pi-ai assistant message of a response
-    that made calls, by the id of its first call. When MESSAGES holds an
-    assistant message whose first call has that id, the kept message is sent
-    in its place, so the provider gets its reasoning back as pi-ai sends it.
-    A request whose last message is from the user clears what is kept: no
-    provider wants the reasoning of an earlier turn.
+    that made calls, by the id and name of every call. When MESSAGES holds an
+    assistant message with exactly those calls, the kept message is sent in
+    its place, so the provider gets its reasoning back as pi-ai sends it. A
+    request whose last message is from the user drops what is kept for the
+    calls in its MESSAGES: no provider wants the reasoning of an earlier
+    turn, and another conversation's turn in progress keeps its own. At most
+    64 messages are kept.
+  - An assistant message with no kept message is rebuilt from the Tape: a
+    plist argument is a JSON object, any other list an array. The Tape has
+    nil for false, null and anything empty alike; nil is sent as false, and
+    as an empty object when it is the whole argument list.
   - One request is one model response. When the model asks for tools the
     calls come back in ON-DONE; the caller runs them and makes another
     request with the results appended to MESSAGES.

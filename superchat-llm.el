@@ -24,10 +24,15 @@ pi-ai provider.  The name is the provider's id.  A plugin may add to it.")
   "(PROVIDERS . MODELS): the collection made from that value of
 `superchat-llm-providers'.")
 
-(defvar superchat-llm--kept (make-hash-table :test #'equal)
-  "The pi-ai assistant message of a response that made calls, by the id of its
-first call.  Memory only: the Tape keeps no reasoning, but some providers want
-it sent back with the calls it led to until the turn is answered.")
+(defvar superchat-llm--kept nil
+  "((CALLS . MESSAGE) ...), newest first: the pi-ai assistant message of a
+response that made calls, by the (ID . NAME) of each call.  Memory only: the
+Tape keeps no reasoning, but some providers want it sent back with the calls
+it led to until the turn is answered.  At most 64 are kept.")
+
+(defun superchat-llm--call-key (calls)
+  "What CALLS, a list of (:id :name ...), are kept under."
+  (mapcar (lambda (call) (cons (plist-get call :id) (plist-get call :name))) calls))
 
 (defun superchat-llm--models ()
   "The pi-ai models collection, rebuilt when `superchat-llm-providers' changed."
@@ -100,6 +105,20 @@ plists, arrays as lists; JSON false and null are nil."
         ((memq arguments '(:false :null)) nil)
         (t arguments)))
 
+(defun superchat-llm--json (value &optional top)
+  "VALUE, call arguments as the Tape holds them, as pi-ai wants JSON data.
+A plist is an object, any other list an array.  The Tape has nil for false,
+null and anything empty alike: nil is an empty object at TOP, else false."
+  (cond ((and (consp value) (keywordp (car value)))
+         (let ((table (make-hash-table :test #'equal)))
+           (cl-loop for (key item) on value by #'cddr
+                    do (puthash (substring (symbol-name key) 1)
+                                (superchat-llm--json item) table))
+           table))
+        ((consp value) (vconcat (mapcar #'superchat-llm--json value)))
+        ((null value) (if top (make-hash-table :test #'equal) :false))
+        (t value)))
+
 (defun superchat-llm--assistant (message model)
   "The pi-ai assistant message that replays assistant MESSAGE for MODEL.
 The kept message of its first call is that message itself.  Otherwise one is
@@ -107,7 +126,7 @@ built with the fields `llm-pi-ai-transform-messages' and the completions API
 read: api, provider and model of MODEL (so it counts as MODEL's own), zero
 usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
   (let ((calls (plist-get message :calls)))
-    (or (and calls (gethash (plist-get (car calls) :id) superchat-llm--kept))
+    (or (and calls (cdr (assoc (superchat-llm--call-key calls) superchat-llm--kept)))
         (llm-pi-ai-make-assistant-message
          :content
          (append
@@ -116,7 +135,8 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
           (mapcar (lambda (call)
                     (llm-pi-ai-make-tool-call :id (plist-get call :id)
                                               :name (plist-get call :name)
-                                              :arguments (plist-get call :args)))
+                                              :arguments (superchat-llm--json
+                                                          (plist-get call :args) t)))
                   calls))
          :api (llm-pi-ai-model-api model)
          :provider (llm-pi-ai-model-provider model)
@@ -127,9 +147,14 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
 
 (defun superchat-llm--context (messages system tools model)
   "The pi-ai context that replays MESSAGES for MODEL, with SYSTEM and TOOLS."
-  ;; A new user turn: no provider wants the reasoning of earlier turns.
+  ;; A new user turn: no provider wants the reasoning of this conversation's
+  ;; earlier turns.  Another conversation's are not in MESSAGES and stay.
   (when (eq (plist-get (car (last messages)) :role) 'user)
-    (clrhash superchat-llm--kept))
+    (dolist (message messages)
+      (when-let* ((calls (plist-get message :calls)))
+        (setq superchat-llm--kept
+              (assoc-delete-all (superchat-llm--call-key calls)
+                                superchat-llm--kept)))))
   (llm-pi-ai-make-context
    :system-prompt system
    :tools (mapcar #'superchat-llm--tool tools)
@@ -157,13 +182,19 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
   (let* ((blocks (llm-pi-ai-message-content message))
          (calls (cl-loop for block in blocks
                          when (llm-pi-ai-tool-call-p block)
-                         collect (list :id (llm-pi-ai-tool-call-id block)
+                         ;; A provider may leave the id out; a result needs one.
+                         do (when (string-empty-p (or (llm-pi-ai-tool-call-id block) ""))
+                              (setf (llm-pi-ai-tool-call-id block)
+                                    (make-temp-name "call_")))
+                         and collect (list :id (llm-pi-ai-tool-call-id block)
                                        :name (llm-pi-ai-tool-call-name block)
                                        :args (unless (llm-pi-ai-tool-call-arguments-error block)
                                                (superchat-llm--args
                                                 (llm-pi-ai-tool-call-arguments block)))))))
     (when calls
-      (puthash (plist-get (car calls) :id) message superchat-llm--kept))
+      (setq superchat-llm--kept
+            (ntake 64 (cons (cons (superchat-llm--call-key calls) message)
+                            superchat-llm--kept))))
     (list :text (mapconcat #'llm-pi-ai-text-content-text
                            (cl-remove-if-not #'llm-pi-ai-text-content-p blocks) "")
           :calls calls
@@ -172,7 +203,14 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
 (cl-defun superchat-llm--request (messages &key system tools model
                                            on-text on-done on-error)
   "Ask the provider once.  Arguments as `superchat-llm-request'."
+  (unless (memq superchat-llm-reasoning '(nil minimal low medium high xhigh max))
+    (user-error "`superchat-llm-reasoning' is %S; it is nil or one of minimal, low, medium, high, xhigh, max"
+                superchat-llm-reasoning))
   (let* ((pi-model (superchat-llm--find-model (or model superchat-llm-model)))
+         (_ (unless (llm-pi-ai-models-get-auth (superchat-llm--models) pi-model)
+              (user-error "No API key for %s: set it in the environment (usually %s_API_KEY) and restart Emacs, or `setenv' it"
+                          superchat-llm-provider
+                          (upcase (string-replace "-" "_" superchat-llm-provider)))))
          (abort (llm-pi-ai-make-abort-signal))
          (handle (list :cancelled nil :finished nil :abort abort))
          (stream nil))
@@ -181,7 +219,9 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
               (llm-pi-ai-models-stream-simple
                (superchat-llm--models) pi-model
                (superchat-llm--context messages system tools pi-model)
-               (append (list :signal abort)
+               ;; As pi's own client: ten minutes for the response to start,
+               ;; two more tries when the provider says to try again.
+               (append (list :signal abort :timeout-ms 600000 :max-retries 2)
                        (when superchat-llm-reasoning
                          (list :reasoning (symbol-name superchat-llm-reasoning))))))
       (error (setf (plist-get handle :finished) t)
@@ -190,9 +230,15 @@ usage, stop reason \"toolUse\" or \"stop\", and a timestamp."
       (llm-pi-ai-event-stream-iterate
        stream
        (lambda (event)
-         (when (and on-text (not (plist-get handle :cancelled))
+         (when (and on-text
+                    (not (or (plist-get handle :cancelled) (plist-get handle :finished)))
                     (equal (llm-pi-ai-assistant-message-event-type event) "text_delta"))
-           (funcall on-text (llm-pi-ai-assistant-message-event-delta event))))
+           ;; pi-ai would drop the stream on a signal and call nobody.
+           (condition-case err
+               (funcall on-text (llm-pi-ai-assistant-message-event-delta event))
+             (error (setf (plist-get handle :finished) t)
+                    (llm-pi-ai-abort-signal-abort abort)
+                    (funcall on-error (error-message-string err))))))
        (lambda ()
          (unless (or (plist-get handle :cancelled) (plist-get handle :finished))
            (setf (plist-get handle :finished) t)

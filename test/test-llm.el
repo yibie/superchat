@@ -90,7 +90,7 @@
          (superchat-llm-providers (list (cons "stub" #'test-llm--provider)))
          (superchat-llm-provider "stub") (superchat-llm-model "model-a")
          (superchat-llm-reasoning nil) (superchat-llm--models nil)
-         (superchat-llm--kept (make-hash-table :test #'equal))
+         (superchat-llm--kept nil)
          (superchat-llm-request-function #'superchat-llm--request))
      ,@body))
 
@@ -375,7 +375,7 @@
          (superchat-llm-providers '(("deepseek" . llm-pi-ai-deepseek-provider)))
          (superchat-llm-provider "deepseek") (superchat-llm-model "deepseek-flash")
          (superchat-llm-reasoning 'high) (superchat-llm--models nil)
-         (superchat-llm--kept (make-hash-table :test #'equal))
+         (superchat-llm--kept nil)
          (superchat-llm-request-function #'superchat-llm--request)
          (chunks
           (list

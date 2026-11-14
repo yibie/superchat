@@ -53,6 +53,16 @@ function of no arguments that kills the process.  It signals
 
 ;;; Process
 
+(defvar llm-pi-ai-http--config-files nil
+  "The curl config files of requests still running; they hold credentials.")
+
+(defun llm-pi-ai-http--delete-config-files ()
+  "Delete every curl config file left, as Emacs is killed mid-request."
+  (dolist (file llm-pi-ai-http--config-files)
+    (ignore-errors (delete-file file))))
+
+(add-hook 'kill-emacs-hook #'llm-pi-ai-http--delete-config-files)
+
 (defun llm-pi-ai-http--start-curl (args config stdin on-output on-exit)
   "Run curl with ARGS and the config text CONFIG, writing STDIN to it.
 Default value of `llm-pi-ai-http-start-function'.  Call ON-OUTPUT with
@@ -66,6 +76,8 @@ a function that kills the process and removes the config file."
            (exited nil)
            (cleanup
             (lambda ()
+              (setq llm-pi-ai-http--config-files
+                    (delete config-file llm-pi-ai-http--config-files))
               (ignore-errors (delete-file config-file))))
            process)
       (condition-case err
@@ -73,16 +85,24 @@ a function that kills the process and removes the config file."
             (let ((coding-system-for-write 'utf-8-unix))
               (write-region config nil config-file nil 'silent))
             (set-file-modes config-file #o600)
+            (push config-file llm-pi-ai-http--config-files)
             (setq process
                   (make-process
                    :name "llm-pi-ai-curl"
                    :command (append (list program "-K" config-file) args)
                    :buffer nil
-                   :stderr stderr-buffer
+                   ;; Its own pipe, so that no "Process ... finished"
+                   ;; line is written after curl's message.
+                   :stderr (make-pipe-process
+                            :name "llm-pi-ai-curl-stderr" :buffer stderr-buffer
+                            :noquery t :sentinel #'ignore)
                    :coding 'binary
                    :connection-type 'pipe
                    :noquery t
-                   :filter (lambda (_proc string) (funcall on-output string))
+                   :filter (lambda (_proc string)
+                             ;; curl has read its config by now.
+                             (funcall cleanup)
+                             (funcall on-output string))
                    :sentinel
                    (lambda (proc _event)
                      (when (and (not exited)
