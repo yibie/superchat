@@ -63,9 +63,10 @@ as (funcall DONE nil MESSAGE) for an error."
     (format "%s\n[%d characters left out]" (substring text 0 superchat-tool-max-chars)
             (- (length text) superchat-tool-max-chars))))
 
-(defun superchat-tools--summary (name args)
-  "One short line for the user: tool NAME with ARGS."
-  (let ((text (format "%s %S" name args)))
+(defun superchat-tools--summary (args)
+  "One short line for the user: the ARGS of a call.  The question names the
+tool itself."
+  (let ((text (format "%S" args)))
     (if (> (length text) 200) (concat (substring text 0 200) "...") text)))
 
 (defun superchat-tools--outside-p (scope args)
@@ -90,7 +91,7 @@ A read outside SCOPE is decided as a write: the user agrees to it first."
          (key (cons tape name))
          (answer (cond ((not (eq decision 'ask)) decision)
                        ((gethash key superchat-tools--always) 'always)
-                       (t (superchat-permission-ask name (superchat-tools--summary name args)))))
+                       (t (superchat-permission-ask name (superchat-tools--summary args)))))
          (allowed (memq answer '(allow always))))
     (when (eq answer 'always) (puthash key t superchat-tools--always))
     (unless (eq decision 'allow)

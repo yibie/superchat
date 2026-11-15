@@ -188,7 +188,9 @@
       (let ((superchat-permission-ask-function
              (lambda (tool summary)
                (should (member tool '("eval_elisp" "shell")))
-               (should (string-match-p (regexp-quote tool) summary))
+               ;; The question names the tool; the summary is the call's arguments.
+               (should-not (string-match-p (regexp-quote tool) summary))
+               (should (string-prefix-p "(:" summary))
                (cl-incf asks) (pop answers))))
         (should (string-match-p "Permission denied" (superchat-test-tools--err "eval_elisp" :code "1")))
         (should (equal (superchat-test-tools--ok "eval_elisp" :code "1") "1"))
