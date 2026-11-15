@@ -144,7 +144,7 @@ There is no "session" object and no "memory" store. A session is the
 
 | kind | `:text` | `:data` |
 |---|---|---|
-| `user` | what the user said | `(:origin PLIST)` optional: `(:buffer NAME :file PATH :mode NAME :line N)`, the mode's name a string |
+| `user` | what the user said | `(:origin PLIST :ephemeral BOOL)`, both optional: ORIGIN `(:buffer NAME :file PATH :mode NAME :line N)`, the mode's name a string; EPHEMERAL t for one question another package asked, not a conversation |
 | `assistant` | the model's text, may be empty | `(:model STRING :calls LIST)`, each call `(:id STRING :name STRING :args PLIST)` |
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
