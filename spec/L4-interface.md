@@ -17,31 +17,34 @@ derived from `org-mode`.
   (the entries before the first `user` entry are a turn too). As an entry
   comes, its turn is drawn again from that turn's entries, so rendering the
   whole view again gives the same text and the same folding. Text above the
-  input area is read-only. Entries look like:
-  - `user`: `* You`, then its text, a line of it that starts with `*` shown
-    with one space before it, so that it is never a heading;
-  - `assistant`: `* Assistant`, then its text converted from Markdown to
-    Org (the Tape keeps the Markdown), then its tool calls. With no text the
-    heading is shown only when it has calls and the line before is not a
-    tool call of the same turn, so the calls of several rounds sit together;
-    with no text and no calls, nothing;
-  - a tool call: a heading `** MARK NAME  ARGS  (DURATION)`, its body folded:
-    MARK is `⏳` while the call has no `tool` entry in its turn, `✗` when
-    that entry has `:error`, else `✓`; ARGS is the arguments plist printed
-    with `%S` without its outer parentheses, newlines escaped, cut to 60
-    characters and `…` (left out with its spaces when empty); DURATION is
-    `N.Ns`, the `:at` of the `tool` entry less that of the entry before it,
-    and is left out while there is none. The body is the arguments, one key
-    and value per line, then the result, each in a `#+begin_example` block
-    escaped with `org-escape-code-in-string`; an empty part has no block;
-  - consecutive tool calls (no other line between them) of one turn: the
-    calls of every round whose calls all have a result, when two or more of
-    them have no error, go under one heading `** ▸ N calls: NAME ×K, ...`,
-    the names in order of first use and `×K` only when K > 1, each call
-    then a level 3 heading; the group is folded. Calls with an error
-    follow the group at level 2, and the calls of a round still waiting
-    follow them. With fewer than two, every call is a level 2 heading in
-    order;
+  input area is read-only. A turn shows, in this order:
+  - its `user` entry: `* You`, then its text, a line of it that starts with
+    `*` shown with one space before it, so that it is never a heading;
+  - once the turn has an `assistant` entry or streamed text, one `* Assistant`
+    heading, then the final answer: the text of the turn's last `assistant`
+    entry when that entry has no calls, converted from Markdown to Org (the
+    Tape keeps the Markdown); else nothing;
+  - the process, when the turn has a call without an error or an
+    intermediate text (the text of any other `assistant` entry): one heading `** ▸ Looked, N calls:
+    NAME ×K, ...` (`1 call`; `** ▸ Looked` when it holds no call), N the
+    calls in it, the names in order of first use and `×K` only when K > 1,
+    `⏳` in place of `▸` while a call of it has no result. Under it, in
+    order, the intermediate texts, converted, each followed by its calls but
+    those with an error, each call a level 3 heading. The process is open
+    while the turn runs and folded once the turn has its final answer or the
+    timeline is no longer busy with it;
+  - each call with an error, a level 2 heading, after the process;
+  - the turn's other entries, each as its own lines, in order.
+  A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
+  body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
+  `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
+  printed with `%S` without its outer parentheses, newlines escaped, cut to
+  60 characters and `…` (left out with its spaces when empty); DURATION is
+  `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, and
+  is left out while there is none. The body is the arguments, one key and
+  value per line, then the result, each in a `#+begin_example` block escaped
+  with `org-escape-code-in-string`; an empty part has no block. The other
+  entries look like:
   - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
     empty, `What comes next: NEXT`; an anchor with empty text (a fork)
     shows only its line;
@@ -63,22 +66,24 @@ derived from `org-mode`.
   with `org-link-escape`. A line of
   three or more `-`, `*` or `_` (spaces between allowed) becomes `-----`.
   `# ` to `###### ` at the start of a line become headings, demoted so that
-  the shallowest heading of the answer is level 2, the others keeping their
-  depth below it; any other line starting with `#` stays text. A list item
-  `*`, `+` or `-` becomes `-`. Consecutive lines starting with `>` become a
+  the shallowest heading of the text is level 2 in the final answer and
+  level 3 in an intermediate text, the others keeping their depth below
+  it; any other line starting with `#` stays text. A list item `*`, `+` or
+  `-` becomes `-`. Consecutive lines starting with `>` become a
   `#+begin_quote` block without the `>`. A table (consecutive lines starting
   with `|`) loses its alignment row (cells of `-` and `:` only) for an Org
   rule `|-` and is aligned with `org-table-align`. `**x**` and `__x__`
   become `*x*`, `*x*` and `_x_` become `/x/`, `~~x~~` becomes `+x+`; x is
   one or more characters that do not start or end with a space, and `_` does
   not open or close inside a word.
-- The answer's text streams in as it comes, raw, in the `shadow` face, under
-  a `* Assistant` heading, below the entries of its turn; the `assistant`
-  entry replaces it when it comes.
+- The answer's text streams in as it comes, raw, in the `shadow` face,
+  where the final answer goes: right under the turn's `* Assistant`
+  heading, above the process; the `assistant` entry replaces it when it
+  comes.
 - `TAB` on a heading of the entries toggles it by Org's own cycling, the
   read-only text notwithstanding; the subtree of the last heading ends where
   the input area's lines begin, which never fold. A heading the person
-  opened stays open when its turn is drawn again.
+  opened or closed stays so when its turn is drawn again.
 - Below the entries are a separator line and the prompt `❯ `, both
   read-only; the input area is everything after the prompt. Typing a
   self-inserting character with point above the input area moves point to
