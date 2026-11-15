@@ -35,10 +35,21 @@ regexp over the whole answer, which overflows the matcher on a long one."
         (string-join body "\n")
       text)))
 
-(defun superchat-inline--show (overlay text)
-  "Make OVERLAY display TEXT in place of the region and remember it."
-  (overlay-put overlay 'superchat-text text)
-  (overlay-put overlay 'display (propertize text 'face 'highlight)))
+(defun superchat-inline--show (overlay text &optional ready)
+  "Show TEXT after the region of OVERLAY and remember it.  The region stays in
+sight, struck through, so the person sees what would go and what would come;
+the last line says which keys act, READY once the answer is complete."
+  (let ((apart (if (or (string-search "\n" text)
+                       (string-search "\n" (buffer-substring (overlay-start overlay)
+                                                              (overlay-end overlay))))
+                   "\n" " ")))
+    (overlay-put overlay 'superchat-text text)
+    (overlay-put overlay 'face '(:inherit shadow :strike-through t))
+    (overlay-put overlay 'after-string
+                 (concat apart (propertize text 'face 'highlight) apart
+                         (propertize (if ready "[C-c C-c accept · C-c C-k discard]"
+                                       "[rewriting… C-c C-k cancels]")
+                                     'face 'shadow)))))
 
 (defun superchat-inline--overlay ()
   "The rewrite overlay at point, or a `user-error'."
@@ -77,15 +88,18 @@ The region stays as it is."
   (let ((status (plist-get run :status)))
     (when (overlay-buffer overlay)
       (if (eq status 'done)
-          (superchat-inline--show
-           overlay (superchat-inline--unfence (plist-get run :text)))
+          (progn
+            (superchat-inline--show
+             overlay (superchat-inline--unfence (plist-get run :text)) t)
+            (message "Rewrite ready: C-c C-c accepts, C-c C-k discards"))
         (delete-overlay overlay)
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
                  (if (eq status 'error) (plist-get run :error) ""))))))
 
 (defun superchat-rewrite (instruction)
   "Ask the model to rewrite the region by INSTRUCTION.
-The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inline-accept] accepts it, \\[superchat-inline-discard] discards it."
+The replacement shows after the region, which is struck through;
+\\<superchat-inline-map>\\[superchat-inline-accept] accepts it, \\[superchat-inline-discard] discards it."
   (interactive (list (progn (superchat-inline--region)
                             (read-string "Rewrite how: "))))
   (let* ((tape (superchat-tape-new-name))
@@ -93,6 +107,8 @@ The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inli
          (overlay (make-overlay (region-beginning) (region-end)))
          (started nil))
     (deactivate-mark)
+    ;; The keys act where the overlay is: point goes there.
+    (goto-char (overlay-start overlay))
     (overlay-put overlay 'keymap superchat-inline-map)
     (overlay-put overlay 'superchat-tape tape)
     (overlay-put overlay 'help-echo "C-c C-c accepts, C-c C-k discards")

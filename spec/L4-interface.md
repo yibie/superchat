@@ -78,8 +78,11 @@ Built-in commands, and no others:
 ## superchat-inline.el
 
 - `superchat-rewrite` (a command): with a region, read an instruction, run on
-  a new ephemeral timeline with tools `none`, and show the model's replacement over the region in an overlay as
-  it streams. Each rewrite has its own timeline, so one does not resend the
+  a new ephemeral timeline with tools `none`, and show the model's replacement in an overlay as
+  it streams: the region stays in sight, dimmed and struck through, the
+  replacement follows it highlighted, and a last part names the keys
+  (`C-c C-k` while it streams; `C-c C-c` and `C-c C-k` once it is complete,
+  said in the echo area too). Point goes to the region, where the keys act. Each rewrite has its own timeline, so one does not resend the
   others. The replacement is the text of the run's `assistant` entry; the
   streamed text is only shown while it comes. `C-c C-c` on the overlay
   replaces the region (one undo step) once the run is over, `C-c C-k`

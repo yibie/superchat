@@ -37,7 +37,7 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
   (seq-find (lambda (o) (overlay-get o 'superchat-text)) (overlays-in (point-min) (point-max))))
 
 (defun superchat-test-inline--shown (overlay)
-  (substring-no-properties (overlay-get overlay 'display)))
+  (overlay-get overlay 'superchat-text))
 
 (ert-deftest superchat-inline-request ()
   (superchat-test-inline--with "alpha beta gamma"
@@ -77,6 +77,22 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
       (should-not (superchat-test-inline--overlay))
       (let ((last-command nil)) (undo))
       (should (equal (buffer-string) "alpha beta gamma")))))
+
+(ert-deftest superchat-inline-the-region-stays-in-sight-with-the-keys ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let (said)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+        (superchat-test-script (list '(:text "BETA"))
+          (superchat-rewrite "shout")))
+      (let* ((overlay (superchat-test-inline--overlay))
+             (after (substring-no-properties (overlay-get overlay 'after-string))))
+        (should-not (overlay-get overlay 'display))
+        (should (plist-get (overlay-get overlay 'face) :strike-through))
+        (should (string-match-p "BETA" after))
+        (should (string-match-p "C-c C-c accept" after))
+        (should (string-match-p "C-c C-c accepts" said))
+        (should (= (point) (overlay-start overlay)))))))
 
 (ert-deftest superchat-inline-discard ()
   (superchat-test-inline--with "alpha beta gamma"
