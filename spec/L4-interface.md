@@ -180,12 +180,11 @@ Built-in commands, and no others:
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
 | `/help` | list commands |
 
-A conversation is a tab of the frame's tab bar (`tab-bar`), as a page is in
-a browser. `/new` and `/fork` open the conversation they make in a new tab;
-`/resume` selects the tab that shows the chosen conversation, or opens a new
-tab when none does. The new tab shows that chat buffer alone, in a window
-with no earlier buffers, so a window tab line lists only it. A tab is
-named as `tab-bar` names it, after its buffer, so it follows the title.
+`/new`, `/resume` and `/fork` show the conversation they open in the window
+they were typed in, in place of this one, whatever `display-buffer-alist`
+says of chat buffers; no other window or tab is made. The window keeps its
+history of buffers, so `previous-buffer` and a window tab line go back to
+the conversations it showed.
 
 ## superchat-inline.el
 

@@ -1036,35 +1036,25 @@ tool `echo', and no chat buffers left behind."
       (should (equal (plist-get (car (superchat-tape-entries :tape "t1" :kinds '(user))) :text)
                      "* not a heading\nsecond")))))
 
-(ert-deftest superchat-chat-a-conversation-is-a-tab ()
+(ert-deftest superchat-chat-new-resume-and-fork-open-in-place ()
   (superchat-test-chat--with
     (superchat-test-script (list '(:text "a1"))
       (with-current-buffer (superchat-chat-open "t1" (superchat-test-chat--scope))
         (superchat-chat-send "one")))
-    (unwind-protect
-        (cl-letf (((symbol-function 'completing-read)
-                   (lambda (_prompt choices &rest _)
-                     (car (seq-find (lambda (c) (equal (cdr c) "t1")) choices)))))
-          (switch-to-buffer (superchat-chat-open "t1"))
-          (let ((tabs (length (tab-bar-tabs))))
-            ;; /new and /fork: one more tab each, showing the new chat alone.
-            (dolist (command '("/new" "/fork"))
-              (with-current-buffer (superchat-chat-open "t1")
-                (switch-to-buffer (current-buffer))
-                (superchat-chat-send command))
-              (cl-incf tabs)
-              (should (= (length (tab-bar-tabs)) tabs))
-              (should (= (length (window-list)) 1))
-              (should-not (equal (superchat-test-chat--tape-of (window-buffer)) "t1")))
-            ;; /resume of a conversation that has a tab selects it, no new tab.
-            (switch-to-buffer (superchat-chat-open "t1"))
-            (tab-bar-new-tab)
-            (switch-to-buffer "*scratch*")
-            (cl-incf tabs)
-            (with-current-buffer (superchat-chat-open "t1") (superchat-chat-send "/resume"))
-            (should (= (length (tab-bar-tabs)) tabs))
-            (should (equal (superchat-test-chat--tape-of (window-buffer)) "t1"))))
-      (tab-bar-close-other-tabs))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _)
+                 (car (seq-find (lambda (c) (equal (cdr c) "t1")) choices)))))
+      (dolist (command '("/new" "/fork" "/resume"))
+        (delete-other-windows)
+        (switch-to-buffer "*scratch*")
+        (switch-to-buffer (superchat-chat-open "t1"))
+        (let ((window (selected-window)))
+          (with-current-buffer (window-buffer) (superchat-chat-send command))
+          (should (= (length (window-list)) 1))
+          (should (eq (selected-window) window))
+          (should (superchat-test-chat--tape-of (window-buffer)))
+          ;; The window remembers the conversation it showed before.
+          (should (window-prev-buffers)))))))
 
 (ert-deftest superchat-chat-a-turn-has-one-assistant-heading ()
   (superchat-test-chat--with
@@ -1084,21 +1074,17 @@ tool `echo', and no chat buffers left behind."
         (kill-buffer buffer)
         (should (equal incremental (superchat-test-chat--text (superchat-chat-open "t1"))))))))
 
-(ert-deftest superchat-chat-a-new-tab-shows-the-new-chat-whatever-the-display-rules ()
+(ert-deftest superchat-chat-a-new-chat-stays-in-place-whatever-the-display-rules ()
   (superchat-test-chat--with
-    (unwind-protect
-        (let ((display-buffer-alist '(("\\*superchat" (display-buffer-in-side-window)
-                                       (side . bottom))))
-              (switch-to-buffer-obey-display-actions t))
-          (switch-to-buffer (superchat-chat-open "t1" (superchat-test-chat--scope)))
-          (with-current-buffer (window-buffer) (superchat-chat-send "/new"))
-          (should (= (length (window-list)) 1))
-          (should-not (equal (superchat-test-chat--tape-of (window-buffer)) "t1"))
-          (should (superchat-test-chat--tape-of (window-buffer)))
-          ;; Nothing of the tab it came from: a window tab line shows it alone.
-          (should-not (window-prev-buffers))
-          (should-not (window-next-buffers)))
-      (tab-bar-close-other-tabs))))
+    (let ((display-buffer-alist '(("\\*superchat" (display-buffer-in-side-window)
+                                   (side . bottom))))
+          (switch-to-buffer-obey-display-actions t))
+      (delete-other-windows)
+      ;; Shown by hand: these rules would put even this one in a side window.
+      (set-window-buffer nil (superchat-chat-open "t1" (superchat-test-chat--scope)))
+      (with-current-buffer (window-buffer) (superchat-chat-send "/new"))
+      (should (= (length (window-list)) 1))
+      (should-not (equal (superchat-test-chat--tape-of (window-buffer)) "t1")))))
 
 (ert-deftest superchat-chat-typing-in-the-history-types-in-the-input ()
   (superchat-test-chat--with

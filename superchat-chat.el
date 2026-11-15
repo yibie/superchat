@@ -10,7 +10,6 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'tab-bar)
 (require 'org)
 (require 'superchat)
 (require 'superchat-tape)
@@ -732,29 +731,14 @@ With no QUERY, show the notes."
                          text nil (superchat-chat--scope))
   (superchat-chat--add nil))
 
-(defun superchat-chat--tab (buffer)
-  "Show chat BUFFER in a tab of the frame's tab bar: its own tab when it has
-one, else a new one.  A conversation is a tab, as a page is in a browser."
-  (cond ((get-buffer-window buffer) (select-window (get-buffer-window buffer)))
-        ;; Another tab.  `tab-bar-get-buffer-tab' answers a copy of it, so the
-        ;; tab is found again among `tab-bar-tabs' by its name.
-        ((when-let* ((tab (tab-bar-get-buffer-tab buffer nil t))
-                     (index (cl-position-if
-                             (lambda (x) (and (not (eq (car x) 'current-tab))
-                                              (equal (alist-get 'name x)
-                                                     (alist-get 'name tab))))
-                             (tab-bar-tabs))))
-           (tab-bar-select-tab (1+ index))
-           t))
-        ;; `set-window-buffer', not `switch-to-buffer': a rule of the user's
-        ;; `display-buffer-alist' for chat buffers must not send it elsewhere.
-        ;; The new tab's window starts with no history: a window tab line
-        ;; would otherwise list the conversation the tab was opened from.
-        (t (tab-bar-new-tab)
-           (set-window-buffer nil buffer)
-           (set-window-prev-buffers nil nil)
-           (set-window-next-buffers nil nil)
-           (set-buffer buffer))))
+(defun superchat-chat--switch (buffer)
+  "Show chat BUFFER in the selected window, in place of this conversation.
+`set-window-buffer', not `switch-to-buffer': a rule of the user's
+`display-buffer-alist' for chat buffers must not send it to another window.
+The window keeps its history, so a window tab line lists the conversations
+it showed."
+  (set-window-buffer nil buffer)
+  (set-buffer buffer))
 
 (defun superchat-chat--resume (_)
   "Choose a timeline of this scope and open it."
@@ -765,7 +749,7 @@ one, else a new one.  A conversation is a tab, as a page is in a browser."
                                  (plist-get e :tape)))
                          (superchat-view 'timelines :scope (superchat-chat--scope)))))
     (unless choices (user-error "No timelines in this scope"))
-    (superchat-chat--tab
+    (superchat-chat--switch
      (superchat-chat-open
       (cdr (assoc (completing-read "Resume: " choices nil t) choices))))))
 
@@ -775,7 +759,7 @@ one, else a new one.  A conversation is a tab, as a page is in a browser."
                 (and (> superchat-chat--shown 0) superchat-chat--shown)
               (get-text-property (point) 'superchat-chat-id))))
     (unless id (user-error "No entry at point"))
-    (superchat-chat--tab (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
+    (superchat-chat--switch (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
 
 (defun superchat-chat--handoff (name)
   "Summarise the conversation into an anchor named NAME; refused when busy."
@@ -815,8 +799,8 @@ one, else a new one.  A conversation is a tab, as a page is in a browser."
 
 (superchat-command-define
  "new" (lambda (_)
-         (superchat-chat--tab (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
- "Start a new timeline in this scope, in a new tab.")
+         (superchat-chat--switch (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
+ "Start a new timeline in this scope, in this window.")
 (superchat-command-define "resume" #'superchat-chat--resume "Open another timeline of this scope.")
 (superchat-command-define "fork" #'superchat-chat--fork
                           "Fork at the entry at point and open the new timeline.")
