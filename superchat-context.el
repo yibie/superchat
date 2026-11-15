@@ -76,10 +76,10 @@ Frontmatter is only at the very start and ends at the first line that is `---'."
                files "\n")))))
 
 (defun superchat-context--notes (scope)
-  "The notes of SCOPE, oldest first so that the cut drops the oldest."
+  "The notes of SCOPE, newest first; the render's cut drops the oldest."
   (when-let* ((notes (superchat-view 'notes :scope scope)))
     (concat "Notes kept from earlier conversations:\n"
-            (superchat-view-render (reverse notes) 2000))))
+            (superchat-view-render notes 2000))))
 
 (defun superchat-context--origin (tape)
   "Where the latest user entry of TAPE came from, when it says."
@@ -93,14 +93,15 @@ Frontmatter is only at the very start and ends at the first line that is `---'."
             (if-let* ((line (plist-get origin :line))) (format ", line %s" line) ""))))
 
 (defun superchat-context-system (tape &optional extra)
-  "The system prompt for timeline TAPE, with the string EXTRA last."
+  "The system prompt for timeline TAPE, with the string EXTRA last.
+A timeline with no entry has no scope, so no rules file and no notes."
   (let ((scope (plist-get (car (superchat-tape-entries :tape tape :newest t :limit 1))
                           :scope)))
     (string-join
      (delq nil (list superchat-context--base
-                     (superchat-context--rules scope)
+                     (and scope (superchat-context--rules scope))
                      (superchat-context--skills)
-                     (superchat-context--notes scope)
+                     (and scope (superchat-context--notes scope))
                      (superchat-context--origin tape)
                      extra))
      "\n\n")))

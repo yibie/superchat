@@ -222,7 +222,12 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
           (unwind-protect (setq failed (superchat-agent--emit run t))
             (remhash tape superchat-agent--runs)
             (when-let* ((on-done (plist-get run :on-done)))
-              (funcall on-done run))))
+              (let ((ok nil))
+                ;; ON-DONE's own error goes to the caller; this one is shown.
+                (unwind-protect (progn (funcall on-done run) (setq ok t))
+                  (when (and failed (not ok))
+                    (message "Superchat: ON-ENTRY failed: %s"
+                             (error-message-string failed))))))))
         ;; No entry can record it now: it goes to whoever ended the run.
         (when failed (signal (car failed) (cdr failed)))))))
 
@@ -236,12 +241,18 @@ always ends.  When RUN has already ended the error belongs to the caller."
 
 (defun superchat-agent--track (run thunk)
   "Call THUNK, which starts a request; keep its handle for `superchat-cancel'.
-The request may already have answered, and the answer may have started
-another request; then this handle is stale and is not kept."
+The request may already have answered (see `superchat-agent--answered-request');
+then this handle is stale and is not kept."
   (let* ((seq (cl-incf (plist-get run :seq)))
          (handle (funcall thunk)))
     (when (and (= seq (plist-get run :seq)) (superchat-agent--live run))
       (setf (plist-get run :handle) handle))))
+
+(defun superchat-agent--answered-request (run)
+  "Forget the handle of RUN's request, which has answered: a later cancel must
+not cancel it, and `superchat-agent--track' must not keep it."
+  (cl-incf (plist-get run :seq))
+  (setf (plist-get run :handle) nil))
 
 (defun superchat-agent--respond (run response)
   "Record RESPONSE, run its calls in order, make the next request."
@@ -259,33 +270,36 @@ another request; then this handle is stale and is not kept."
 tools that answer at once do not deepen the stack; a tool that answers later
 resumes it from its callback, and Emacs is free meanwhile.  :calling is non-nil
 while `superchat-tool-call' has not returned: a cancel then waits for it, and
-so does a non-local exit out of it, which ends the run as an error.  :stop
-stops a tool that is still running."
+so does a non-local exit out of it, which ends the run as an error.  An error
+signalled inside it is that error event and goes no further.  :stop stops a
+tool that has not answered yet."
   (let ((waiting nil))
     (while (and calls (not waiting) (superchat-agent--live run))
       (let ((call (pop calls)) (rest calls) (returned nil) (answered nil) (stop nil)
             (ok nil) (why nil))
         (setf (plist-get run :calling) t)
         (unwind-protect
-            (handler-bind ((error (lambda (err) (setq why (error-message-string err)))))
-              (setq stop (superchat-tool-call
-                          (plist-get run :tape) call
-                          (lambda (_)
-                            (if (not returned)
-                                (setq answered t)
-                              (setf (plist-get run :stop) nil)
-                              (when (superchat-agent--live run)
-                                (superchat-agent--guard
-                                 run (lambda () (superchat-agent--emit run)
-                                       (superchat-agent--calls run rest))))))
-                          (lambda () (not (superchat-agent--live run)))))
-              (setq ok t))
+            (condition-case err
+                (setq stop (superchat-tool-call
+                            (plist-get run :tape) call
+                            (lambda (_)
+                              (if (not returned)
+                                  (setq answered t)
+                                (setf (plist-get run :stop) nil)
+                                (when (superchat-agent--live run)
+                                  (superchat-agent--guard
+                                   run (lambda () (superchat-agent--emit run)
+                                         (superchat-agent--calls run rest))))))
+                              (lambda () (not (superchat-agent--live run))))
+                      ok t)
+              (error (setq why (error-message-string err))))
           (setq returned t)
-          (setf (plist-get run :calling) nil (plist-get run :stop) stop)
-          (cond ((eq (plist-get run :status) 'cancelled) (superchat-agent--end run 'cancelled))
+          (setf (plist-get run :calling) nil (plist-get run :stop) (unless answered stop))
+          (cond (why (superchat-agent--end run 'error why))
+                ((eq (plist-get run :status) 'cancelled) (superchat-agent--end run 'cancelled))
                 ((and (not ok) (superchat-agent--live run))
                  (superchat-agent--end
-                  run 'error (or why "A tool call was interrupted before it returned.")))))
+                  run 'error "A tool call was interrupted before it returned."))))
         (superchat-agent--emit run)
         (setq waiting (not answered))))
     (when (and (not waiting) (superchat-agent--live run))
@@ -330,11 +344,14 @@ stops a tool that is still running."
                                             (on-text (plist-get run :on-text)))
                                   (funcall on-text text)))
                      :on-done (lambda (response)
+                                (superchat-agent--answered-request run)
                                 (when (superchat-agent--live run)
                                   (superchat-agent--guard
                                    run (lambda () (superchat-agent--respond run response)))))
-                     :on-error (lambda (why) (when (superchat-agent--live run)
-                                               (superchat-agent--end run 'error why))))))))))))
+                     :on-error (lambda (why)
+                                 (superchat-agent--answered-request run)
+                                 (when (superchat-agent--live run)
+                                   (superchat-agent--end run 'error why))))))))))))
 
 (defun superchat-agent--add-user (run)
   "Append the user entry of RUN, if it is unsent."
@@ -391,6 +408,7 @@ the user entry: the timeline is one question, not a conversation."
                       (superchat-agent--summarise
                        tape nil run
                        (lambda (anchor &optional why)
+                         (superchat-agent--answered-request run)
                          (superchat-agent--guard
                           run (lambda ()
                                 (if anchor
@@ -520,13 +538,15 @@ The timeline is busy until then."
 
 (defun superchat-agent--fork-entries (tape entry-id)
   "The conversation entries of TAPE up to ENTRY-ID, and the results of the
-calls of every assistant entry among them."
+calls of every assistant entry among them.  ENTRY-ID must be one of them."
   (let* ((entries (superchat-view 'conversation :tape tape))
          (calls (cl-loop for e in entries
                          when (and (eq (plist-get e :kind) 'assistant)
                                    (<= (plist-get e :id) entry-id))
                          append (mapcar (lambda (c) (plist-get c :id))
                                         (plist-get (plist-get e :data) :calls)))))
+    (unless (cl-find entry-id entries :key (lambda (e) (plist-get e :id)))
+      (error "Entry %s is not in the conversation of %s" entry-id tape))
     (cl-remove-if-not
      (lambda (e) (or (<= (plist-get e :id) entry-id)
                      (and (eq (plist-get e :kind) 'tool)
@@ -534,15 +554,17 @@ calls of every assistant entry among them."
      entries)))
 
 (defun superchat-fork (tape entry-id)
-  "A new timeline that starts from TAPE's conversation up to ENTRY-ID.
-Its first entry is an anchor with no summary that refers to those entries."
-  (let ((name (superchat-tape-new-name)))
+  "A new timeline, of TAPE's scope, that starts from TAPE's conversation up to
+ENTRY-ID.  Its first entry is an anchor with no summary that refers to those
+entries."
+  (let ((refs (mapcar (lambda (e) (plist-get e :id))
+                      (superchat-agent--fork-entries tape entry-id)))
+        (name (superchat-tape-new-name)))
     (superchat-tape-append
      name 'anchor ""
      :data (list :name "fork" :summary "" :next "")
-     :refs (mapcar (lambda (e) (plist-get e :id))
-                   (superchat-agent--fork-entries tape entry-id))
-     :scope (plist-get (car (superchat-tape-entries :tape tape :newest t :limit 1)) :scope))
+     :refs refs
+     :scope (plist-get (car (superchat-tape-entries :tape tape :limit 1)) :scope))
     name))
 
 (provide 'superchat-agent)

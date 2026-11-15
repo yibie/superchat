@@ -1787,5 +1787,105 @@ model m8 and `superchat-context-chars' nil."
       ;; Two Cancelled. results: the first signal is raised, the second shown.
       (should (= (cl-count-if (lambda (m) (string-match-p "display broke" m)) shown) 1)))))
 
+;;; The sixth review
+
+(ert-deftest superchat-agent-on-done-error-wins-and-the-pending-on-entry-error-is-shown ()
+  (superchat-test-agent--with
+    (let (shown caught)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown))))
+        (superchat-test-script (list '(:error "boom"))
+          (condition-case err
+              (superchat-run "t" "go"
+                             :on-entry (lambda (e) (when (eq (plist-get e :kind) 'event)
+                                                     (error "display broke")))
+                             :on-done (lambda (_) (error "done broke")))
+            (error (setq caught (cadr err))))))
+      (should (equal caught "done broke"))
+      (should (cl-some (lambda (m) (string-match-p "display broke" m)) shown))
+      (should-not (superchat-run-active "t")))))
+
+(ert-deftest superchat-agent-an-error-raised-by-on-done-reaches-the-caller ()
+  (superchat-test-agent--with
+    (superchat-test-script (list '(:text "fine"))
+      (should (equal (cadr (should-error (superchat-run "t" "go"
+                                                        :on-done (lambda (_) (error "done broke")))))
+                     "done broke")))
+    (should-not (superchat-run-active "t"))))
+
+(ert-deftest superchat-agent-a-signal-inside-a-tool-call-is-only-the-error-event ()
+  (superchat-test-agent--with
+    (let (dones run)
+      (cl-letf (((symbol-function 'superchat-tool-call) (lambda (&rest _) (error "tape broke"))))
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "echo" :x "a"))))
+          (setq run (superchat-run "t" "go"
+                                   :on-done (lambda (r) (push (plist-get r :status) dones))))))
+      (should (eq (plist-get run :status) 'error))
+      (should (string-match-p "tape broke" (plist-get run :error)))
+      (should (equal dones '(error)))
+      (should (equal (superchat-test-agent--types "t") '(user assistant tool error))))))
+
+(defun superchat-test-agent--answer-once (call)
+  "A request function: the first request answers at once with CALL, later
+ones never answer.  Each handle is a fresh list."
+  (let ((n 0))
+    (lambda (_messages &rest keys)
+      (when (= (cl-incf n) 1)
+        (funcall (plist-get keys :on-done) (list :text "" :calls (list call) :model "s")))
+      (list :cancelled nil :finished nil :request n))))
+
+(ert-deftest superchat-agent-a-tool-that-answered-is-never-stopped ()
+  (superchat-test-agent--with
+    (let ((stopped nil) (superchat-llm-request-function
+                         (superchat-test-agent--answer-once
+                          (superchat-test-agent--call "c1" "echo" :x "a"))))
+      (cl-letf (((symbol-function 'superchat-tool-call)
+                 (lambda (tape call on-result &rest _)
+                   (funcall on-result (superchat-tape-append
+                                       tape 'tool "done" :data (list :call-id (plist-get call :id)
+                                                                     :name "echo")))
+                   (lambda () (setq stopped t))))
+                ((symbol-function 'superchat-llm-cancel) #'ignore))
+        (superchat-run "t" "go")
+        (superchat-cancel "t"))
+      (should-not stopped)
+      (should-not (superchat-run-active "t")))))
+
+(ert-deftest superchat-agent-a-cancel-never-cancels-a-request-that-answered ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slowx
+      (let ((cancelled nil) (superchat-llm-request-function
+                             (superchat-test-agent--answer-once
+                              (superchat-test-agent--call "c1" "slowx"))))
+        (cl-letf (((symbol-function 'superchat-llm-cancel) (lambda (h) (push h cancelled))))
+          (superchat-run "t" "go")
+          (should (superchat-run-active "t"))
+          (superchat-cancel "t"))
+        (superchat-test-agent--idle)
+        (should-not cancelled)
+        (should (equal (superchat-test-agent--types "t") '(user assistant tool cancelled)))))))
+
+(ert-deftest superchat-agent-a-change-of-the-budget-is-seen-at-the-next-request ()
+  (superchat-test-agent--with
+    (let ((superchat-context-chars 100000))
+      (superchat-tool-define "shrink" :class 'read :description "Shrinks the budget"
+                             :function (lambda (_) (setq superchat-context-chars 100) "ok"))
+      (unwind-protect
+          (superchat-test-script
+              (list `(:calls (,(superchat-test-agent--call "c1" "shrink"))) '(:text "never"))
+            (let ((run (superchat-run "t" (make-string 300 ?u))))
+              (should (= (length superchat-test-requests) 1))
+              (should (eq (plist-get run :status) 'error))
+              (should (string-match-p "is 100\\." (plist-get run :error)))))
+        (superchat-tool-remove "shrink")))))
+
+(ert-deftest superchat-agent-fork-at-an-entry-not-in-the-conversation-is-an-error ()
+  (superchat-test-agent--with
+    (let ((other (superchat-tape-append "o" 'user "elsewhere" :scope "home")))
+      (superchat-tape-append "t" 'user "q" :scope "home")
+      (should-error (superchat-fork "t" (plist-get other :id)))
+      (should-error (superchat-fork "t" 0)))))
+
 (provide 'test-agent)
 ;;; test-agent.el ends here

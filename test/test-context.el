@@ -100,5 +100,25 @@
     (superchat-tape-append "t" 'user "three" :data '(:origin (:buffer "new.el" :mode "emacs-lisp-mode")))
     (should (string-match-p "new.el.*emacs-lisp-mode" (superchat-context-system "t")))))
 
+(ert-deftest superchat-context-a-timeline-with-no-entry-has-no-rules-and-no-notes ()
+  (superchat-test-with-tape
+    (let ((default-directory (file-name-as-directory (make-temp-file "sc-ctx-" t))))
+      (unwind-protect
+          (progn
+            (superchat-test-context--write (concat default-directory "AGENTS.md") "HERE-RULES")
+            (superchat-test-context--write (concat superchat-directory "AGENTS.md") "HOME-RULES")
+            (superchat-tape-append "h" 'note "HOME-NOTE" :scope "home")
+            (superchat-tape-append "p" 'note "PROJECT-NOTE" :scope "/p/")
+            (let ((system (superchat-context-system "empty" "EXTRA-PART"))
+                  (case-fold-search nil))
+              (should (string-match-p "Superchat" system))
+              (should (string-match-p "EXTRA-PART" system))
+              (should-not (string-match-p "RULES\\|Rules of\\|NOTE\\|Notes kept" system))))
+        (delete-directory default-directory t)))))
+
+(ert-deftest superchat-context-the-base-instructions-are-at-most-40-lines ()
+  (superchat-test-with-tape
+    (should (<= (length (split-string (superchat-context-system "empty") "\n")) 40))))
+
 (provide 'test-context)
 ;;; test-context.el ends here
