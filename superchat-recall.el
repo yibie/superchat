@@ -22,10 +22,6 @@
   (plist-get (car (superchat-tape-entries :tape superchat-tool-tape :limit 1 :newest t))
              :scope))
 
-(defun superchat-recall--number (value)
-  "VALUE as a number; a model may send it as a string."
-  (if (stringp value) (string-to-number value) value))
-
 (defun superchat-recall--view (args)
   "Run the view named in ARGS for the current timeline and scope; text."
   (let ((view (intern (plist-get args :view)))
@@ -33,7 +29,7 @@
     (dolist (key '(:query :name :id :limit))
       (when-let* ((value (plist-get args key)))
         (setq params (plist-put params key (if (memq key '(:id :limit))
-                                               (superchat-recall--number value)
+                                               (superchat-tools--number value nil)
                                              value)))))
     (superchat-view-render (apply #'superchat-view view params)
                            superchat-recall--max-chars)))

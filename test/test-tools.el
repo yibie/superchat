@@ -787,5 +787,51 @@ sets `stopped' and cancels the timer."
                              #'ignore)
         (should-not asked)))))
 
+(ert-deftest superchat-tools-no-read-leaves-the-project-unasked ()
+  (superchat-test-tools--in-scope
+    (let* ((outside (file-name-as-directory (make-temp-file "sc-out-" t)))
+           (asked 0)
+           (superchat-permission-ask-function (lambda (&rest _) (cl-incf asked) 'deny)))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "sub" outside))
+            (with-temp-file (expand-file-name "secret" outside) (insert "KEY=hunter2"))
+            (make-symbolic-link (expand-file-name "sub" outside) (expand-file-name "link" dir))
+            (superchat-permission-set "t" 'ask)
+            ;; Through a link and `..': the check and grep must see one path.
+            (should-not (string-match-p "hunter2" (plist-get (superchat-test-tools--call
+                                                              "search_files" :pattern "KEY"
+                                                              :path "link/../secret")
+                                                             :text)))
+            ;; A path that grep would take for an option.
+            (should-not (string-match-p "hunter2" (plist-get (superchat-test-tools--call
+                                                              "search_files" :pattern "x"
+                                                              :path (concat "-f" outside "secret"))
+                                                             :text)))
+            ;; The buffer of an outside file is outside too.
+            (let ((b (find-file-noselect (expand-file-name "secret" outside))))
+              (unwind-protect
+                  (progn (setq asked 0)
+                         (superchat-test-tools--err "read_buffer" :buffer (buffer-name b))
+                         (should (= asked 1)))
+                (kill-buffer b))))
+        (delete-directory outside t)))))
+
+(ert-deftest superchat-tools-at-home-a-search-of-the-default-path-is-asked ()
+  (superchat-test-with-tape
+    (let ((asked nil))
+      (superchat-tape-append "h" 'user "go" :scope "home")
+      (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny)))
+        (superchat-tool-call "h" '(:id "c" :name "search_files" :args (:pattern "KEY"))
+                             #'ignore)
+        (should asked)))))
+
+(ert-deftest superchat-tools-line-numbers-may-come-as-strings ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "f.txt" "a\nb\nc\n")
+    (should (string-prefix-p "Lines 2-3 of 3"
+                             (superchat-test-tools--ok "read_file" :path "f.txt"
+                                                       :start "2" :count "2")))))
+
 (provide 'test-tools)
 ;;; test-tools.el ends here

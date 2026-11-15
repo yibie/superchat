@@ -32,8 +32,7 @@ requires `llm.el`.
     message, an assistant message of this request's MESSAGES or an earlier
     call of the same response already has, gets one made here.
   - A request waits ten minutes for the response to start and is tried up to
-    two more times when the provider says to try again, as pi's own client
-    does.
+    two more times when the provider says to try again.
   - A response that ends with the bridge's stop reason `error` goes to ON-ERROR
     with its error message; `aborted` calls neither; every other stop reason
     goes to ON-DONE.
@@ -46,7 +45,7 @@ requires `llm.el`.
     with the error's message. An error raised by ON-DONE or ON-ERROR is the
     caller's to catch: it is not delivered anywhere.
   - The model's reasoning is never on the Tape and never in ON-DONE. This
-    module keeps, in memory, the whole the bridge assistant message of a response
+    module keeps, in memory, the whole assistant message the bridge gave for a response
     that made calls, by the id and name of every call. When MESSAGES holds an
     assistant message with exactly those calls, the kept message is sent in
     its place, so the provider gets its reasoning back as the bridge sends it. A
@@ -69,7 +68,9 @@ requires `llm.el`.
   signalled.
 - `(superchat-llm-context-window &optional MODEL)` → the context window, in
   tokens, of MODEL (default `superchat-llm-model`) of the provider, as the
-  bridge's model data gives it; nil when the data has none.
+  bridge's model data gives it; nil when the data has none, or when the
+  provider or the model is not set or not known (the request reports
+  those).
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
   function of no arguments that returns a bridge provider. When a name is
   there twice the first entry counts, and a changed entry is seen at the
@@ -97,7 +98,7 @@ key is found by the bridge (for DeepSeek, the environment variable
 (a `defvar`, default `#'superchat-llm--request`) is what `superchat-llm-request`
 calls, and `test/helper.el` replaces it. The tests of this file give
 `superchat-llm-providers` a provider whose API is a stub that returns scripted
-The bridge event streams.
+bridge event streams.
 
 ## superchat-permission.el
 
@@ -112,13 +113,13 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
 
 - `(superchat-permission-level TAPE)` → the level of a timeline: the level of
   its latest `event` entry of type `level`, else `superchat-default-level`.
-- `(superchat-permission-set TAPE LEVEL)`: append that event.
+- `(superchat-permission-set TAPE LEVEL)`: append that event. A LEVEL that
+  is not one of the three is an error.
 - `(superchat-permission-decide TAPE CLASS)` → `allow`, `deny` or `ask`.
 - `(superchat-permission-ask TOOL-NAME SUMMARY)` → `allow`, `deny` or
   `always`, by calling `superchat-permission-ask-function` (a `defvar`). The
   default reads one key in the minibuffer: y, n, or a for "always in this
-  conversation". `superchat-tool-call` remembers `always` for that tool name
-  in that timeline until Emacs exits, in a hash table, not on the Tape.
+  conversation".
 
 ## superchat-tools.el
 
@@ -168,6 +169,8 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   the entry is appended with quitting off again. A quit (`C-g` while the
   tool runs or while the user is asked) is such an entry too, with the text
   `Interrupted by the user.`
+- `superchat-tool-call` remembers an `always` answer for that tool name in
+  that timeline until Emacs exits, in a hash table, not on the Tape.
 - Results longer than `superchat-tool-max-chars` (20000) are cut, and the
   text says how many characters were left out.
 - A tool that reads from a process never holds more of its output than a
@@ -189,10 +192,15 @@ Built-in tools, and no others:
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order, return the last value printed, with what was printed to `*Messages*` meanwhile |
 | `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else; asynchronous |
 
-A path is relative to the scope. A call of a `read` tool whose `path`
-argument names a file outside the scope and outside `superchat-directory`
-(where the skills are), once `..` and symbolic links are resolved, is
-decided as a `write` call: at `ask` the user is asked, at `read-only` it is
+A path is relative to the scope; `~` and absolute paths work. A call of a
+`read` tool that reads outside the scope and outside `superchat-directory`
+(where the skills are) is decided as a `write` call. What it reads is the
+file or directory its `path` argument names, the project when a tool that
+takes a `path` is given none, and the file a buffer named by its `buffer`
+argument visits. A path is checked as the tool will open it, with symbolic
+links resolved, and given to the tool in that form, so a link, a `..` or a
+leading `-` cannot make the tool read another file than the one checked. A
+buffer that visits no file is Emacs's own and inside. Such a call: at `ask` the user is asked, at `read-only` it is
 denied, at `auto` it runs. `"home"` is no project, so there only
 `superchat-directory` is inside. The `permission` event and the denial say that
 the call was outside the project. A file a tool edits is edited through its
@@ -214,6 +222,6 @@ Three tools, defined with `superchat-tool-define`, all of class `read`:
   entry yet. The `note` tool and the person (`superchat-note`, `/note`)
   write notes through this one function.
 
-A number argument may arrive as a string. The description of `recall` lists the views and their arguments from
+The description of `recall` lists the views and their arguments from
 `superchat-view-names`, each time the specs are asked for. The description of
 `tape_query` gives the table definition.

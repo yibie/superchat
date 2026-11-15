@@ -155,7 +155,8 @@ A correction is a new entry whose `:refs` names the entry it corrects.
 
 The arguments of a call are a plist with keyword keys, `(:path "a.el" :count 5)`,
 everywhere: from `superchat-llm-request`, on the Tape, and into a tool's
-function. A JSON false is nil.
+function. A JSON false is nil. A number argument may arrive as a string,
+or as a float where a whole number is meant; a tool takes it as the number.
 
 ## superchat.el
 

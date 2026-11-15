@@ -69,22 +69,35 @@ tool itself."
   (let ((text (format "%S" args)))
     (if (> (length text) 200) (concat (substring text 0 200) "...") text)))
 
-(defun superchat-tools--outside-p (scope args)
-  "Non-nil when the :path of ARGS names a file outside SCOPE and outside
+(defun superchat-tools--reads (tool args)
+  "The files and directories a call of TOOL with ARGS reads: its path, the
+project when the path is left out, and the file of a buffer it names.
+A path is expanded as the tool expands it, so what is checked is what is read."
+  (delq nil
+        (list (when (cl-some (lambda (a) (equal (plist-get a :name) "path"))
+                             (plist-get tool :args))
+                (superchat-tools--path (let ((path (plist-get args :path)))
+                                         (if (stringp path) path "."))))
+              (when-let* ((name (plist-get args :buffer)) ((stringp name))
+                          (buffer (get-buffer name)))
+                (buffer-file-name buffer)))))
+
+(defun superchat-tools--outside-p (scope tool args)
+  "Non-nil when a call of TOOL with ARGS reads outside SCOPE and outside
 `superchat-directory', where the skills the system prompt offers are.  Links
-and `..' are resolved first; \"home\" is no project, so only
-`superchat-directory' is inside it."
-  (when-let* ((path (plist-get args :path)) ((stringp path)))
-    (let ((file (expand-file-name path (if (equal scope "home") "~/" scope))))
-      (not (or (file-in-directory-p file superchat-directory)
-               (and (not (equal scope "home")) (file-in-directory-p file scope)))))))
+are resolved first; \"home\" is no project, so only `superchat-directory' is
+inside it."
+  (cl-some (lambda (file)
+             (not (or (file-in-directory-p file superchat-directory)
+                      (and (not (equal scope "home")) (file-in-directory-p file scope)))))
+           (superchat-tools--reads tool args)))
 
 (defun superchat-tools--permit (tape name tool args scope)
   "Decide whether the call may run; append the permission event when it was
 asked about or denied.  Return nil to run, or the text that says why not.
 A read outside SCOPE is decided as a write: the user agrees to it first."
   (let* ((class (if (and (eq (plist-get tool :class) 'read)
-                         (superchat-tools--outside-p scope args))
+                         (superchat-tools--outside-p scope tool args))
                     'write
                   (plist-get tool :class)))
          (decision (superchat-permission-decide tape class))
@@ -194,6 +207,13 @@ to the project and turn to `shell', which the user cannot judge as well.")
   "The live buffer called NAME, or an error."
   (or (get-buffer name) (error "No buffer named %s" name)))
 
+(defun superchat-tools--number (value default)
+  "VALUE as a number, DEFAULT when it is nil.
+A model may send a number as a string."
+  (cond ((null value) default)
+        ((stringp value) (string-to-number value))
+        (t value)))
+
 (defun superchat-tools--numbered (args)
   "Numbered lines of the current buffer from ARGS' :start, at most 400."
   (save-excursion
@@ -201,8 +221,9 @@ to the project and turn to `shell', which the user cannot judge as well.")
       (widen)
       (let* ((total (count-lines (point-min) (point-max)))
              ;; JSON has one number type: a line may come as 2.0.
-             (start (max 1 (truncate (or (plist-get args :start) 1))))
-             (count (min 400 (max 1 (truncate (or (plist-get args :count) 400)))))
+             (start (max 1 (truncate (superchat-tools--number (plist-get args :start) 1))))
+             (count (min 400 (max 1 (truncate (superchat-tools--number
+                                                (plist-get args :count) 400)))))
              (end (min total (+ start count -1))))
         (goto-char (point-min))
         (forward-line (1- start))
@@ -301,8 +322,13 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
              ;; Stops at 101 matching lines or after ten seconds, so a search
              ;; of a huge tree does not run on.
              (superchat-tools--spawn
-              (list "grep" "-rnIs" "--exclude-dir=.git" "-e" (plist-get args :pattern)
-                    (or (plist-get args :path) "."))
+              ;; The path the permission was decided for, after `--': never an option.
+              (list "grep" "-rnIs" "--exclude-dir=.git" "-e" (plist-get args :pattern) "--"
+                    ;; Relative inside, so that the lines name files as the project does.
+                    (let ((file (superchat-tools--path (or (plist-get args :path) "."))))
+                      (if (file-in-directory-p file default-directory)
+                          (file-relative-name file)
+                        file)))
               10
               (lambda (output why)
                 (let ((lines (split-string output "\n" t)))
