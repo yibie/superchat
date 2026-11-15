@@ -863,8 +863,12 @@ finished messages and the messages the third request sent."
                (cons id (lambda ()
                           (superchat-bridge-create-provider
                            :id id :base-url "http://h/v1" :auth auth
-                           :models (list (superchat-bridge--compatible-model
-                                          id "http://h/v1" "m"))
+                           :models (list (superchat-bridge-make-model
+                                          :type 'chat :id "m" :name "m"
+                                          :api "openai-completions" :provider id
+                                          :base-url "http://h/v1" :input '("text")
+                                          :cost (superchat-bridge-make-model-cost)
+                                          :context-window 128000 :max-tokens 16384))
                            :api (superchat-bridge-openai-completions-api))))))
          (superchat-llm-providers
           (list (funcall mk "p1" (superchat-bridge-make-provider-auth

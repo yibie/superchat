@@ -112,5 +112,14 @@
       (should (<= (length text) 6000))
       (should (string-match-p "characters cut" text)))))
 
+(ert-deftest superchat-recall-note-on-a-new-timeline-takes-the-scope ()
+  (superchat-test-with-tape
+    (let ((note (superchat-recall-note "fresh" "T" "kept" '(1) "/p/")))
+      (should (eq (plist-get note :kind) 'note))
+      (should (equal (plist-get note :scope) "/p/"))
+      (should (equal (plist-get note :refs) '(1)))
+      (should (equal (plist-get (plist-get note :data) :title) "T")))
+    (should-error (superchat-recall-note "other" "T" "no scope"))))
+
 (provide 'test-recall)
 ;;; test-recall.el ends here

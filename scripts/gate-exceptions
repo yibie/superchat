@@ -5,4 +5,3 @@ test/test-agent.el superchat-tools--always a fresh table of "always" answers for
 test/test-chat.el superchat-agent--runs a fresh table of runs for each test
 test/test-chat.el superchat-tools--always a fresh table of "always" answers for each test
 test/test-inline.el superchat-agent--runs a fresh table of runs for each test
-test/test-llm.el superchat-bridge--compatible-model the test builds a model the bridge has no public constructor for

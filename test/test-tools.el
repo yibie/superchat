@@ -675,5 +675,62 @@ sets `stopped' and cancels the timer."
                (superchat-test-tools--ok
                 "shell" :command "head -c 30000 /dev/zero | tr '\\0' z; sleep 5"))))))
 
+(defun superchat-test-tools--kinds ()
+  "Each entry of timeline \"t\" after the first: an event as its type."
+  (mapcar (lambda (e) (if (eq (plist-get e :kind) 'event)
+                          (plist-get (plist-get e :data) :type)
+                        (symbol-name (plist-get e :kind))))
+          (cdr (superchat-tape-entries :tape "t"))))
+
+(ert-deftest superchat-tools-a-malformed-call-is-never-asked-about ()
+  (superchat-test-tools--in-scope
+    (superchat-permission-set "t" 'ask)
+    (let* ((asked 0)
+           (superchat-permission-ask-function (lambda (&rest _) (cl-incf asked) 'allow)))
+      (superchat-test-tools--err "frob")
+      (superchat-test-tools--err "edit_buffer" :buffer "x")
+      (should (= asked 0))
+      (should (equal (superchat-test-tools--kinds) '("level" "level" "tool" "tool"))))))
+
+(ert-deftest superchat-tools-a-quit-while-asked-leaves-no-permission-event ()
+  (superchat-test-tools--in-scope
+    (superchat-permission-set "t" 'ask)
+    (let ((superchat-permission-ask-function (lambda (&rest _) (signal 'quit nil))))
+      (superchat-test-tools--err "eval_elisp" :code "1")
+      (should (equal (superchat-test-tools--kinds) '("level" "level" "tool"))))
+    ;; An answer is recorded before the result, with what it allowed.
+    (let ((superchat-permission-ask-function (lambda (&rest _) 'deny)))
+      (superchat-test-tools--err "eval_elisp" :code "1")
+      (should (equal (last (superchat-test-tools--kinds) 2) '("permission" "tool")))
+      (should (eq (plist-get (plist-get (car (superchat-tape-entries :tape "t" :kinds '(event)
+                                                                      :newest t :limit 1))
+                                         :data)
+                             :allowed)
+                  nil)))))
+
+(ert-deftest superchat-tools-cancelled-is-asked-also-with-no-question ()
+  (superchat-test-tools--in-scope
+    (let ((ran nil) entry)
+      (superchat-tool-define "mark" :class 'read :function (lambda (_) (setq ran t) "ran"))
+      (unwind-protect
+          (superchat-tool-call "t" '(:id "c" :name "mark" :args nil)
+                               (lambda (e) (setq entry e)) (lambda () t))
+        (superchat-tool-remove "mark"))
+      (should-not ran)
+      (should (equal (plist-get entry :text) "Cancelled.")))))
+
+(ert-deftest superchat-tools-async-signal-after-done-is-the-result ()
+  (superchat-test-tools--in-scope
+    (let (entries)
+      (superchat-tool-define "both" :class 'read :async t
+                             :function (lambda (_ done) (funcall done "fine") (error "then broke")))
+      (unwind-protect
+          (superchat-tool-call "t" '(:id "c" :name "both" :args nil)
+                               (lambda (e) (push e entries)))
+        (superchat-tool-remove "both"))
+      (should (= (length entries) 1))
+      (should (string-match-p "then broke" (plist-get (car entries) :text)))
+      (should (eq (plist-get (plist-get (car entries) :data) :error) t)))))
+
 (provide 'test-tools)
 ;;; test-tools.el ends here
