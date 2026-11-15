@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'tab-bar)
 (require 'org)
 (require 'superchat)
 (require 'superchat-tape)
@@ -698,8 +699,23 @@ With no QUERY, show the notes."
                          text nil (superchat-chat--scope))
   (superchat-chat--add nil))
 
-;; /new, /resume and /fork replace this conversation in its window: the person
-;; moves from one conversation to another, as a browser tab does.
+(defun superchat-chat--tab (buffer)
+  "Show chat BUFFER in a tab of the frame's tab bar: its own tab when it has
+one, else a new one.  A conversation is a tab, as a page is in a browser."
+  (cond ((get-buffer-window buffer) (select-window (get-buffer-window buffer)))
+        ;; Another tab.  `tab-bar-get-buffer-tab' answers a copy of it, so the
+        ;; tab is found again among `tab-bar-tabs' by its name.
+        ((when-let* ((tab (tab-bar-get-buffer-tab buffer nil t))
+                     (index (cl-position-if
+                             (lambda (x) (and (not (eq (car x) 'current-tab))
+                                              (equal (alist-get 'name x)
+                                                     (alist-get 'name tab))))
+                             (tab-bar-tabs))))
+           (tab-bar-select-tab (1+ index))
+           t))
+        (t (tab-bar-new-tab)
+           (switch-to-buffer buffer))))
+
 (defun superchat-chat--resume (_)
   "Choose a timeline of this scope and open it."
   (let ((choices (mapcar (lambda (e)
@@ -709,7 +725,7 @@ With no QUERY, show the notes."
                                  (plist-get e :tape)))
                          (superchat-view 'timelines :scope (superchat-chat--scope)))))
     (unless choices (user-error "No timelines in this scope"))
-    (pop-to-buffer-same-window
+    (superchat-chat--tab
      (superchat-chat-open
       (cdr (assoc (completing-read "Resume: " choices nil t) choices))))))
 
@@ -719,7 +735,7 @@ With no QUERY, show the notes."
                 (and (> superchat-chat--shown 0) superchat-chat--shown)
               (get-text-property (point) 'superchat-chat-id))))
     (unless id (user-error "No entry at point"))
-    (pop-to-buffer-same-window (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
+    (superchat-chat--tab (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
 
 (defun superchat-chat--handoff (name)
   "Summarise the conversation into an anchor named NAME; refused when busy."
@@ -759,8 +775,8 @@ With no QUERY, show the notes."
 
 (superchat-command-define
  "new" (lambda (_)
-         (pop-to-buffer-same-window (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
- "Start a new timeline in this scope, in a new buffer.")
+         (superchat-chat--tab (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
+ "Start a new timeline in this scope, in a new tab.")
 (superchat-command-define "resume" #'superchat-chat--resume "Open another timeline of this scope.")
 (superchat-command-define "fork" #'superchat-chat--fork
                           "Fork at the entry at point and open the new timeline.")
