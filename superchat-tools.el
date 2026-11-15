@@ -68,10 +68,22 @@ as (funcall DONE nil MESSAGE) for an error."
   (let ((text (format "%s %S" name args)))
     (if (> (length text) 200) (concat (substring text 0 200) "...") text)))
 
-(defun superchat-tools--permit (tape name tool args)
+(defun superchat-tools--outside-p (scope args)
+  "Non-nil when the :path of ARGS names a file outside SCOPE.  Links and `..'
+are resolved first; \"home\" is no project, so every path is outside it."
+  (when-let* ((path (plist-get args :path)) ((stringp path)))
+    (or (equal scope "home")
+        (not (file-in-directory-p (expand-file-name path scope) scope)))))
+
+(defun superchat-tools--permit (tape name tool args scope)
   "Decide whether the call may run; append the permission event when it was
-asked about or denied.  Return nil to run, or the text that says why not."
-  (let* ((decision (superchat-permission-decide tape (plist-get tool :class)))
+asked about or denied.  Return nil to run, or the text that says why not.
+A read outside SCOPE is decided as a write: the user agrees to it first."
+  (let* ((class (if (and (eq (plist-get tool :class) 'read)
+                         (superchat-tools--outside-p scope args))
+                    'write
+                  (plist-get tool :class)))
+         (decision (superchat-permission-decide tape class))
          (key (cons tape name))
          (answer (cond ((not (eq decision 'ask)) decision)
                        ((gethash key superchat-tools--always) 'always)
@@ -80,13 +92,16 @@ asked about or denied.  Return nil to run, or the text that says why not."
     (when (eq answer 'always) (puthash key t superchat-tools--always))
     (unless (eq decision 'allow)
       (superchat-tape-append
-       tape 'event (format "%s (%s): %s -> %s" name (plist-get tool :class) decision
-                           (if allowed "allowed" "denied"))
+       tape 'event (format "%s (%s%s): %s -> %s" name (plist-get tool :class)
+                           (if (eq class (plist-get tool :class)) "" ", outside the project")
+                           decision (if allowed "allowed" "denied"))
        :data (list :type "permission" :tool name :decision (symbol-name decision)
                    :allowed (and allowed t))))
     (unless allowed
-      (format "Permission denied: %s is a %s tool and the level is %s."
-              name (plist-get tool :class) (superchat-permission-level tape)))))
+      (format "Permission denied: %s is a %s tool%s and the level is %s."
+              name (plist-get tool :class)
+              (if (eq class (plist-get tool :class)) "" ", used outside the project")
+              (superchat-permission-level tape)))))
 
 (defun superchat-tools--start (tape call finish cancelled)
   "Start CALL for timeline TAPE.  FINISH is called with (TEXT ERRORP) once.
@@ -102,7 +117,7 @@ user was asked.  Return the tool's stop function or nil.  May signal."
          ;; A process made by the tool takes its directory from here.
          (default-directory (if (equal scope "home") (expand-file-name "~/") scope))
          (superchat-tool-tape tape)
-         (why (unless missing (superchat-tools--permit tape name tool args))))
+         (why (unless missing (superchat-tools--permit tape name tool args scope))))
     (cond
      (missing (funcall finish (format "Missing required argument: %s"
                                       (mapconcat (lambda (a) (plist-get a :name)) missing ", "))

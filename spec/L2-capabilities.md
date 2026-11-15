@@ -189,7 +189,12 @@ Built-in tools, and no others:
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order, return the last value printed, with what was printed to `*Messages*` meanwhile |
 | `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else; asynchronous |
 
-A path is relative to the scope. A file a tool edits is edited through its
+A path is relative to the scope. A call of a `read` tool whose `path`
+argument names a file outside the scope, once `..` and symbolic links are
+resolved, is decided as a `write` call: at `ask` the user is asked, at
+`read-only` it is denied, at `auto` it runs. `"home"` is no project, so
+there every path is outside. The `permission` event and the denial say that
+the call was outside the project. A file a tool edits is edited through its
 buffer, so the user can undo it.
 
 ## superchat-recall.el

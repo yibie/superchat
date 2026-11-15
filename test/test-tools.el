@@ -732,5 +732,50 @@ sets `stopped' and cancels the timer."
       (should (string-match-p "then broke" (plist-get (car entries) :text)))
       (should (eq (plist-get (plist-get (car entries) :data) :error) t)))))
 
+(ert-deftest superchat-tools-a-read-outside-the-project-is-asked-about ()
+  (superchat-test-tools--in-scope
+    (let* ((outside (file-name-as-directory (make-temp-file "sc-outside-" t)))
+           (secret (expand-file-name "secret" outside))
+           asked)
+      (unwind-protect
+          (let ((superchat-permission-ask-function
+                 (lambda (&rest _) (push t asked) 'deny)))
+            (superchat-test-tools--write dir "in.txt" "inside")
+            (with-temp-file secret (insert "key"))
+            (make-symbolic-link secret (expand-file-name "link" dir))
+            (superchat-permission-set "t" 'ask)
+            (should (string-match-p "inside" (superchat-test-tools--ok "read_file" :path "in.txt")))
+            (should-not asked)
+            ;; An absolute path, `..', and a link inside that leads outside.
+            (dolist (path (list secret (concat "../" (file-name-nondirectory
+                                                       (directory-file-name outside))
+                                                "/secret")
+                                "link"))
+              (setq asked nil)
+              (should (string-match-p "outside the project"
+                                      (superchat-test-tools--err "read_file" :path path)))
+              (should asked))
+            (should (string-match-p "outside the project"
+                                    (plist-get (car (superchat-tape-entries
+                                                     :tape "t" :kinds '(event) :newest t :limit 1))
+                                               :text)))
+            (setq asked nil)
+            (superchat-permission-set "t" 'read-only)
+            (superchat-test-tools--err "read_file" :path secret)
+            (should-not asked)
+            (superchat-permission-set "t" 'auto)
+            (should (equal (cadr (split-string (superchat-test-tools--ok "read_file" :path secret)
+                                               "\n"))
+                           "1\tkey")))
+        (delete-directory outside t)))))
+
+(ert-deftest superchat-tools-at-home-every-path-is-outside ()
+  (superchat-test-with-tape
+    (let ((superchat-tools--always (make-hash-table :test #'equal)) asked)
+      (superchat-tape-append "h" 'user "go" :scope "home")
+      (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny)))
+        (superchat-tool-call "h" '(:id "c" :name "read_file" :args (:path "x")) #'ignore)
+        (should asked)))))
+
 (provide 'test-tools)
 ;;; test-tools.el ends here
