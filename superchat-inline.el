@@ -144,7 +144,7 @@ The replacement shows after the region, which is struck through;
           (superchat-chat-send text origin)
         ;; Not lost: the person sends it when the timeline is free.
         (goto-char (point-max))
-        (insert (if (bolp) "" "\n") text)
+        (insert (if (or (bolp) (= (point) superchat-chat--input)) "" "\n") text)
         (message "%s is busy: the question is in its input, not sent" (buffer-name))))))
 
 (provide 'superchat-inline)

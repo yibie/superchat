@@ -10,26 +10,86 @@ functions of the layers below.
 One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
 40 characters of the timeline's own first `user` entry (a fork's refs do
 not count), or `new` until it has one. Major mode `superchat-chat-mode`,
-derived from `text-mode`.
+derived from `org-mode`.
 
-- The buffer is rendered from the `conversation` view. Text above the input
-  area is read-only. Entries look like:
-  - `user`: `▸ You`, then its text;
-  - `assistant`: `▸ Assistant`, then its text; with no text, nothing, not
-    even the header;
-  - a tool call: one dimmed line `⚙ NAME(ARGS) → ` and the first line of the
-    result, ARGS being the arguments plist printed with `%S` without its
-    outer parentheses, newlines escaped, then cut to 60 characters and `…`
-    (empty when there are none);
+- The buffer is rendered from the `conversation` view, one turn at a time:
+  a turn is a `user` entry and the entries after it up to the next one
+  (the entries before the first `user` entry are a turn too). As an entry
+  comes, its turn is drawn again from that turn's entries, so rendering the
+  whole view again gives the same text and the same folding. Text above the
+  input area is read-only. Entries look like:
+  - `user`: `* You`, then its text, a line of it that starts with `*` shown
+    with one space before it, so that it is never a heading;
+  - `assistant`: `* Assistant`, then its text converted from Markdown to
+    Org (the Tape keeps the Markdown), then its tool calls. With no text the
+    heading is shown only when it has calls and the line before is not a
+    tool call of the same turn, so the calls of several rounds sit together;
+    with no text and no calls, nothing;
+  - a tool call: a heading `** MARK NAME  ARGS  (DURATION)`, its body folded:
+    MARK is `⏳` while the call has no `tool` entry in its turn, `✗` when
+    that entry has `:error`, else `✓`; ARGS is the arguments plist printed
+    with `%S` without its outer parentheses, newlines escaped, cut to 60
+    characters and `…` (left out with its spaces when empty); DURATION is
+    `N.Ns`, the `:at` of the `tool` entry less that of the entry before it,
+    and is left out while there is none. The body is the arguments, one key
+    and value per line, then the result, each in a `#+begin_example` block
+    escaped with `org-escape-code-in-string`; an empty part has no block;
+  - consecutive tool calls (no other line between them) of one turn: the
+    calls of every round whose calls all have a result, when two or more of
+    them have no error, go under one heading `** ▸ N calls: NAME ×K, ...`,
+    the names in order of first use and `×K` only when K > 1, each call
+    then a level 3 heading; the group is folded. Calls with an error
+    follow the group at level 2, and the calls of a round still waiting
+    follow them. With fewer than two, every call is a level 2 heading in
+    order;
   - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
     empty, `What comes next: NEXT`; an anchor with empty text (a fork)
     shows only its line;
   - `note`: a dimmed line `note: TITLE`, then its text;
   - `event`: its text as one dimmed line, an `error` event in the `error`
     face.
+  Faces are `font-lock-face`, so Org's fontification keeps them.
+- The Markdown of an answer becomes Org by these rules, and no others. A
+  fenced block (```` ``` ```` or `~~~` at the start of a line, closed by a
+  line of the same delimiter, or by the end of the text) and a native
+  `#+begin_src` block (closed by `#+end_src`) become a `#+begin_src LANG`
+  block, LANG the first word of the info string; the body is kept as it is,
+  escaped with `org-escape-code-in-string`, without the newline before the
+  closing line; nothing else applies inside it. Inline code `` `x` `` becomes
+  `=x=`, or `~x~` when x has a `=`, and nothing else applies inside it. An
+  image `![alt](https://u)` becomes `[[https://u]]`; a link
+  `[text](https://u)` becomes `[[https://u][text]]`, the text may hold one
+  level of brackets and the url one level of parentheses, the url escaped
+  with `org-link-escape`. A line of
+  three or more `-`, `*` or `_` (spaces between allowed) becomes `-----`.
+  `# ` to `###### ` at the start of a line become headings, demoted so that
+  the shallowest heading of the answer is level 2, the others keeping their
+  depth below it; any other line starting with `#` stays text. A list item
+  `*`, `+` or `-` becomes `-`. Consecutive lines starting with `>` become a
+  `#+begin_quote` block without the `>`. A table (consecutive lines starting
+  with `|`) loses its alignment row (cells of `-` and `:` only) for an Org
+  rule `|-` and is aligned with `org-table-align`. `**x**` and `__x__`
+  become `*x*`, `*x*` and `_x_` become `/x/`, `~~x~~` becomes `+x+`; x is
+  one or more characters that do not start or end with a space, and `_` does
+  not open or close inside a word.
+- The answer's text streams in as it comes, raw, in the `shadow` face, under
+  a `* Assistant` heading, below the entries of its turn; the `assistant`
+  entry replaces it when it comes.
+- `TAB` on a heading of the entries toggles it by Org's own cycling, the
+  read-only text notwithstanding; the subtree of the last heading ends where
+  the input area's lines begin, which never fold. A heading the person
+  opened stays open when its turn is drawn again.
+- Below the entries are a separator line and the prompt `❯ `, both
+  read-only; the input area is everything after the prompt. Typing a
+  self-inserting character with point above the input area moves point to
+  the end of the input and inserts it there.
+- `header-line-format` shows `MODEL · LEVEL · SCOPE`: the buffer's model or
+  `superchat-llm-model` (`not set` when neither is), the permission level of
+  the timeline, the scope through `abbreviate-file-name`; and ` · running`
+  while the timeline is busy.
 - The last character of what is shown passes on no text property: what is
   typed after it has no face and no entry id.
-- The input area is the editable text after the last entry. In it, `RET`
+- The input area is the editable text after the prompt. In it, `RET`
   sends when point is in its last line, otherwise inserts a newline; above
   it, `RET` is an edit of read-only text and refused as any edit there is.
   `C-c C-c` always sends. `C-c C-k` cancels the run. What is sent is
@@ -42,8 +102,15 @@ derived from `text-mode`.
   refused with a message, not an error, and the input stays. The message is
   `A request is still running; C-c C-k cancels it` during a run and `A
   handoff is still running; C-c C-k cancels it` while a handoff is pending.
-- While a run is active the mode line shows `[running]`, streamed text
-  appears as it comes, and the input stays editable but sending is refused
+- While the timeline is busy (a run or a handoff) the mode line shows
+  `[running Ns]`, N the whole seconds since it began. While a run is active
+  a waiting line just above the separator shows a spinner and the seconds
+  since the latest entry: `⠋ NAME running… Ns` while a call of the turn has
+  no result (the first such), else `⠋ thinking… Ns`. It is an overlay, not
+  text of the buffer and not an entry; a timer of the buffer updates it and
+  the mode line, and is cancelled when the run ends or the buffer is
+  killed; the line is gone when the run ends.
+- While a run is active the input stays editable but sending is refused
   with a message. Streamed text that never became an entry is removed when
   the run ends (cancelled or error). A run that ends with `error` says so
   in the echo area with the error's text. An entry is shown once, however
@@ -99,7 +166,7 @@ Built-in commands, and no others:
 | `/new` | a new timeline in the same scope as this buffer's timeline, in a new buffer |
 | `/resume` | choose a timeline from the `timelines` view with `completing-read` and open it |
 | `/fork` | fork at the entry at point, or at the latest entry when point is in the input area; open the new timeline |
-| `/handoff [name]` | `superchat-handoff`; refused while the timeline is busy; the mode line shows `[running]` until it is over, and `C-c C-k` cancels it |
+| `/handoff [name]` | `superchat-handoff`; refused while the timeline is busy; the mode line shows `[running Ns]` until it is over, and `C-c C-k` cancels it |
 | `/topic name` | open the `topic` view of that name in a read-only buffer; no name is a `user-error` |
 | `/recall [query]` | `superchat-recall` with QUERY: the `search` view, or the `notes` view when it is empty |
 | `/notes` | open the `notes` view in a read-only buffer |

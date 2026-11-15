@@ -41,7 +41,9 @@ tool `echo', and no chat buffers left behind."
          (delete-directory superchat-test-chat--dir t)))))
 
 (defun superchat-test-chat--text (buffer)
-  (with-current-buffer buffer (buffer-substring-no-properties (point-min) (point-max))))
+  "The text of BUFFER; of a chat buffer, the entries only, above the separator."
+  (with-current-buffer buffer
+    (buffer-substring-no-properties (point-min) (or superchat-chat--block (point-max)))))
 
 (defun superchat-test-chat--input (buffer)
   "The text after the entries of BUFFER."
@@ -66,7 +68,8 @@ tool `echo', and no chat buffers left behind."
     (let ((buffer (superchat-chat-open "t1")))
       (should (equal (buffer-name buffer) "*superchat: new*"))
       (should (eq (buffer-local-value 'major-mode buffer) 'superchat-chat-mode))
-      (should (equal (superchat-test-chat--text buffer) "")))))
+      (should (equal (superchat-test-chat--text buffer) ""))
+      (should (string-match-p "\\`─+\n❯ \\'" (with-current-buffer buffer (buffer-string)))))))
 
 (ert-deftest superchat-chat-open-reuses-buffer ()
   (superchat-test-chat--with
@@ -79,7 +82,7 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-script (list '(:text "Hello there"))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (should (equal (superchat-test-chat--text buffer)
-                     "▸ You\nhi\n\n▸ Assistant\nHello there\n\n"))
+                     "* You\nhi\n\n* Assistant\nHello there\n\n"))
       (should (equal (buffer-name buffer) "*superchat: hi*"))
       (should (equal (mapcar (lambda (e) (plist-get e :kind)) (superchat-tape-entries :tape "t1"))
                      '(user assistant)))
@@ -106,7 +109,7 @@ tool `echo', and no chat buffers left behind."
           (list '(:text "" :calls ((:id "c1" :name "echo" :args (:x "a\nb"))))
                 '(:text "Done"))
         (with-current-buffer buffer (superchat-chat-send "go")))
-      (should (string-match-p "^⚙ echo(:x \"a\\\\nb\") → echo:a$"
+      (should (string-match-p "^\\*\\* ✓ echo  :x \"a\\\\nb\"  ([0-9.]+s)$"
                               (superchat-test-chat--text buffer))))))
 
 (ert-deftest superchat-chat-tool-round ()
@@ -116,9 +119,12 @@ tool `echo', and no chat buffers left behind."
           (list '(:text "Looking" :calls ((:id "c1" :name "echo" :args (:x "abc"))))
                 '(:text "Done"))
         (with-current-buffer buffer (superchat-chat-send "go")))
-      (should (equal (superchat-test-chat--text buffer)
-                     (concat "▸ You\ngo\n\n▸ Assistant\nLooking\n\n"
-                             "⚙ echo(:x \"abc\") → echo:abc\n▸ Assistant\nDone\n\n"))))))
+      (should (equal (replace-regexp-in-string "([0-9.]+s)" "(Ds)" (superchat-test-chat--text buffer))
+                     (concat "* You\ngo\n\n* Assistant\nLooking\n\n"
+                             "** ✓ echo  :x \"abc\"  (Ds)\n"
+                             "#+begin_example\n:x \"abc\"\n#+end_example\n"
+                             "#+begin_example\necho:abc\nsecond line\n#+end_example\n"
+                             "* Assistant\nDone\n\n"))))))
 
 (ert-deftest superchat-chat-tool-args-are-cut ()
   (superchat-test-chat--with
@@ -127,9 +133,9 @@ tool `echo', and no chat buffers left behind."
           (list `(:text "" :calls ((:id "c1" :name "echo" :args (:x ,(make-string 100 ?a)))))
                 '(:text "Done"))
         (with-current-buffer buffer (superchat-chat-send "go")))
-      (should (string-match "⚙ echo(\\(.*\\)) → " (superchat-test-chat--text buffer)))
+      (should (string-match "\\*\\* ✓ echo  \\(.*\\)  (" (superchat-test-chat--text buffer)))
       (should (= (length (match-string 1 (superchat-test-chat--text buffer))) 61))
-      (should-not (string-match-p "▸ Assistant\n\n" (superchat-test-chat--text buffer))))))
+      (should-not (string-match-p "\\* Assistant\n\n" (superchat-test-chat--text buffer))))))
 
 (ert-deftest superchat-chat-render-equals-incremental ()
   (superchat-test-chat--with
@@ -157,13 +163,13 @@ tool `echo', and no chat buffers left behind."
                (list :cancelled nil :finished nil :request nil))))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (should (equal (reverse snapshots)
-                     '("▸ You\nhi\n\n▸ Assistant\nHel" "▸ You\nhi\n\n▸ Assistant\nHello")))
-      (should (equal (buffer-local-value 'mode-line-process buffer) " [running]"))
+                     '("* You\nhi\n\n* Assistant\nHel" "* You\nhi\n\n* Assistant\nHello")))
+      (should (string-match-p "\\` \\[running [0-9]+s\\]\\'" (buffer-local-value 'mode-line-process buffer)))
       (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-k"))))
       (should-not (buffer-local-value 'mode-line-process buffer))
       ;; Streamed text that never became an entry does not stay.
       (should (equal (superchat-test-chat--text buffer)
-                     "▸ You\nhi\n\nCancelled by the user.\n")))))
+                     "* You\nhi\n\nCancelled by the user.\n")))))
 
 (ert-deftest superchat-chat-unsent-input-survives ()
   (superchat-test-chat--with
@@ -176,7 +182,7 @@ tool `echo', and no chat buffers left behind."
           (should (equal (buffer-substring-no-properties superchat-chat--input (point-max))
                          "half a thought"))
           (should (= (point) (+ (marker-position superchat-chat--input) 4)))))
-      (should (string-prefix-p "▸ You\nother" (superchat-test-chat--text buffer)))
+      (should (string-prefix-p "* You\nother" (superchat-test-chat--text buffer)))
       ;; The render after a handoff keeps it as well.
       (superchat-test-script (list '(:text "sum\nNEXT: n"))
         (with-current-buffer buffer (superchat-chat-send "/handoff")))
@@ -322,7 +328,7 @@ tool `echo', and no chat buffers left behind."
            (fork (superchat-test-chat--tape-of shown)))
       (should-not (equal fork "t1"))
       (should (equal (superchat-test-chat--text shown)
-                     "▸ You\none\n\n▸ Assistant\na1\n\n── summary: fork ──\n\n"))
+                     "* You\none\n\n* Assistant\na1\n\n── summary: fork ──\n\n"))
       (should (= (length (superchat-tape-entries :tape "t1")) 4)))))
 
 (ert-deftest superchat-chat-fork-from-the-input-forks-at-the-latest-entry ()
@@ -414,10 +420,10 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (superchat-chat-send "hi"))
         (kill-buffer buffer)
         (let ((again (superchat-chat-open "t1")))
-          (should (equal (buffer-local-value 'mode-line-process again) " [running]"))
+          (should (string-match-p "\\[running [0-9]+s\\]" (buffer-local-value 'mode-line-process again)))
           (superchat-test-drain)
           (should (equal (superchat-test-chat--text again)
-                         "▸ You\nhi\n\n▸ Assistant\nHello\n\n"))
+                         "* You\nhi\n\n* Assistant\nHello\n\n"))
           (should-not (buffer-local-value 'mode-line-process again)))))))
 
 (ert-deftest superchat-chat-new-command-keeps-the-scope ()
@@ -463,14 +469,14 @@ tool `echo', and no chat buffers left behind."
         (superchat-test-script (list '(:text "never") '(:text "Sum.\nNEXT: n"))
           (with-current-buffer buffer
             (superchat-chat-send "/handoff")
-            (should (equal mode-line-process " [running]"))
+            (should (string-match-p "\\[running [0-9]+s\\]" mode-line-process))
             (call-interactively (key-binding (kbd "C-c C-k")))
             (should-not mode-line-process)
             ;; The event is shown at once, as a fresh render would show it.
             (should (string-match-p "Cancelled by the user" (buffer-string))))
           (should-not (superchat-run-active "t1"))
           (with-current-buffer buffer (superchat-chat-send "/handoff")
-                               (should (equal mode-line-process " [running]")))
+                               (should (string-match-p "\\[running [0-9]+s\\]" mode-line-process)))
           (superchat-test-drain)
           (should-not (buffer-local-value 'mode-line-process buffer))
           (should (= (length (superchat-tape-entries :tape "t1" :kinds '(anchor))) 1)))))))
@@ -560,7 +566,7 @@ tool `echo', and no chat buffers left behind."
     (superchat)
     (let ((first (current-buffer)))
       (should (equal (superchat-test-chat--tape-of first) "20240101-a"))
-      (should (equal (superchat-test-chat--text first) "▸ You\nearlier\n\n"))
+      (should (equal (superchat-test-chat--text first) "* You\nearlier\n\n"))
       (superchat)
       (should (eq (current-buffer) first))
       (superchat '(4))
@@ -612,10 +618,10 @@ tool `echo', and no chat buffers left behind."
         (superchat-chat-send "/note aside")
         (funcall (plist-get answer :on-text) "lo"))
       (should (equal (superchat-test-chat--text buffer)
-                     "▸ You\nhi\n\nnote: aside\naside\n\n▸ Assistant\nHello"))
+                     "* You\nhi\n\nnote: aside\naside\n\n* Assistant\nHello"))
       (funcall (plist-get answer :on-done) '(:text "Hello" :model "m"))
       (should (equal (superchat-test-chat--text buffer)
-                     "▸ You\nhi\n\nnote: aside\naside\n\n▸ Assistant\nHello\n\n")))))
+                     "* You\nhi\n\nnote: aside\naside\n\n* Assistant\nHello\n\n")))))
 
 (ert-deftest superchat-chat-recall-command-uses-the-chat-scope ()
   (superchat-test-chat--with
@@ -750,7 +756,7 @@ tool `echo', and no chat buffers left behind."
              (text (superchat-test-chat--text buffer)))
         (should (equal (plist-get (plist-get event :data) :type) "error"))
         (should (string-match (regexp-quote (plist-get event :text)) text))
-        (should (eq (get-text-property (1+ (match-beginning 0)) 'face buffer) 'error)))
+        (should (eq (get-text-property (1+ (match-beginning 0)) 'font-lock-face buffer) 'error)))
       (should (string-match-p "boom" said)))))
 
 (ert-deftest superchat-chat-a-note-shows-its-title ()
@@ -758,7 +764,7 @@ tool `echo', and no chat buffers left behind."
     (superchat-tape-append "t1" 'user "hi" :scope (superchat-test-chat--scope))
     (superchat-tape-append "t1" 'note "the text" :data '(:title "The title"))
     (let ((text (superchat-test-chat--text (superchat-chat-open "t1"))))
-      (should (equal text "▸ You\nhi\n\nnote: The title\nthe text\n\n")))))
+      (should (equal text "* You\nhi\n\nnote: The title\nthe text\n\n")))))
 
 (ert-deftest superchat-chat-recall-with-no-query-shows-the-notes ()
   (superchat-test-chat--with
@@ -788,6 +794,214 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-script (list '(:text "ok"))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (should (equal (plist-get (car (superchat-tape-entries :tape "t1")) :scope) scope)))))
+
+;;; The Org display
+
+(defun superchat-test-chat--org (markdown)
+  "What a chat buffer shows of an answer MARKDOWN, below its heading."
+  (let ((tape (superchat-tape-new-name)))
+    (superchat-tape-append tape 'user "q" :scope (superchat-test-chat--scope))
+    (superchat-tape-append tape 'assistant markdown)
+    (string-remove-suffix
+     "\n\n" (string-remove-prefix "* You\nq\n\n* Assistant\n"
+                                  (superchat-test-chat--text (superchat-chat-open tape))))))
+
+(ert-deftest superchat-chat-markdown-becomes-org ()
+  (superchat-test-chat--with
+    (let (wrong)
+     (pcase-dolist (`(,markdown ,org)
+                   '(;; The info string's first word only, commas, no newline before the end.
+                     ("```python title=x\n* a\n#+b\n```" "#+begin_src python\n,* a\n,#+b\n#+end_src")
+                     ("~~~\n**x** # y\n~~~" "#+begin_src\n,**x** # y\n#+end_src")
+                     ("````\n```\n````" "#+begin_src\n```\n#+end_src")
+                     ("#+begin_src sh\necho *a*\n#+end_src" "#+begin_src sh\necho *a*\n#+end_src")
+                     ("```\n# open to the end" "#+begin_src\n# open to the end\n#+end_src")
+                     ;; Inline code first: nothing converts inside it.
+                     ("use `**x**` and `a=b`" "use =**x**= and ~a=b~")
+                     ;; Only # to ###### headings, the shallowest at level 2.
+                     ("# A\n## B\ntext" "** A\n*** B\ntext")
+                     ("## B\n### C" "** B\n*** C")
+                     ("#tag\n####### seven" "#tag\n####### seven")
+                     ("a\n\n---\n\n* * *\n___" "a\n\n-----\n\n-----\n-----")
+                     ("* one\n+ two\n  - three" "- one\n- two\n  - three")
+                     ;; One character is enough.
+                     ("**a** *b* __c__ _d_ ~~e~~" "*a* /b/ *c* /d/ +e+")
+                     ("**bold *inner* text**" "*bold /inner/ text*")
+                     ("snake_case_name and 2 * 3 * 4" "snake_case_name and 2 * 3 * 4")
+                     ("![pic](http://x/p.png)" "[[http://x/p.png]]")
+                     ("[a [b] c](http://w/x_(y)) after" "[[http://w/x_(y)][a [b] c]] after")
+                     ("[k](http://w/a[1])" "[[http://w/a\\[1\\]][k]]")
+                     ("> one\n> two\nafter" "#+begin_quote\none\ntwo\n#+end_quote\nafter")
+                     ("| a | b |\n|:--|--:|\n| 1 | 22 |" "| a |  b |\n|---+----|\n| 1 | 22 |")))
+      (let ((got (superchat-test-chat--org markdown)))
+        (unless (equal got org) (push (list markdown got) wrong))))
+     (should-not wrong))
+    (should-not (string-match-p "begin_src" (superchat-test-chat--org "say ```x``` here")))
+    ;; The Tape keeps the Markdown.
+    (should (equal (plist-get (car (superchat-tape-entries :kinds '(assistant) :newest t :limit 1)) :text)
+                   "say ```x``` here"))))
+
+(ert-deftest superchat-chat-streamed-text-is-raw-until-the-entry-comes ()
+  (superchat-test-chat--with
+    (let* ((buffer (superchat-chat-open "t1")) streamed face
+           (superchat-llm-request-function
+           (lambda (_messages &rest keys)
+             (funcall (plist-get keys :on-text) "**bold**")
+             (setq streamed (superchat-test-chat--text buffer)
+                   face (with-current-buffer buffer
+                          (get-text-property (- superchat-chat--block 2) 'font-lock-face)))
+             (funcall (plist-get keys :on-done) '(:text "**bold**" :model "m"))
+             (list :cancelled nil :finished nil :request nil))))
+      (with-current-buffer buffer (superchat-chat-send "hi"))
+      (should (equal streamed "* You\nhi\n\n* Assistant\n**bold**"))
+      (should (eq face 'shadow))
+      (should (equal (superchat-test-chat--text buffer) "* You\nhi\n\n* Assistant\n*bold*\n\n")))))
+
+(defun superchat-test-chat--visible (buffer)
+  "The entries of BUFFER as a person sees them, folded text left out."
+  (with-current-buffer buffer
+    (cl-loop for at from (point-min) below superchat-chat--block
+             unless (invisible-p at) concat (string (char-after at)))))
+
+(ert-deftest superchat-chat-tool-headings-and-groups ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) during)
+      (superchat-tool-define "peek" :class 'read :description "Peek" :args nil
+                             :function (lambda (_) (setq during (superchat-test-chat--text buffer)) "seen"))
+      (unwind-protect
+          (superchat-test-script
+              (list '(:text "" :calls ((:id "c1" :name "echo" :args (:x "a"))))
+                    '(:text "" :calls ((:id "c2" :name "echo" :args (:x "b"))
+                                       (:id "c3" :name "nope" :args nil)
+                                       (:id "c4" :name "peek" :args nil)))
+                    '(:text "Done"))
+            (with-current-buffer buffer (superchat-chat-send "go")))
+        (superchat-tool-remove "peek"))
+      ;; While it runs, a call with no result waits; the earlier round is not grouped
+      ;; alone, and the calls of several rounds sit under one Assistant heading.
+      (should (string-match-p "^\\*\\* ⏳ peek$" during))
+      (should (= (length (split-string during "^\\* Assistant$")) 2))
+      (let ((text (replace-regexp-in-string "([0-9.]+s)" "(Ds)" (superchat-test-chat--text buffer))))
+        (should (string-prefix-p
+                 (concat "* You\ngo\n\n* Assistant\n"
+                         "** ▸ 3 calls: echo ×2, peek\n"
+                         "*** ✓ echo  :x \"a\"  (Ds)\n#+begin_example\n:x \"a\"\n#+end_example\n"
+                         "#+begin_example\necho:a\nsecond line\n#+end_example\n"
+                         "*** ✓ echo  :x \"b\"  (Ds)\n")
+                 text))
+        (should (string-match-p "\n\\*\\* ✗ nope  (Ds)\n#\\+begin_example\n" text))
+        (should (string-suffix-p "\n* Assistant\nDone\n\n" text)))
+      ;; Folded: the group and the error's heading show, nothing under them.
+      (should (equal (replace-regexp-in-string "([0-9.]+s)" "(Ds)" (superchat-test-chat--visible buffer))
+                     (concat "* You\ngo\n\n* Assistant\n** ▸ 3 calls: echo ×2, peek\n"
+                             "** ✗ nope  (Ds)\n* Assistant\nDone\n\n")))
+      ;; TAB opens the read-only group to its calls, each still folded.
+      (with-current-buffer buffer
+        (goto-char (point-min))
+        (search-forward "▸ 3 calls")
+        (call-interactively (key-binding (kbd "TAB")))
+        (should (string-match-p "^\\*\\* ▸ 3 calls.*\n\\*\\*\\* ✓ echo  :x \"a\"  (.*)\n\\*\\*\\* ✓ echo"
+                                (superchat-test-chat--visible buffer)))
+        ;; It stays open when its turn is drawn again.
+        (superchat-note "a later note")
+        (should (string-match-p "^\\*\\*\\* ✓ peek" (superchat-test-chat--visible buffer)))
+        ;; The last heading folds only down to the separator.
+        (goto-char (point-min))
+        (search-forward "Done")
+        (call-interactively (key-binding (kbd "TAB")))
+        (should (string-suffix-p "─\n❯ " (buffer-substring-no-properties (point-min) (point-max))))
+        (should-not (invisible-p superchat-chat--block))
+        (should-not (invisible-p (1- (point-max))))))))
+
+(ert-deftest superchat-chat-render-equals-incremental-with-groups ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script
+          (list '(:text "# Plan\nfirst" :calls ((:id "c1" :name "echo" :args (:x "a"))
+                                              (:id "c2" :name "echo" :args (:x "b"))))
+                '(:text "" :calls ((:id "c3" :name "nope" :args nil)))
+                '(:text "Done"))
+        (with-current-buffer buffer (superchat-chat-send "go")))
+      (superchat-test-script (list '(:text "again"))
+        (with-current-buffer buffer (superchat-chat-send "more")))
+      (let ((incremental (with-current-buffer buffer (buffer-string)))
+            (seen (superchat-test-chat--visible buffer)))
+        (should (string-match-p "^\\*\\* Plan$" seen))
+        (kill-buffer buffer)
+        (let ((again (superchat-chat-open "t1")))
+          (should (equal-including-properties incremental (with-current-buffer again (buffer-string))))
+          (should (equal seen (superchat-test-chat--visible again))))))))
+
+(ert-deftest superchat-chat-header-line ()
+  (superchat-test-chat--with
+    (let* ((superchat-llm-model "m1")
+           (buffer (superchat-chat-open "t1"))
+           (superchat-llm-request-function #'superchat-test-chat--silent))
+      (with-current-buffer buffer
+        (should (equal header-line-format "m1 · ask · home"))
+        (superchat-chat-send "one")
+        (should (equal header-line-format "m1 · ask · home · running"))
+        (call-interactively (key-binding (kbd "C-c C-k")))
+        (should (equal header-line-format "m1 · ask · home"))
+        (superchat-chat-send "/level auto")
+        (should (equal header-line-format "m1 · auto · home"))))))
+
+(defun superchat-test-chat--waiting (buffer)
+  "The waiting line of BUFFER, or nil."
+  (with-current-buffer buffer
+    (seq-some (lambda (o) (overlay-get o 'before-string)) (overlays-in (point-min) (point-max)))))
+
+(ert-deftest superchat-chat-waiting-line ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) during)
+      (let ((superchat-llm-request-function #'superchat-test-chat--silent))
+        (with-current-buffer buffer (superchat-chat-send "one"))
+        (should (string-match-p "\\`. thinking… [0-9]+s\n\\'" (superchat-test-chat--waiting buffer)))
+        (should (with-current-buffer buffer
+                  (string-suffix-p "* You\none\n\n" (buffer-substring (point-min) superchat-chat--block))))
+        (let ((timer (buffer-local-value 'superchat-chat--timer buffer)))
+          (should (memq timer timer-list))
+          (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-k"))))
+          (should-not (memq timer timer-list)))
+        (should-not (superchat-test-chat--waiting buffer)))
+      (superchat-tool-define "peek" :class 'read :description "Peek" :args nil
+                             :function (lambda (_) (setq during (superchat-test-chat--waiting buffer)) "ok"))
+      (unwind-protect
+          (superchat-test-script (list '(:text "" :calls ((:id "c1" :name "peek" :args nil)))
+                                       '(:text "Done"))
+            (with-current-buffer buffer (superchat-chat-send "two")))
+        (superchat-tool-remove "peek"))
+      (should (string-match-p "\\`. peek running… [0-9]+s\n\\'" during))
+      (should-not (superchat-test-chat--waiting buffer))
+      ;; A buffer killed during a run takes its timer with it.
+      (let ((superchat-llm-request-function #'superchat-test-chat--silent))
+        (with-current-buffer buffer (superchat-chat-send "three"))
+        (let ((timer (buffer-local-value 'superchat-chat--timer buffer)))
+          (kill-buffer buffer)
+          (should-not (memq timer timer-list)))))))
+
+(ert-deftest superchat-chat-user-text-is-never-a-heading ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "ok"))
+        (with-current-buffer buffer (superchat-chat-send "* not a heading\nsecond")))
+      (should (string-match-p "^ \\* not a heading$" (superchat-test-chat--text buffer)))
+      (should (equal (plist-get (car (superchat-tape-entries :tape "t1" :kinds '(user))) :text)
+                     "* not a heading\nsecond")))))
+
+(ert-deftest superchat-chat-typing-in-the-history-types-in-the-input ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "Hello"))
+        (with-current-buffer buffer (superchat-chat-send "hi")))
+      (superchat-test-chat--type buffer "draft ")
+      (with-current-buffer buffer
+        (goto-char (point-min))
+        (search-forward "Hello")
+        (let ((last-command-event ?x))
+          (call-interactively (key-binding "x")))
+        (should (= (point) (point-max)))
+        (should (equal (superchat-test-chat--input buffer) "draft x"))))))
 
 (provide 'test-chat)
 ;;; test-chat.el ends here
