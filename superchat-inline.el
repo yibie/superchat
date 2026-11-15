@@ -142,10 +142,9 @@ The replacement shows after the region, which is struck through;
     (with-current-buffer buffer
       (if (not (superchat-run-active tape))
           (superchat-chat-send text origin)
-        ;; Not lost: the person sends it when the timeline is free.
-        (goto-char (point-max))
-        (insert (if (or (bolp) (= (point) superchat-chat--input)) "" "\n") text)
-        (message "%s is busy: the question is in its input, not sent" (buffer-name))))))
+        ;; Not lost: it goes when the timeline is free.
+        (superchat-chat--enqueue text)
+        (message "%s is busy: the question is queued, sent when it is free" (buffer-name))))))
 
 (provide 'superchat-inline)
 ;;; superchat-inline.el ends here

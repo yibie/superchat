@@ -256,12 +256,16 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
                   ((symbol-function 'message)
                    (lambda (f &rest a) (when f (setq said (apply #'format f a))))))
           (call-interactively #'superchat-ask)))
+      ;; Queued, not put into the input.
       (should (equal (with-current-buffer chat
                        (buffer-substring-no-properties superchat-chat--input (point-max)))
-                     "why?"))
+                     ""))
+      (should (string-match-p "⏸ queued: why?"
+                              (with-current-buffer chat
+                                (overlay-get superchat-chat--waiting 'before-string))))
       (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1))
       (should (string-match-p (regexp-quote (buffer-name chat)) said))
-      (should (string-match-p "not sent" said)))))
+      (should (string-match-p "queued" said)))))
 
 (provide 'test-inline)
 ;;; test-inline.el ends here

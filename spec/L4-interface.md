@@ -27,8 +27,12 @@ derived from `org-mode`.
     heading `** Progress: N calls: NAME ×K, ...` (`1 call`; `** Progress`
     when it holds no call), N the calls in it, the names in order of first
     use and `×K` only when K > 1, `⏳ ` before `Progress` while a call of it
-    has no result. Under it, in order, the intermediate texts, converted,
-    each followed by its calls, each call a level 3 heading. Progress is
+    has no result. Under it, in order, the intermediate texts, each followed
+    by its calls, each call a level 3 heading. An intermediate text is a
+    level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
+    text cut to 60 characters and `…`, with the whole converted text as its
+    body, open unless the person folds it; a text of one line has no body.
+    Progress is
     open while the turn runs and folded once the turn has its final answer
     or the timeline is no longer busy with it, unless a call of it has an
     error: then it stays open, so that the error is seen;
@@ -100,16 +104,37 @@ derived from `org-mode`.
 - The input area is the editable text after the prompt. In it, `RET`
   sends when point is in its last line, otherwise inserts a newline; above
   it, `RET` is an edit of read-only text and refused as any edit there is.
-  `C-c C-c` always sends. `C-c C-k` cancels the run. What is sent is
+  `C-c C-c` always sends, `C-u C-c C-c` forces (below). `C-c C-k`
+  cancels the run. What is sent or queued is
   deleted from the input of the buffer it was typed in, also when the
   command it was (`/new`, `/resume`, `/fork`) shows another buffer.
 - When an entry or streamed text is shown, point, and the point of every
   window showing the buffer, stays where it was when above the input area
   and moves with the input when in it.
-- What is refused while the timeline is busy (sending, `/handoff`) is
-  refused with a message, not an error, and the input stays. The message is
-  `A request is still running; C-c C-k cancels it` during a run and `A
-  handoff is still running; C-c C-k cancels it` while a handoff is pending.
+- Sending from the input area while the timeline is busy (a run or a
+  handoff) queues the input instead, when it is not empty and not a
+  command: the input is cleared, and a dimmed line `⏸ queued: FIRST-LINE`
+  (`⏸ N queued: FIRST-LINE` when N > 1), FIRST-LINE the first line of the
+  first queued text cut to 60 characters and `…` when anything is left
+  out, shows just above the separator, after the waiting line, as part of
+  the same overlay. The queue is the buffer's only, not on the Tape:
+  killing the buffer drops it. When the run ends `done`, or the handoff
+  makes its anchor, the queued texts, joined by a blank line, are sent at
+  once as one request, as a send from the input area would send them. When
+  it ends otherwise (cancelled, error, a failed or cancelled handoff), the
+  queue is not sent: its text goes back to the start of the input area,
+  before what is typed there and apart from it by a blank line, and the
+  message says so.
+- `C-u C-c C-c` while the timeline is busy cancels the run or the handoff and,
+  once it has ended (from the run's ON-DONE), sends the queue and then the
+  input, joined by a blank line, as one request. When it is not busy it
+  sends as `C-c C-c` does.
+- What is refused while the timeline is busy (a command that needs it free
+  such as `/handoff`, and `superchat-chat-send` called by a program, which
+  never queues and returns nil) is refused with a message, not an error.
+  A command is never queued. The message is `A request
+  is still running; C-c C-k cancels it` during a run and `A handoff is
+  still running; C-c C-k cancels it` while a handoff is pending.
 - While the timeline is busy (a run or a handoff) the mode line shows
   `[running Ns]`, N the whole seconds since it began. While a run is active
   a waiting line just above the separator shows a spinner and the seconds
@@ -118,8 +143,7 @@ derived from `org-mode`.
   text of the buffer and not an entry; a timer of the buffer updates it and
   the mode line, and is cancelled when the run ends or the buffer is
   killed; the line is gone when the run ends.
-- While a run is active the input stays editable but sending is refused
-  with a message. Streamed text that never became an entry is removed when
+- While a run is active the input stays editable. Streamed text that never became an entry is removed when
   the run ends (cancelled or error). A run that ends with `error` says so
   in the echo area with the error's text. An entry is shown once, however
   it reached the buffer. The callbacks of a run find the chat buffer of
@@ -212,8 +236,8 @@ the conversations it showed.
   chat buffer of `superchat-chat-recent-tape` for the scope (a new timeline
   when there is none) beside the current window and sends the question
   there with `superchat-chat-send`. When that timeline is busy, the question
-  is put into the chat buffer's input area instead, and the message names
-  the chat buffer and says the question was not sent.
+  joins the chat buffer's queue instead, and the message names the chat
+  buffer and says the question is queued.
 
 ## superchat-plugin.el
 

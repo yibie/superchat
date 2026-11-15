@@ -34,6 +34,8 @@
 (defvar-local superchat-chat--waiting nil "Overlay of the waiting line, above the separator.")
 (defvar-local superchat-chat--timer nil "Timer that keeps the waiting line and the mode line current.")
 (defvar-local superchat-chat--began nil "When the timeline became busy.")
+(defvar-local superchat-chat--queue nil "Texts sent while the timeline was busy, the newest first.")
+(defvar-local superchat-chat--force nil "Non-nil: the queue goes when the run ends, however it ends.")
 (defvar-local superchat-chat--shown 0 "Id of the latest entry shown; nothing at or below it is shown again.")
 
 (defvar superchat-chat--commands nil
@@ -187,12 +189,16 @@ plain: its last character passes on no property, neither a face nor the id."
   "STRING in FACE, `shadow' by default, as a face Org's fontification keeps."
   (propertize string 'font-lock-face (or face 'shadow)))
 
+(defun superchat-chat--cut (line width)
+  "LINE cut to WIDTH characters and `…' when longer."
+  (if (> (length line) width) (concat (substring line 0 width) "…") line))
+
 (defun superchat-chat--args (args)
   "ARGS on one line, cut to 60 characters."
-  (let ((line (if args (let ((print-escape-newlines t))
-                         (string-trim (format "%S" args) "(" ")"))
-                "")))
-    (if (> (length line) 60) (concat (substring line 0 60) "…") line)))
+  (superchat-chat--cut (if args (let ((print-escape-newlines t))
+                                  (string-trim (format "%S" args) "(" ")"))
+                         "")
+                       60))
 
 (defun superchat-chat--heading (head body key id folded)
   "HEAD, a heading line, and BODY under it, read-only, with ID.  KEY names the
@@ -263,9 +269,13 @@ unless a call failed."
   (let (inside names waiting failed)
     (dolist (entry answers)
       (unless (string-empty-p (string-trim (plist-get entry :text)))
-        (push (superchat-chat--seal (concat (superchat-chat--answer entry nil) "\n")
-                                    (plist-get entry :id))
-              inside))
+        ;; A heading of its own: after a call, it is not taken into the call's subtree.
+        (let ((text (superchat-chat--answer entry nil)))
+          (push (superchat-chat--heading
+                 (concat "*** 💬 " (superchat-chat--cut (car (split-string text "\n")) 60))
+                 (if (string-search "\n" text) (concat "\n" text) "")
+                 (format "said %s" (plist-get entry :id)) (plist-get entry :id) nil)
+                inside)))
       (dolist (call (plist-get (plist-get entry :data) :calls))
         (let ((result (gethash (plist-get call :id) results)))
           (push (plist-get call :name) names)
@@ -454,6 +464,19 @@ heading the person folded or opened stays so, as do those of CHOICES."
                         (- now (or (plist-get (car (last superchat-chat--entries)) :at) now)))
                 'face 'shadow)))
 
+(defun superchat-chat--queued-line ()
+  "The line that shows the queue, or nil when it is empty."
+  (when-let* ((first (car (last superchat-chat--queue))))
+    (let ((line (car (split-string first "\n"))))
+      (propertize (format "⏸ %squeued: %s\n"
+                          (if (cdr superchat-chat--queue)
+                              (format "%d " (length superchat-chat--queue))
+                            "")
+                          (if (string-search "\n" first)
+                              (concat (substring line 0 (min 60 (length line))) "…")
+                            (superchat-chat--cut line 60)))
+                  'face 'shadow))))
+
 (defun superchat-chat--stop ()
   "Cancel the timer of the buffer."
   (when superchat-chat--timer
@@ -483,8 +506,10 @@ waiting line; a timer keeps them current while the timeline is busy."
           mode-line-process (and run (format " [running %ds]" (- now superchat-chat--began))))
     (move-overlay superchat-chat--waiting superchat-chat--block superchat-chat--block)
     (overlay-put superchat-chat--waiting 'before-string
-                 (and run (not (eq (plist-get run :status) 'handoff))
-                      (superchat-chat--waiting-line now)))
+                 (when-let* ((lines (delq nil (list (and run (not (eq (plist-get run :status) 'handoff))
+                                                         (superchat-chat--waiting-line now))
+                                                    (superchat-chat--queued-line)))))
+                   (apply #'concat lines)))
     (force-mode-line-update)))
 
 (defun superchat-chat--add (_entry)
@@ -575,7 +600,9 @@ A line starting with / is a command.  Return nil when nothing was sent."
                                             (superchat-chat--status)
                                             (when (eq (plist-get run :status) 'error)
                                               (message "Request failed: %s"
-                                                       (plist-get run :error)))))
+                                                       (plist-get run :error)))
+                                            (superchat-chat--release
+                                             (eq (plist-get run :status) 'done))))
                          ;; The first request of a timeline fixes its scope.
                          (and superchat-chat--pending-scope
                               (not (superchat-tape-entries :tape tape :limit 1))
@@ -583,18 +610,52 @@ A line starting with / is a command.  Return nil when nothing was sent."
         (superchat-chat--status))
       t))))
 
-(defun superchat-chat--send-input ()
-  "Send the input area; keep it when nothing was sent."
-  (interactive)
-  (let ((buffer (current-buffer))
-        (text (string-trim (buffer-substring-no-properties superchat-chat--input
-                                                           (point-max)))))
-    ;; The input goes only once the request is on its way: an error or a
-    ;; refusal leaves it where it was.  Entries are inserted above the marker.
-    ;; A command may have gone to another chat buffer: this one's input goes.
-    (when (and (not (string-empty-p text)) (superchat-chat-send text))
-      (with-current-buffer buffer
-        (delete-region superchat-chat--input (point-max))))))
+(defun superchat-chat--enqueue (text)
+  "Queue TEXT, sent when the timeline is free."
+  (push text superchat-chat--queue)
+  (superchat-chat--status))
+
+(defun superchat-chat--release (sent)
+  "The timeline is free: send the queue when SENT or forced, else put its
+text back at the start of the input and say so."
+  (when superchat-chat--queue
+    (let ((text (string-join (reverse superchat-chat--queue) "\n\n"))
+          (force superchat-chat--force))
+      (setq superchat-chat--queue nil superchat-chat--force nil)
+      (if (or sent force)
+          (superchat-chat-send text)
+        (superchat-chat--edit
+         (lambda ()
+           (goto-char superchat-chat--input)
+           (insert text (if (= (point) (point-max)) "" "\n\n"))))
+        (message "The queued request was not sent; it is back in the input"))
+      (superchat-chat--status)))
+  (setq superchat-chat--force nil))
+
+(defun superchat-chat--send-input (&optional force)
+  "Send the input area; keep it when nothing was sent.  While the timeline is
+busy, queue it, or with FORCE cancel the run and send the queue and the input."
+  (interactive "P")
+  (let* ((buffer (current-buffer))
+         (text (string-trim (buffer-substring-no-properties superchat-chat--input
+                                                            (point-max))))
+         (busy (superchat-run-active superchat-chat--tape))
+         (clear (lambda () (with-current-buffer buffer
+                             (delete-region superchat-chat--input (point-max))))))
+    (cond
+     ((and force busy)
+      (unless (string-empty-p text) (superchat-chat--enqueue text))
+      (funcall clear)
+      (setq superchat-chat--force t)
+      (superchat-chat--cancel))
+     ((string-empty-p text) nil)
+     ((and busy (not (string-prefix-p "/" text)))
+      (superchat-chat--enqueue text)
+      (funcall clear))
+     ;; The input goes only once the request is on its way: an error or a
+     ;; refusal leaves it where it was.  Entries are inserted above the marker.
+     ;; A command may have gone to another chat buffer: this one's input goes.
+     ((superchat-chat-send text) (funcall clear)))))
 
 (defun superchat-chat--return ()
   "Send on the last line of the input, else insert a newline."
@@ -606,11 +667,13 @@ A line starting with / is a command.  Return nil when nothing was sent."
 (defun superchat-chat--cancel ()
   "Cancel the run of this timeline."
   (interactive)
-  (if (superchat-run-active superchat-chat--tape)
-      ;; A cancelled handoff has no callback to show its event: render it.
+  (if-let* ((run (superchat-run-active superchat-chat--tape)))
+      ;; A cancelled handoff has no callback to show its event, nor to free
+      ;; the queue: render it and free it here.
       (progn (superchat-cancel superchat-chat--tape)
              (superchat-chat--render)
-             (superchat-chat--status))
+             (superchat-chat--status)
+             (when (eq (plist-get run :status) 'handoff) (superchat-chat--release nil)))
     (message "Nothing is running in this conversation")))
 
 (defun superchat-chat--cycle ()
@@ -774,7 +837,8 @@ it showed."
                                          (lambda (anchor)
                                            (superchat-chat--render)
                                            (superchat-chat--status)
-                                           (message (if anchor "Handoff made" "Handoff failed"))))))
+                                           (message (if anchor "Handoff made" "Handoff failed"))
+                                           (superchat-chat--release anchor)))))
   (superchat-chat--status))
 
 (defun superchat-chat--level (name)
