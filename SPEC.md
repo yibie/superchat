@@ -237,7 +237,8 @@ requires `llm.el`.
     no known tool or lacks an argument: the caller judges. A call whose
     arguments the provider sent as text that is not a JSON object comes back
     with `:args` nil. A call the provider gave no id, or an id that a kept
-    message already has, gets one made here.
+    message, an assistant message of this request's MESSAGES or an earlier
+    call of the same response already has, gets one made here.
   - A request waits ten minutes for the response to start and is tried up to
     two more times when the provider says to try again, as pi's own client
     does.
@@ -412,7 +413,8 @@ A number argument may arrive as a string. The description of `recall` lists the 
   3. the skills catalog: for each `NAME/SKILL.md` under
      `superchat-directory`/`skills/`, its name and the `description:` line of
      its frontmatter, with the path, so the model reads the file with
-     `read_file` when it wants it;
+     `read_file` when it wants it. A file whose first `---` line is never
+     closed has no frontmatter;
   4. the `notes` view of the scope, rendered, at most 2000 characters;
   5. the origin of the latest `user` entry, when it has one;
   6. EXTRA, a string, when given.
@@ -485,7 +487,15 @@ A number argument may arrive as a string. The description of `recall` lists the 
   given to its ON-ENTRY afterwards. A run only ever adds results for calls
   of its own responses. There is one way a run ends, used by all of these.
 - ON-ENTRY may cancel the run. Nothing more is requested or run after that,
-  and ON-DONE is still called exactly once.
+  and ON-DONE is still called exactly once. A cancel while the run is
+  ending (ON-ENTRY given an entry the ending wrote) does nothing: the
+  status stays what the ending set.
+- When ON-ENTRY signals on an entry the ending wrote, the ending goes on:
+  ON-ENTRY gets the entries after that one, the timeline is freed, ON-DONE
+  is called, and then the first such signal is raised to whatever ended the
+  run: the caller of `superchat-run` or `superchat-cancel`, or the timer or
+  process that delivered a response or a tool's result, where Emacs
+  reports it. An error raised by ON-DONE is the caller's in the same way.
 - The calls of one response are run in a loop, not by recursion: a response
   with hundreds of calls is no deeper than one with two.
 - An entry `superchat-tool-call` appended (a permission event, a result) is
@@ -498,8 +508,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
   handoff always begins with the conversation's current anchor message
   when there is one, the entries after it are cut to the budget oldest
   first, and when a single entry alone is larger than what is left its
-  text is cut. The summary a handoff appends is cut to a quarter of the
-  budget.
+  text is cut, so the run after a refusal makes a handoff that fits. The
+  summary and the next step a handoff appends are each cut to a quarter of
+  the budget, so an anchor message stays under half of it.
 - The timeline of a run that ends is freed after its last entries were
   given to ON-ENTRY, just before ON-DONE: ON-DONE may start the next run,
   ON-ENTRY may not.
@@ -515,7 +526,9 @@ A number argument may arrive as a string. The description of `recall` lists the 
   back and the answer; 120000 when the model has no window in the data.
   Twice the budget is then the whole window. The handoff before a run, the
   text given to a handoff and the leaving out within a run all use this
-  one budget.
+  one budget. It is worked out each time a request is built, so a change of
+  the model's data or of `superchat-context-chars` during a run is seen at
+  its next request.
 - `(superchat-run-active TAPE)` → the run or nil.
 - `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
   append a `cancelled` event and free the timeline. For a run: cancel the
@@ -585,7 +598,8 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
   `superchat-run` with the first request. A chat buffer's scope is its
   timeline's scope, never whatever `default-directory` happens to be; every
   command that needs a scope (`/new`, `/resume`, `/topic`, `/recall`,
-  `/notes`) uses that.
+  `/notes`, and `superchat`, `superchat-note`, `superchat-recall`,
+  `superchat-ask` called from that buffer) uses that.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
@@ -642,7 +656,8 @@ Built-in commands, and no others:
 - `(superchat-plugin-define NAME &key doc enable disable)`: NAME is a
   symbol; ENABLE and
   DISABLE are functions of no arguments. Another keyword is an error.
-  Defining a name that is enabled disables the old definition first. A plugin adds tools, views and
+  Defining a name that is enabled disables the old definition and then
+  enables the new one, so loading a plugin's file again keeps it on. A plugin adds tools, views and
   commands in ENABLE and removes them in DISABLE.
 - `(superchat-plugin-enable NAME)`, `(superchat-plugin-disable NAME)`,
   `(superchat-plugin-enabled-p NAME)`.

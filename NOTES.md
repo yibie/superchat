@@ -1,10 +1,3 @@
 # Notes
 
 One line each: what seems missing or wrong in SPEC.md, and why. Nothing is built from this file.
-- superchat-llm: the Tape has nil for JSON false, null, `[]` and `{}` alike, so a call argument rebuilt from the Tape (no kept message) is sent as false whichever it was; only the unkept replay is affected.
-- superchat-agent: when ON-ENTRY signals inside the continuation of an asynchronous tool's result, the run ends with `error` as specified, but the signal itself leaves through the timer or process sentinel that delivered the result (SPEC names no caller to give it to); Emacs reports it there.
-- superchat-agent: the user entry of a run whose handoff failed is appended while the run is ending with `error`, so an ON-ENTRY that cancels on it finds the timeline already free; the status stays `error` (SPEC says ON-ENTRY may cancel, not what a late cancel does).
-- superchat-agent: when ON-ENTRY signals on an entry the ending of a run wrote itself, the signal leaves through whoever ended the run, after ON-DONE, and ON-ENTRY does not get the entries after that one; SPEC names no other place for it.
-- superchat-agent: after a refusal (one message over twice the budget) the next run's handoff only recovers because `superchat-view-render` drops the oldest block first and the refusal's error event is the newest; SPEC does not say the handoff text must exclude an oversized entry, it relies on that order.
-- superchat-agent: the budget is per call of `superchat-agent--budget`, so a change of `superchat-llm-model` or of the provider's data between the handoff check and a later round is seen at once; SPEC does not say whether a run keeps the budget it started with.
-- superchat-agent: SPEC cuts only "the summary" of a handoff to a quarter of the budget; the `next` text is cut to a quarter too, so an anchor message stays under half the budget.
