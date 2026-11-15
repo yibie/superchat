@@ -989,6 +989,22 @@ tool `echo', and no chat buffers left behind."
       (should (equal (plist-get (car (superchat-tape-entries :tape "t1" :kinds '(user))) :text)
                      "* not a heading\nsecond")))))
 
+(ert-deftest superchat-chat-new-resume-and-fork-open-in-the-same-window ()
+  (superchat-test-chat--with
+    (superchat-test-script (list '(:text "a1"))
+      (with-current-buffer (superchat-chat-open "t1" (superchat-test-chat--scope))
+        (superchat-chat-send "one")))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices &rest _) (caar choices))))
+      (dolist (command '("/new" "/fork" "/resume"))
+        (delete-other-windows)
+        (switch-to-buffer (superchat-chat-open "t1"))
+        (let ((window (selected-window)))
+          (superchat-chat-send command)
+          (should (= (length (window-list)) 1))
+          (should (eq (selected-window) window))
+          (should (buffer-local-value 'superchat-chat--tape (window-buffer window))))))))
+
 (ert-deftest superchat-chat-typing-in-the-history-types-in-the-input ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))

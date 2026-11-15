@@ -175,6 +175,10 @@ Built-in commands, and no others:
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
 | `/help` | list commands |
 
+`/new`, `/resume` and `/fork` show the conversation they open in the window
+of the chat buffer they were typed in, in place of it; no other window is
+made or used.
+
 ## superchat-inline.el
 
 - `superchat-rewrite` (a command): with a region, read an instruction, run on
