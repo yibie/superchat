@@ -434,7 +434,7 @@ what is left, oldest dropped first."
   (let* ((anchor (cl-find-if (lambda (e) (and (eq (plist-get e :kind) 'anchor)
                                               (not (string-empty-p (plist-get e :text)))))
                              entries :from-end t))
-         (head (and anchor (superchat-view--clip
+         (head (and anchor (superchat-view-clip
                             (plist-get (superchat-agent--message anchor) :text) budget)))
          (rest (if anchor (cdr (memq anchor entries)) entries))
          (body (and rest (superchat-view-render rest (- budget (length head) 2))))
@@ -453,10 +453,10 @@ quarter of BUDGET."
   (let* ((case-fold-search nil)
          (split (string-match "^NEXT:[ \t]*" answer))
          (after (and split (match-end 0)))
-         (summary (superchat-view--clip
+         (summary (superchat-view-clip
                    (string-trim (if split (substring answer 0 split) answer))
                    (floor budget 4)))
-         (next (superchat-view--clip
+         (next (superchat-view-clip
                 (if split (string-trim (substring answer after)) "")
                 (floor budget 4))))
     (unless (string-empty-p summary)

@@ -192,5 +192,20 @@
       (superchat-tape-close)
       (delete-directory dir t))))
 
+(ert-deftest superchat-tape-open-follows-the-options ()
+  (let* ((dir (file-name-as-directory (make-temp-file "superchat-open-" t)))
+         (superchat-directory dir)
+         (superchat-tape-file (expand-file-name "one.sqlite" dir)))
+    (unwind-protect
+        (progn
+          (superchat-tape-append "t" 'user "in one" :scope "home")
+          (let ((superchat-tape-file (expand-file-name "two.sqlite" dir)))
+            (should-not (superchat-tape-entries))
+            (superchat-tape-append "t" 'user "in two" :scope "home"))
+          (should (equal (superchat-test-tape--texts (superchat-tape-entries)) '("in one")))
+          (should (file-exists-p (expand-file-name "two.sqlite" dir))))
+      (superchat-tape-close)
+      (delete-directory dir t))))
+
 (provide 'test-tape)
 ;;; test-tape.el ends here

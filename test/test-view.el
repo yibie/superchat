@@ -235,5 +235,31 @@
     (should (equal (superchat-test-view--texts (superchat-view 'topic :name "t" :scope "/q/"))
                    '("Q1" "q-in")))))
 
+(ert-deftest superchat-view-clip-cuts-with-a-mark ()
+  (should (equal (superchat-view-clip "short" 5) "short"))
+  (let ((cut (superchat-view-clip (make-string 100 ?a) 40)))
+    (should (<= (length cut) 40))
+    (should (string-match "\\`\\(a+\\)\\.\\.\\. \\[\\([0-9]+\\) characters cut\\]\\'" cut))
+    ;; What is kept and what the mark counts make the whole text.
+    (should (= (+ (length (match-string 1 cut)) (string-to-number (match-string 2 cut))) 100)))
+  ;; Shorter than the mark: the mark alone, counting every character.
+  (should (equal (superchat-view-clip (make-string 100 ?a) 5) "... [100 characters cut]")))
+
+(ert-deftest superchat-view-conversation-of-a-fork-is-its-refs-at-the-latest-anchor-only ()
+  (superchat-test-with-tape
+    (let ((u1 (superchat-test-view--add "a" 'user "u1")))
+      ;; A summary first, then an anchor with refs and no summary: the latest counts.
+      (superchat-test-view--anchor "f" "S" "handoff")
+      (superchat-test-view--add "f" 'user "after S")
+      (superchat-test-view--anchor "f" "" "fork" :refs (list u1))
+      (superchat-test-view--add "f" 'user "new")
+      (should (equal (superchat-test-view--texts (superchat-view 'conversation :tape "f"))
+                     '("u1" "" "new")))
+      ;; No refs: an empty anchor is only where the conversation starts.
+      (superchat-test-view--anchor "g" "" "empty")
+      (superchat-test-view--add "g" 'user "x")
+      (should (equal (superchat-test-view--texts (superchat-view 'conversation :tape "g"))
+                     '("" "x"))))))
+
 (provide 'test-view)
 ;;; test-view.el ends here

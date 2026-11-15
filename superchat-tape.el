@@ -39,14 +39,14 @@
 (defvar superchat-tape--readers (make-hash-table :test #'equal)
   "File name to its read-only connection, for `superchat-tape-select'.")
 
-(defun superchat-tape--file (file)
-  "Absolute name of FILE, or of the configured Tape file."
-  (expand-file-name (or file superchat-tape-file
+(defun superchat-tape--file ()
+  "Absolute name of the Tape file, as the user options say now."
+  (expand-file-name (or superchat-tape-file
                         (expand-file-name "tape.sqlite" superchat-directory))))
 
-(defun superchat-tape-open (&optional file)
-  "Open FILE (default the configured Tape file), create the schema, return it."
-  (let ((name (superchat-tape--file file)))
+(defun superchat-tape-open ()
+  "Open the Tape, creating its schema, and return the connection."
+  (let ((name (superchat-tape--file)))
     (or (gethash name superchat-tape--connections)
         (progn
           (make-directory (file-name-directory name) t)
@@ -155,7 +155,7 @@ The connection is a second one, kept per file.  `sqlite-execute' is used
 because `sqlite-select' hides a refused write."
   (unless (string-match-p "\\`[ \t\n]*\\(select\\|with\\)\\_>" (downcase sql))
     (error "Only SELECT and WITH statements are allowed"))
-  (let* ((name (superchat-tape--file nil))
+  (let* ((name (superchat-tape--file))
          (db (or (gethash name superchat-tape--readers)
                  (progn (superchat-tape-open)
                         (let ((reader (sqlite-open name)))

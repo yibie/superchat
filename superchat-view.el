@@ -34,7 +34,7 @@
   "Alist of (NAME . DOC) of every view."
   (mapcar (lambda (v) (cons (car v) (cddr v))) superchat-view--registry))
 
-(defun superchat-view--clip (text max)
+(defun superchat-view-clip (text max)
   "TEXT cut to at most MAX characters, ending in a mark that says how many
 were cut; TEXT itself when it fits."
   (if (<= (length text) max)
@@ -71,7 +71,7 @@ header line of a block is never cut: it is what the text is cited by."
     (when max-chars
       (let ((room (- max-chars (length (superchat-view--omitted dropped)))))
         (setq blocks (mapcar (lambda (b)
-                               (cons (car b) (superchat-view--clip
+                               (cons (car b) (superchat-view-clip
                                               (cdr b) (max 0 (- room (length (car b)) 1)))))
                              blocks))))
     (concat (superchat-view--omitted dropped)
@@ -88,11 +88,9 @@ header line of a block is never cut: it is what the text is cited by."
          (anchor (car (superchat-tape-entries :tape tape :kinds '(anchor)
                                               :newest t :limit 1)))
          (rows (superchat-tape-entries
-                :tape tape :after (and anchor (1- (plist-get anchor :id)))))
-         (first (car (superchat-tape-entries :tape tape :kinds '(anchor) :limit 1))))
-    ;; A fork's first anchor has no summary: the entries it refers to are the past.
-    (if (and anchor (eq (plist-get anchor :id) (plist-get first :id))
-             (plist-get anchor :refs) (string-empty-p (plist-get anchor :text)))
+                :tape tape :after (and anchor (1- (plist-get anchor :id))))))
+    ;; An anchor with no summary stands for the entries it refers to: a fork.
+    (if (and anchor (plist-get anchor :refs) (string-empty-p (plist-get anchor :text)))
         (append (delq nil (mapcar #'superchat-tape-get
                                   (sort (copy-sequence (plist-get anchor :refs)) #'<)))
                 rows)
