@@ -183,7 +183,8 @@ Built-in commands, and no others:
 A conversation is a tab of the frame's tab bar (`tab-bar`), as a page is in
 a browser. `/new` and `/fork` open the conversation they make in a new tab;
 `/resume` selects the tab that shows the chosen conversation, or opens a new
-tab when none does. The new tab shows that chat buffer alone. A tab is
+tab when none does. The new tab shows that chat buffer alone, in a window
+with no earlier buffers, so a window tab line lists only it. A tab is
 named as `tab-bar` names it, after its buffer, so it follows the title.
 
 ## superchat-inline.el

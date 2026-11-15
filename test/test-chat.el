@@ -1094,7 +1094,10 @@ tool `echo', and no chat buffers left behind."
           (with-current-buffer (window-buffer) (superchat-chat-send "/new"))
           (should (= (length (window-list)) 1))
           (should-not (equal (superchat-test-chat--tape-of (window-buffer)) "t1"))
-          (should (superchat-test-chat--tape-of (window-buffer))))
+          (should (superchat-test-chat--tape-of (window-buffer)))
+          ;; Nothing of the tab it came from: a window tab line shows it alone.
+          (should-not (window-prev-buffers))
+          (should-not (window-next-buffers)))
       (tab-bar-close-other-tabs))))
 
 (ert-deftest superchat-chat-typing-in-the-history-types-in-the-input ()

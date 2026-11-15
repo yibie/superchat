@@ -748,8 +748,12 @@ one, else a new one.  A conversation is a tab, as a page is in a browser."
            t))
         ;; `set-window-buffer', not `switch-to-buffer': a rule of the user's
         ;; `display-buffer-alist' for chat buffers must not send it elsewhere.
+        ;; The new tab's window starts with no history: a window tab line
+        ;; would otherwise list the conversation the tab was opened from.
         (t (tab-bar-new-tab)
            (set-window-buffer nil buffer)
+           (set-window-prev-buffers nil nil)
+           (set-window-next-buffers nil nil)
            (set-buffer buffer))))
 
 (defun superchat-chat--resume (_)
