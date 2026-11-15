@@ -31,9 +31,11 @@ numbers, strings, plists or lists. Nil comes back as nil. `:refs` is a JSON arra
 
 Public functions, and no others:
 
-- `(superchat-tape-open &optional FILE)`: open (creating schema) and return
-  the connection. With no FILE, `superchat-tape-file`. One connection per
-  file, kept. `(superchat-tape-close)` closes it.
+- `(superchat-tape-open)`: open the Tape (creating its schema) and return
+  the connection. There is one Tape: the file `superchat-tape-file` names
+  when the function is called, so every other function works on the file
+  the options name now. One connection per file, kept.
+  `(superchat-tape-close)` closes every connection.
 - `(superchat-tape-append TAPE KIND TEXT &key data refs scope at)` → the new
   entry. SCOPE defaults to the scope of the latest entry of TAPE; it is an
   error to give none for the first entry of a timeline. KIND is one of the
@@ -68,13 +70,18 @@ There is no function that updates or deletes.
 - `(superchat-view-render ENTRIES &optional MAX-CHARS)` → text for a model or
   a person: one block per entry, `#ID kind time` then the text, tool results
   cut to 400 characters. When MAX-CHARS is exceeded the oldest entries are
-  dropped and the first line says how many.
+  dropped and the first line says how many; when the one block left is still
+  larger, its `#ID kind time` line stays whole and its text is cut as
+  `superchat-view-clip` cuts it.
+- `(superchat-view-clip TEXT MAX)` → TEXT when it has at most MAX
+  characters, else its start, ending in `... [N characters cut]`, at most
+  MAX characters in all; the mark alone when MAX is shorter than the mark.
 
 Built-in views:
 
 | name | arguments | returns |
 |---|---|---|
-| `conversation` | `:tape` | the timeline from its latest anchor, inclusive, to its end; the whole timeline when it has no anchor |
+| `conversation` | `:tape` | the timeline from its latest anchor, inclusive, to its end; the whole timeline when it has no anchor. When that anchor has `:refs` and an empty summary (a fork), the entries it refers to come first, in id order |
 | `topic` | `:name`, `:scope` optional | for every anchor with that name: the entries from that anchor up to the next anchor of the same timeline |
 | `search` | `:query`, `:scope`, `:kinds`, `:limit` (default 8), `:around` (default 1) | each hit with AROUND neighbours before and after it in its timeline, no entry twice, in id order |
 | `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"` |

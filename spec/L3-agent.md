@@ -164,6 +164,4 @@ a model through `superchat-run`. It uses L1 and L2.
 - `(superchat-fork TAPE ENTRY-ID)` → a new timeline name whose first entry is
   an anchor: summary empty, `:refs` the ids of TAPE's `conversation` view up
   to ENTRY-ID, and the `tool` entries that answer the calls of every
-  `assistant` entry among them, so that no call is left without its result. The `conversation` view of a
-  timeline whose first anchor has refs and an empty summary begins with
-  those referred entries.
+  `assistant` entry among them, so that no call is left without its result.
