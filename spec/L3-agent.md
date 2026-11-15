@@ -96,7 +96,8 @@ a model through `superchat-run`. It uses L1 and L2.
   is called, and then the first such signal is raised to whatever ended the
   run: the caller of `superchat-run` or `superchat-cancel`, or the timer or
   process that delivered a response or a tool's result, where Emacs
-  reports it. An error raised by ON-DONE is the caller's in the same way.
+  reports it. A later signal of the same ending is shown with `message`.
+  An error raised by ON-DONE is the caller's in the same way.
 - The calls of one response are run in a loop, not by recursion: a response
   with hundreds of calls is no deeper than one with two.
 - An entry `superchat-tool-call` appended (a permission event, a result) is
@@ -132,7 +133,8 @@ a model through `superchat-run`. It uses L1 and L2.
   its next request.
 - `(superchat-run-active TAPE)` → the run or nil.
 - `(superchat-cancel TAPE)`: for a pending handoff, cancel its request,
-  append a `cancelled` event and free the timeline. For a run: cancel the
+  append a `cancelled` event and free the timeline; the handoff's ON-DONE is
+  not called, and an answer that comes later is dropped. For a run: cancel the
   request, append a `cancelled` event,
   call ON-DONE with `cancelled`. A tool that is running is stopped through
   the function `superchat-tool-call` returned. Tool calls of the current
@@ -143,17 +145,23 @@ a model through `superchat-run`. It uses L1 and L2.
   entry is appended before the `cancelled` event: what the user wrote is
   never lost.
 - After `superchat-max-rounds` (40) model responses in one run, the run ends
-  with status `error` and an `error` event that says so.
+  with status `error` and an `error` event that says so. The calls of the
+  last response are run first: the limit stops the next request, so every
+  call has its result.
 - An error from the model appends an `error` event and ends the run with
   status `error`.
 - `(superchat-handoff TAPE &optional NAME on-done)`: ask the model, with no
   tools, for a summary of the `conversation` view and for what comes next,
-  and append an anchor with them, its `:refs` the ids summarised. The
-  request is one `user` message holding `superchat-view-render` of the view,
-  cut to the budget, and the question, so it has no tool turns a provider could refuse. It
+  and append an anchor with them, its `:refs` the ids of the entries the
+  request held. The request is one `user` message holding the text given to
+  a handoff (see above: the current anchor message, then
+  `superchat-view-render` of the entries after it, cut to the budget) and
+  the question, so it has no tool turns a provider could refuse. It
   returns the handle of the request. NAME is the
   topic name, default `"handoff"`. ON-DONE is called with the anchor, or with
-  nil when the model failed (an `error` event is appended then).
+  nil when the model failed (an `error` event is appended then). An answer
+  with no summary is a failure too: an anchor with refs and no summary is
+  how L1 reads a fork, so only `superchat-fork` writes one.
 - When `superchat-run` is called and the timeline's messages are already
   larger than the budget, a handoff is made first, and the
   `user` entry is appended after the anchor, so the request is never behind
