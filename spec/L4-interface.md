@@ -16,9 +16,12 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
   `▸ You`, `▸ Assistant`, a tool call as one line `⚙ name(args cut to 60
   chars) → first line of the result`, an anchor as `── summary: NAME ──` and
   its text, an event as a dimmed line.
-- The input area is the editable text after the last entry. `RET` sends when
-  point is in the last line of the input, otherwise inserts a newline;
+- The input area is the editable text after the last entry. In it, `RET`
+  sends when point is in its last line, otherwise inserts a newline; above
+  it, `RET` is an edit of read-only text and refused as any edit there is.
   `C-c C-c` always sends. `C-c C-k` cancels the run.
+- What is refused while the timeline is busy (sending, `/handoff`) is
+  refused with a message, not an error, and the input stays.
 - While a run is active the mode line shows `[running]`, streamed text
   appears as it comes, and the input stays editable but sending is refused
   with a message. An entry is shown once, however it reached the buffer. The
@@ -62,8 +65,8 @@ Built-in commands, and no others:
 |---|---|
 | `/new` | a new timeline in the same scope as this buffer's timeline, in a new buffer |
 | `/resume` | choose a timeline from the `timelines` view with `completing-read` and open it |
-| `/fork` | fork at the entry at point, open the new timeline |
-| `/handoff [name]` | `superchat-handoff`; refused while a run is active; the mode line shows `[running]` until it is over, and `C-c C-k` cancels it |
+| `/fork` | fork at the entry at point, or at the latest entry when point is in the input area; open the new timeline |
+| `/handoff [name]` | `superchat-handoff`; refused while the timeline is busy; the mode line shows `[running]` until it is over, and `C-c C-k` cancels it |
 | `/topic name` | open the `topic` view of that name in a read-only buffer |
 | `/recall query` | open the `search` view in a read-only buffer |
 | `/notes` | open the `notes` view in a read-only buffer |

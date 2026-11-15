@@ -80,7 +80,7 @@ points to require. A file requires nothing else, and
   files at the repository root. Tests are not counted. Each file has its own
   cap in the layer table. `scripts/check.sh` fails when a cap is exceeded.
 - Emacs 30.1 or later. Dependencies: `curl`, the `bridge/` directory of this repository, and what Emacs ships with
-  (`sqlite`, `project`, `cl-lib`, `subr-x`, `json`). Nothing else.
+  (`sqlite`, `project`, `cl-lib`, `subr-x`, `seq`, `json`). Nothing else.
 - Every file starts with `;;; NAME.el --- ... -*- lexical-binding: t; -*-` and
   byte-compiles with no warnings.
 
