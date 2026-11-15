@@ -118,8 +118,9 @@
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
         (should (= (length superchat-test-requests) 2)))
       (should (eq status 'error))
-      (let ((last (car (last (superchat-tape-entries :tape "t")))))
-        (should (equal (plist-get (plist-get last :data) :type) "error"))))))
+      ;; The calls of the last response ran: every call has its result.
+      (should (equal (superchat-test-agent--types "t")
+                     '(user assistant tool assistant tool error))))))
 
 (ert-deftest superchat-agent-one-run-per-timeline ()
   (superchat-test-agent--with
@@ -1754,6 +1755,37 @@ model m8 and `superchat-context-chars' nil."
                        :on-done (lambda (r) (push (plist-get r :status) dones))))
       (should (equal dones '(error)))
       (should (equal (superchat-test-agent--types "t") '(user error))))))
+
+(ert-deftest superchat-agent-a-handoff-with-no-summary-fails ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "hello" :scope "home")
+    (let (got)
+      (superchat-test-script (list '(:text "  \n"))
+        (superchat-handoff "t" nil (lambda (a) (push a got))))
+      (should (equal got '(nil)))
+      (should-not (superchat-tape-entries :tape "t" :kinds '(anchor)))
+      (should (string-match-p "no summary"
+                              (cdr (car (last (superchat-test-agent--entries "t")))))))))
+
+(ert-deftest superchat-agent-a-later-signal-in-the-ending-is-shown ()
+  (superchat-test-agent--with
+    (let (shown)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) shown))))
+        (superchat-test-script
+            (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                    '("c1" "c2" "c3"))))
+          (condition-case nil
+              (superchat-run "t" "go"
+                             :on-entry (lambda (e)
+                                         (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                           (superchat-cancel "t"))
+                                         (when (equal (plist-get e :text) "Cancelled.")
+                                           (error "display broke")))
+                             :on-done #'ignore)
+            (error nil))))
+      ;; Two Cancelled. results: the first signal is raised, the second shown.
+      (should (= (cl-count-if (lambda (m) (string-match-p "display broke" m)) shown) 1)))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here

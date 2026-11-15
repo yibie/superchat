@@ -157,7 +157,11 @@ first such error is returned, for the ending to raise after ON-DONE."
             (if (not final)
                 (funcall on-entry entry)
               (condition-case err (funcall on-entry entry)
-                (error (setq failed (or failed err)))))))))
+                ;; The first goes to whoever ended the run; no entry can hold the rest.
+                (error (if failed
+                           (message "Superchat: ON-ENTRY failed again: %s"
+                                    (error-message-string err))
+                         (setq failed err)))))))))
     failed))
 
 (defun superchat-agent--live (run)
