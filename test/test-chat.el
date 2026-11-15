@@ -88,6 +88,23 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (superchat-chat-send (make-string 60 ?x))))
       (should (equal (buffer-name buffer) (format "*superchat: %s*" (make-string 40 ?x)))))))
 
+(ert-deftest superchat-chat-title-counts-characters-not-columns ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "ok"))
+        (with-current-buffer buffer (superchat-chat-send (make-string 60 ?字))))
+      (should (equal (buffer-name buffer) (format "*superchat: %s*" (make-string 40 ?字)))))))
+
+(ert-deftest superchat-chat-a-call-with-lines-in-its-arguments-is-one-line ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script
+          (list '(:text "" :calls ((:id "c1" :name "echo" :args (:x "a\nb"))))
+                '(:text "Done"))
+        (with-current-buffer buffer (superchat-chat-send "go")))
+      (should (string-match-p "^⚙ echo(:x \"a\\\\nb\") → echo:a$"
+                              (superchat-test-chat--text buffer))))))
+
 (ert-deftest superchat-chat-tool-round ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))
@@ -448,7 +465,7 @@ tool `echo', and no chat buffers left behind."
     (let ((buffer (superchat-chat-open "t1")))
       (dolist (case '(("/topic fruit" "topic fruit" "#3 anchor")
                       ("/recall plums" "recall plums" "the answer is plums")
-                      ("/notes" "notes of this scope" "plums win")))
+                      ("/notes" "notes" "plums win")))
         (with-current-buffer buffer (superchat-chat-send (car case)))
         (with-current-buffer (get-buffer (format "*superchat-view: %s*" (cadr case)))
           (should (derived-mode-p 'special-mode))
@@ -524,6 +541,57 @@ tool `echo', and no chat buffers left behind."
         (superchat-note "kept in the chat scope"))
       (should (equal (plist-get (car (superchat-tape-entries :kinds '(note))) :scope)
                      "/chat-scope/")))))
+
+(ert-deftest superchat-chat-a-note-from-elsewhere-shows-in-the-open-chat ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "ok"))
+        (with-current-buffer buffer (superchat-chat-send "hi")))
+      (superchat-note "kept from another buffer")
+      (superchat-test-script (list '(:text "later"))
+        (with-current-buffer buffer (superchat-chat-send "again")))
+      (let ((incremental (superchat-test-chat--text buffer)))
+        (should (string-match-p "kept from another buffer" incremental))
+        (kill-buffer buffer)
+        (should (equal incremental (superchat-test-chat--text (superchat-chat-open "t1"))))))))
+
+(ert-deftest superchat-chat-note-command-appends-and-shows ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1" (superchat-test-chat--scope))))
+      (with-current-buffer buffer (superchat-chat-send "/note keep this"))
+      (let ((note (car (superchat-tape-entries :tape "t1" :kinds '(note)))))
+        (should (equal (plist-get note :text) "keep this"))
+        (should (equal (plist-get (plist-get note :data) :title) "keep this")))
+      (should (string-match-p "keep this" (superchat-test-chat--text buffer))))))
+
+(ert-deftest superchat-chat-an-entry-during-streaming-keeps-the-streamed-text ()
+  (superchat-test-chat--with
+    (let* ((buffer (superchat-chat-open "t1" (superchat-test-chat--scope))) answer
+           (superchat-llm-request-function
+            (lambda (_messages &rest keys)
+              (funcall (plist-get keys :on-text) "Hel")
+              (setq answer keys)
+              (list :cancelled nil :finished nil :request nil))))
+      (with-current-buffer buffer
+        (superchat-chat-send "hi")
+        (superchat-chat-send "/note aside")
+        (funcall (plist-get answer :on-text) "lo"))
+      (should (equal (superchat-test-chat--text buffer)
+                     "▸ You\nhi\n\naside\n▸ Assistant\nHello"))
+      (funcall (plist-get answer :on-done) '(:text "Hello" :model "m"))
+      (should (equal (superchat-test-chat--text buffer)
+                     "▸ You\nhi\n\naside\n▸ Assistant\nHello\n\n")))))
+
+(ert-deftest superchat-chat-recall-command-uses-the-chat-scope ()
+  (superchat-test-chat--with
+    (superchat-tape-append "p1" 'user "a ferret here" :scope "/proj/")
+    (superchat-tape-append "p1" 'note "kept" :data '(:title "kept"))
+    (with-current-buffer (superchat-chat-open "p1")
+      (superchat-recall "ferret")
+      (should (string-match-p "a ferret here"
+                              (superchat-test-chat--text "*superchat-view: recall ferret*")))
+      (superchat-recall "")
+      (should (string-match-p "kept" (superchat-test-chat--text "*superchat-view: notes*"))))))
 
 (ert-deftest superchat-chat-command-records-origin ()
   (superchat-test-chat--with

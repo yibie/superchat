@@ -21,13 +21,15 @@
       (error "No plugin is defined with the name `%s'" name)))
 
 (cl-defun superchat-plugin-define (name &key doc enable disable)
-  "Define plugin NAME with DOC, ENABLE and DISABLE; do not enable it.
-Redefining an enabled plugin disables the old definition first."
-  (when (assq name superchat-plugin--definitions)
-    (superchat-plugin-disable name))
-  (setf (alist-get name superchat-plugin--definitions)
-        (list :doc doc :enable enable :disable disable))
-  name)
+  "Define plugin NAME with DOC, ENABLE and DISABLE.
+Redefining an enabled plugin disables the old definition and enables the new
+one, so loading a plugin's file again keeps it on."
+  (let ((was (superchat-plugin-enabled-p name)))
+    (when was (superchat-plugin-disable name))
+    (setf (alist-get name superchat-plugin--definitions)
+          (list :doc doc :enable enable :disable disable))
+    (when was (superchat-plugin-enable name))
+    name))
 
 (defun superchat-plugin-enable (name)
   "Enable plugin NAME by calling its ENABLE once.

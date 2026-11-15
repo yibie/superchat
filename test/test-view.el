@@ -203,5 +203,37 @@
       (should (string-match-p "earlier entries left out\\]" two))
       (should (string-suffix-p "tiny" two)))))
 
+;; A header is what a block is cited by: a small limit cuts only the text.
+(ert-deftest superchat-view-render-small-limit-keeps-the-header-whole ()
+  (superchat-test-with-tape
+    (let* ((old (superchat-tape-append "a" 'user "older" :scope "/p/"))
+           (e (superchat-tape-append "a" 'user (make-string 200 ?z)))
+           (text (superchat-view-render (list old e) 60)))
+      (should (string-match-p (format "\\`\\[1 earlier entries left out\\]\n\n#%d user [0-9-]+ [0-9:]+\n"
+                                      (plist-get e :id))
+                              text))
+      (should (string-match-p "characters cut\\]\\'" text)))))
+
+(ert-deftest superchat-view-search-overlapping-neighbours-come-once ()
+  (superchat-test-with-tape
+    (dolist (text '("zero" "needle one" "two" "needle three" "needle four" "five"))
+      (superchat-test-view--add "a" 'user text))
+    (let ((entries (superchat-view 'search :query "needle" :around 2)))
+      (should (equal (superchat-test-view--texts entries)
+                     '("zero" "needle one" "two" "needle three" "needle four" "five")))
+      (should (equal (mapcar (lambda (e) (plist-get e :id)) entries)
+                     (sort (delete-dups (mapcar (lambda (e) (plist-get e :id)) entries)) #'<))))))
+
+(ert-deftest superchat-view-topic-with-a-matching-scope ()
+  (superchat-test-with-tape
+    (superchat-test-view--anchor "a" "A1" "t")
+    (superchat-test-view--add "a" 'user "a-in")
+    (superchat-tape-append "q" 'anchor "Q1" :data '(:name "t") :scope "/q/")
+    (superchat-tape-append "q" 'user "q-in")
+    (should (equal (superchat-test-view--texts (superchat-view 'topic :name "t" :scope "/p/"))
+                   '("A1" "a-in")))
+    (should (equal (superchat-test-view--texts (superchat-view 'topic :name "t" :scope "/q/"))
+                   '("Q1" "q-in")))))
+
 (provide 'test-view)
 ;;; test-view.el ends here

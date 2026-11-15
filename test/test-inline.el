@@ -91,6 +91,30 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
     (call-interactively #'superchat-inline-accept)
     (should (equal (buffer-string) "alpha (foo)\n(bar) gamma"))))
 
+(ert-deftest superchat-inline-two-blocks-are-not-unwrapped ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let ((answer "```\na\n```\nmiddle\n```\nb\n```"))
+      (superchat-test-script (list (list :text answer))
+        (superchat-rewrite "shout"))
+      (should (equal (overlay-get (superchat-test-inline--overlay) 'superchat-text) answer)))))
+
+(ert-deftest superchat-inline-a-long-fenced-answer-is-unwrapped ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (let ((body (mapconcat #'identity (make-list 40000 "line of code") "\n")))
+      (superchat-test-script (list (list :text (concat "```\n" body "\n```")))
+        (superchat-rewrite "shout"))
+      (should (equal (overlay-get (superchat-test-inline--overlay) 'superchat-text) body)))))
+
+(ert-deftest superchat-inline-a-refused-accept-keeps-the-overlay ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (superchat-test-script (list '(:text "BETA"))
+      (superchat-rewrite "shout"))
+    (goto-char (overlay-start (superchat-test-inline--overlay)))
+    (setq buffer-read-only t)
+    (should-error (call-interactively #'superchat-inline-accept))
+    (should (superchat-test-inline--overlay))
+    (should (equal (buffer-string) "alpha beta gamma"))))
+
 (ert-deftest superchat-inline-accept-after-edit ()
   (superchat-test-inline--with "alpha beta gamma"
     (superchat-test-script (list '(:text "BETA"))

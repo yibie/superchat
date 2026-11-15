@@ -65,7 +65,8 @@
     (dolist (case '(("a" "---\nname: a\ndescription: Good one\n---\ndescription: in body\n")
                     ("b" "intro\n---\ndescription: not frontmatter\n---\n")
                     ("c" "---\nname: c\n---\ndescription: after the end\n")
-                    ("d" "---\nname: d\ndescription: Dash line\n--- \ndescription: late\n---\n")))
+                    ("d" "---\nname: d\ndescription: Dash line\n--- \ndescription: late\n---\n")
+                    ("e" "---\nname: e\ndescription: never closed\n")))
       (superchat-test-context--write
        (concat superchat-directory "skills/" (car case) "/SKILL.md") (cadr case)))
     (let ((system (superchat-context-system "t")))
@@ -73,6 +74,7 @@
       (should (string-match-p "b: no description" system))
       (should (string-match-p "c: no description" system))
       (should (string-match-p "d: Dash line" system))
+      (should (string-match-p "e: no description" system))
       (should-not (string-match-p "in body\\|not frontmatter\\|after the end" system)))))
 
 (ert-deftest superchat-context-notes-limit-and-scope ()

@@ -55,22 +55,27 @@ were cut; TEXT itself when it fits."
 
 (defun superchat-view-render (entries &optional max-chars)
   "ENTRIES as text.  Over MAX-CHARS the oldest are dropped and counted; a
-single block still over it has its text cut, with a mark saying so."
-  (let* ((blocks (mapcar (lambda (e) (format "#%d %s %s\n%s" (plist-get e :id) (plist-get e :kind)
-                                             (format-time-string "%F %R" (plist-get e :at))
-                                             (superchat-view--cut e)))
+single block still over it has its text cut, with a mark saying so.  The
+header line of a block is never cut: it is what the text is cited by."
+  (let* ((blocks (mapcar (lambda (e) (cons (format "#%d %s %s" (plist-get e :id) (plist-get e :kind)
+                                                   (format-time-string "%F %R" (plist-get e :at)))
+                                           (superchat-view--cut e)))
                          entries))
-         (total (cl-loop for b in blocks sum (+ 2 (length b)) into n finally return (- n 2)))
+         (size (lambda (b) (+ (length (car b)) 1 (length (cdr b)))))
+         (total (cl-loop for b in blocks sum (+ 2 (funcall size b)) into n finally return (- n 2)))
          (dropped 0))
     (while (and max-chars (cdr blocks)
                 (> (+ total (length (superchat-view--omitted dropped))) max-chars))
-      (cl-decf total (+ 2 (length (pop blocks))))
+      (cl-decf total (+ 2 (funcall size (pop blocks))))
       (cl-incf dropped))
     (when max-chars
       (let ((room (- max-chars (length (superchat-view--omitted dropped)))))
-        (setq blocks (mapcar (lambda (b) (superchat-view--clip b (max 0 room))) blocks))))
+        (setq blocks (mapcar (lambda (b)
+                               (cons (car b) (superchat-view--clip
+                                              (cdr b) (max 0 (- room (length (car b)) 1)))))
+                             blocks))))
     (concat (superchat-view--omitted dropped)
-            (string-join blocks "\n\n"))))
+            (mapconcat (lambda (b) (concat (car b) "\n" (cdr b))) blocks "\n\n"))))
 
 (defun superchat-view--in-order (entries)
   "ENTRIES without duplicates, in id order."

@@ -166,8 +166,13 @@ because `sqlite-select' hides a refused write."
     (and (listp rows) rows)))
 
 (defun superchat-tape-new-name ()
-  "A fresh timeline name, YYYYMMDD-HHMMSS-xxxx."
-  (format "%s-%04x" (format-time-string "%Y%m%d-%H%M%S") (random 65536)))
+  "A fresh timeline name, YYYYMMDD-HHMMSS-xxxx, that no entry of the Tape has."
+  (let (name)
+    (while (progn (setq name (format "%s-%04x" (format-time-string "%Y%m%d-%H%M%S")
+                                     (random 65536)))
+                  (sqlite-select (superchat-tape-open)
+                                 "SELECT 1 FROM entry WHERE tape = ? LIMIT 1" (list name))))
+    name))
 
 (defun superchat-tape-scope-of (directory)
   "The scope for DIRECTORY: its project root, or \"home\"."

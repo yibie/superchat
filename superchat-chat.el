@@ -41,9 +41,18 @@ FUNCTION is called with the rest of the line, in the chat buffer."
   (setq superchat-chat--commands (assoc-delete-all name superchat-chat--commands)))
 
 (defun superchat-chat--scope ()
-  "The scope of this buffer: that of its timeline, else the one it was opened with."
-  (or (plist-get (car (superchat-tape-entries :tape superchat-chat--tape :limit 1)) :scope)
-      superchat-chat--pending-scope))
+  "The scope of this buffer.  A chat buffer has its timeline's, else the one it
+was opened with; any other buffer that of `default-directory'."
+  (if superchat-chat--tape
+      (or (plist-get (car (superchat-tape-entries :tape superchat-chat--tape :limit 1)) :scope)
+          superchat-chat--pending-scope)
+    (superchat-tape-scope-of default-directory)))
+
+(defun superchat-chat--origin-here ()
+  "The origin of a request made from the current buffer, at point."
+  (append (list :buffer (buffer-name))
+          (and buffer-file-name (list :file buffer-file-name))
+          (list :mode (symbol-name major-mode) :line (line-number-at-pos))))
 
 ;;; Rendering
 
@@ -56,7 +65,8 @@ FUNCTION is called with the rest of the line, in the chat buffer."
          (call (seq-find (lambda (c) (equal (plist-get c :id) (plist-get data :call-id)))
                          (plist-get (plist-get assistant :data) :calls)))
          (args (if-let* ((plist (plist-get call :args)))
-                   (string-trim (format "%S" plist) "(" ")")
+                   (let ((print-escape-newlines t))
+                     (string-trim (format "%S" plist) "(" ")"))
                  ""))
          (args (if (> (length args) 60) (concat (substring args 0 60) "…") args)))
     (propertize (format "⚙ %s(%s) → %s\n" (plist-get data :name) args
@@ -90,14 +100,19 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
             (_ (propertize (concat text "\n") 'face 'shadow)))))
     (superchat-chat--seal string (plist-get entry :id))))
 
-(defun superchat-chat--insert (string)
-  "Insert the sealed STRING above the input area; the user's point stays put."
+(defun superchat-chat--insert (string &optional streamed)
+  "Insert the sealed STRING above the input area; the user's point stays put.
+STREAMED text goes at the end of the stream; an entry goes above the stream,
+which stays below it until the answer replaces it."
   (let ((inhibit-read-only t)
+        (at (if (or streamed (not superchat-chat--stream))
+                superchat-chat--input
+              superchat-chat--stream))
         (tail (and (>= (point) superchat-chat--input) (- (point-max) (point)))))
     (save-excursion
-      (goto-char superchat-chat--input)
+      (goto-char at)
       (insert string)
-      (set-marker superchat-chat--input (point)))
+      (set-marker at (point)))
     (when tail (goto-char (- (point-max) tail)))))
 
 (defun superchat-chat--unstream ()
@@ -125,7 +140,8 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
 
 (defun superchat-chat--line (text width)
   "TEXT on one line, cut to WIDTH characters."
-  (truncate-string-to-width (replace-regexp-in-string "[\n\t]+" " " text) width))
+  (let ((line (replace-regexp-in-string "[\n\t]+" " " text)))
+    (substring line 0 (min width (length line)))))
 
 (defun superchat-chat--name (tape)
   "The buffer name for timeline TAPE."
@@ -137,24 +153,28 @@ only its last character is rear-nonsticky, so nothing can be inserted inside."
   (setq mode-line-process (and (superchat-run-active superchat-chat--tape) " [running]"))
   (force-mode-line-update))
 
-(defun superchat-chat--add (entry)
-  "Show ENTRY, which was just appended to the timeline."
-  (when (> (plist-get entry :id) superchat-chat--shown)
-    (superchat-chat--unstream)
-    (if (eq (plist-get entry :kind) 'anchor)
-        (superchat-chat--render)
-      (setq superchat-chat--shown (plist-get entry :id))
-      (superchat-chat--insert (superchat-chat--format entry)))
-    (when (eq (plist-get entry :kind) 'user)
-      (rename-buffer (superchat-chat--name superchat-chat--tape) t)))
+(defun superchat-chat--add (_entry)
+  "Show the entries of the timeline after the latest one shown, the entry just
+appended among them: one that reached the Tape another way is shown too."
+  (dolist (entry (superchat-tape-entries :tape superchat-chat--tape
+                                         :after superchat-chat--shown))
+    ;; A render for an anchor shows the rest of the list itself.
+    (when (> (plist-get entry :id) superchat-chat--shown)
+      (pcase (plist-get entry :kind)
+        ('anchor (superchat-chat--render))
+        (kind (when (eq kind 'assistant) (superchat-chat--unstream))
+              (setq superchat-chat--shown (plist-get entry :id))
+              (superchat-chat--insert (superchat-chat--format entry))))
+      (when (eq (plist-get entry :kind) 'user)
+        (rename-buffer (superchat-chat--name superchat-chat--tape) t))))
   (superchat-chat--mode-line))
 
 (defun superchat-chat--on-text (text)
   "Show streamed TEXT as it comes."
   (unless superchat-chat--stream
     (setq superchat-chat--stream (copy-marker superchat-chat--input))
-    (superchat-chat--insert (superchat-chat--seal (propertize "▸ Assistant\n" 'face 'bold))))
-  (superchat-chat--insert (superchat-chat--seal (copy-sequence text))))
+    (superchat-chat--insert (superchat-chat--seal (propertize "▸ Assistant\n" 'face 'bold)) t))
+  (superchat-chat--insert (superchat-chat--seal (copy-sequence text)) t))
 
 (defun superchat-chat--buffer (tape)
   "The chat buffer of timeline TAPE, or nil."
@@ -271,13 +291,11 @@ SCOPE is the scope of a timeline that has no entry yet."
 With a prefix argument NEW, start a new timeline."
   (interactive "P")
   (superchat-plugin-enable-configured)
-  (let* ((origin (append (list :buffer (buffer-name))
-                         (and buffer-file-name (list :file buffer-file-name))
-                         (list :mode (symbol-name major-mode) :line (line-number-at-pos))))
-         (tape (or (and (not new)
-                        (superchat-chat-recent-tape (superchat-tape-scope-of default-directory)))
+  (let* ((origin (superchat-chat--origin-here))
+         (scope (superchat-chat--scope))
+         (tape (or (and (not new) (superchat-chat-recent-tape scope))
                    (superchat-tape-new-name)))
-         (buffer (superchat-chat-open tape (superchat-tape-scope-of default-directory))))
+         (buffer (superchat-chat-open tape scope)))
     (with-current-buffer buffer
       (setq superchat-chat--origin origin))
     (pop-to-buffer buffer)))
@@ -312,18 +330,18 @@ With a prefix argument NEW, start a new timeline."
   "Keep TEXT as a note of this buffer's scope, as the model's note tool does."
   (interactive (list (read-string "Note: ")))
   (when (string-empty-p (string-trim text)) (user-error "A note needs text"))
-  (let ((scope (if superchat-chat--tape
-                   (superchat-chat--scope)
-                 (superchat-tape-scope-of default-directory))))
-    (superchat-recall-note (or (superchat-chat-recent-tape scope) (superchat-tape-new-name))
-                           (superchat-chat--title text) text nil scope)))
+  (let* ((scope (superchat-chat--scope))
+         (tape (or (superchat-chat-recent-tape scope) (superchat-tape-new-name))))
+    (superchat-recall-note tape (superchat-chat--title text) text nil scope)
+    (when-let* ((buffer (superchat-chat--buffer tape)))
+      (with-current-buffer buffer (superchat-chat--add nil)))))
 
 ;;;###autoload
 (defun superchat-recall (query)
   "Show what the Tape has on QUERY in this buffer's scope.
 With no QUERY, show the notes."
   (interactive (list (read-string "Recall (empty for notes): ")))
-  (let ((scope (superchat-tape-scope-of default-directory)))
+  (let ((scope (superchat-chat--scope)))
     (if (string-empty-p query)
         (superchat-chat--show-entries "notes" (superchat-view 'notes :scope scope))
       (superchat-chat--show-entries
@@ -332,8 +350,9 @@ With no QUERY, show the notes."
 (defun superchat-chat--note (text)
   "Append TEXT as a note to this timeline and show it."
   (when (string-empty-p text) (user-error "/note needs text"))
-  (superchat-chat--add (superchat-recall-note superchat-chat--tape (superchat-chat--title text)
-                                              text nil (superchat-chat--scope))))
+  (superchat-recall-note superchat-chat--tape (superchat-chat--title text)
+                         text nil (superchat-chat--scope))
+  (superchat-chat--add nil))
 
 (defun superchat-chat--resume (_)
   "Choose a timeline of this scope and open it."
@@ -370,7 +389,8 @@ With no QUERY, show the notes."
   "Show the permission level, or set it to NAME."
   (if (string-empty-p name)
       (message "Permission level: %s" (superchat-permission-level superchat-chat--tape))
-    (superchat-chat--add (superchat-permission-set superchat-chat--tape (intern name)))))
+    (superchat-permission-set superchat-chat--tape (intern name))
+    (superchat-chat--add nil)))
 
 (defun superchat-chat--model-command (name)
   "Show the model of this buffer, or set it to NAME."
@@ -407,8 +427,8 @@ With no QUERY, show the notes."
                                                      :scope (superchat-chat--scope)))
  "query. Search the Tape of this scope.")
 (superchat-command-define
- "notes" (lambda (_) (superchat-chat--show-view "notes" "of this scope" 'notes
-                                                :scope (superchat-chat--scope)))
+ "notes" (lambda (_) (superchat-chat--show-entries
+                      "notes" (superchat-view 'notes :scope (superchat-chat--scope))))
  "Show the notes of this scope.")
 (superchat-command-define "note" #'superchat-chat--note
                           "text. Keep TEXT as a note, as the note tool does.")

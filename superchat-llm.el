@@ -42,11 +42,13 @@ signalled when the models collection was last built.")
   "What CALLS, a list of (:id :name ...), are kept under."
   (mapcar (lambda (call) (cons (plist-get call :id) (plist-get call :name))) calls))
 
-(defun superchat-llm--models ()
-  "The bridge models collection, rebuilt when `superchat-llm-providers' changed
-or an entry signalled when it was built, so that a fixed cause is seen."
+(defun superchat-llm--models (&optional retry)
+  "The bridge models collection, rebuilt when `superchat-llm-providers' changed,
+or with RETRY when an entry signalled when it was built, so that a fixed cause
+is seen.  Only the start of a request gives RETRY: a broken entry would
+otherwise rebuild the collection at every look into it."
   (let ((old (car superchat-llm--models)))
-    (unless (and (not superchat-llm--failed)
+    (unless (and (not (and retry superchat-llm--failed))
                  (= (length old) (length superchat-llm-providers))
                  (cl-every (lambda (a b) (and (equal (car a) (car b))
                                               (eq (cdr a) (cdr b))))
@@ -217,20 +219,25 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
                           (_ (error "Unknown message role %S" role)))
             when built collect built)))
 
-(defun superchat-llm--result (message)
-  "The ON-DONE plist for the final assistant MESSAGE; keeps it if it made calls."
+(defun superchat-llm--result (message messages)
+  "The ON-DONE plist for the final assistant MESSAGE, the answer to MESSAGES;
+keeps it if it made calls."
   (let* ((blocks (superchat-bridge-message-content message))
+         ;; A provider may leave the id out, or count from call_0 again in
+         ;; each response or even within one; a result needs an id, and a
+         ;; kept message one that no message it could be replayed for has.
+         (taken (append (cl-loop for m in messages
+                                 append (mapcar (lambda (c) (plist-get c :id))
+                                                (plist-get m :calls)))
+                        (cl-loop for (key) in superchat-llm--kept
+                                 append (mapcar #'car key))))
          (calls (cl-loop for block in blocks
                          when (superchat-bridge-tool-call-p block)
-                         ;; A provider may leave the id out, or count from
-                         ;; call_0 again in each response; a result needs an
-                         ;; id, and a kept message one no other has.
-                         do (when (let ((id (or (superchat-bridge-tool-call-id block) "")))
-                                    (or (string-empty-p id)
-                                        (cl-some (lambda (kept) (assoc id (car kept)))
-                                                 superchat-llm--kept)))
-                              (setf (superchat-bridge-tool-call-id block)
-                                    (make-temp-name "call_")))
+                         do (let ((id (or (superchat-bridge-tool-call-id block) "")))
+                              (when (or (string-empty-p id) (member id taken))
+                                (setf (superchat-bridge-tool-call-id block)
+                                      (make-temp-name "call_")))
+                              (push (superchat-bridge-tool-call-id block) taken))
                          and collect (list :id (superchat-bridge-tool-call-id block)
                                        :name (superchat-bridge-tool-call-name block)
                                        :args (unless (superchat-bridge-tool-call-arguments-error block)
@@ -251,33 +258,38 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
   (unless (memq superchat-llm-reasoning '(nil minimal low medium high xhigh max))
     (user-error "`superchat-llm-reasoning' is %S; it is nil or one of minimal, low, medium, high, xhigh, max"
                 superchat-llm-reasoning))
+  (superchat-llm--models t)
   (let* ((pi-model (superchat-llm--find-model (or model superchat-llm-model)))
-         (_ (unless (superchat-bridge-models-get-auth (superchat-llm--models) pi-model)
-              (let* ((provider (superchat-bridge-models-get-provider
-                                (superchat-llm--models) superchat-llm-provider))
-                     (key (superchat-bridge-provider-auth-api-key
-                           (superchat-bridge-provider-auth provider)))
-                     (vars (and key (superchat-bridge-api-key-auth-env-vars key))))
-                (if vars
-                    (user-error "No API key for %s: set %s in the environment and restart Emacs, or `setenv' it"
-                                superchat-llm-provider (string-join vars " or "))
-                  (user-error "Provider %s is not configured: its credentials cannot be found"
-                              superchat-llm-provider)))))
          (abort (superchat-bridge-make-abort-signal))
          (handle (list :cancelled nil :finished nil :abort abort))
-         (stream nil))
+         (stream nil) (keyless nil))
+    ;; Resolving the key may signal too (a credential store that fails): that
+    ;; is an error of this request, not of the caller's setup.
     (condition-case err
-        (setq stream
-              (superchat-bridge-models-stream-simple
-               (superchat-llm--models) pi-model
-               (superchat-llm--context messages system tools pi-model)
-               ;; As pi's own client: ten minutes for the response to start,
-               ;; two more tries when the provider says to try again.
-               (append (list :signal abort :timeout-ms 600000 :max-retries 2)
-                       (when superchat-llm-reasoning
-                         (list :reasoning (symbol-name superchat-llm-reasoning))))))
+        (if (not (superchat-bridge-models-get-auth (superchat-llm--models) pi-model))
+            (setq keyless t)
+          (setq stream
+                (superchat-bridge-models-stream-simple
+                 (superchat-llm--models) pi-model
+                 (superchat-llm--context messages system tools pi-model)
+                 ;; As pi's own client: ten minutes for the response to start,
+                 ;; two more tries when the provider says to try again.
+                 (append (list :signal abort :timeout-ms 600000 :max-retries 2)
+                         (when superchat-llm-reasoning
+                           (list :reasoning (symbol-name superchat-llm-reasoning)))))))
       (error (setf (plist-get handle :finished) t)
              (funcall on-error (error-message-string err))))
+    (when keyless
+      (let* ((provider (superchat-bridge-models-get-provider
+                        (superchat-llm--models) superchat-llm-provider))
+             (key (superchat-bridge-provider-auth-api-key
+                   (superchat-bridge-provider-auth provider)))
+             (vars (and key (superchat-bridge-api-key-auth-env-vars key))))
+        (if vars
+            (user-error "No API key for %s: set %s in the environment and restart Emacs, or `setenv' it"
+                        superchat-llm-provider (string-join vars " or "))
+          (user-error "Provider %s is not configured: its credentials cannot be found"
+                      superchat-llm-provider))))
     (when stream
       (superchat-bridge-event-stream-iterate
        stream
@@ -301,7 +313,7 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
                     (funcall on-error
                              (or (and message (superchat-bridge-assistant-message-error-message message))
                                  "The model gave no response")))
-                   (t (funcall on-done (superchat-llm--result message)))))))))
+                   (t (funcall on-done (superchat-llm--result message messages)))))))))
     handle))
 
 (cl-defun superchat-llm-request (messages &key system tools model

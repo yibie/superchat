@@ -543,7 +543,7 @@
 
 (ert-deftest superchat-agent-async-tool-then-sync-tool-in-order ()
   (superchat-test-agent--with
-    (superchat-test-agent--with-slow 0.2
+    (superchat-test-agent--with-slow 0.1
       (let (status entries)
         (superchat-test-script
             (list `(:calls (,(superchat-test-agent--call "c1" "slow")
@@ -745,7 +745,7 @@
          for standin = (seq-find (lambda (x) (string-match-p "earlier entries" (plist-get x :text))) m)
          do
          ;; the entries on the Tape when request K was made: anchor, user, K rounds of two
-         (should (<= (superchat-agent--size m) 700))
+         (should (<= (superchat-test-agent--size m) 700))
          (should (string-prefix-p "Summary of the conversation so far:" (plist-get (nth 0 m) :text)))
          (should (equal (plist-get (nth 1 m) :text) "go"))
          (superchat-test-agent--well-formed m)
@@ -1062,45 +1062,80 @@ message it follows, the other tool messages between them aside."
         (setq head m)))
     ok))
 
-(defun superchat-test-agent--budget-case (tape budget)
-  "Check `superchat-agent--fit' on TAPE with BUDGET: a list of problems."
-  (let* ((superchat-context-chars budget)
-         (view (superchat-view 'conversation :tape tape))
-         (user-id (plist-get (car (last (cl-remove-if-not
-                                         (lambda (e) (eq (plist-get e :kind) 'user)) view)))
-                             :id))
-         (out (superchat-agent--fit view user-id))
-         (standin (seq-find (lambda (m) (string-match-p "earlier entries" (plist-get m :text)))
-                            out))
-         (latest (cl-position 'assistant view :key (lambda (e) (plist-get e :kind)) :from-end t))
+(defun superchat-test-agent--history (i)
+  "Random entries for case I, each the arguments of `superchat-tape-append'
+after the timeline name: results that answer nothing or an older response,
+anchors, notes, permission events, and calls with their results."
+  (let (out (n 0))
+    (cl-flet ((text () (make-string (pcase (random 6) (0 0) (1 (random 600)) (_ (random 120))) ?a))
+              (add (&rest args) (push args out)))
+      (dotimes (_ (random 7))
+        (pcase (random 11)
+          ((or 0 1) (add 'user (text)))
+          (2 (add 'anchor (text) :data '(:name "h" :summary "s" :next "")))
+          (3 (add 'note (text) :data '(:title "t")))
+          (8 (add 'tool (text) :data (list :call-id "stray" :name "echo")))
+          (9 (add 'tool (text) :data (list :call-id (format "c%d-1" i) :name "echo")))
+          (_ (let ((calls (cl-loop for k below (random 4)
+                                   collect (list :id (format "c%d-%d" i (cl-incf n))
+                                                 :name "echo" :args (list :x (text))))))
+               (add 'assistant (text) :data (list :model "m" :calls calls))
+               (dolist (c calls)
+                 (when (zerop (random 3)) (add 'event "p" :data '(:type "permission")))
+                 (add 'tool (text) :data (list :call-id (plist-get c :id) :name "echo")))
+               (when (zerop (random 4))
+                 (add 'tool (text) :data (list :call-id "stray" :name "echo")))))))
+      (add 'user (text)))
+    (nreverse out)))
+
+(defun superchat-test-agent--request-at (tape history budget)
+  "The messages of the first request of a run on the new timeline TAPE at
+BUDGET, its ON-ENTRY writing HISTORY after the run's user entry \"go\"; nil
+when the run made no request."
+  (let ((superchat-context-chars budget) (written nil))
+    (superchat-test-script (list '(:text "x"))
+      (superchat-run tape "go" :scope "home" :tools 'none
+                     :on-entry (lambda (_)
+                                 (unless written
+                                   (setq written t)
+                                   (dolist (h history) (apply #'superchat-tape-append tape h)))))
+      (plist-get (car superchat-test-requests) :messages))))
+
+(defun superchat-test-agent--budget-problems (out whole budget)
+  "What is wrong with OUT, the request made at BUDGET, given WHOLE, the
+request made from the same entries with room for all of them."
+  (let* ((standin-p (lambda (m) (string-match-p "\\`\\[[0-9]+ earlier entries" (plist-get m :text))))
+         (stands (cl-remove-if-not standin-p out))
+         (rest (cl-remove-if standin-p out))
+         (latest (cl-position 'assistant whole :key (lambda (m) (plist-get m :role)) :from-end t))
+         ;; Never left out: anchors, the run's user entry, the latest response and its results.
          (protected
-          (superchat-agent--messages
-           (cl-remove-if-not
-            (lambda (e) (or (eq (plist-get e :kind) 'anchor) (eql (plist-get e :id) user-id)
-                            (and latest (>= (cl-position e view) latest)
-                                 (memq (plist-get e :kind) '(assistant tool event note))
-                                 (cl-every (lambda (x) (memq (plist-get x :kind) '(tool event note)))
-                                           (cl-subseq view (1+ latest) (1+ (cl-position e view)))))))
-            view)))
+          (append (cl-remove-if-not
+                   (lambda (m) (or (equal (plist-get m :text) "go")
+                                   (string-prefix-p "Summary of the conversation so far:"
+                                                    (plist-get m :text))))
+                   whole)
+                  (and latest (cons (nth latest whole)
+                                    (cl-loop for m in (nthcdr (1+ latest) whole)
+                                             while (eq (plist-get m :role) 'tool) collect m)))))
          problems)
-    (when (cl-set-difference protected (remq standin out) :test #'equal)
+    (when (cl-set-difference protected rest :test #'equal)
       (push "protected item missing" problems))
-    (unless (superchat-test-agent--no-orphans out)
-      (push "a tool message that answers no call before it" problems))
-    (unless (superchat-test-agent--no-orphans (superchat-agent--messages view))
-      (push "an orphan in the whole conversation" problems))
-    (when (cl-set-difference (superchat-agent--messages view)
-                             out :test #'equal)
-      (unless standin (push "left out with no stand-in" problems)))
-    (when (> (cl-count-if (lambda (m) (string-match-p "earlier entries" (plist-get m :text))) out) 1)
-      (push "two stand-ins" problems))
-    (let ((where (mapcar (lambda (m) (plist-get m :call-id)) (cl-remove-if-not
-                                                              (lambda (m) (eq (plist-get m :role) 'tool))
-                                                              out))))
+    (dolist (m (list out whole))
+      (unless (superchat-test-agent--no-orphans m)
+        (push "a tool message that answers no call before it" problems)))
+    (let ((tail whole))
+      (dolist (m rest)
+        (setq tail (cdr (member m tail)))
+        (unless (or tail (equal m (car (last whole)))) (push "not in the order of the whole" problems))))
+    (when (and (not (equal rest whole)) (null stands))
+      (push "left out with no stand-in" problems))
+    (when (cdr stands) (push "two stand-ins" problems))
+    (let ((where (mapcar (lambda (m) (plist-get m :call-id))
+                         (cl-remove-if-not (lambda (m) (eq (plist-get m :role) 'tool)) out))))
       (dolist (m out)
-        (when (eq (plist-get m :role) 'assistant)
-          (dolist (c (plist-get m :calls))
-            (unless (member (plist-get c :id) where) (push "call without result" problems))))))
+        (dolist (c (plist-get m :calls))
+          (unless (member (plist-get c :id) where) (push "call without result" problems)))))
     ;; Leaving anything out costs a stand-in; below that cost nothing can be done.
     (when (and (> (superchat-test-agent--size out) budget)
                (<= (+ (superchat-test-agent--size protected)
@@ -1111,43 +1146,19 @@ message it follows, the other tool messages between them aside."
 
 (ert-deftest superchat-agent-budget-property ()
   (superchat-test-agent--with
-    (let ((bad nil) (n 0))
+    (let ((bad nil) (made 0))
       (random "budget-property")
-      (cl-flet ((text () (make-string (pcase (random 6) (0 0) (1 (random 600)) (_ (random 120))) ?a)))
-        (dotimes (i 200)
-          (let ((tape (format "p%d" i)))
-            (superchat-tape-append tape 'user (text) :scope "home")
-            (dotimes (_ (random 7))
-              (pcase (random 11)
-                ((or 0 1) (superchat-tape-append tape 'user (text)))
-                (2 (superchat-tape-append tape 'anchor (text)
-                                          :data '(:name "h" :summary "s" :next "")))
-                (3 (superchat-tape-append tape 'note (text) :data '(:title "t")))
-                ;; A result that answers nothing, and one that answers a call
-                ;; of an earlier response than the entry before it.
-                (8 (superchat-tape-append tape 'tool (text)
-                                          :data (list :call-id "stray" :name "echo")))
-                (9 (superchat-tape-append tape 'tool (text)
-                                          :data (list :call-id (format "c%d-1" i) :name "echo")))
-                (_ (let ((calls (cl-loop for k below (random 4)
-                                         collect (list :id (format "c%d-%d" i (cl-incf n))
-                                                       :name "echo" :args (list :x (text))))))
-                     (superchat-tape-append tape 'assistant (text)
-                                            :data (list :model "m" :calls calls))
-                     (dolist (c calls)
-                       (when (zerop (random 3))
-                         (superchat-tape-append tape 'event "p" :data '(:type "permission")))
-                       (superchat-tape-append tape 'tool (text)
-                                              :data (list :call-id (plist-get c :id)
-                                                          :name "echo")))
-                     (when (zerop (random 4))
-                       (superchat-tape-append tape 'tool (text)
-                                              :data (list :call-id "stray" :name "echo")))))))
-            (superchat-tape-append tape 'user (text))
-            (dolist (budget '(50 300 900))
-              (when-let* ((problems (superchat-test-agent--budget-case tape budget)))
-                (push (list tape budget problems) bad)))))
-        (should-not bad)))))
+      (dotimes (i 200)
+        (let* ((history (superchat-test-agent--history i))
+               (whole (superchat-test-agent--request-at (format "w%d" i) history 1000000)))
+          (dolist (budget '(50 300 900))
+            (when-let* ((out (superchat-test-agent--request-at (format "p%d-%d" i budget)
+                                                               history budget)))
+              (cl-incf made)
+              (when-let* ((problems (superchat-test-agent--budget-problems out whole budget)))
+                (push (list i budget problems) bad))))))
+      (should (> made 300))
+      (should-not bad))))
 
 ;;; The fifth review: one way a run ends
 
@@ -1442,17 +1453,25 @@ model m8 and `superchat-context-chars' nil."
          (superchat-context-chars nil))
      ,@body))
 
+(defun superchat-test-agent--budget-said (model)
+  "The budget the refusal of a run of MODEL on a huge first message names."
+  (let ((run (superchat-run (superchat-tape-new-name) (make-string 300000 ?u)
+                            :scope "home" :model model)))
+    (and (string-match "is \\([0-9]+\\)\\." (plist-get run :error))
+         (string-to-number (match-string 1 (plist-get run :error))))))
+
 (ert-deftest superchat-agent-budget-function ()
-  (superchat-test-agent--with-windows
-    (should (= (superchat-agent--budget) 4000))
-    (should (= (superchat-agent--budget "m2") 1000))
-    (should (= (superchat-agent--budget "unknown") 120000))
-    (let ((superchat-context-chars 500))
-      (should (= (superchat-agent--budget) 500))
-      (should (= (superchat-agent--budget "m2") 500))))
-  ;; The scripted model has no window: no provider is set.
-  (let ((superchat-context-chars nil) (superchat-llm-provider nil))
-    (should (= (superchat-agent--budget) 120000))))
+  (superchat-test-agent--with
+    (superchat-test-agent--with-windows
+      (should (= (superchat-test-agent--budget-said nil) 4000))
+      (should (= (superchat-test-agent--budget-said "m2") 1000))
+      (should (= (superchat-test-agent--budget-said "unknown") 120000))
+      (let ((superchat-context-chars 500))
+        (should (= (superchat-test-agent--budget-said nil) 500))
+        (should (= (superchat-test-agent--budget-said "m2") 500))))
+    ;; The scripted model has no window: no provider is set.
+    (let ((superchat-context-chars nil) (superchat-llm-provider nil))
+      (should (= (superchat-test-agent--budget-said nil) 120000)))))
 
 (ert-deftest superchat-agent-budget-of-the-model-of-the-run ()
   (superchat-test-agent--with
@@ -1480,7 +1499,7 @@ model m8 and `superchat-context-chars' nil."
           (should (= (length superchat-test-requests) 25))
           (dolist (request (reverse superchat-test-requests))
             (let ((m (plist-get request :messages)))
-              (should (<= (superchat-agent--size m) 4000))
+              (should (<= (superchat-test-agent--size m) 4000))
               (superchat-test-agent--well-formed m)
               (when (seq-find (lambda (x) (string-match-p "earlier entries" (plist-get x :text))) m)
                 (setq left-out t))))
@@ -1572,7 +1591,7 @@ model m8 and `superchat-context-chars' nil."
       (superchat-test-script (list '(:text "S\nNEXT: n") '(:text "fine"))
         (superchat-run "t" "go")
         (let ((text (superchat-test-agent--first-text superchat-test-requests)))
-          (should (string-match-p "\\`#[0-9]+ anchor [^\n]*\nSECRET-EARLIER-SUMMARY" text))
+          (should (string-prefix-p "Summary of the conversation so far:\nSECRET-EARLIER-SUMMARY" text))
           (should (string-match-p "earlier entries left out" text))
           (should (string-match-p "e7 " text))
           (should-not (string-match-p "e0 " text)))))))
@@ -1703,6 +1722,39 @@ model m8 and `superchat-context-chars' nil."
                        '("c1")))
         (should (superchat-test-agent--no-orphans m))
         (superchat-test-agent--well-formed m)))))
+
+(ert-deftest superchat-agent-on-entry-that-signals-in-the-ending-still-gets-every-entry ()
+  (superchat-test-agent--with
+    (let (seen order caught)
+      (superchat-test-script
+          (list `(:calls ,(mapcar (lambda (i) (superchat-test-agent--call i "echo" :x "a"))
+                                  '("c1" "c2" "c3"))))
+        (condition-case err
+            (superchat-run "t" "go"
+                           :on-entry (lambda (e)
+                                       (push (plist-get e :id) seen)
+                                       (when (equal (plist-get (plist-get e :data) :call-id) "c1")
+                                         (superchat-cancel "t"))
+                                       (when (equal (plist-get e :text) "Cancelled.")
+                                         (error "display broke")))
+                           :on-done (lambda (_) (push 'done order)))
+          (error (push 'signal order) (setq caught (cadr err)))))
+      (should (equal order '(signal done)))
+      (should (equal caught "display broke"))
+      ;; Both results and the event reached ON-ENTRY, though it signalled on the first.
+      (should (equal (reverse seen)
+                     (mapcar (lambda (e) (plist-get e :id)) (superchat-tape-entries :tape "t")))))))
+
+(ert-deftest superchat-agent-a-cancel-in-the-ending-changes-nothing ()
+  (superchat-test-agent--with
+    (let (dones)
+      (superchat-test-script (list '(:error "boom"))
+        (superchat-run "t" "go"
+                       :on-entry (lambda (e) (when (eq (plist-get e :kind) 'event)
+                                               (superchat-cancel "t")))
+                       :on-done (lambda (r) (push (plist-get r :status) dones))))
+      (should (equal dones '(error)))
+      (should (equal (superchat-test-agent--types "t") '(user error))))))
 
 (provide 'test-agent)
 ;;; test-agent.el ends here

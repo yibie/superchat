@@ -128,9 +128,18 @@
     (should (= 1 (length (superchat-tape-entries))))))
 
 (ert-deftest superchat-tape-new-name-is-fresh ()
-  (let ((names (cl-loop repeat 50 collect (superchat-tape-new-name))))
-    (should (= 50 (length (delete-dups (copy-sequence names)))))
-    (should (string-match-p "\\`[0-9]\\{8\\}-[0-9]\\{6\\}-[0-9a-f]\\{4\\}\\'" (car names)))))
+  (superchat-test-with-tape
+    (let ((names (cl-loop repeat 50 collect (superchat-tape-new-name))))
+      (should (= 50 (length (delete-dups (copy-sequence names)))))
+      (should (string-match-p "\\`[0-9]\\{8\\}-[0-9]\\{6\\}-[0-9a-f]\\{4\\}\\'" (car names))))))
+
+(ert-deftest superchat-tape-new-name-is-not-a-timeline-already-there ()
+  (superchat-test-with-tape
+    (let ((draws (list 0 0 1)))
+      (cl-letf (((symbol-function 'format-time-string) (lambda (&rest _) "20260101-000000"))
+                ((symbol-function 'random) (lambda (&rest _) (pop draws))))
+        (superchat-tape-append (superchat-tape-new-name) 'user "x" :scope "home")
+        (should (equal (superchat-tape-new-name) "20260101-000000-0001"))))))
 
 (ert-deftest superchat-tape-scope-of-project-and-not ()
   (let* ((root (file-name-as-directory (make-temp-file "scope-" t)))

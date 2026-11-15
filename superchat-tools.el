@@ -134,10 +134,12 @@ not called.  Whatever the tool or the user does, the result is an entry."
   (let ((starting t) finished pending stop)
     (cl-labels ((deliver (text errorp)
                   (funcall on-result
-                           (superchat-tape-append
-                            tape 'tool (superchat-tools--cut text)
-                            :data (list :call-id (plist-get call :id) :name (plist-get call :name)
-                                        :error (and errorp t)))))
+                           ;; A quit must not leave a call without its result.
+                           (let ((inhibit-quit t))
+                             (superchat-tape-append
+                              tape 'tool (superchat-tools--cut text)
+                              :data (list :call-id (plist-get call :id) :name (plist-get call :name)
+                                          :error (and errorp t))))))
                 (finish (text errorp)
                   (unless finished
                     (setq finished t)
@@ -174,8 +176,9 @@ not called.  Whatever the tool or the user does, the result is an entry."
     (save-restriction
       (widen)
       (let* ((total (count-lines (point-min) (point-max)))
-             (start (max 1 (or (plist-get args :start) 1)))
-             (count (min 400 (max 1 (or (plist-get args :count) 400))))
+             ;; JSON has one number type: a line may come as 2.0.
+             (start (max 1 (truncate (or (plist-get args :start) 1))))
+             (count (min 400 (max 1 (truncate (or (plist-get args :count) 400)))))
              (end (min total (+ start count -1))))
         (goto-char (point-min))
         (forward-line (1- start))
@@ -239,6 +242,7 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
                   (delete-process process)
                   (let ((output (with-current-buffer buffer (buffer-string))))
                     (kill-buffer buffer)
+                    ;; WHY nil: the caller stopped it and wants no result.
                     (when why (funcall finish output why))))))
       (condition-case err
           (setq process
@@ -260,11 +264,7 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
         (error (kill-buffer buffer) (signal (car err) (cdr err))))
       (setq timer (run-at-time seconds nil (lambda () (end 'timeout))))
       (process-send-eof process)
-      (lambda ()
-        (setq ended t)
-        (cancel-timer timer)
-        (delete-process process)
-        (kill-buffer buffer)))))
+      (lambda () (end nil)))))
 
 (superchat-tool-define
  "search_files" :class 'read :async t

@@ -51,7 +51,8 @@ Answer briefly and plainly.  When a request is unclear, ask one question."
 Frontmatter is only at the very start and ends at the first line that is `---'."
   (when-let* ((text (superchat-context--read file))
               (lines (split-string text "\n")))
-    (when (equal (car lines) "---")
+    ;; With no closing line there is no frontmatter, only a body.
+    (when (and (equal (car lines) "---") (member "---" (cdr lines)))
       (cl-loop for line in (cdr lines)
                until (equal line "---")
                when (string-match "\\`description:[ \t]*\\(.*?\\)[ \t]*\\'" line)

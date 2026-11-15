@@ -19,21 +19,22 @@
   "Answer with the replacement text only: no explanation, no remarks, and no
 code fence unless the fence is part of the replacement itself.")
 
-(defun superchat-inline--origin ()
-  "Where the request comes from: the current buffer and point."
-  (list :buffer (buffer-name) :file buffer-file-name :mode (symbol-name major-mode)
-        :line (line-number-at-pos)))
-
 (defun superchat-inline--region ()
   "The text of the active region, or a `user-error'."
   (unless (use-region-p) (user-error "Select a region first"))
   (buffer-substring-no-properties (region-beginning) (region-end)))
 
 (defun superchat-inline--unfence (text)
-  "TEXT without a fenced code block that wraps all of it."
-  (if (string-match "\\`[ \t\n]*```[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n?```[ \t\n]*\\'" text)
-      (match-string 1 text)
-    text))
+  "TEXT without a fenced code block that wraps all of it.  Lines, not a
+regexp over the whole answer, which overflows the matcher on a long one."
+  (let* ((lines (split-string (string-trim text) "\n"))
+         (body (butlast (cdr lines))))
+    (if (and (cdr lines) (string-prefix-p "```" (car lines))
+             (equal (car (last lines)) "```")
+             ;; Two blocks with text between them are not one block.
+             (not (seq-some (lambda (l) (string-prefix-p "```" l)) body)))
+        (string-join body "\n")
+      text)))
 
 (defun superchat-inline--show (overlay text)
   "Make OVERLAY display TEXT in place of the region and remember it."
@@ -54,10 +55,11 @@ code fence unless the fence is part of the replacement itself.")
     (let ((start (overlay-start overlay))
           (end (overlay-end overlay))
           (text (overlay-get overlay 'superchat-text)))
-      (delete-overlay overlay)
+      ;; The overlay goes last: when the buffer refuses the edit, it stays.
       (goto-char start)
       (delete-region start end)
-      (insert text))))
+      (insert text)
+      (delete-overlay overlay))))
 
 (defun superchat-inline-discard ()
   "Discard the replacement, cancelling the run if it is active.
@@ -82,7 +84,6 @@ The region stays as it is."
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
                  (if (eq status 'error) (plist-get run :error) ""))))))
 
-;;;###autoload
 (defun superchat-rewrite (instruction)
   "Ask the model to rewrite the region by INSTRUCTION.
 The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inline-accept] accepts it, \\[superchat-inline-discard] discards it."
@@ -102,7 +103,7 @@ The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inli
         (progn
           (superchat-run tape (format "%s\n\n%s" instruction text)
                          :tools 'none :ephemeral t :system superchat-inline--system
-                         :origin (superchat-inline--origin)
+                         :origin (superchat-chat--origin-here)
                          :on-text (lambda (piece)
                                     (when (overlay-buffer overlay)
                                       (superchat-inline--show
@@ -112,13 +113,12 @@ The replacement shows over the region; \\<superchat-inline-map>\\[superchat-inli
           (setq started t))
       (unless started (delete-overlay overlay)))))
 
-;;;###autoload
 (defun superchat-ask (question)
   "Ask QUESTION about this buffer, or the region, in the chat buffer."
   (interactive (list (read-string "Ask: ")))
   (let* ((region (and (use-region-p) (superchat-inline--region)))
-         (origin (superchat-inline--origin))
-         (scope (superchat-tape-scope-of default-directory))
+         (origin (superchat-chat--origin-here))
+         (scope (superchat-chat--scope))
          (buffer (superchat-chat-open (or (superchat-chat-recent-tape scope)
                                           (superchat-tape-new-name))
                                       scope)))

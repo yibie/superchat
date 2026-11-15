@@ -66,13 +66,14 @@
       (test-llm--emit stream message deltas))
     stream))
 
-(defun test-llm--provider (&optional id)
-  "A bridge provider ID (default \"stub\") with two models and the stub API."
+(defun test-llm--provider (&optional id resolve)
+  "A bridge provider ID (default \"stub\") with two models and the stub API.
+RESOLVE, when given, is its API key resolver."
   (superchat-bridge-create-provider
    :id (or id "stub") :name "Stub" :base-url "http://stub.test"
    :auth (superchat-bridge-make-provider-auth
           :api-key (superchat-bridge-make-api-key-auth
-                    :name "none" :resolve (lambda (_c _k _s) (list :auth nil))))
+                    :name "none" :resolve (or resolve (lambda (_c _k _s) (list :auth nil)))))
    :models (mapcar (lambda (model)
                      (superchat-bridge-make-model
                       :id model :name model :api "test-api" :provider (or id "stub")
@@ -770,7 +771,64 @@ finished messages and the messages the third request sent."
                                   (test-llm--provider "flaky")))))
       (should-error (superchat-llm-model-ids) :type 'user-error)
       (setq ready t)
+      (should (plist-get (test-llm--ask (list (test-llm--user "hi"))) :done))
       (should (equal (superchat-llm-model-ids) '("model-a" "model-b"))))))
+
+(ert-deftest superchat-llm-a-failed-entry-is-tried-once-a-request ()
+  (test-llm-with (list '(:text "a") '(:text "b"))
+    (let ((tries 0))
+      (setq superchat-llm-providers
+            (cons (cons "broken" (lambda () (cl-incf tries) (error "plugin broke")))
+                  superchat-llm-providers))
+      (test-llm--ask (list (test-llm--user "hi")))
+      (should (= tries 1))
+      (dotimes (_ 3) (superchat-llm-context-window) (superchat-llm-model-ids))
+      (should (= tries 1))
+      (test-llm--ask (list (test-llm--user "hi")))
+      (should (= tries 2)))))
+
+(ert-deftest superchat-llm-a-key-resolver-that-signals-goes-to-on-error ()
+  (test-llm-with nil
+    (setq superchat-llm-providers
+          (list (cons "stub" (lambda ()
+                               (test-llm--provider
+                                nil (lambda (&rest _) (error "Vault locked")))))))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should (= (length (plist-get r :errors)) 1))
+      (should (string-match-p "Vault locked" (car (plist-get r :errors))))
+      (should-not (plist-get r :done))
+      (should-not test-llm--calls))))
+
+(ert-deftest superchat-llm-an-id-an-earlier-message-has-is-made-anew ()
+  ;; A's call_0 is no longer kept after the next user turn; B counts from
+  ;; call_0 again and must not be replayed in A's place.
+  (test-llm-with (list '(:thinking "TA" :calls (("call_0" "read_file" nil)))
+                       '(:thinking "TB" :calls (("call_0" "read_file" nil)))
+                       '(:text "fin"))
+    (test-llm--ask (list (test-llm--user "hi")))
+    (let* ((a-turn (append (test-llm--replay "call_0") (list (test-llm--user "again"))))
+           (r (test-llm--ask a-turn))
+           (b test-llm--last)
+           (id (plist-get (car (plist-get (car (plist-get r :done)) :calls)) :id)))
+      (should-not (equal id "call_0"))
+      (test-llm--ask (append a-turn
+                             (list (list :role 'assistant :text ""
+                                         :calls (list (list :id id :name "read_file" :args nil)))
+                                   (list :role 'tool :call-id id :name "read_file" :text "r"))))
+      (let ((sent (test-llm--assistants)))
+        (should (= (length sent) 2))
+        (should-not (eq (car sent) b))
+        (should (equal (superchat-bridge-tool-call-id (test-llm--tool-call-of (car sent)))
+                       "call_0"))
+        (should (eq (cadr sent) b))))))
+
+(ert-deftest superchat-llm-one-id-twice-in-a-response-is-made-anew ()
+  (test-llm-with (list '(:calls (("call_0" "read_file" nil) ("call_0" "read_file" nil))))
+    (let* ((r (test-llm--ask (list (test-llm--user "hi"))))
+           (ids (mapcar (lambda (c) (plist-get c :id))
+                        (plist-get (car (plist-get r :done)) :calls))))
+      (should (equal (car ids) "call_0"))
+      (should-not (equal (cadr ids) "call_0")))))
 
 (provide 'test-llm)
 ;;; test-llm.el ends here

@@ -59,10 +59,16 @@
     (superchat-test-plugin-define 'a)
     (superchat-plugin-enable 'a)
     (superchat-plugin-define 'a :enable (lambda () (push 'new-on superchat-test-plugin-log)))
-    (should (equal superchat-test-plugin-log '((off a) (on a))))
-    (should-not (superchat-plugin-enabled-p 'a))
-    (superchat-plugin-enable 'a)
-    (should (eq (car superchat-test-plugin-log) 'new-on))))
+    ;; The old one off, then the new one on: it stays enabled.
+    (should (equal superchat-test-plugin-log '(new-on (off a) (on a))))
+    (should (superchat-plugin-enabled-p 'a))))
+
+(ert-deftest superchat-plugin-redefine-a-disabled-one-leaves-it-off ()
+  (superchat-test-plugins
+    (superchat-test-plugin-define 'a)
+    (superchat-plugin-define 'a :enable (lambda () (push 'new-on superchat-test-plugin-log)))
+    (should-not superchat-test-plugin-log)
+    (should-not (superchat-plugin-enabled-p 'a))))
 
 (ert-deftest superchat-plugin-enable-configured-enables-missing ()
   (superchat-test-plugins

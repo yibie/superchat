@@ -286,6 +286,45 @@
       (should (= 100 (length (seq-filter (lambda (l) (string-match-p ":hit$" l))
                                          (split-string text "\n"))))))))
 
+(ert-deftest superchat-tools-read-lines-given-as-floats ()
+  ;; JSON numbers may arrive as floats.
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "one\ntwo\nthree\n")
+    (let ((text (superchat-test-tools--ok "read_file" :path "a.txt" :start 2.0 :count 1.0)))
+      (should (string-match-p "Lines 2-2 of 3" text))
+      (should-not (string-match-p "three" text)))
+    (let ((b (generate-new-buffer "sc-floats")))
+      (unwind-protect
+          (progn (with-current-buffer b (insert "alpha\nbeta\n"))
+                 (should (string-match-p "Lines 2-2 of 2"
+                                         (superchat-test-tools--ok "read_buffer" :buffer "sc-floats"
+                                                                   :start 2.0 :count 1.5))))
+        (kill-buffer b)))))
+
+(ert-deftest superchat-tools-search-files-skips-git-and-binary-files ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "needle text\n")
+    (make-directory (expand-file-name ".git" dir))
+    (superchat-test-tools--write dir ".git/config" "needle in git\n")
+    (let ((coding-system-for-write 'no-conversion))
+      (superchat-test-tools--write dir "bin.dat" (concat "needle\0\1\2binary" (make-string 10 0))))
+    (let ((text (superchat-test-tools--ok "search_files" :pattern "needle")))
+      (should (string-match-p "a.txt:1:needle text" text))
+      (should-not (string-match-p "\\.git" text))
+      (should-not (string-match-p "bin.dat" text)))))
+
+(ert-deftest superchat-tools-result-is-appended-with-quitting-off ()
+  (superchat-test-tools--in-scope
+    (let (seen)
+      (cl-letf* ((append (symbol-function 'superchat-tape-append))
+                 ((symbol-function 'superchat-tape-append)
+                  (lambda (tape kind &rest rest)
+                    (when (eq kind 'tool) (push inhibit-quit seen))
+                    (apply append tape kind rest))))
+        (let ((inhibit-quit nil))
+          (superchat-test-tools--ok "list_buffers")))
+      (should (equal seen '(t))))))
+
 (ert-deftest superchat-tools-edit-buffer ()
   (superchat-test-tools--in-scope
     (let ((b (generate-new-buffer "sc-edit")))
@@ -313,8 +352,7 @@
     (let ((b (generate-new-buffer "sc-case")))
       (unwind-protect
           (progn
-            (with-current-buffer b (insert "Foo and foo aaa"))
-            (setq-local case-fold-search t)
+            (with-current-buffer b (insert "Foo and foo aaa") (setq-local case-fold-search t))
             (should (string-match-p "Replaced" (superchat-test-tools--ok
                                                 "edit_buffer" :buffer "sc-case" :old "Foo" :new "Bar")))
             (should (string-match-p "2 times" (superchat-test-tools--err

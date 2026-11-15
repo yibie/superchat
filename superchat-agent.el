@@ -48,9 +48,8 @@ window, a token counting as a character; else 120000."
         (t 120000)))
 
 (defun superchat-agent--messages (entries)
-  "The messages for ENTRIES; events, notes and orphan results are left out."
-  (delq nil (mapcar #'superchat-agent--message
-                    (cl-loop for g in (superchat-agent--groups entries) append g))))
+  "The messages for ENTRIES, as a request sends them when nothing is left out."
+  (cl-loop for g in (superchat-agent--grouped entries) append (cadr g)))
 
 (defun superchat-agent--size (messages)
   "The size of MESSAGES: their texts and the printed arguments of their calls.
@@ -77,16 +76,30 @@ entry heading its group is in no group: no request ever has it."
                (push e (car groups))))))
     (nreverse (mapcar #'nreverse groups))))
 
+(defun superchat-agent--answered (group)
+  "The messages of GROUP.  A call its tool entries do not answer (Emacs stopped
+while it ran) is not sent, nor an assistant message left with nothing."
+  (let* ((ids (mapcar (lambda (e) (plist-get (plist-get e :data) :call-id)) (cdr group)))
+         (messages (delq nil (mapcar #'superchat-agent--message group)))
+         (head (car messages)))
+    (if (not (eq (plist-get head :role) 'assistant))
+        messages
+      (let ((calls (cl-remove-if-not (lambda (c) (member (plist-get c :id) ids))
+                                     (plist-get head :calls))))
+        (if (and (null calls) (string-empty-p (plist-get head :text)))
+            (cdr messages)
+          (cons (plist-put (copy-sequence head) :calls calls) (cdr messages)))))))
+
 (defun superchat-agent--grouped (entries)
   "The groups of ENTRIES, each as (ENTRIES MESSAGES)."
-  (mapcar (lambda (g) (list g (delq nil (mapcar #'superchat-agent--message g))))
+  (mapcar (lambda (g) (list g (superchat-agent--answered g)))
           (superchat-agent--groups entries)))
 
 (defun superchat-agent--never-left-out (groups user-id)
   "The members of GROUPS, from `superchat-agent--grouped', that a request
 always keeps: those with an anchor or the entry USER-ID, and the latest
-assistant entry with its results."
-  (let ((latest (cl-find-if (lambda (g) (eq (plist-get (caar g) :kind) 'assistant))
+assistant entry with its results that a request sends at all."
+  (let ((latest (cl-find-if (lambda (g) (eq (plist-get (car (cadr g)) :role) 'assistant))
                             groups :from-end t)))
     (cl-remove-if-not
      (lambda (g) (or (eq g latest)
@@ -102,16 +115,15 @@ assistant entry with its results."
                              "this request; recall and tape_query can read them.]")
                        n)))
 
-(defun superchat-agent--fit (entries user-id &optional budget)
-  "The messages for ENTRIES within BUDGET (default `superchat-agent--budget').
+(defun superchat-agent--fit (entries user-id budget)
+  "The messages for ENTRIES within BUDGET.
 The oldest groups go first, except an anchor, the entry USER-ID and the latest
 assistant entry with its results.  One stand-in message takes the place of the
 oldest group left out, so every call stays with its results and the list
 still starts with what the first entry said.  The stand-in counts toward the
 size; when leaving out what can be left out would not make the request
 smaller than it is, nothing is left out."
-  (let* ((budget (or budget (superchat-agent--budget)))
-         (groups (superchat-agent--grouped entries))
+  (let* ((groups (superchat-agent--grouped entries))
          (kept (superchat-agent--never-left-out groups user-id))
          (whole (cl-loop for g in groups sum (superchat-agent--size (cadr g))))
          (size whole) (dropped 0) gone)
@@ -122,7 +134,7 @@ smaller than it is, nothing is left out."
       (dolist (g groups)
         (when (and (cadr g) (not (memq g kept)) (> (total) budget))
           (cl-decf size (superchat-agent--size (cadr g)))
-          (cl-incf dropped (length (cadr g)))
+          (cl-incf dropped (length (car g)))
           (push g gone)))
       (if (>= (total) whole)
           (cl-loop for g in groups append (cadr g))
@@ -132,15 +144,22 @@ smaller than it is, nothing is left out."
 
 (defun superchat-agent--emit (run &optional final)
   "Give ON-ENTRY every entry appended to the timeline since the last call.
-Nothing once RUN has ended, except when the ending itself says FINAL."
-  (when (or final (not (plist-get run :done)))
-    (dolist (entry (superchat-tape-entries :tape (plist-get run :tape)
-                                           :after (plist-get run :seen)))
-      ;; ON-ENTRY may cancel, which emits the rest of this list itself.
-      (when (> (plist-get entry :id) (plist-get run :seen))
-        (setf (plist-get run :seen) (plist-get entry :id))
-        (when-let* ((on-entry (plist-get run :on-entry)))
-          (funcall on-entry entry))))))
+Nothing once RUN has ended, except when the ending itself says FINAL.  Then
+a signal of ON-ENTRY does not keep it from the entries after that one: the
+first such error is returned, for the ending to raise after ON-DONE."
+  (let (failed)
+    (when (or final (not (plist-get run :done)))
+      (dolist (entry (superchat-tape-entries :tape (plist-get run :tape)
+                                             :after (plist-get run :seen)))
+        ;; ON-ENTRY may cancel, which emits the rest of this list itself.
+        (when (> (plist-get entry :id) (plist-get run :seen))
+          (setf (plist-get run :seen) (plist-get entry :id))
+          (when-let* ((on-entry (plist-get run :on-entry)))
+            (if (not final)
+                (funcall on-entry entry)
+              (condition-case err (funcall on-entry entry)
+                (error (setq failed (or failed err)))))))))
+    failed))
 
 (defun superchat-agent--live (run)
   "Non-nil while RUN has not ended."
@@ -170,7 +189,7 @@ each call of this run without a result; append the user entry if it was never
 sent; append the event; give ON-ENTRY the new entries; free the timeline;
 call ON-DONE.  Afterwards ON-ENTRY gets nothing."
   (unless (plist-get run :done)
-    (let ((tape (plist-get run :tape))
+    (let ((tape (plist-get run :tape)) (failed nil)
           (event (cond ((eq status 'cancelled) '("cancelled" . "Cancelled by the user."))
                        (why (cons "error" why)))))
       (setf (plist-get run :done) t (plist-get run :status) status
@@ -197,10 +216,12 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
                                                         :data (list :type (car event))))))
               (user))
           ;; Free only now: ON-DONE may start the next run, ON-ENTRY may not.
-          (unwind-protect (superchat-agent--emit run t)
+          (unwind-protect (setq failed (superchat-agent--emit run t))
             (remhash tape superchat-agent--runs)
             (when-let* ((on-done (plist-get run :on-done)))
-              (funcall on-done run))))))))
+              (funcall on-done run))))
+        ;; No entry can record it now: it goes to whoever ended the run.
+        (when failed (signal (car failed) (cdr failed)))))))
 
 (defun superchat-agent--guard (run thunk)
   "Call THUNK; an error it signals ends RUN with an error event, so a run
@@ -407,49 +428,65 @@ Then write a line that starts with NEXT: and say what comes next."
           (floor budget 4)))
 
 (defun superchat-agent--handoff-text (entries budget)
-  "ENTRIES rendered for a handoff within BUDGET.  The current anchor, when
-there is one, comes first and is never dropped; the entries after it are
-rendered to what is left, oldest dropped first."
+  "ENTRIES rendered for a handoff within BUDGET, as (TEXT . KEPT), KEPT the
+entries TEXT was made from.  The current anchor's message, when there is
+one, comes first and is never dropped; the entries after it are rendered to
+what is left, oldest dropped first."
   (let* ((anchor (cl-find-if (lambda (e) (and (eq (plist-get e :kind) 'anchor)
                                               (not (string-empty-p (plist-get e :text)))))
                              entries :from-end t))
-         (head (and anchor (superchat-view-render (list anchor) budget)))
-         (rest (if anchor (cdr (memq anchor entries)) entries)))
-    (string-join (delq nil (list head (and rest (superchat-view-render
-                                                 rest (- budget (length head) 2)))))
-                 "\n\n")))
+         (head (and anchor (superchat-view--clip
+                            (plist-get (superchat-agent--message anchor) :text) budget)))
+         (rest (if anchor (cdr (memq anchor entries)) entries))
+         (body (and rest (superchat-view-render rest (- budget (length head) 2))))
+         ;; The render says how many of the oldest it left out, on its first line.
+         (gone (if (and body (string-match "\\`\\[\\([0-9]+\\) earlier entries left out\\]"
+                                          body))
+                   (string-to-number (match-string 1 body))
+                 0)))
+    (cons (string-join (delq nil (list head body)) "\n\n")
+          (append (and anchor (list anchor)) (nthcdr gone rest)))))
+
+(defun superchat-agent--anchor (tape name answer sources budget)
+  "Append to TAPE the anchor NAME made from ANSWER, citing SOURCES; nil when
+ANSWER has no summary.  The summary and the next step are each cut to a
+quarter of BUDGET."
+  (let* ((case-fold-search nil)
+         (split (string-match "^NEXT:[ \t]*" answer))
+         (after (and split (match-end 0)))
+         (summary (superchat-view--clip
+                   (string-trim (if split (substring answer 0 split) answer))
+                   (floor budget 4)))
+         (next (superchat-view--clip
+                (if split (string-trim (substring answer after)) "")
+                (floor budget 4))))
+    (unless (string-empty-p summary)
+      (superchat-tape-append tape 'anchor summary
+                             :data (list :name (or name "handoff") :summary summary :next next)
+                             :refs (mapcar (lambda (e) (plist-get e :id)) sources)))))
 
 (defun superchat-agent--summarise (tape name owner on-done &optional model)
   "Ask MODEL for the summary of TAPE and append the anchor NAME.
 Return the handle.  The conversation goes as one user message: a provider
 refuses tool turns when the request has no tools.  ON-DONE gets the anchor, or
 nil and why.  An answer that comes after OWNER, the run or handoff that asked,
-left `superchat-agent--runs' (it was cancelled) is dropped.  The summary and
-the next step are each cut to a quarter of the budget."
-  (let ((entries (superchat-view 'conversation :tape tape))
-        (budget (superchat-agent--budget model)))
+left `superchat-agent--runs' (it was cancelled) is dropped."
+  (let* ((budget (superchat-agent--budget model))
+         (text (superchat-agent--handoff-text (superchat-view 'conversation :tape tape) budget)))
     (superchat-llm-request
      (list (list :role 'user
-                 :text (concat (superchat-agent--handoff-text entries budget) "\n\n"
-                               (superchat-agent--summary-question budget))))
+                 :text (concat (car text) "\n\n" (superchat-agent--summary-question budget))))
      :model model
      :on-done (lambda (response)
                 (when (eq (gethash tape superchat-agent--runs) owner)
-                  (let* ((text (plist-get response :text))
-                         (split (string-match "^NEXT:[ \t]*" text))
-                         (after (and split (match-end 0)))
-                         (summary (superchat-view--clip
-                                   (string-trim (if split (substring text 0 split) text))
-                                   (floor budget 4)))
-                         (next (superchat-view--clip
-                                (if split (string-trim (substring text after)) "")
-                                (floor budget 4)))
-                         (anchor (superchat-tape-append
-                                  tape 'anchor summary
-                                  :data (list :name (or name "handoff") :summary summary
-                                              :next next)
-                                  :refs (mapcar (lambda (e) (plist-get e :id)) entries))))
-                    (funcall on-done anchor))))
+                  (let ((why nil) (anchor nil))
+                    ;; A failure to write the anchor is a failed handoff, so it ends.
+                    (condition-case err
+                        (setq anchor (superchat-agent--anchor tape name (plist-get response :text)
+                                                              (cdr text) budget)
+                              why (unless anchor "The model gave no summary."))
+                      (error (setq why (error-message-string err))))
+                    (funcall on-done anchor why))))
      :on-error (lambda (why)
                  (when (eq (gethash tape superchat-agent--runs) owner)
                    (funcall on-done nil why))))))
@@ -468,11 +505,13 @@ The timeline is busy until then."
               (superchat-agent--summarise
                tape name entry
                (lambda (anchor &optional why)
-                 (unless anchor
-                   (superchat-tape-append tape 'event (format "Handoff failed: %s" why)
-                                          :data (list :type "error")))
-                 (remhash tape superchat-agent--runs)
-                 (when on-done (funcall on-done anchor)))))
+                 ;; Free whatever happens: a handoff always ends.
+                 (unwind-protect
+                     (unless anchor
+                       (superchat-tape-append tape 'event (format "Handoff failed: %s" why)
+                                              :data (list :type "error")))
+                   (remhash tape superchat-agent--runs)
+                   (when on-done (funcall on-done anchor))))))
       (error (remhash tape superchat-agent--runs)
              (signal (car err) (cdr err))))))
 
