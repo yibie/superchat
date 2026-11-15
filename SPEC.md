@@ -80,7 +80,9 @@ points to require. A file requires nothing else, and
   files at the repository root. Tests are not counted. Each file has its own
   cap in the layer table. `scripts/check.sh` fails when a cap is exceeded.
 - Emacs 30.1 or later. Dependencies: `curl`, the `bridge/` directory of this repository, and what Emacs ships with
-  (`sqlite`, `project`, `cl-lib`, `subr-x`, `seq`, `json`). Nothing else.
+  (`sqlite`, `project`, `cl-lib`, `subr-x`, `seq`, `json`, `org`). Nothing else.
+- Superchat is free software under the GNU General Public License, version 3
+  or later (`LICENSE`); `superchat.el` says so in its header.
 - Every file starts with `;;; NAME.el --- ... -*- lexical-binding: t; -*-` and
   byte-compiles with no warnings.
 

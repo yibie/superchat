@@ -3,6 +3,7 @@
 ;; Version: 2.0.0
 ;; Package-Requires: ((emacs "30.1"))
 ;; Keywords: tools, convenience
+;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
 ;; The user options every other file reads.  `M-x superchat' is in
