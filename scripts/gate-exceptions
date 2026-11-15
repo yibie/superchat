@@ -1,5 +1,2 @@
 # Uses of a private name across layers not yet removed: FILE NAME why.
 # A line goes when its layer's work removes the use; the gate fails on a stale one.
-test/test-chat.el superchat-agent--runs a fresh table of runs for each test
-test/test-chat.el superchat-tools--always a fresh table of "always" answers for each test
-test/test-inline.el superchat-agent--runs a fresh table of runs for each test

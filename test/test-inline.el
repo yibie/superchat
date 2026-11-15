@@ -14,8 +14,7 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
   (declare (indent 1))
   `(superchat-test-with-tape
      (let* ((dir (file-name-as-directory (make-temp-file "sc-inline-" t)))
-            (default-directory dir)
-            (superchat-agent--runs (make-hash-table :test #'equal)))
+            (default-directory dir))
        (unwind-protect
            (with-temp-buffer
              (setq buffer-file-name (expand-file-name "a.txt" dir))
@@ -27,6 +26,11 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
              (push-mark (match-beginning 0) t t)
              (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "shout")))
                ,@body))
+         ;; A run left on the Tape would keep its timeline busy for the next test.
+         (dolist (row (superchat-tape-select "SELECT DISTINCT tape FROM entry"))
+           (when (superchat-run-active (car row)) (superchat-cancel (car row))))
+         (dolist (b (buffer-list))
+           (when (buffer-local-value 'superchat-chat--tape b) (kill-buffer b)))
          (delete-directory dir t)))))
 
 (defun superchat-test-inline--overlay ()

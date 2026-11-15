@@ -9,7 +9,6 @@
 ;;; Code:
 
 (require 'subr-x)
-(require 'diff-mode)
 (require 'superchat)
 (require 'superchat-tape)
 (require 'superchat-agent)
@@ -39,7 +38,7 @@ regexp over the whole answer, which overflows the matcher on a long one."
 (defun superchat-inline--show (overlay text)
   "Make OVERLAY display TEXT in place of the region and remember it."
   (overlay-put overlay 'superchat-text text)
-  (overlay-put overlay 'display (propertize text 'face 'diff-added)))
+  (overlay-put overlay 'display (propertize text 'face 'highlight)))
 
 (defun superchat-inline--overlay ()
   "The rewrite overlay at point, or a `user-error'."

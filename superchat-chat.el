@@ -376,13 +376,15 @@ With no QUERY, show the notes."
     (pop-to-buffer (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
 
 (defun superchat-chat--handoff (name)
-  "Summarise the conversation into an anchor named NAME; an error when busy."
-  (superchat-handoff superchat-chat--tape (and (not (string-empty-p name)) name)
+  "Summarise the conversation into an anchor named NAME; refused when busy."
+  (if (superchat-run-active superchat-chat--tape)
+      (message "A request is still running; C-c C-k cancels it")
+    (superchat-handoff superchat-chat--tape (and (not (string-empty-p name)) name)
                      (superchat-chat--in superchat-chat--tape
                                          (lambda (anchor)
                                            (superchat-chat--render)
                                            (superchat-chat--mode-line)
-                                           (message (if anchor "Handoff made" "Handoff failed")))))
+                                           (message (if anchor "Handoff made" "Handoff failed"))))))
   (superchat-chat--mode-line))
 
 (defun superchat-chat--level (name)

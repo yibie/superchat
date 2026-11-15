@@ -12,14 +12,17 @@
 (defvar superchat-test-chat--dir nil
   "The directory made for the running test; the only one the macro deletes.")
 
+(defun superchat-test-chat--end-runs ()
+  "Cancel every run a test left on the Tape, so the next test finds it free."
+  (dolist (row (superchat-tape-select "SELECT DISTINCT tape FROM entry"))
+    (when (superchat-run-active (car row)) (superchat-cancel (car row)))))
+
 (defmacro superchat-test-chat--with (&rest body)
   "BODY with a Tape, in a directory made here, outside any project, with a read
 tool `echo', and no chat buffers left behind."
   (declare (indent 0))
   `(superchat-test-with-tape
      (let ((superchat-test-chat--dir (file-name-as-directory (make-temp-file "sc-chat-" t)))
-           (superchat-tools--always (make-hash-table :test #'equal))
-           (superchat-agent--runs (make-hash-table :test #'equal))
            (superchat-chat--commands superchat-chat--commands)
            (superchat-plugin--definitions superchat-plugin--definitions)
            (superchat-plugin--enabled superchat-plugin--enabled))
@@ -32,6 +35,7 @@ tool `echo', and no chat buffers left behind."
                (setq default-directory superchat-test-chat--dir)
                ,@body))
          (superchat-tool-remove "echo")
+         (superchat-test-chat--end-runs)
          (dolist (b (buffer-list))
            (when (buffer-local-value 'superchat-chat--tape b) (kill-buffer b)))
          (delete-directory superchat-test-chat--dir t)))))
@@ -320,6 +324,28 @@ tool `echo', and no chat buffers left behind."
                      "▸ You\none\n\n▸ Assistant\na1\n\n── summary: fork ──\n\n\n"))
       (should (= (length (superchat-tape-entries :tape "t1")) 4)))))
 
+(ert-deftest superchat-chat-fork-from-the-input-forks-at-the-latest-entry ()
+  (superchat-test-chat--with
+    (superchat-test-script (list '(:text "a1") '(:text "a2"))
+      (with-current-buffer (superchat-chat-open "t1")
+        (superchat-chat-send "one")
+        (superchat-chat-send "two")))
+    (let ((shown (with-current-buffer (superchat-chat-open "t1")
+                   (goto-char (point-max))
+                   (superchat-chat-send "/fork")
+                   (current-buffer))))
+      (should (string-match-p "a2" (superchat-test-chat--text shown))))))
+
+(ert-deftest superchat-chat-return-above-the-input-is-refused ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "Hello"))
+        (with-current-buffer buffer (superchat-chat-send "hi")))
+      (with-current-buffer buffer
+        (goto-char (1+ (point-min)))
+        (should-error (superchat-chat--return) :type 'text-read-only)
+        (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1))))))
+
 (ert-deftest superchat-chat-fork-without-entry-at-point ()
   (superchat-test-chat--with
     (with-current-buffer (superchat-chat-open "t1")
@@ -341,7 +367,11 @@ tool `echo', and no chat buffers left behind."
     (let ((superchat-llm-request-function #'superchat-test-chat--silent))
       (with-current-buffer (superchat-chat-open "t1")
         (superchat-chat-send "one")
-        (should-error (superchat-chat-send "/handoff") :type 'error)
+        (let ((said nil))
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq said (apply #'format fmt args)))))
+            (superchat-chat-send "/handoff"))
+          (should (string-match-p "still running" said)))
         (superchat-cancel "t1"))
       (should-not (superchat-tape-entries :tape "t1" :kinds '(anchor))))))
 
