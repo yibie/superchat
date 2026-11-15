@@ -82,7 +82,7 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-script (list '(:text "Hello there"))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (should (equal (superchat-test-chat--text buffer)
-                     "* You\nhi\n\n* Assistant\nHello there\n\n"))
+                     "* You\nhi\n\n* Assistant\n** Answer\nHello there\n\n"))
       (should (equal (buffer-name buffer) "*superchat: hi*"))
       (should (equal (mapcar (lambda (e) (plist-get e :kind)) (superchat-tape-entries :tape "t1"))
                      '(user assistant)))
@@ -120,11 +120,12 @@ tool `echo', and no chat buffers left behind."
                 '(:text "Done"))
         (with-current-buffer buffer (superchat-chat-send "go")))
       (should (equal (replace-regexp-in-string "([0-9.]+s)" "(Ds)" (superchat-test-chat--text buffer))
-                     (concat "* You\ngo\n\n* Assistant\nDone\n\n"
-                             "** ▸ Looked, 1 call: echo\nLooking\n"
+                     (concat "* You\ngo\n\n* Assistant\n"
+                             "** Progress: 1 call: echo\nLooking\n"
                              "*** ✓ echo  :x \"abc\"  (Ds)\n"
                              "#+begin_example\n:x \"abc\"\n#+end_example\n"
-                             "#+begin_example\necho:abc\nsecond line\n#+end_example\n"))))))
+                             "#+begin_example\necho:abc\nsecond line\n#+end_example\n"
+                             "** Answer\nDone\n\n"))))))
 
 (ert-deftest superchat-chat-tool-args-are-cut ()
   (superchat-test-chat--with
@@ -163,7 +164,7 @@ tool `echo', and no chat buffers left behind."
                (list :cancelled nil :finished nil :request nil))))
         (with-current-buffer buffer (superchat-chat-send "hi")))
       (should (equal (reverse snapshots)
-                     '("* You\nhi\n\n* Assistant\nHel" "* You\nhi\n\n* Assistant\nHello")))
+                     '("* You\nhi\n\n* Assistant\n** Answer\nHel" "* You\nhi\n\n* Assistant\n** Answer\nHello")))
       (should (string-match-p "\\` \\[running [0-9]+s\\]\\'" (buffer-local-value 'mode-line-process buffer)))
       (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-k"))))
       (should-not (buffer-local-value 'mode-line-process buffer))
@@ -328,7 +329,7 @@ tool `echo', and no chat buffers left behind."
            (fork (superchat-test-chat--tape-of shown)))
       (should-not (equal fork "t1"))
       (should (equal (superchat-test-chat--text shown)
-                     "* You\none\n\n* Assistant\na1\n\n── summary: fork ──\n\n"))
+                     "* You\none\n\n* Assistant\n** Answer\na1\n\n── summary: fork ──\n\n"))
       (should (= (length (superchat-tape-entries :tape "t1")) 4)))))
 
 (ert-deftest superchat-chat-fork-from-the-input-forks-at-the-latest-entry ()
@@ -423,7 +424,7 @@ tool `echo', and no chat buffers left behind."
           (should (string-match-p "\\[running [0-9]+s\\]" (buffer-local-value 'mode-line-process again)))
           (superchat-test-drain)
           (should (equal (superchat-test-chat--text again)
-                         "* You\nhi\n\n* Assistant\nHello\n\n"))
+                         "* You\nhi\n\n* Assistant\n** Answer\nHello\n\n"))
           (should-not (buffer-local-value 'mode-line-process again)))))))
 
 (ert-deftest superchat-chat-new-command-keeps-the-scope ()
@@ -618,10 +619,10 @@ tool `echo', and no chat buffers left behind."
         (superchat-chat-send "/note aside")
         (funcall (plist-get answer :on-text) "lo"))
       (should (equal (superchat-test-chat--text buffer)
-                     "* You\nhi\n\n* Assistant\nHello\n\nnote: aside\naside\n\n"))
+                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\nnote: aside\naside\n\n"))
       (funcall (plist-get answer :on-done) '(:text "Hello" :model "m"))
       (should (equal (superchat-test-chat--text buffer)
-                     "* You\nhi\n\n* Assistant\nHello\n\nnote: aside\naside\n\n")))))
+                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\nnote: aside\naside\n\n")))))
 
 (ert-deftest superchat-chat-recall-command-uses-the-chat-scope ()
   (superchat-test-chat--with
@@ -803,7 +804,7 @@ tool `echo', and no chat buffers left behind."
     (superchat-tape-append tape 'user "q" :scope (superchat-test-chat--scope))
     (superchat-tape-append tape 'assistant markdown)
     (string-remove-suffix
-     "\n\n" (string-remove-prefix "* You\nq\n\n* Assistant\n"
+     "\n\n" (string-remove-prefix "* You\nq\n\n* Assistant\n** Answer\n"
                                   (superchat-test-chat--text (superchat-chat-open tape))))))
 
 (ert-deftest superchat-chat-markdown-becomes-org ()
@@ -818,9 +819,11 @@ tool `echo', and no chat buffers left behind."
                      ("```\n# open to the end" "#+begin_src\n# open to the end\n#+end_src")
                      ;; Inline code first: nothing converts inside it.
                      ("use `**x**` and `a=b`" "use =**x**= and ~a=b~")
-                     ;; Only # to ###### headings, the shallowest at level 2.
-                     ("# A\n## B\ntext" "** A\n*** B\ntext")
-                     ("## B\n### C" "** B\n*** C")
+                     ;; Only # to ###### headings, the shallowest at level 3, under Answer.
+                     ("# A\n## B\ntext" "*** A\n**** B\ntext")
+                     ("## B\n### C" "*** B\n**** C")
+                     ;; A quoted list item is a list item, never a heading.
+                     ("> * a" "#+begin_quote\n- a\n#+end_quote")
                      ("#tag\n####### seven" "#tag\n####### seven")
                      ("a\n\n---\n\n* * *\n___" "a\n\n-----\n\n-----\n-----")
                      ("* one\n+ two\n  - three" "- one\n- two\n  - three")
@@ -853,9 +856,9 @@ tool `echo', and no chat buffers left behind."
              (funcall (plist-get keys :on-done) '(:text "**bold**" :model "m"))
              (list :cancelled nil :finished nil :request nil))))
       (with-current-buffer buffer (superchat-chat-send "hi"))
-      (should (equal streamed "* You\nhi\n\n* Assistant\n**bold**"))
+      (should (equal streamed "* You\nhi\n\n* Assistant\n** Answer\n**bold**"))
       (should (eq face 'shadow))
-      (should (equal (superchat-test-chat--text buffer) "* You\nhi\n\n* Assistant\n*bold*\n\n")))))
+      (should (equal (superchat-test-chat--text buffer) "* You\nhi\n\n* Assistant\n** Answer\n*bold*\n\n")))))
 
 (defun superchat-test-chat--visible (buffer)
   "The entries of BUFFER as a person sees them, folded text left out."
@@ -867,7 +870,7 @@ tool `echo', and no chat buffers left behind."
   "TEXT with every duration written D."
   (replace-regexp-in-string "([0-9.]+s)" "(Ds)" text))
 
-(ert-deftest superchat-chat-tool-headings-and-the-process ()
+(ert-deftest superchat-chat-progress-then-answer-and-an-error-keeps-progress-open ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during seen)
       (superchat-tool-define "peek" :class 'read :description "Peek" :args nil
@@ -884,37 +887,52 @@ tool `echo', and no chat buffers left behind."
                     '(:text "Done"))
             (with-current-buffer buffer (superchat-chat-send "go")))
         (superchat-tool-remove "peek"))
-      ;; While it runs, the process is open and a call with no result waits.
-      (should (string-prefix-p "* You\ngo\n\n* Assistant\n** ⏳ Looked, 3 calls: echo ×2, peek\n"
+      ;; While it runs, Progress is open and a call with no result waits.
+      (should (string-prefix-p "* You\ngo\n\n* Assistant\n** ⏳ Progress: 4 calls: echo ×2, nope, peek\n"
                                (superchat-test-chat--d during)))
-      (should (string-match-p "^\\*\\*\\* ✓ echo  :x \"b\"  (.*)\n\\*\\*\\* ⏳ peek$" seen))
+      (should (string-match-p "^\\*\\*\\* ✗ nope  (.*)\n\\*\\*\\* ⏳ peek$" seen))
       (should (string-match-p "^Looking$" seen))
-      (let ((text (superchat-test-chat--d (superchat-test-chat--text buffer))))
-        ;; The final answer first, then the process, then the call with an error.
-        (should (equal text
-                       (concat "* You\ngo\n\n* Assistant\nDone\n\n"
-                               "** ▸ Looked, 3 calls: echo ×2, peek\n"
-                               "*** ✓ echo  :x \"a\"  (Ds)\n#+begin_example\n:x \"a\"\n#+end_example\n"
-                               "#+begin_example\necho:a\nsecond line\n#+end_example\n"
-                               "Looking\n"
-                               "*** ✓ echo  :x \"b\"  (Ds)\n#+begin_example\n:x \"b\"\n#+end_example\n"
-                               "#+begin_example\necho:b\nsecond line\n#+end_example\n"
-                               "*** ✓ peek  (Ds)\n#+begin_example\nseen\n#+end_example\n"
-                               "** ✗ nope  (Ds)\n#+begin_example\nError: Unknown tool: nope\n#+end_example\n"))))
-      ;; At the end the process is folded; the error's heading shows, its body does not.
+      ;; Progress, holding every call, then the Answer.
+      (should (equal (superchat-test-chat--d (superchat-test-chat--text buffer))
+                     (concat "* You\ngo\n\n* Assistant\n"
+                             "** Progress: 4 calls: echo ×2, nope, peek\n"
+                             "*** ✓ echo  :x \"a\"  (Ds)\n#+begin_example\n:x \"a\"\n#+end_example\n"
+                             "#+begin_example\necho:a\nsecond line\n#+end_example\n"
+                             "Looking\n"
+                             "*** ✓ echo  :x \"b\"  (Ds)\n#+begin_example\n:x \"b\"\n#+end_example\n"
+                             "#+begin_example\necho:b\nsecond line\n#+end_example\n"
+                             "*** ✗ nope  (Ds)\n#+begin_example\nError: Unknown tool: nope\n#+end_example\n"
+                             "*** ✓ peek  (Ds)\n#+begin_example\nseen\n#+end_example\n"
+                             "** Answer\nDone\n\n")))
+      ;; A call failed: at the end Progress stays open, each call folded.
       (should (equal (superchat-test-chat--d (superchat-test-chat--visible buffer))
-                     (concat "* You\ngo\n\n* Assistant\nDone\n\n"
-                             "** ▸ Looked, 3 calls: echo ×2, peek\n** ✗ nope  (Ds)\n")))
+                     (concat "* You\ngo\n\n* Assistant\n"
+                             "** Progress: 4 calls: echo ×2, nope, peek\n"
+                             "*** ✓ echo  :x \"a\"  (Ds)\nLooking\n*** ✓ echo  :x \"b\"  (Ds)\n"
+                             "*** ✗ nope  (Ds)\n*** ✓ peek  (Ds)\n"
+                             "** Answer\nDone\n\n"))))))
+
+(ert-deftest superchat-chat-answer-open-and-progress-folded-at-the-end ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script
+          (list '(:text "" :calls ((:id "c1" :name "echo" :args (:x "a"))))
+                '(:text "# Step\nLooking" :calls ((:id "c2" :name "echo" :args (:x "b"))))
+                '(:text "# Notes\nDone\n## Next\nmore"))
+        (with-current-buffer buffer (superchat-chat-send "go")))
+      ;; Progress folded, the Answer open, its headings under it at level 3.
+      (should (equal (superchat-test-chat--visible buffer)
+                     (concat "* You\ngo\n\n* Assistant\n** Progress: 2 calls: echo ×2\n"
+                             "** Answer\n*** Notes\nDone\n**** Next\nmore\n\n")))
+      (should (string-match-p "^\\*Step\\*\nLooking$" (superchat-test-chat--text buffer)))
       (with-current-buffer buffer
-        ;; TAB opens the read-only process to what it holds, each call still folded.
+        ;; TAB opens the read-only Progress; it stays open when its turn is drawn again.
         (goto-char (point-min))
-        (search-forward "▸ Looked")
+        (search-forward "Progress")
         (call-interactively (key-binding (kbd "TAB")))
-        (should (string-match-p "^\\*\\*\\* ✓ echo  :x \"a\"  (.*)\n\\*\\*\\* ✓ echo"
-                                (superchat-test-chat--visible buffer)))
-        ;; It stays open when its turn is drawn again.
+        (should (string-match-p "^\\*\\*\\* ✓ echo  :x \"b\"" (superchat-test-chat--visible buffer)))
         (superchat-note "a later note")
-        (should (string-match-p "^\\*\\*\\* ✓ peek" (superchat-test-chat--visible buffer)))
+        (should (string-match-p "^\\*\\*\\* ✓ echo  :x \"b\"" (superchat-test-chat--visible buffer)))
         ;; The last level 1 heading folds only down to the separator.
         (goto-char (point-min))
         (search-forward "* Assistant")
@@ -923,7 +941,7 @@ tool `echo', and no chat buffers left behind."
         (should-not (invisible-p superchat-chat--block))
         (should-not (invisible-p (1- (point-max))))))))
 
-(ert-deftest superchat-chat-streamed-text-shows-above-the-process ()
+(ert-deftest superchat-chat-streamed-text-shows-under-answer ()
   (superchat-test-chat--with
     (let* ((buffer (superchat-chat-open "t1")) (asked 0) streamed seen
            (superchat-llm-request-function
@@ -937,14 +955,13 @@ tool `echo', and no chat buffers left behind."
                 (funcall (plist-get keys :on-done) '(:text "Fin" :model "m")))
               (list :cancelled nil :finished nil :request nil))))
       (with-current-buffer buffer (superchat-chat-send "go"))
-      (should (string-prefix-p "* You\ngo\n\n* Assistant\nFin\n\n** ▸ Looked, 1 call: echo\n*** ✓ echo"
-                               streamed))
+      (should (string-prefix-p "* You\ngo\n\n* Assistant\n** Progress: 1 call: echo\n*** ✓ echo" streamed))
+      (should (string-suffix-p "#+end_example\n** Answer\nFin" streamed))
       (should (string-match-p "^\\*\\*\\* ✓ echo" seen))
-      (should (string-prefix-p "* You\ngo\n\n* Assistant\nFin\n\n** ▸ Looked, 1 call: echo\n*** ✓ echo"
-                               (superchat-test-chat--text buffer)))
-      (should-not (string-match-p "✓ echo" (superchat-test-chat--visible buffer))))))
+      (should (equal (superchat-test-chat--visible buffer)
+                     "* You\ngo\n\n* Assistant\n** Progress: 1 call: echo\n** Answer\nFin\n\n")))))
 
-(ert-deftest superchat-chat-a-turn-that-fails-folds-its-process ()
+(ert-deftest superchat-chat-a-turn-that-fails-folds-its-progress ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))
       (let (said)
@@ -956,7 +973,7 @@ tool `echo', and no chat buffers left behind."
         (should (string-match-p "boom" said)))
       (let ((event (plist-get (car (superchat-tape-entries :tape "t1" :kinds '(event))) :text)))
         (should (equal (superchat-test-chat--visible buffer)
-                       (concat "* You\ngo\n\n* Assistant\n** ▸ Looked, 1 call: echo\n"
+                       (concat "* You\ngo\n\n* Assistant\n** Progress: 1 call: echo\n"
                                event "\n")))))))
 
 (ert-deftest superchat-chat-render-equals-incremental-with-groups ()
@@ -972,8 +989,8 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (superchat-chat-send "more")))
       (let ((incremental (with-current-buffer buffer (buffer-string)))
             (seen (superchat-test-chat--visible buffer)))
-        ;; An intermediate text's headings sit below the process heading.
-        (should (string-match-p "^\\*\\*\\* Plan$" (superchat-test-chat--text buffer)))
+        ;; An intermediate text's heading is bold text, never a heading.
+        (should (string-match-p "^\\*Plan\\*$" (superchat-test-chat--text buffer)))
         (kill-buffer buffer)
         (let ((again (superchat-chat-open "t1")))
           (should (equal-including-properties incremental (with-current-buffer again (buffer-string))))
@@ -1066,8 +1083,9 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (superchat-chat-send "go")))
       (let ((text (superchat-test-chat--text buffer)))
         (should (= (cl-count-if (lambda (l) (equal l "* Assistant")) (split-string text "\n")) 1))
-        ;; The final answer above the process, which holds the other rounds.
-        (should (string-match-p "\\`\\* You\ngo\n\n\\* Assistant\nDone\n\n\\*\\* ▸ Looked, 2 calls: echo ×2\n" text))
+        ;; Progress, which holds the rounds, then the Answer.
+        (should (string-match-p "\\`\\* You\ngo\n\n\\* Assistant\n\\*\\* Progress: 2 calls: echo ×2\n" text))
+        (should (string-suffix-p "\n** Answer\nDone\n\n" text))
         (should (string-match-p "^Looking$" text)))
       ;; A full render gives the same text.
       (let ((incremental (superchat-test-chat--text buffer)))

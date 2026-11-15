@@ -21,19 +21,22 @@ derived from `org-mode`.
   - its `user` entry: `* You`, then its text, a line of it that starts with
     `*` shown with one space before it, so that it is never a heading;
   - once the turn has an `assistant` entry or streamed text, one `* Assistant`
-    heading, then the final answer: the text of the turn's last `assistant`
-    entry when that entry has no calls, converted from Markdown to Org (the
-    Tape keeps the Markdown); else nothing;
-  - the process, when the turn has a call without an error or an
-    intermediate text (the text of any other `assistant` entry): one heading `** ▸ Looked, N calls:
-    NAME ×K, ...` (`1 call`; `** ▸ Looked` when it holds no call), N the
-    calls in it, the names in order of first use and `×K` only when K > 1,
-    `⏳` in place of `▸` while a call of it has no result. Under it, in
-    order, the intermediate texts, converted, each followed by its calls but
-    those with an error, each call a level 3 heading. The process is open
-    while the turn runs and folded once the turn has its final answer or the
-    timeline is no longer busy with it;
-  - each call with an error, a level 2 heading, after the process;
+    heading;
+  - under it, Progress, when the turn has a call or an intermediate text
+    (the text of an `assistant` entry other than the final answer): one
+    heading `** Progress: N calls: NAME ×K, ...` (`1 call`; `** Progress`
+    when it holds no call), N the calls in it, the names in order of first
+    use and `×K` only when K > 1, `⏳ ` before `Progress` while a call of it
+    has no result. Under it, in order, the intermediate texts, converted,
+    each followed by its calls, each call a level 3 heading. Progress is
+    open while the turn runs and folded once the turn has its final answer
+    or the timeline is no longer busy with it, unless a call of it has an
+    error: then it stays open, so that the error is seen;
+  - then, when the turn has a final answer or streamed text, `** Answer`,
+    then the final answer: the text of the turn's last `assistant` entry
+    when that entry has no calls and some text, converted from Markdown to
+    Org (the Tape keeps the Markdown). Answer is never folded but by the
+    person;
   - the turn's other entries, each as its own lines, in order.
   A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
   body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
@@ -66,9 +69,10 @@ derived from `org-mode`.
   with `org-link-escape`. A line of
   three or more `-`, `*` or `_` (spaces between allowed) becomes `-----`.
   `# ` to `###### ` at the start of a line become headings, demoted so that
-  the shallowest heading of the text is level 2 in the final answer and
-  level 3 in an intermediate text, the others keeping their depth below
-  it; any other line starting with `#` stays text. A list item `*`, `+` or
+  the shallowest heading of the final answer is level 3, under Answer, the
+  others keeping their depth below it, and a heading of an intermediate
+  text becomes a line of bold text, `*TITLE*`, never a heading; any other
+  line starting with `#` stays text. A list item `*`, `+` or
   `-` becomes `-`. Consecutive lines starting with `>` become a
   `#+begin_quote` block without the `>`. A table (consecutive lines starting
   with `|`) loses its alignment row (cells of `-` and `:` only) for an Org
@@ -77,9 +81,8 @@ derived from `org-mode`.
   one or more characters that do not start or end with a space, and `_` does
   not open or close inside a word.
 - The answer's text streams in as it comes, raw, in the `shadow` face,
-  where the final answer goes: right under the turn's `* Assistant`
-  heading, above the process; the `assistant` entry replaces it when it
-  comes.
+  where the final answer goes: under `** Answer`, after Progress; the
+  `assistant` entry replaces it when it comes.
 - `TAB` on a heading of the entries toggles it by Org's own cycling, the
   read-only text notwithstanding; the subtree of the last heading ends where
   the input area's lines begin, which never fold. A heading the person

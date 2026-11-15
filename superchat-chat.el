@@ -27,7 +27,7 @@
 (defvar-local superchat-chat--turn nil "Marker: where the current turn's text starts.")
 (defvar-local superchat-chat--entries nil "The entries of the current turn, in order.")
 (defvar-local superchat-chat--stream nil "Marker: where streamed text starts, under the Assistant heading.")
-(defvar-local superchat-chat--stream-end nil "Marker: where streamed text ends and the process starts.")
+(defvar-local superchat-chat--stream-end nil "Marker: where streamed text ends and the rest of the turn starts.")
 (defvar-local superchat-chat--block nil "Marker: where the separator and the prompt start.")
 (defvar-local superchat-chat--input nil "Marker: where the input area starts.")
 (defvar-local superchat-chat--answers nil "Hash table: an assistant entry's id to its text as Org.")
@@ -69,9 +69,9 @@ was opened with; any other buffer that of `default-directory'."
 (defun superchat-chat--org (markdown level)
   "MARKDOWN as Org, by the rules of the specification and no others.
 Headings are demoted so that the shallowest is at LEVEL, under the heading
-the text sits in.  What no rule may touch (blocks, inline code, links) is
-kept out behind placeholders of private-use characters, which no rule
-matches."
+the text sits in; with no LEVEL each is a line of bold text.  What no rule
+may touch (blocks, inline code, links) is kept out behind placeholders of
+private-use characters, which no rule matches."
   (with-temp-buffer
     (insert markdown)
     (let ((kept nil) blocks (top 6))
@@ -132,18 +132,22 @@ matches."
                                                         (match-string 1)))
                                           t t))))
         (each "^[ \t]*\\([-*_]\\)\\(?:[ \t]*\\1\\)\\{2,\\}[ \t]*$" (lambda () (replace-match "-----" t t)))
-        (each "^\\([ \t]*\\)[-*+] " (lambda () (replace-match "\\1- " t)))
-        ;; Heading stars are private-use characters until the emphasis is done.
-        (each "^\\(#\\{1,6\\}\\) " (lambda () (setq top (min top (length (match-string 1))))))
-        (each "^\\(#\\{1,6\\}\\) "
-              (lambda () (replace-match (concat (make-string (- (+ (length (match-string 1)) level) top) ?\uE003)
-                                                " ")
-                                        t t)))
+        ;; Before the lists: a quoted list item is a list item.
         (each "^>.*\\(?:\n>.*\\)*"
               (lambda () (replace-match (concat "#+begin_quote\n"
                                                 (replace-regexp-in-string "^> ?" "" (match-string 0))
                                                 "\n#+end_quote")
                                         t t)))
+        (each "^\\([ \t]*\\)[-*+] " (lambda () (replace-match "\\1- " t)))
+        ;; Heading stars are private-use characters until the emphasis is done.
+        (each "^\\(#\\{1,6\\}\\) " (lambda () (setq top (min top (length (match-string 1))))))
+        (each "^\\(#\\{1,6\\}\\) \\(.*\\)$"
+              (lambda () (replace-match
+                          (if level
+                              (concat (make-string (- (+ (length (match-string 1)) level) top) ?\uE003)
+                                      " " (match-string 2))
+                            (concat "\uE003" (string-trim (match-string 2)) "\uE003"))
+                          t t)))
         (each "^[ \t]*|\\(?:[ \t]*:?-+:?[ \t]*|\\)+[ \t]*$" (lambda () (replace-match "|-" t t)))
         (emphasis "**" "\uE003" "" nil)
         (emphasis "__" "\uE003" "" t)
@@ -225,8 +229,8 @@ it carries the id of its tool entry, or of its assistant entry before."
      t)))
 
 (defun superchat-chat--answer (entry level)
-  "The text of assistant ENTRY as Org, its headings from LEVEL, converted once
-per buffer."
+  "The text of assistant ENTRY as Org, its headings from LEVEL or, with no
+LEVEL, bold lines; converted once per buffer."
   (with-memoization (gethash (cons (plist-get entry :id) level) superchat-chat--answers)
     (superchat-chat--org (string-trim (plist-get entry :text)) level)))
 
@@ -251,52 +255,52 @@ and carrying its id."
                                     (if (equal (plist-get data :type) "error") 'error 'shadow))))))
     (superchat-chat--seal string (plist-get entry :id))))
 
-(defun superchat-chat--process (answers results folded)
-  "The process of the turn whose `assistant' entries other than the final
-answer are ANSWERS: its heading and what it holds, FOLDED or not; then the
-calls with an error, which stay outside.  RESULTS maps a call id to (TOOL
-ENTRY . SECONDS)."
-  (let (inside outside names waiting)
+(defun superchat-chat--process (answers results done)
+  "The Progress heading of the turn whose `assistant' entries other than the
+final answer are ANSWERS, and what it holds: their texts and calls.  RESULTS
+maps a call id to (TOOL ENTRY . SECONDS).  It is folded once the turn is DONE,
+unless a call failed."
+  (let (inside names waiting failed)
     (dolist (entry answers)
       (unless (string-empty-p (string-trim (plist-get entry :text)))
-        (push (superchat-chat--seal (concat (superchat-chat--answer entry 3) "\n")
+        (push (superchat-chat--seal (concat (superchat-chat--answer entry nil) "\n")
                                     (plist-get entry :id))
               inside))
       (dolist (call (plist-get (plist-get entry :data) :calls))
-        (let* ((result (gethash (plist-get call :id) results))
-               (item (list :call call :result (car result) :seconds (cdr result)
-                           :id (plist-get entry :id))))
-          (if (plist-get (plist-get (car result) :data) :error)
-              (push item outside)
-            (push (plist-get call :name) names)
-            (unless result (setq waiting t))
-            (push (superchat-chat--call item 3) inside)))))
-    (concat
-     (when inside
-       (superchat-chat--heading
-        (concat "** " (if waiting "⏳" "▸") " Looked"
-                (when names
-                  (format ", %d call%s: %s" (length names) (if (cdr names) "s" "")
-                          (mapconcat (lambda (name)
-                                       (let ((k (seq-count (apply-partially #'equal name) names)))
-                                         (if (> k 1) (format "%s ×%d" name k) name)))
-                                     (seq-uniq (reverse names)) ", "))))
-        (concat "\n" (string-remove-suffix "\n" (apply #'concat (nreverse inside))))
-        (format "process %s" (plist-get (car answers) :id))
-        (plist-get (car answers) :id)
-        folded))
-     (mapconcat (lambda (c) (superchat-chat--call c 2)) (nreverse outside) ""))))
+        (let ((result (gethash (plist-get call :id) results)))
+          (push (plist-get call :name) names)
+          (unless result (setq waiting t))
+          (when (plist-get (plist-get (car result) :data) :error) (setq failed t))
+          (push (superchat-chat--call (list :call call :result (car result) :seconds (cdr result)
+                                            :id (plist-get entry :id))
+                                      3)
+                inside))))
+    (when inside
+      (superchat-chat--heading
+       (concat "** " (and waiting "⏳ ") "Progress"
+               (when names
+                 (format ": %d call%s: %s" (length names) (if (cdr names) "s" "")
+                         (mapconcat (lambda (name)
+                                      (let ((k (seq-count (apply-partially #'equal name) names)))
+                                        (if (> k 1) (format "%s ×%d" name k) name)))
+                                    (seq-uniq (reverse names)) ", "))))
+       (concat "\n" (string-remove-suffix "\n" (apply #'concat (nreverse inside))))
+       (format "progress %s" (plist-get (car answers) :id))
+       (plist-get (car answers) :id)
+       (and done (not failed))))))
 
 (defun superchat-chat--turn-text (entries streaming over)
   "The text of ENTRIES, one turn, as (HEAD . TAIL); streamed text goes between.
 HEAD is the user's request and, once the model answers or is STREAMING, the
-Assistant heading and the final answer; TAIL is the process, the calls with
-an error and the other entries.  The process is folded once the final answer
-is there or the turn is OVER."
+Assistant heading, Progress and, with a final answer or STREAMING, the Answer
+heading; TAIL is the final answer and the other entries.  Progress is folded
+once the final answer is there or the turn is OVER."
   (let* ((results (make-hash-table :test #'equal))
          (answers (seq-filter (lambda (e) (eq (plist-get e :kind) 'assistant)) entries))
          (final (car (last answers)))
-         (final (and final (not (plist-get (plist-get final :data) :calls)) final))
+         (final (and final (not (plist-get (plist-get final :data) :calls))
+                     (not (string-empty-p (string-trim (plist-get final :text))))
+                     final))
          (before nil))
     (dolist (entry entries)
       (when (eq (plist-get entry :kind) 'tool)
@@ -312,13 +316,14 @@ is there or the turn is OVER."
                                         "")))
       (cons (concat (others t)
                     (when (or answers streaming)
-                      (superchat-chat--seal
-                       (concat "* Assistant\n"
-                               (when (and final (not (string-empty-p (string-trim (plist-get final :text)))))
-                                 (concat (superchat-chat--answer final 2) "\n\n")))
-                       (plist-get (or final (car answers)) :id))))
-            (let ((tail (concat (and answers (superchat-chat--process (remq final answers) results
-                                                                       (or final over)))
+                      (concat (superchat-chat--seal "* Assistant\n" (plist-get (car answers) :id))
+                              (superchat-chat--process
+                               (seq-remove (lambda (e) (eq e final)) answers) results (or final over))
+                              (when (or final streaming)
+                                (superchat-chat--seal "** Answer\n" (plist-get final :id))))))
+            (let ((tail (concat (when final
+                                  (superchat-chat--seal (concat (superchat-chat--answer final 3) "\n\n")
+                                                        (plist-get final :id)))
                                 (others nil))))
               ;; Streamed text has no end of line of its own.
               (if (and streaming (not (string-empty-p tail)))
