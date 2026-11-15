@@ -1,11 +1,20 @@
 # Superchat
 
-`SPEC.md` is the whole contract: read it first, all of it. Build only what it
-names. When something seems missing, write one line in `NOTES.md` and go on.
+`SPEC.md` and the layer specifications it links (`spec/L*.md`) are the whole
+contract. Before you write, read `SPEC.md`, all of it, and the specification
+of the layer you work in, all of it. Of a lower layer read only the public
+functions you call. Build only what they name. When something seems missing,
+write one line in `NOTES.md`, starting with the layer it concerns, and go on.
 
-- Run `scripts/check.sh` before handing work back. It must print `CHECK OK`.
-  It runs in a copy under the temporary directory; never run the tests
-  directly in this directory.
+- Work in one layer at a time: edit only its files, their tests and its
+  specification. A need in another layer goes to `NOTES.md`.
+- Run `scripts/check.sh` before handing work back; `scripts/check.sh L1`
+  runs the tests of one layer while you work. It must print `CHECK OK`. It
+  runs in a copy under the temporary directory; never run the tests directly
+  in this directory.
+- A use of another layer's private name is an error of the gates. Do not add
+  a line to `scripts/gate-exceptions` to get past one: remove the use, or
+  write the missing public function into the lower layer's specification.
 - Stay in this directory. Do not read or search any other Superchat checkout
   on this machine: this is a clean implementation and must not borrow from an
   earlier one.
