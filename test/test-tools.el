@@ -773,9 +773,17 @@ sets `stopped' and cancels the timer."
   (superchat-test-with-tape
     (let ((superchat-tools--always (make-hash-table :test #'equal)) asked)
       (superchat-tape-append "h" 'user "go" :scope "home")
-      (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny)))
+      (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny))
+            (skill (expand-file-name "skills/s/SKILL.md" superchat-directory)))
         (superchat-tool-call "h" '(:id "c" :name "read_file" :args (:path "x")) #'ignore)
-        (should asked)))))
+        (should asked)
+        ;; A skill the system prompt offers is read with no question.
+        (make-directory (file-name-directory skill) t)
+        (with-temp-file skill (insert "a skill"))
+        (setq asked nil)
+        (superchat-tool-call "h" (list :id "d" :name "read_file" :args (list :path skill))
+                             #'ignore)
+        (should-not asked)))))
 
 (provide 'test-tools)
 ;;; test-tools.el ends here

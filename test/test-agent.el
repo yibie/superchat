@@ -14,8 +14,7 @@
   (declare (indent 0))
   `(superchat-test-with-tape
      (let ((default-directory (file-name-as-directory (make-temp-file "sc-agent-" t)))
-           (superchat-agent--runs (make-hash-table :test #'equal))
-           (superchat-tools--always (make-hash-table :test #'equal)))
+           (superchat-agent--runs (make-hash-table :test #'equal)))
        (superchat-tool-define "echo" :class 'read :description "Echo"
                               :args '((:name "x" :type string :required t))
                               :function (lambda (a) (concat "echo:" (plist-get a :x))))
@@ -1442,8 +1441,8 @@ entry PRED recognises; check what every way of ending owes."
   "BODY with provider \"cw\" (models m8: 8000, m2: 2000) set as the default
 model m8 and `superchat-context-chars' nil."
   (declare (indent 0))
-  `(let ((superchat-llm--models nil)
-         (superchat-llm-providers
+  ;; A changed `superchat-llm-providers' is seen at once: no cache to reset.
+  `(let ((superchat-llm-providers
           (list (cons "cw" (lambda ()
                              (superchat-bridge-openai-compatible-provider
                               :id "cw" :base-url "http://localhost:1/v1"

@@ -190,10 +190,11 @@ Built-in tools, and no others:
 | `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else; asynchronous |
 
 A path is relative to the scope. A call of a `read` tool whose `path`
-argument names a file outside the scope, once `..` and symbolic links are
-resolved, is decided as a `write` call: at `ask` the user is asked, at
-`read-only` it is denied, at `auto` it runs. `"home"` is no project, so
-there every path is outside. The `permission` event and the denial say that
+argument names a file outside the scope and outside `superchat-directory`
+(where the skills are), once `..` and symbolic links are resolved, is
+decided as a `write` call: at `ask` the user is asked, at `read-only` it is
+denied, at `auto` it runs. `"home"` is no project, so there only
+`superchat-directory` is inside. The `permission` event and the denial say that
 the call was outside the project. A file a tool edits is edited through its
 buffer, so the user can undo it.
 

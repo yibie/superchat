@@ -69,11 +69,14 @@ as (funcall DONE nil MESSAGE) for an error."
     (if (> (length text) 200) (concat (substring text 0 200) "...") text)))
 
 (defun superchat-tools--outside-p (scope args)
-  "Non-nil when the :path of ARGS names a file outside SCOPE.  Links and `..'
-are resolved first; \"home\" is no project, so every path is outside it."
+  "Non-nil when the :path of ARGS names a file outside SCOPE and outside
+`superchat-directory', where the skills the system prompt offers are.  Links
+and `..' are resolved first; \"home\" is no project, so only
+`superchat-directory' is inside it."
   (when-let* ((path (plist-get args :path)) ((stringp path)))
-    (or (equal scope "home")
-        (not (file-in-directory-p (expand-file-name path scope) scope)))))
+    (let ((file (expand-file-name path (if (equal scope "home") "~/" scope))))
+      (not (or (file-in-directory-p file superchat-directory)
+               (and (not (equal scope "home")) (file-in-directory-p file scope)))))))
 
 (defun superchat-tools--permit (tape name tool args scope)
   "Decide whether the call may run; append the permission event when it was
