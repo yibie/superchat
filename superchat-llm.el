@@ -45,8 +45,9 @@ signalled when the models collection was last built.")
 (defun superchat-llm--models (&optional retry)
   "The bridge models collection, rebuilt when `superchat-llm-providers' changed,
 or with RETRY when an entry signalled when it was built, so that a fixed cause
-is seen.  Only the start of a request gives RETRY: a broken entry would
-otherwise rebuild the collection at every look into it."
+is seen.  Each public function gives RETRY once, at its start: the model data
+is there whenever it is asked for, and a broken entry does not rebuild the
+collection at every look into it within one call."
   (let ((old (car superchat-llm--models)))
     (unless (and (not (and retry superchat-llm--failed))
                  (= (length old) (length superchat-llm-providers))
@@ -74,6 +75,11 @@ otherwise rebuild the collection at every look into it."
 (defun superchat-llm-model-ids ()
   "The model ids of `superchat-llm-provider'.
 A `user-error' says what to set when it is unset or unknown."
+  (superchat-llm--models t)
+  (superchat-llm--ids))
+
+(defun superchat-llm--ids ()
+  "The model ids of `superchat-llm-provider', from the collection as it is."
   (let ((names (mapcar #'car superchat-llm-providers)))
     (unless (member superchat-llm-provider names)
       (user-error "%s; set `superchat-llm-provider' to one of: %s, for example (setq superchat-llm-provider %S)"
@@ -90,7 +96,7 @@ A `user-error' says what to set when it is unset or unknown."
 (defun superchat-llm--find-model (id)
   "The bridge model ID of `superchat-llm-provider'.
 A `user-error' says what to set when either is unset or unknown."
-  (let ((known (superchat-llm-model-ids)))
+  (let ((known (superchat-llm--ids)))
     (or (superchat-bridge-models-get-model (superchat-llm--models)
                                            superchat-llm-provider id)
         (user-error "%s; set `superchat-llm-model' to one of: %s"
@@ -102,6 +108,7 @@ A `user-error' says what to set when either is unset or unknown."
   "The context window in tokens of MODEL of `superchat-llm-provider'.
 MODEL defaults to `superchat-llm-model'.  Nil when the data has none, or
 the provider or model is unset or unknown: the request reports those."
+  (superchat-llm--models t)
   (let ((id (or model superchat-llm-model)))
     (when (and (stringp superchat-llm-provider) (stringp id))
       (let ((window (when-let* ((m (superchat-bridge-models-get-model

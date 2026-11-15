@@ -277,8 +277,11 @@ requires `llm.el`.
 - `superchat-llm-providers` (a `defvar`): an alist from a provider name to a
   function of no arguments that returns a bridge provider. When a name is
   there twice the first entry counts, and a changed entry is seen at the
-  next request. An entry whose function signalled is tried again at the
-  next request. It starts with
+  next request. The model data is there whenever it is asked for: an entry
+  whose function signalled is tried again, once, at the start of the next
+  `superchat-llm-request`, `superchat-llm-model-ids` or
+  `superchat-llm-context-window`, so a fixed entry is seen by `/model` too.
+  It starts with
   one entry for each provider the bridge has (`"deepseek"`, `"groq"`,
   `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
   collection is made from it on first use.

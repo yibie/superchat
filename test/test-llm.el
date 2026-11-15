@@ -771,10 +771,10 @@ finished messages and the messages the third request sent."
                                   (test-llm--provider "flaky")))))
       (should-error (superchat-llm-model-ids) :type 'user-error)
       (setq ready t)
-      (should (plist-get (test-llm--ask (list (test-llm--user "hi"))) :done))
+      ;; Fixed: the model ids see it at once, with no request first.
       (should (equal (superchat-llm-model-ids) '("model-a" "model-b"))))))
 
-(ert-deftest superchat-llm-a-failed-entry-is-tried-once-a-request ()
+(ert-deftest superchat-llm-a-failed-entry-is-tried-once-a-call ()
   (test-llm-with (list '(:text "a") '(:text "b"))
     (let ((tries 0))
       (setq superchat-llm-providers
@@ -782,10 +782,12 @@ finished messages and the messages the third request sent."
                   superchat-llm-providers))
       (test-llm--ask (list (test-llm--user "hi")))
       (should (= tries 1))
-      (dotimes (_ 3) (superchat-llm-context-window) (superchat-llm-model-ids))
-      (should (= tries 1))
+      (superchat-llm-context-window)
+      (should (= tries 2))
+      (superchat-llm-model-ids)
+      (should (= tries 3))
       (test-llm--ask (list (test-llm--user "hi")))
-      (should (= tries 2)))))
+      (should (= tries 4)))))
 
 (ert-deftest superchat-llm-a-key-resolver-that-signals-goes-to-on-error ()
   (test-llm-with nil

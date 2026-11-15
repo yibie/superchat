@@ -43,8 +43,7 @@
 `superchat-context-chars' when a number; else half the model's context
 window, a token counting as a character; else 120000."
   (cond ((numberp superchat-context-chars) superchat-context-chars)
-        ((superchat-llm-context-window model)
-         (floor (superchat-llm-context-window model) 2))
+        ((when-let* ((window (superchat-llm-context-window model))) (floor window 2)))
         (t 120000)))
 
 (defun superchat-agent--messages (entries)
