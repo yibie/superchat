@@ -60,13 +60,20 @@
     (maphash (lambda (_ db) (sqlite-close db)) table)
     (clrhash table)))
 
+(defun superchat-tape--plist-p (value)
+  "Non-nil when VALUE is a plist with keyword keys."
+  (and (proper-list-p value) (keywordp (car value)) (cl-evenp (length value))
+       (cl-loop for k in value by #'cddr always (keywordp k))))
+
 (defun superchat-tape--json (value)
   "VALUE ready for `json-serialize'.
-A plist becomes an object, any other list an array."
-  (cond ((not (consp value)) value)
-        ((keywordp (car value))
+A plist becomes an object, any other list an array.  A value `:data'
+cannot hold is an error, so what is stored is what comes back."
+  (cond ((or (stringp value) (numberp value) (memq value '(nil t))) value)
+        ((superchat-tape--plist-p value)
          (cl-loop for (k v) on value by #'cddr collect k collect (superchat-tape--json v)))
-        (t (vconcat (mapcar #'superchat-tape--json value)))))
+        ((proper-list-p value) (vconcat (mapcar #'superchat-tape--json value)))
+        (t (error "Not a value :data can hold: %S" value))))
 
 (defun superchat-tape--parse (json)
   "The Lisp value of the stored JSON string."
@@ -97,19 +104,24 @@ A plist becomes an object, any other list an array."
 
 (cl-defun superchat-tape-append (tape kind text &key data refs scope at)
   "Append an entry to timeline TAPE and return it.
-SCOPE defaults to that of TAPE's latest entry."
+A timeline has one scope, set by its first entry: SCOPE defaults to
+it, and a different one is an error."
   (unless (and (symbolp kind) (member (symbol-name kind) superchat-tape--kinds))
     (error "Unknown entry kind: %S" kind))
-  (let ((scope (or scope
-                   (caar (sqlite-select (superchat-tape-open)
-                                        "SELECT scope FROM entry WHERE tape = ? ORDER BY id DESC LIMIT 1"
-                                        (list tape)))
-                   (error "The first entry of timeline %s needs a scope" tape)))
-        (db (superchat-tape-open)))
+  (unless (or (null data) (superchat-tape--plist-p data))
+    (error "The :data of an entry is a plist: %S" data))
+  (let* ((db (superchat-tape-open))
+         (held (caar (sqlite-select db "SELECT scope FROM entry WHERE tape = ? LIMIT 1"
+                                    (list tape))))
+         (scope (or scope held (error "The first entry of timeline %s needs a scope" tape))))
+    (when (and held (not (equal scope held)))
+      (error "Timeline %s has scope %s, not %s" tape held scope))
     (sqlite-execute db "INSERT INTO entry (tape, kind, text, data, refs, scope, at)
  VALUES (?, ?, ?, ?, ?, ?, ?)"
                     (list tape (symbol-name kind) text
-                          (json-serialize (superchat-tape--json data) :null-object nil)
+                          (if data
+                              (json-serialize (superchat-tape--json data) :null-object nil)
+                            "{}")
                           (json-serialize (vconcat refs))
                           scope (float (or at (float-time)))))
     (superchat-tape-get (caar (sqlite-select db "SELECT last_insert_rowid()")))))

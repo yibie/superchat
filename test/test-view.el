@@ -114,6 +114,18 @@
     (should (equal (superchat-test-view--texts (superchat-view 'notes :query "home"))
                    '("n2 home")))))
 
+(ert-deftest superchat-view-notes-query-is-the-newest-matches ()
+  (superchat-test-with-tape
+    ;; The older notes match best; the limit still takes the newest.
+    (dotimes (i 3) (superchat-tape-append (format "o%d" i) 'note "apple apple" :scope "/p/"))
+    (superchat-tape-append "h" 'note "an apple, said at home, in a longer note" :scope "home")
+    (superchat-tape-append "n" 'note "the newest apple note of all, the longest one" :scope "/p/")
+    (should (equal (superchat-test-view--texts
+                    (superchat-view 'notes :scope "/p/" :query "apple" :limit 2))
+                   '("the newest apple note of all, the longest one"
+                     "an apple, said at home, in a longer note")))
+    (should (equal (length (superchat-view 'notes :query "apple" :limit 4)) 4))))
+
 (ert-deftest superchat-view-timelines ()
   (superchat-test-with-tape
     (superchat-test-view--add "a" 'event "e")
@@ -169,8 +181,9 @@
       (should (string-match-p (format "\\`#%d user [0-9-]+ [0-9:]+\nhello\n\n#%d tool "
                                       (plist-get u :id) (plist-get tool :id))
                               text))
-      (should (string-match-p (concat "x\\{400\\}\\.\\.\\.\\'") text))
-      (should-not (string-match-p "x\\{401\\}" text))
+      (should (string-suffix-p (superchat-view-clip (make-string 500 ?x) 400) text))
+      (should (string-match-p (format "#%d tool [0-9-]+ [0-9:]+\n" (plist-get tool :id)) text))
+      (should (= (length (cadr (split-string text "\n#[0-9]+ tool [0-9-]+ [0-9:]+\n"))) 400))
       (should (equal (superchat-view-render nil) "")))))
 
 (ert-deftest superchat-view-render-drops-oldest ()
@@ -187,6 +200,26 @@
       (should (string-match-p "entry-5" text))
       (should-not (string-match-p "entry-1 " text))
       (should (equal (superchat-view-render entries (length full)) full)))))
+
+(ert-deftest superchat-view-render-drops-smallest-ids-whatever-the-order ()
+  (superchat-test-with-tape
+    (let* ((entries (reverse (cl-loop for i from 1 to 5
+                                      collect (superchat-tape-append
+                                               "a" 'user (format "entry-%d %s" i (make-string 90 ?.))
+                                               :scope "/p/"))))
+           (text (superchat-view-render entries 300)))
+      (should (string-match "\\`\\[\\([0-9]+\\) earlier entries left out\\]\n\n#" text))
+      (should (<= (length text) 300))
+      (should (string-match-p "entry-5.*\n\\(.\\|\n\\)*entry-4" text))
+      (should-not (string-match-p "entry-1 " text)))))
+
+(ert-deftest superchat-view-render-exceeds-the-limit-only-by-the-header ()
+  (superchat-test-with-tape
+    (let* ((e (superchat-tape-append "a" 'user (make-string 200 ?z) :scope "/p/"))
+           (header (format "#%d user %s" (plist-get e :id)
+                           (format-time-string "%F %R" (plist-get e :at)))))
+      (should (equal (superchat-view-render (list e) (+ (length header) 3)) header))
+      (should (equal (superchat-view-render (list e) 3) header)))))
 
 (ert-deftest superchat-view-render-cuts-a-single-block-over-the-limit ()
   (superchat-test-with-tape
@@ -208,7 +241,7 @@
   (superchat-test-with-tape
     (let* ((old (superchat-tape-append "a" 'user "older" :scope "/p/"))
            (e (superchat-tape-append "a" 'user (make-string 200 ?z)))
-           (text (superchat-view-render (list old e) 60)))
+           (text (superchat-view-render (list old e) 90)))
       (should (string-match-p (format "\\`\\[1 earlier entries left out\\]\n\n#%d user [0-9-]+ [0-9:]+\n"
                                       (plist-get e :id))
                               text))
@@ -244,6 +277,21 @@
     (should (= (+ (length (match-string 1 cut)) (string-to-number (match-string 2 cut))) 100)))
   ;; Shorter than the mark: the mark alone, counting every character.
   (should (equal (superchat-view-clip (make-string 100 ?a) 5) "... [100 characters cut]")))
+
+(ert-deftest superchat-view-conversation-of-a-fork-with-missing-refs ()
+  (superchat-test-with-tape
+    (let ((u1 (superchat-test-view--add "a" 'user "u1")))
+      (superchat-test-view--anchor "f" "" "fork" :refs (list 9999 u1))
+      (superchat-test-view--add "f" 'user "new")
+      (should (equal (superchat-test-view--texts (superchat-view 'conversation :tape "f"))
+                     '("u1" "" "new"))))))
+
+(ert-deftest superchat-view-conversation-and-search-need-their-argument ()
+  (superchat-test-with-tape
+    (superchat-test-view--add "a" 'user "one")
+    (should-error (superchat-view 'conversation))
+    (should-error (superchat-view 'search))
+    (should-error (superchat-view 'search :query ""))))
 
 (ert-deftest superchat-view-conversation-of-a-fork-is-its-refs-at-the-latest-anchor-only ()
   (superchat-test-with-tape

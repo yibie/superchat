@@ -45,37 +45,46 @@ were cut; TEXT itself when it fits."
 (defun superchat-view--cut (entry)
   "The text of ENTRY, a tool result cut to 400 characters."
   (let ((text (plist-get entry :text)))
-    (if (and (eq (plist-get entry :kind) 'tool) (> (length text) 400))
-        (concat (substring text 0 400) "...")
-      text)))
+    (if (eq (plist-get entry :kind) 'tool) (superchat-view-clip text 400) text)))
 
 (defun superchat-view--omitted (n)
   "The line that says N entries were dropped, or nothing."
   (if (> n 0) (format "[%d earlier entries left out]\n\n" n) ""))
 
+(defun superchat-view--block (block)
+  "BLOCK, (ID HEADER . TEXT), as text: no newline after a header with no text."
+  (if (string-empty-p (cddr block)) (cadr block) (concat (cadr block) "\n" (cddr block))))
+
 (defun superchat-view-render (entries &optional max-chars)
-  "ENTRIES as text.  Over MAX-CHARS the oldest are dropped and counted; a
-single block still over it has its text cut, with a mark saying so.  The
-header line of a block is never cut: it is what the text is cited by."
-  (let* ((blocks (mapcar (lambda (e) (cons (format "#%d %s %s" (plist-get e :id) (plist-get e :kind)
-                                                   (format-time-string "%F %R" (plist-get e :at)))
-                                           (superchat-view--cut e)))
+  "ENTRIES as text, in the order given.  Over MAX-CHARS the entries with
+the smallest ids are dropped and counted; a single block still over it has
+its text cut, with a mark saying so, or left out when not even the mark
+fits.  The header line of a block is never cut: it is what the text is
+cited by."
+  (let* ((blocks (mapcar (lambda (e)
+                           (cons (plist-get e :id)
+                                 (cons (format "#%d %s %s" (plist-get e :id) (plist-get e :kind)
+                                               (format-time-string "%F %R" (plist-get e :at)))
+                                       (superchat-view--cut e))))
                          entries))
-         (size (lambda (b) (+ (length (car b)) 1 (length (cdr b)))))
-         (total (cl-loop for b in blocks sum (+ 2 (funcall size b)) into n finally return (- n 2)))
-         (dropped 0))
-    (while (and max-chars (cdr blocks)
-                (> (+ total (length (superchat-view--omitted dropped))) max-chars))
-      (cl-decf total (+ 2 (funcall size (pop blocks))))
-      (cl-incf dropped))
-    (when max-chars
-      (let ((room (- max-chars (length (superchat-view--omitted dropped)))))
-        (setq blocks (mapcar (lambda (b)
-                               (cons (car b) (superchat-view-clip
-                                              (cdr b) (max 0 (- room (length (car b)) 1)))))
-                             blocks))))
+         (oldest (sort (mapcar #'car blocks) #'<))
+         (total (- (cl-loop for b in blocks sum (+ 2 (length (superchat-view--block b)))) 2))
+         (dropped 0)
+         (over (lambda () (and max-chars (> (+ total (length (superchat-view--omitted dropped)))
+                                            max-chars)))))
+    (while (and (cdr blocks) (funcall over))
+      (let ((block (assq (pop oldest) blocks)))
+        (cl-decf total (+ 2 (length (superchat-view--block block))))
+        (setq blocks (delq block blocks))
+        (cl-incf dropped)))
+    (when (funcall over)
+      (let* ((block (car blocks))
+             (room (- max-chars (length (superchat-view--omitted dropped))
+                      (length (cadr block)) 1))
+             (text (superchat-view-clip (cddr block) (max 0 room))))
+        (setcdr (cdr block) (if (> (length text) room) "" text))))
     (concat (superchat-view--omitted dropped)
-            (mapconcat (lambda (b) (concat (car b) "\n" (cdr b))) blocks "\n\n"))))
+            (mapconcat #'superchat-view--block blocks "\n\n"))))
 
 (defun superchat-view--in-order (entries)
   "ENTRIES without duplicates, in id order."
@@ -84,12 +93,12 @@ header line of a block is never cut: it is what the text is cited by."
 
 (defun superchat-view--conversation (args)
   "The timeline of :tape from its latest anchor; see the view `conversation'."
-  (let* ((tape (plist-get args :tape))
+  (let* ((tape (or (plist-get args :tape) (error "The view conversation needs :tape")))
          (anchor (car (superchat-tape-entries :tape tape :kinds '(anchor)
                                               :newest t :limit 1)))
          (rows (superchat-tape-entries
                 :tape tape :after (and anchor (1- (plist-get anchor :id))))))
-    ;; An anchor with no summary stands for the entries it refers to: a fork.
+    ;; An anchor with no text stands for the entries it refers to: a fork.
     (if (and anchor (plist-get anchor :refs) (string-empty-p (plist-get anchor :text)))
         (append (delq nil (mapcar #'superchat-tape-get
                                   (sort (copy-sequence (plist-get anchor :refs)) #'<)))
@@ -112,10 +121,13 @@ header line of a block is never cut: it is what the text is cited by."
 
 (defun superchat-view--search (args)
   "Hits of :query with :around neighbours each side, in id order."
-  (let ((around (or (plist-get args :around) 1)))
+  (let ((around (or (plist-get args :around) 1))
+        (query (plist-get args :query)))
+    (when (or (null query) (string-empty-p query))
+      (error "The view search needs a :query"))
     (superchat-view--in-order
      (cl-loop
-      for hit in (superchat-tape-search (plist-get args :query) :scope (plist-get args :scope)
+      for hit in (superchat-tape-search query :scope (plist-get args :scope)
                                         :kinds (plist-get args :kinds)
                                         :limit (or (plist-get args :limit) 8))
       for id = (plist-get hit :id)
@@ -133,7 +145,7 @@ header line of a block is never cut: it is what the text is cited by."
          (found (cl-loop
                  for s in (if scope (delete-dups (list scope "home")) '(nil))
                  append (if query
-                            (superchat-tape-search query :scope s :kinds '(note) :limit limit)
+                            (superchat-tape-search query :scope s :kinds '(note))
                           (superchat-tape-entries :scope s :kinds '(note)
                                                   :newest t :limit limit)))))
     (take limit (nreverse (superchat-view--in-order found)))))

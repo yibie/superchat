@@ -33,6 +33,19 @@
                                 :data)
                      data)))))
 
+(ert-deftest superchat-tape-data-holds-only-what-comes-back ()
+  (superchat-test-with-tape
+    (should (equal (plist-get (superchat-tape-append "t" 'note "x" :scope "home"
+                                                     :data '(:b t :n 1.5 :l (:a "s")))
+                              :data)
+                   '(:b t :n 1.5 :l (:a "s"))))
+    (should-not (plist-get (superchat-tape-append "t" 'note "nil data") :data))
+    (should (equal (superchat-tape-select "SELECT data FROM entry WHERE text = 'nil data'")
+                   '(("{}"))))
+    (dolist (bad '((:s sym) (:v [1 2]) (:k :key) (:l (1 . 2)) (:p (:a 1 :b)) ("not" "plist")))
+      (should-error (superchat-tape-append "t" 'note "bad" :data bad)))
+    (should-not (superchat-tape-search "bad"))))
+
 (ert-deftest superchat-tape-kind-is-a-symbol ()
   (superchat-test-with-tape
     (should-error (superchat-tape-append "t" "user" "x" :scope "home"))
@@ -43,8 +56,11 @@
     (should-error (superchat-tape-append "t1" 'user "no scope"))
     (superchat-tape-append "t1" 'user "a" :scope "/p/")
     (should (equal (plist-get (superchat-tape-append "t1" 'user "b") :scope) "/p/"))
-    (should (equal (plist-get (superchat-tape-append "t1" 'user "c" :scope "home") :scope)
-                   "home"))))
+    (should (equal (plist-get (superchat-tape-append "t1" 'user "c" :scope "/p/") :scope) "/p/"))
+    ;; A timeline has one scope: another one is refused.
+    (should-error (superchat-tape-append "t1" 'user "d" :scope "home"))
+    (should (equal (superchat-test-tape--texts (superchat-tape-entries :tape "t1"))
+                   '("a" "b" "c")))))
 
 (ert-deftest superchat-tape-rejects-unknown-kind ()
   (superchat-test-with-tape
@@ -79,7 +95,7 @@
   (superchat-test-with-tape
     (superchat-tape-append "t" 'user "the quick brown fox" :scope "/p/")
     (superchat-tape-append "t" 'user "今天讨论数据库设计" :scope "/p/")
-    (superchat-tape-append "t" 'note "another fox elsewhere" :scope "home")
+    (superchat-tape-append "h" 'note "another fox elsewhere" :scope "home")
     (should (equal (superchat-test-tape--texts (superchat-tape-search "quick"))
                    '("the quick brown fox")))
     (should (= 2 (length (superchat-tape-search "fox"))))
@@ -90,6 +106,21 @@
     (should (= 1 (length (superchat-tape-search "fox" :limit 1))))
     (should (equal (superchat-test-tape--texts (superchat-tape-search "数据库设计"))
                    '("今天讨论数据库设计")))))
+
+(ert-deftest superchat-tape-search-best-first ()
+  (superchat-test-with-tape
+    (superchat-tape-append "t" 'user "a fox among many other words in a long line of text" :scope "home")
+    (superchat-tape-append "t" 'user "fox fox fox" :scope "home")
+    (superchat-tape-append "t" 'user "yet another long line of text that has a fox in it" :scope "home")
+    (should (equal (car (superchat-test-tape--texts (superchat-tape-search "fox")))
+                   "fox fox fox"))))
+
+(ert-deftest superchat-tape-search-short-query-newest-first ()
+  (superchat-test-with-tape
+    (superchat-tape-append "t" 'user "ab one" :scope "home")
+    (superchat-tape-append "t" 'user "ab two" :scope "home")
+    (should (equal (superchat-test-tape--texts (superchat-tape-search "ab"))
+                   '("ab two" "ab one")))))
 
 (ert-deftest superchat-tape-search-short-query ()
   (superchat-test-with-tape
@@ -191,6 +222,17 @@
           (should (equal (superchat-tape-select "SELECT text FROM entry") '(("new a")))))
       (superchat-tape-close)
       (delete-directory dir t))))
+
+(ert-deftest superchat-tape-close-closes-the-read-only-connection-too ()
+  (superchat-test-with-tape
+    (let ((opened nil) (open (symbol-function 'sqlite-open)))
+      (superchat-tape-close)
+      (cl-letf (((symbol-function 'sqlite-open)
+                 (lambda (&rest args) (car (push (apply open args) opened)))))
+        (superchat-tape-select "SELECT 1"))
+      (should (= 2 (length opened)))
+      (superchat-tape-close)
+      (dolist (db opened) (should-error (sqlite-select db "SELECT 1"))))))
 
 (ert-deftest superchat-tape-open-follows-the-options ()
   (let* ((dir (file-name-as-directory (make-temp-file "superchat-open-" t)))
