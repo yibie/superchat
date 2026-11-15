@@ -180,6 +180,11 @@ not called.  Whatever the tool or the user does, the result is an entry."
 
 ;;; Reading
 
+(defconst superchat-tools--path-note
+  "PATH is relative to the project, or absolute (~ works). A file outside the project is read only after the user agrees."
+  "What a reading tool says of its path: the model must not think it is bound
+to the project and turn to `shell', which the user cannot judge as well.")
+
 (defun superchat-tools--path (path)
   "Absolute name of PATH, relative to `default-directory'."
   (expand-file-name path default-directory))
@@ -211,7 +216,8 @@ not called.  Whatever the tool or the user does, the result is an entry."
 
 (superchat-tool-define
  "read_file" :class 'read
- :description "Read a file with line numbers, at most 400 lines a call. Paths are relative to the project."
+ :description (concat "Read a file with line numbers, at most 400 lines a call. "
+                     superchat-tools--path-note)
  :args '((:name "path" :type string :description "File to read" :required t)
          (:name "start" :type number :description "First line, default 1")
          (:name "count" :type number :description "Lines to read, default and most 400"))
@@ -286,7 +292,8 @@ cancels the timer; FINISH is then not called.  The buffer is killed always."
 
 (superchat-tool-define
  "search_files" :class 'read :async t
- :description "grep -rn for a pattern under the project, or under PATH. At most 100 lines."
+ :description (concat "grep -rn for a pattern under the project, or under PATH. At most 100 lines. "
+                     superchat-tools--path-note)
  :args '((:name "pattern" :type string :description "grep pattern" :required t)
          (:name "path" :type string :description "File or directory to search, default the project"))
  :function (lambda (args done)
