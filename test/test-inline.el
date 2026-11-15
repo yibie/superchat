@@ -90,8 +90,9 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
         (should-not (overlay-get overlay 'display))
         (should (plist-get (overlay-get overlay 'face) :strike-through))
         (should (string-match-p "BETA" after))
-        (should (string-match-p "C-c C-c accept" after))
-        (should (string-match-p "C-c C-c accepts" said))
+        (should (string-match-p "struck-through text: C-c C-c accept" after))
+        (should (string-match-p "struck-through text, C-c C-c accepts" said))
+        (should-not (overlay-get overlay 'help-echo))
         (should (= (point) (overlay-start overlay)))))))
 
 (ert-deftest superchat-inline-discard ()
@@ -242,6 +243,23 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
       (pcase-let ((`(,opened (,text ,_)) (superchat-test-inline--ask nil)))
         (should (string-match-p "\\`[0-9]\\{8\\}-[0-9]\\{6\\}-" opened))
         (should (equal text "why?"))))))
+
+(ert-deftest superchat-inline-ask-while-the-chat-is-busy-keeps-the-question ()
+  (superchat-test-inline--with "alpha beta gamma"
+    (deactivate-mark)
+    (let ((chat (superchat-chat-open "t1" (superchat-tape-scope-of default-directory)))
+          (superchat-llm-request-function (lambda (&rest _) (list :request nil)))
+          said)
+      (with-current-buffer chat (superchat-chat-send "one"))
+      (save-window-excursion
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why?"))
+                  ((symbol-function 'message)
+                   (lambda (f &rest a) (when f (setq said (apply #'format f a))))))
+          (call-interactively #'superchat-ask)))
+      (should (string-suffix-p "\nwhy?" (with-current-buffer chat (buffer-string))))
+      (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1))
+      (should (string-match-p (regexp-quote (buffer-name chat)) said))
+      (should (string-match-p "not sent" said)))))
 
 (provide 'test-inline)
 ;;; test-inline.el ends here

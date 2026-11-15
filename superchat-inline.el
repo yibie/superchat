@@ -47,8 +47,8 @@ the last line says which keys act, READY once the answer is complete."
     (overlay-put overlay 'face '(:inherit shadow :strike-through t))
     (overlay-put overlay 'after-string
                  (concat apart (propertize text 'face 'highlight) apart
-                         (propertize (if ready "[C-c C-c accept · C-c C-k discard]"
-                                       "[rewriting… C-c C-k cancels]")
+                         (propertize (if ready "[on the struck-through text: C-c C-c accept · C-c C-k discard]"
+                                       "[rewriting… on the struck-through text, C-c C-k cancels]")
                                      'face 'shadow)))))
 
 (defun superchat-inline--overlay ()
@@ -91,7 +91,7 @@ The region stays as it is."
           (progn
             (superchat-inline--show
              overlay (superchat-inline--unfence (plist-get run :text)) t)
-            (message "Rewrite ready: C-c C-c accepts, C-c C-k discards"))
+            (message "Rewrite ready: on the struck-through text, C-c C-c accepts, C-c C-k discards"))
         (delete-overlay overlay)
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
                  (if (eq status 'error) (plist-get run :error) ""))))))
@@ -111,7 +111,6 @@ The replacement shows after the region, which is struck through;
     (goto-char (overlay-start overlay))
     (overlay-put overlay 'keymap superchat-inline-map)
     (overlay-put overlay 'superchat-tape tape)
-    (overlay-put overlay 'help-echo "C-c C-c accepts, C-c C-k discards")
     (superchat-inline--show overlay "")
     ;; No overlay may outlive a run that never started.
     (unwind-protect
@@ -134,16 +133,19 @@ The replacement shows after the region, which is struck through;
   (let* ((region (and (use-region-p) (superchat-inline--region)))
          (origin (superchat-chat--origin-here))
          (scope (superchat-chat--scope))
-         (buffer (superchat-chat-open (or (superchat-chat-recent-tape scope)
-                                          (superchat-tape-new-name))
-                                      scope)))
+         (tape (or (superchat-chat-recent-tape scope) (superchat-tape-new-name)))
+         (buffer (superchat-chat-open tape scope))
+         (text (if region
+                   (format "%s\n\n> %s" question (replace-regexp-in-string "\n" "\n> " region))
+                 question)))
     (display-buffer buffer '(display-buffer-in-direction (direction . right)))
     (with-current-buffer buffer
-      (superchat-chat-send (if region
-                               (format "%s\n\n> %s" question
-                                       (replace-regexp-in-string "\n" "\n> " region))
-                             question)
-                           origin))))
+      (if (not (superchat-run-active tape))
+          (superchat-chat-send text origin)
+        ;; Not lost: the person sends it when the timeline is free.
+        (goto-char (point-max))
+        (insert (if (bolp) "" "\n") text)
+        (message "%s is busy: the question is in its input, not sent" (buffer-name))))))
 
 (provide 'superchat-inline)
 ;;; superchat-inline.el ends here
