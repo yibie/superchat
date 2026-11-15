@@ -63,6 +63,10 @@ requires `llm.el`.
     request with the results appended to MESSAGES.
 - `(superchat-llm-cancel HANDLE)`: aborts the request through the bridge's abort
   signal.
+- `(superchat-llm-model-ids)` → the model ids of `superchat-llm-provider`. A
+  `user-error` says what to set when the provider is not set or not known,
+  and names the entry of `superchat-llm-providers` whose function
+  signalled.
 - `(superchat-llm-context-window &optional MODEL)` → the context window, in
   tokens, of MODEL (default `superchat-llm-model`) of the provider, as the
   bridge's model data gives it; nil when the data has none.
@@ -129,7 +133,8 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   that stops the work. It calls DONE exactly once, later or before it
   returns, with the result string, or for an error with nil and the
   message: `(funcall DONE nil "what went wrong")`. A signal raised
-  before it returns counts as an error result. Emacs stays usable while an
+  before it returns counts as an error result, also when DONE was already
+  called: the signal is the result. Emacs stays usable while an
   asynchronous tool runs. `shell` and `search_files` are asynchronous; the
   others are plain Lisp and return at once (`eval_elisp` runs Lisp, which
   cannot be made asynchronous: `C-g` interrupts it).
@@ -139,14 +144,18 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   the list `superchat-llm-request` takes.
 - `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED)` → nil, or
   a function of no arguments that stops a tool still running. CANCELLED is
-  a function of no arguments; when it returns non-nil after the user was
-  asked, the tool does not run and its result is `Cancelled.`. It decides
+  a function of no arguments, asked once permission is decided (after the
+  user answered, when asked); when it returns non-nil, the tool does not run
+  and its result is `Cancelled.`. It decides
   permission, asks when needed, runs the function with `default-directory`
   set to the timeline's scope (the user's home directory for `"home"`),
   appends the result as a `tool` entry and calls ON-RESULT with that entry,
   exactly once: before it returns for a synchronous tool, later for an
-  asynchronous one. For an `ask` or `deny` decision it appends a
-  `permission` event first. When the returned function is called before the
+  asynchronous one. A call that names no known tool or lacks a required
+  argument is answered first, with no question and no event. For an `ask`
+  or `deny` decision it appends a `permission` event once the decision is
+  known, before the result; it says whether the call was allowed. A quit
+  while the user is asked leaves no `permission` event, only the result. When the returned function is called before the
   result came, the tool is stopped, nothing is appended and ON-RESULT is
   never called; a result that comes after that is dropped. A denied call, an unknown tool, a missing
   required argument and an error signalled by the function all become a
@@ -193,6 +202,11 @@ Three tools, defined with `superchat-tool-define`, all of class `read`:
 | `recall` | `view`, `query` opt, `name` opt, `id` opt, `limit` opt | run a built-in or plugin view for the current scope and return `superchat-view-render` of it, at most 6000 characters |
 | `tape_query` | `sql` | `superchat-tape-select`, rows as JSON lines, at most 200 rows; the limit is part of the statement that runs, so a query that would return a million rows does not fetch them |
 | `note` | `title`, `text`, `sources` (comma-separated entry ids) | append a `note` entry to the current timeline |
+
+- `(superchat-recall-note TAPE TITLE TEXT &optional REFS SCOPE)` → the
+  `note` entry appended to TAPE; SCOPE is needed only for a timeline with no
+  entry yet. The `note` tool and the person (`superchat-note`, `/note`)
+  write notes through this one function.
 
 A number argument may arrive as a string. The description of `recall` lists the views and their arguments from
 `superchat-view-names`, each time the specs are asked for. The description of
