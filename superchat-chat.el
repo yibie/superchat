@@ -204,16 +204,21 @@ plain: its last character passes on no property, neither a face nor the id."
   "HEAD, a heading line, and BODY under it, read-only, with ID.  KEY names the
 heading when its turn is drawn again; FOLDED is how it is shown by default."
   (let ((head (copy-sequence head)))
-    (put-text-property 0 1 'superchat-chat-fold (list key (length body) folded) head)
+    (put-text-property 0 1 'superchat-chat-fold (list key folded) head)
     (superchat-chat--seal (concat head body "\n") id)))
 
 (defun superchat-chat--call (call level)
-  "The heading at LEVEL of CALL, (:call :result :seconds :id), and its body;
-it carries the id of its tool entry, or of its assistant entry before."
+  "The heading at LEVEL of CALL, (:call :result :seconds :id :asked), and its
+body, after the lines of the permission events ASKED for it; it carries the id
+of its tool entry, or of its assistant entry before."
   (let* ((result (plist-get call :result))
          (args (plist-get (plist-get call :call) :args))
          (short (superchat-chat--args args)))
-    (superchat-chat--heading
+    (concat
+     ;; A line no call's body takes in: it ends the body of the call before.
+     (propertize (mapconcat #'superchat-chat--format (plist-get call :asked) "")
+                 'superchat-chat-loose level)
+     (superchat-chat--heading
      (string-join (delq nil (list (concat (make-string level ?*) " "
                                           (cond ((not result) "⏳")
                                                 ((plist-get (plist-get result :data) :error) "✗")
@@ -230,9 +235,11 @@ it carries the id of its tool entry, or of its assistant entry before."
                                             concat (format "%s %S\n" key value)))
                                   (string-trim-right (or (plist-get result :text) ""))))
                 "")
-     (plist-get (plist-get call :call) :id)
+     ;; The assistant entry's id too: a provider may give each response the
+     ;; same call ids.
+     (format "call %s %s" (plist-get call :id) (plist-get (plist-get call :call) :id))
      (plist-get (or result call) :id)
-     t)))
+     t))))
 
 (defun superchat-chat--answer (entry level)
   "The text of assistant ENTRY as Org, its headings from LEVEL or, with no
@@ -261,10 +268,11 @@ and carrying its id."
                                     (if (equal (plist-get data :type) "error") 'error 'shadow))))))
     (superchat-chat--seal string (plist-get entry :id))))
 
-(defun superchat-chat--process (answers results done)
+(defun superchat-chat--process (answers results asked done)
   "The Progress heading of the turn whose `assistant' entries other than the
 final answer are ANSWERS, and what it holds: their texts and calls.  RESULTS
-maps a call id to (TOOL ENTRY . SECONDS).  It is folded once the turn is DONE,
+maps a call id to (TOOL ENTRY . SECONDS), ASKED to the permission events asked
+for it.  It is folded once the turn is DONE,
 unless a call failed."
   (let (inside names waiting failed)
     (dolist (entry answers)
@@ -282,7 +290,8 @@ unless a call failed."
           (unless result (setq waiting t))
           (when (plist-get (plist-get (car result) :data) :error) (setq failed t))
           (push (superchat-chat--call (list :call call :result (car result) :seconds (cdr result)
-                                            :id (plist-get entry :id))
+                                            :id (plist-get entry :id)
+                                            :asked (gethash (plist-get call :id) asked))
                                       3)
                 inside))))
     (when inside
@@ -306,6 +315,8 @@ Assistant heading, Progress and, with a final answer or STREAMING, the Answer
 heading; TAIL is the final answer and the other entries.  Progress is folded
 once the final answer is there or the turn is OVER."
   (let* ((results (make-hash-table :test #'equal))
+         (asked (make-hash-table :test #'equal))
+         (waiting nil)
          (answers (seq-filter (lambda (e) (eq (plist-get e :kind) 'assistant)) entries))
          (final (car (last answers)))
          (final (and final (not (plist-get (plist-get final :data) :calls))
@@ -313,10 +324,17 @@ once the final answer is there or the turn is OVER."
                      final))
          (before nil))
     (dolist (entry entries)
-      (when (eq (plist-get entry :kind) 'tool)
-        (puthash (plist-get (plist-get entry :data) :call-id)
-                 (cons entry (if before (- (plist-get entry :at) (plist-get before :at)) 0))
-                 results))
+      (pcase (plist-get entry :kind)
+        ('assistant (setq waiting (append waiting (mapcar (lambda (c) (plist-get c :id))
+                                                          (plist-get (plist-get entry :data) :calls)))))
+        ('tool (let ((id (plist-get (plist-get entry :data) :call-id)))
+                 (setq waiting (remove id waiting))
+                 (puthash id (cons entry (if before (- (plist-get entry :at) (plist-get before :at)) 0))
+                          results)))
+        ;; Asked for the next call to run: the first that has no result yet.
+        ('event (when (and waiting (equal (plist-get (plist-get entry :data) :type) "permission"))
+                  (puthash (car waiting) (append (gethash (car waiting) asked) (list entry)) asked)
+                  (setq entries (remq entry entries)))))
       (setq before entry))
     (cl-flet ((others (user) (mapconcat #'superchat-chat--format
                                         (seq-filter (lambda (e) (eq (eq (plist-get e :kind) 'user) user))
@@ -328,43 +346,66 @@ once the final answer is there or the turn is OVER."
                     (when (or answers streaming)
                       (concat (superchat-chat--seal "* Assistant\n" (plist-get (car answers) :id))
                               (superchat-chat--process
-                               (seq-remove (lambda (e) (eq e final)) answers) results (or final over))
+                               (seq-remove (lambda (e) (eq e final)) answers) results asked
+                               (or final over))
                               (when (or final streaming)
                                 (superchat-chat--seal "** Answer\n" (plist-get final :id))))))
             (let ((tail (concat (when final
                                   (superchat-chat--seal (concat (superchat-chat--answer final 3) "\n\n")
                                                         (plist-get final :id)))
-                                (others nil))))
+                                ;; A line no heading's body takes in.
+                                (propertize (others nil) 'superchat-chat-loose 1))))
               ;; Streamed text has no end of line of its own.
               (if (and streaming (not (string-empty-p tail)))
                   (concat (superchat-chat--seal "\n\n") tail)
                 tail))))))
 
 (defun superchat-chat--folds (from to)
-  "The (POSITION KEY LENGTH FOLDED) of each heading between FROM and TO."
+  "The (POSITION KEY FOLDED) of each heading between FROM and TO, FOLDED being
+how it is shown by default."
   (let ((at from) folds)
     (while (setq at (text-property-not-all at to 'superchat-chat-fold nil))
       (push (cons at (get-text-property at 'superchat-chat-fold)) folds)
       (setq at (1+ at)))
     folds))
 
-(defun superchat-chat--eol (position)
-  "The end of the line of POSITION."
-  (save-excursion (goto-char position) (line-end-position)))
+(defun superchat-chat--body (at)
+  "The (START . END) of the body of the heading at AT as Org reckons it in the
+text now, ending before the first line that belongs to no heading as deep, or
+nil when it has none."
+  (save-excursion
+    (goto-char at)
+    (let* ((level (org-current-level))
+           (start (line-end-position))
+           (stop start))
+      ;; The separator and the input are no heading's body either.
+      (while (and (< stop (min (point-max) superchat-chat--block))
+                  (not (let ((loose (get-text-property stop 'superchat-chat-loose)))
+                         (and loose (<= loose level)))))
+        (setq stop (next-single-property-change stop 'superchat-chat-loose nil
+                                                (min (point-max) superchat-chat--block))))
+      (save-restriction
+        (narrow-to-region (point-min) stop)
+        (org-end-of-subtree t t)
+        (let ((end (if (and (bolp) (> (point) start)) (1- (point)) (point))))
+          (and (> end start) (cons start end)))))))
 
 (defun superchat-chat--choices (from to)
-  "The (KEY . FOLDED) of each heading between FROM and TO that the person
-folded or opened, against the way it was shown."
-  (cl-loop for (at key length folded) in (superchat-chat--folds from to)
-           for now = (and (> length 0) (org-fold-folded-p (superchat-chat--eol at)) t)
-           unless (or (= length 0) (eq now folded)) collect (cons key now)))
+  "The (KEY . FOLDED) of each heading in sight between FROM and TO that the
+person folded or opened, against the way it is shown by default."
+  (cl-loop for (at key folded) in (superchat-chat--folds from to)
+           for body = (superchat-chat--body at)
+           for now = (and body (org-fold-folded-p (car body)) t)
+           when (and body (not (invisible-p at)) (not (eq now folded)))
+           collect (cons key now)))
 
 (defun superchat-chat--fold (from to choices)
-  "Fold the headings between FROM and TO that fold by default or by CHOICES."
-  (pcase-dolist (`(,at ,key ,length ,folded) (superchat-chat--folds from to))
-    (when (and (> length 0) (if-let* ((choice (assoc key choices))) (cdr choice) folded))
-      (let ((eol (superchat-chat--eol at)))
-        (org-fold-region eol (+ eol length) t 'outline)))))
+  "Fold, by its key, each heading between FROM and TO that folds by default or
+by CHOICES: its body as Org reckons it now."
+  (pcase-dolist (`(,at ,key ,folded) (superchat-chat--folds from to))
+    (when-let* (((if-let* ((choice (assoc key choices))) (cdr choice) folded))
+                (body (superchat-chat--body at)))
+      (org-fold-region (car body) (cdr body) t 'outline))))
 
 (defun superchat-chat--edit (function)
   "Call FUNCTION with the buffer writable.  The user's point and that of every
@@ -432,10 +473,10 @@ heading the person folded or opened stays so, as do those of CHOICES."
        (erase-buffer)
        (dolist (turn (butlast turns))
          (let ((text (superchat-chat--turn-text turn nil t))) (insert (car text) (cdr text))))
-       (superchat-chat--fold (point-min) (point) choices)
        (dolist (marker (list superchat-chat--turn superchat-chat--stream
                              superchat-chat--stream-end superchat-chat--block))
          (set-marker marker (point)))
+       (superchat-chat--fold (point-min) (point) choices)
        (insert superchat-chat--prompt)
        (set-marker superchat-chat--input (point))
        (insert input)

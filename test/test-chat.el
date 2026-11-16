@@ -1224,5 +1224,102 @@ tool `echo', and no chat buffers left behind."
       (should (string-match-p "^⏸ queued: two$" (superchat-test-chat--waiting buffer)))
       (superchat-cancel "t1"))))
 
+(defun superchat-test-chat--hidden (buffer from to)
+  "The positions between FROM and TO in BUFFER that are invisible."
+  (with-current-buffer buffer
+    (cl-loop for at from from below to when (invisible-p at) collect at)))
+
+(defun superchat-test-chat--call-bodies (buffer)
+  "The (START . END) of the body of each call heading of BUFFER, by its text:
+from the end of the heading's line to the end of the line before the next
+heading."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (let (bodies)
+        (while (re-search-forward "^\\*\\*\\* [✓✗⏳] .*$" superchat-chat--block t)
+          (let ((start (point)))
+            (re-search-forward "^\\*" superchat-chat--block 'move)
+            (push (cons start (1- (line-beginning-position))) bodies)
+            (goto-char start)))
+        (nreverse bodies)))))
+
+(ert-deftest superchat-chat-a-redrawn-turn-folds-only-the-call-bodies ()
+  (superchat-test-chat--with
+    (let* ((org-fold-core-style 'overlays)
+           (buffer (superchat-chat-open "t1")) (asked 0) during
+           (answer (concat "Intro line\n# 笔记在哪\n| k | v |\n|---|---|\n"
+                           "| 1 | a |\n| 2 | b |\n| 3 | c |\n| 4 | d |\n| 5 | e |\n| 6 | f |\n\n"
+                           "# 你的进程\n- one\n- two\n- three\n## 下一步\n* x\n* y"))
+           (check (lambda ()
+                    ;; Each call's body is hidden, and nothing else of the entries.
+                    (let ((bodies (superchat-test-chat--call-bodies buffer)))
+                      (should (= (length bodies) 4))
+                      (should (equal (superchat-test-chat--hidden
+                                      buffer 1 (with-current-buffer buffer superchat-chat--block))
+                                     (cl-loop for (from . to) in bodies
+                                              append (number-sequence from (1- to))))))))
+           (superchat-llm-request-function
+            (lambda (_messages &rest keys)
+              (pcase (cl-incf asked)
+                (1 (funcall (plist-get keys :on-done)
+                            '(:text "" :calls ((:id "call_0" :name "echo" :args (:x "a"))
+                                               (:id "call_1" :name "echo" :args (:x "b"))
+                                               (:id "call_2" :name "echo" :args (:x "c")))
+                                    :model "m")))
+                (2 (funcall (plist-get keys :on-done)
+                            '(:text "Looking" :calls ((:id "call_0" :name "echo" :args (:x "d")))
+                                    :model "m")))
+                (_ (dolist (line (split-string answer "\n"))
+                     (funcall (plist-get keys :on-text) (concat line "\n")))
+                   (funcall check)
+                   (setq during t)
+                   (funcall (plist-get keys :on-done) (list :text answer :model "m"))))
+              (list :cancelled nil :finished nil :request nil))))
+      (with-current-buffer buffer (superchat-chat-send "go"))
+      (should during)
+      (with-current-buffer buffer
+        (let* ((answer-at (save-excursion (goto-char (point-min)) (search-forward "\n** Answer\n")))
+               (progress-eol (save-excursion (goto-char (point-min)) (search-forward "** Progress")
+                                             (line-end-position))))
+          ;; The whole Answer shows, its headings and its table included.
+          (should-not (superchat-test-chat--hidden buffer (- answer-at 10) superchat-chat--block))
+          (should (string-match-p "^\\*\\*\\* 你的进程$" (superchat-test-chat--visible buffer)))
+          (should (string-match-p "^| 6 | f |$" (superchat-test-chat--visible buffer)))
+          ;; Progress is folded: all of its body, and nothing before it.
+          (should-not (superchat-test-chat--hidden buffer (point-min) progress-eol))
+          (let ((hidden (superchat-test-chat--hidden buffer progress-eol (- answer-at 10))))
+            (should (> (length hidden) (- answer-at 10 progress-eol 3)))))))))
+
+(ert-deftest superchat-chat-a-permission-event-shows-before-its-call ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) seen)
+      (superchat-tool-define "put" :class 'write :description "Put" :args nil
+                             :function (lambda (_) "put done"))
+      (superchat-tool-define "peek" :class 'read :description "Peek" :args nil
+                             :function (lambda (_) (setq seen (superchat-test-chat--visible buffer)) "seen"))
+      (unwind-protect
+          (cl-letf (((symbol-function 'superchat-permission-ask) (lambda (&rest _) 'allow)))
+            (superchat-test-script
+                (list '(:text "" :calls ((:id "c1" :name "put" :args nil)
+                                         (:id "c2" :name "put" :args nil)
+                                         (:id "c3" :name "peek" :args nil)))
+                      '(:text "Done"))
+              (with-current-buffer buffer (superchat-chat-send "go"))))
+        (superchat-tool-remove "put")
+        (superchat-tool-remove "peek"))
+      (let ((event (plist-get (car (superchat-tape-entries :tape "t1" :kinds '(event))) :text))
+            (text (superchat-test-chat--d (superchat-test-chat--text buffer))))
+        ;; Each permission line comes just before its call, inside Progress.
+        (should (string-match-p
+                 (concat "\\`\\* You\ngo\n\n\\* Assistant\n\\*\\* Progress: 3 calls: put ×2, peek\n"
+                         (regexp-quote event) "\n\\*\\*\\* ✓ put  (Ds)\n#\\+begin_example\nput done\n#\\+end_example\n"
+                         (regexp-quote event) "\n\\*\\*\\* ✓ put  (Ds)\n")
+                 text))
+        (should (string-suffix-p "** Answer\nDone\n\n" text))
+        ;; While the turn runs each line shows, though the call before it is folded.
+        (should (= (length (split-string seen (regexp-quote event))) 3))
+        (should-not (string-match-p "put done" seen))))))
+
 (provide 'test-chat)
 ;;; test-chat.el ends here

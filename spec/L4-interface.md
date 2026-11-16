@@ -28,7 +28,10 @@ derived from `org-mode`.
     when it holds no call), N the calls in it, the names in order of first
     use and `×K` only when K > 1, `⏳ ` before `Progress` while a call of it
     has no result. Under it, in order, the intermediate texts, each followed
-    by its calls, each call a level 3 heading. An intermediate text is a
+    by its calls, each call a level 3 heading. A `permission` event of the
+    turn belongs to the call it was asked for, the first call of the turn
+    without a `tool` entry when the event came: it is a dimmed line just
+    before that call's heading. An intermediate text is a
     level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
     text cut to 60 characters and `…`, with the whole converted text as its
     body, open unless the person folds it; a text of one line has no body.
@@ -41,7 +44,9 @@ derived from `org-mode`.
     when that entry has no calls and some text, converted from Markdown to
     Org (the Tape keeps the Markdown). Answer is never folded but by the
     person;
-  - the turn's other entries, each as its own lines, in order.
+  - the turn's other entries (permission events but those tied to no
+    call, cancelled, error and level events, notes, anchors), each as its
+    own lines, in order.
   A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
   body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
   `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
@@ -90,7 +95,12 @@ derived from `org-mode`.
 - `TAB` on a heading of the entries toggles it by Org's own cycling, the
   read-only text notwithstanding; the subtree of the last heading ends where
   the input area's lines begin, which never fold. A heading the person
-  opened or closed stays so when its turn is drawn again.
+  opened or closed stays so when its turn is drawn again. Folds are put back
+  by each heading's identity only, never by a position or a length: each
+  hides that heading's body as Org reckons it in the text now, ending before
+  the first line that belongs to no heading as deep (a permission line ends
+  the body of the call before it, a line of the turn's other entries ends
+  every body); a heading no longer there has no fold.
 - Below the entries are a separator line and the prompt `❯ `, both
   read-only; the input area is everything after the prompt. Typing a
   self-inserting character with point above the input area moves point to
