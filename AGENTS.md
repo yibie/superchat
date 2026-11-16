@@ -10,8 +10,9 @@ write one line in `NOTES.md`, starting with the layer it concerns, and go on.
   specification and its decision notes. A need in another layer goes to
   `NOTES.md`.
 - A commit that changes a rule of a specification adds or updates a note
-  under `decisions/` in the same commit; `SPEC.md`, "Decisions", gives its
-  shape.
+  under `decisions/` in the same commit, or says `Decision: none — WHY` in
+  its message; `SPEC.md`, "Decisions", gives the shape. Run
+  `git config core.hooksPath scripts/hooks` once so the commit is checked.
 - Run `scripts/check.sh` before handing work back; `scripts/check.sh L1`
   runs the tests of one layer while you work. It must print `CHECK OK`. It
   runs in a copy under the temporary directory; never run the tests directly

@@ -223,7 +223,9 @@ of the table, the dependency arrows and the layer order, that no file uses a
 private name of a module of another layer, the banned forms of the rules
 against overflow, that every link in the specification files and decision
 notes leads to a file, that every specification file is within its word
-ceiling, and that every decision note has the shape "Decisions" gives. A test may use a private name of a module of its own layer. A use
+ceiling, and that every decision note has the shape "Decisions" gives.
+`scripts/check.sh` also shows `scripts/hooks/commit-msg` the invalid cases
+it must refuse. A test may use a private name of a module of its own layer. A use
 across layers that is not yet removed is listed, with its reason, in
 `scripts/gate-exceptions`; a line there that no longer matches anything is
 an error too, so the list only shrinks. Before it checks the repository,
@@ -239,8 +241,12 @@ holds what was decided.
 A commit that adds or changes a rule of a specification (behaviour, a public
 function, an entry or data format, a gate, a working rule) adds or updates a
 note in the same commit. A wording fix, a test, or a fix that makes the code
-do what the specification already says needs none. This is checked in
-review.
+do what the specification already says needs none; its message says so in a
+line `Decision: none — WHY`. `scripts/hooks/commit-msg` refuses a commit
+that changes `SPEC.md` or a `spec/` file with neither a file under
+`decisions/` nor that line; `git config core.hooksPath scripts/hooks` turns
+it on. Whether a note is needed, and whether a waiver's reason holds, is
+checked in review.
 
 A note is `decisions/STATE/LAYER/YYYY-MM-DD-topic.md`: STATE is `proposed`,
 `implemented` or `rejected`; LAYER is the layer it concerns, `L0` for this

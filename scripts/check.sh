@@ -18,6 +18,7 @@ INIT="(progn (require 'package) (setq package-user-dir \"$ELPA\" native-comp-ena
 fail=0
 # The gates read the repository itself: what they check is the files, not a run.
 "$EMACS" -Q --batch -l "$src/scripts/gates.el" "$src" 2>&1 || fail=1
+sh "$src/scripts/hooks/commit-msg" --self-test || fail=1
 mkdir "$work/elc"
 for f in *.el; do
   "$EMACS" -Q --batch --eval "$INIT" -L . -L bridge-lisp \

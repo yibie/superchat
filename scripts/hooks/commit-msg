@@ -1,0 +1,32 @@
+#!/bin/sh
+# A commit that changes a specification file brings a decision note, or says
+# in its message why it needs none.
+# usage: commit-msg MESSAGE-FILE   (git runs it; core.hooksPath is scripts/hooks)
+#        commit-msg --self-test    (scripts/check.sh runs it)
+
+# problems FILES MESSAGE: one line when FILES change a specification and
+# neither touch decisions/ nor MESSAGE has a "Decision: none — WHY" line.
+problems() {
+  printf '%s\n' "$1" | grep -qE '^(SPEC\.md|spec/[^/]*\.md)$' || return 0
+  printf '%s\n' "$1" | grep -q '^decisions/' && return 0
+  printf '%s\n' "$2" | grep -qE '^Decision: none — .' && return 0
+  echo 'NOTE the commit changes a specification but no note in decisions/;'
+  echo '     add one, or say why none is needed: "Decision: none — WHY"'
+}
+
+if [ "$1" = --self-test ]; then
+  fail=0
+  [ -n "$(problems 'spec/L1-memory.md' 'L1: x')" ] || { echo "GATE commit-msg accepts a spec change with no note"; fail=1; }
+  [ -n "$(problems 'SPEC.md' 'Decision: none')" ] || { echo "GATE commit-msg accepts a waiver with no reason"; fail=1; }
+  [ -z "$(problems 'spec/L1-memory.md
+decisions/implemented/L1/2026-01-01-x.md' 'L1: x')" ] || { echo "GATE commit-msg rejects a spec change with its note"; fail=1; }
+  [ -z "$(problems 'SPEC.md' 'L0: x
+
+Decision: none — wording')" ] || { echo "GATE commit-msg rejects a waiver with a reason"; fail=1; }
+  exit $fail
+fi
+
+out=$(problems "$(git diff --cached --name-only)" "$(grep -v '^#' "$1")")
+[ -z "$out" ] && exit 0
+echo "$out" >&2
+exit 1
