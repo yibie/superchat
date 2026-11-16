@@ -50,9 +50,16 @@ One query for the newest, because every tool call asks."
   (alist-get class (alist-get (superchat-permission-level tape)
                               superchat-permission--table)))
 
-(defun superchat-permission-ask (tool-name summary)
-  "Ask the user about TOOL-NAME doing SUMMARY: `allow', `deny' or `always'."
-  (funcall superchat-permission-ask-function tool-name summary))
+(defvar superchat-permission-asking nil
+  "While the user is asked: (:tape TAPE :tool NAME :summary SUMMARY).
+A run waiting for an answer looks like a slow tool unless the display can
+tell the two apart.")
+
+(defun superchat-permission-ask (tool-name summary &optional tape)
+  "Ask the user about TOOL-NAME doing SUMMARY: `allow', `deny' or `always'.
+TAPE is the timeline the call belongs to."
+  (let ((superchat-permission-asking (list :tape tape :tool tool-name :summary summary)))
+    (funcall superchat-permission-ask-function tool-name summary)))
 
 (provide 'superchat-permission)
 ;;; superchat-permission.el ends here

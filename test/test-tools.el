@@ -208,6 +208,7 @@
                ;; The question names the tool; the summary is the call's arguments.
                (should-not (string-match-p (regexp-quote tool) summary))
                (should (string-prefix-p "(:" summary))
+               (should (equal (plist-get superchat-permission-asking :tape) "t"))
                (cl-incf asks) (pop answers))))
         (should (string-match-p "Permission denied" (superchat-test-tools--err "eval_elisp" :code "1")))
         (should (equal (superchat-test-tools--ok "eval_elisp" :code "1") "1"))

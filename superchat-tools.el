@@ -104,7 +104,7 @@ A read outside SCOPE is decided as a write: the user agrees to it first."
          (key (cons tape name))
          (answer (cond ((not (eq decision 'ask)) decision)
                        ((gethash key superchat-tools--always) 'always)
-                       (t (superchat-permission-ask name (superchat-tools--summary args)))))
+                       (t (superchat-permission-ask name (superchat-tools--summary args) tape))))
          (allowed (memq answer '(allow always))))
     (when (eq answer 'always) (puthash key t superchat-tools--always))
     (unless (eq decision 'allow)

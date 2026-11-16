@@ -44,6 +44,19 @@
         (should (eq (superchat-permission-ask "shell" "ls") answer))))
     (should (equal (car seen) '("shell" "ls")))))
 
+(ert-deftest superchat-permission-asking-names-the-question-while-it-waits ()
+  (let (seen)
+    (let ((superchat-permission-ask-function
+           (lambda (&rest _) (setq seen superchat-permission-asking) 'allow)))
+      (should (eq (superchat-permission-ask "shell" "ls" "t") 'allow)))
+    (should (equal seen '(:tape "t" :tool "shell" :summary "ls")))
+    (should-not superchat-permission-asking)
+    (let ((superchat-permission-ask-function (lambda (&rest _) (signal 'quit nil))))
+      (should (eq (condition-case nil (superchat-permission-ask "shell" "ls" "t")
+                    (quit 'quit))
+                  'quit)))
+    (should-not superchat-permission-asking)))
+
 (ert-deftest superchat-permission-level-is-one-query-for-the-newest-level ()
   (superchat-test-with-tape
     (superchat-tape-append "t" 'user "hi" :scope "home")

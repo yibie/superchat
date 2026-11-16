@@ -116,10 +116,14 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
 - `(superchat-permission-set TAPE LEVEL)`: append that event. A LEVEL that
   is not one of the three is an error.
 - `(superchat-permission-decide TAPE CLASS)` → `allow`, `deny` or `ask`.
-- `(superchat-permission-ask TOOL-NAME SUMMARY)` → `allow`, `deny` or
-  `always`, by calling `superchat-permission-ask-function` (a `defvar`). The
-  default reads one key in the minibuffer: y, n, or a for "always in this
-  conversation".
+- `(superchat-permission-ask TOOL-NAME SUMMARY &optional TAPE)` → `allow`,
+  `deny` or `always`, by calling `superchat-permission-ask-function` (a
+  `defvar`) with TOOL-NAME and SUMMARY. The default reads one key in the
+  minibuffer: y, n, or a for "always in this conversation".
+- `superchat-permission-asking` (a `defvar`): while that function runs,
+  `(:tape TAPE :tool TOOL-NAME :summary SUMMARY)`, else nil, also after it
+  signalled; so what shows a run can say that it waits for the person's
+  answer, not for the tool. `superchat-tool-call` gives its TAPE.
 
 ## superchat-tools.el
 
