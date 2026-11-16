@@ -24,10 +24,10 @@ derived from `org-mode`.
     heading;
   - under it, Progress, when the turn has a call or an intermediate text
     (the text of an `assistant` entry other than the final answer): one
-    heading `** Progress: N calls: NAME ×K, ...` (`1 call`; `** Progress`
-    when it holds no call), N the calls in it, the names in order of first
-    use and `×K` only when K > 1, `⏳ ` before `Progress` while a call of it
-    has no result. Under it, in order, the intermediate texts, each followed
+    heading `** Progress  STRIP  N calls, K failed` (`1 call`; `, K failed`
+    only when K > 0; `** Progress` when it holds no call), N the calls in
+    it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
+    while a call of it has no result. Under it, in order, the intermediate texts, each followed
     by its calls, each call a level 3 heading. A `permission` event of the
     turn belongs to the call it was asked for, the first call of the turn
     without a `tool` entry when the event came: it is a dimmed line just
@@ -47,6 +47,12 @@ derived from `org-mode`.
   - the turn's other entries (permission events but those tied to no
     call, cancelled, error and level events, notes, anchors), each as its
     own lines, in order.
+  The strip of a turn is one cell for each of its calls and intermediate
+  texts, in order: `•` in `shadow` for an intermediate text, `▮` for a
+  call, in `shadow` once it has a `tool` entry, in `error` when that entry
+  has `:error`, in `default` while it has none. Over 60 cells it is `…`
+  and the last 59. Its colours show in the heading too, over Org's face for
+  the heading.
   A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
   body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
   `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
@@ -148,9 +154,15 @@ derived from `org-mode`.
   still running; C-c C-k cancels it` while a handoff is pending.
 - While the timeline is busy (a run or a handoff) the mode line shows
   `[running Ns]`, N the whole seconds since it began. While a run is active
-  a waiting line just above the separator shows a spinner and the seconds
-  since the latest entry: `⠋ NAME running… Ns` while a call of the turn has
-  no result (the first such), else `⠋ thinking… Ns`. It is an overlay, not
+  a waiting line just above the separator shows the strip of the current
+  turn on a line of its own, when the turn has a call, then a spinner and
+  the seconds since the latest entry: `⠋ NAME running… Ns` while a call of
+  the turn has no result (the first such), else `⠋ thinking… Ns`. While
+  the person is asked about a call of this timeline
+  (`superchat-permission-asking`), the cell of that call, the first with no
+  result, is `⏸` in `warning`, and the spinner's line is, in `warning`,
+  `⏸ waiting for your answer (minibuffer): NAME SUMMARY — y/n/a`, SUMMARY
+  cut to 60 characters and `…`. It is an overlay, not
   text of the buffer and not an entry; a timer of the buffer updates it and
   the mode line, and is cancelled when the run ends or the buffer is
   killed; the line is gone when the run ends.

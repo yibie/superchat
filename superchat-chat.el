@@ -284,13 +284,44 @@ and carrying its id."
                                     (if (equal (plist-get data :type) "error") 'error 'shadow))))))
     (superchat-chat--seal string (plist-get entry :id))))
 
-(defun superchat-chat--process (answers results asked done)
+(defun superchat-chat--strip (entries &optional asking)
+  "One cell for each call and intermediate text of the turn ENTRIES, coloured
+by how it went; with ASKING, the first call with no result waits for the
+person.  Each cell carries its face twice: Org's heading face would hide it."
+  (let ((results (make-hash-table :test #'equal)) cells open)
+    (dolist (entry entries)
+      (when (eq (plist-get entry :kind) 'tool)
+        (puthash (plist-get (plist-get entry :data) :call-id) entry results)))
+    (cl-flet ((cell (char face) (push (propertize char 'face face 'superchat-chat-cell face) cells)))
+      (dolist (entry entries)
+        ;; An entry with calls is never the final answer.
+        (when-let* ((calls (and (eq (plist-get entry :kind) 'assistant)
+                                (plist-get (plist-get entry :data) :calls))))
+          (unless (string-empty-p (string-trim (plist-get entry :text))) (cell "•" 'shadow))
+          (dolist (call calls)
+            (let ((result (gethash (plist-get call :id) results)))
+              (cond ((plist-get (plist-get result :data) :error) (cell "▮" 'error))
+                    (result (cell "▮" 'shadow))
+                    ((and asking (not open)) (cell "⏸" 'warning))
+                    (t (cell "▮" 'default)))
+              (unless result (setq open t)))))))
+    (setq cells (nreverse cells))
+    (apply #'concat (if (> (length cells) 60) (cons "…" (last cells 59)) cells))))
+
+(defun superchat-chat--cells (limit)
+  "Font-lock matcher: the next run of strip cells of one face before LIMIT."
+  (when-let* ((at (text-property-not-all (point) limit 'superchat-chat-cell nil)))
+    (goto-char (next-single-property-change at 'superchat-chat-cell nil limit))
+    (set-match-data (list at (point)))
+    t))
+
+(defun superchat-chat--process (answers results asked done strip)
   "The Progress heading of the turn whose `assistant' entries other than the
 final answer are ANSWERS, and what it holds: their texts and calls.  RESULTS
 maps a call id to (TOOL ENTRY . SECONDS), ASKED to the permission events asked
-for it.  It is folded once the turn is DONE,
+for it; STRIP is the turn's strip.  It is folded once the turn is DONE,
 unless a call failed."
-  (let (inside names waiting failed)
+  (let ((calls 0) (failed 0) inside waiting)
     (dolist (entry answers)
       (unless (string-empty-p (string-trim (plist-get entry :text)))
         ;; A heading of its own: after a call, it is not taken into the call's subtree.
@@ -302,9 +333,9 @@ unless a call failed."
                 inside)))
       (dolist (call (plist-get (plist-get entry :data) :calls))
         (let ((result (gethash (plist-get call :id) results)))
-          (push (plist-get call :name) names)
+          (cl-incf calls)
           (unless result (setq waiting t))
-          (when (plist-get (plist-get (car result) :data) :error) (setq failed t))
+          (when (plist-get (plist-get (car result) :data) :error) (cl-incf failed))
           (push (superchat-chat--call (list :call call :result (car result) :seconds (cdr result)
                                             :id (plist-get entry :id)
                                             :asked (gethash (plist-get call :id) asked))
@@ -313,16 +344,13 @@ unless a call failed."
     (when inside
       (superchat-chat--heading
        (concat "** " (and waiting "⏳ ") "Progress"
-               (when names
-                 (format ": %d call%s: %s" (length names) (if (cdr names) "s" "")
-                         (mapconcat (lambda (name)
-                                      (let ((k (seq-count (apply-partially #'equal name) names)))
-                                        (if (> k 1) (format "%s ×%d" name k) name)))
-                                    (seq-uniq (reverse names)) ", "))))
+               (when (> calls 0)
+                 (format "  %s  %d call%s%s" strip calls (if (= calls 1) "" "s")
+                         (if (> failed 0) (format ", %d failed" failed) ""))))
        (concat "\n" (string-remove-suffix "\n" (apply #'concat (nreverse inside))))
        (format "progress %s" (plist-get (car answers) :id))
        (plist-get (car answers) :id)
-       (and done (not failed))))))
+       (and done (= failed 0))))))
 
 (defun superchat-chat--turn-text (entries streaming over)
   "The text of ENTRIES, one turn, as (HEAD . TAIL); streamed text goes between.
@@ -363,7 +391,7 @@ once the final answer is there or the turn is OVER."
                       (concat (superchat-chat--seal "* Assistant\n" (plist-get (car answers) :id))
                               (superchat-chat--process
                                (seq-remove (lambda (e) (eq e final)) answers) results asked
-                               (or final over))
+                               (or final over) (superchat-chat--strip entries))
                               (when (or final streaming)
                                 (superchat-chat--seal "** Answer\n" (plist-get final :id))))))
             (let ((tail (concat (when final
@@ -509,17 +537,28 @@ heading the person folded or opened stays so, as do those of CHOICES."
     (format "*superchat: %s*" (if first (superchat-chat--line (plist-get first :text) 40) "new"))))
 
 (defun superchat-chat--waiting-line (now)
-  "The waiting line of the current turn at time NOW."
-  (let* ((answered (delq nil (mapcar (lambda (e) (and (eq (plist-get e :kind) 'tool)
+  "The waiting line of the current turn at time NOW, its strip above it.
+A question to the person looks like a slow tool unless it says so."
+  (let* ((asking (and (equal (plist-get superchat-permission-asking :tape) superchat-chat--tape)
+                      superchat-permission-asking))
+         (strip (superchat-chat--strip superchat-chat--entries asking))
+         (answered (delq nil (mapcar (lambda (e) (and (eq (plist-get e :kind) 'tool)
                                                       (plist-get (plist-get e :data) :call-id)))
                                      superchat-chat--entries)))
          (call (seq-find (lambda (c) (not (member (plist-get c :id) answered)))
                          (mapcan (lambda (e) (copy-sequence (plist-get (plist-get e :data) :calls)))
                                  superchat-chat--entries))))
-    (propertize (format "%c %s %ds\n" (aref "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" (mod (floor (* now 10)) 10))
-                        (if call (format "%s running…" (plist-get call :name)) "thinking…")
-                        (- now (or (plist-get (car (last superchat-chat--entries)) :at) now)))
-                'face 'shadow)))
+    (concat
+     (unless (string-empty-p strip) (concat strip "\n"))
+     (if asking
+         (propertize (format "⏸ waiting for your answer (minibuffer): %s %s — y/n/a\n"
+                             (plist-get asking :tool)
+                             (superchat-chat--cut (plist-get asking :summary) 60))
+                     'face 'warning)
+       (propertize (format "%c %s %ds\n" (aref "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" (mod (floor (* now 10)) 10))
+                           (if call (format "%s running…" (plist-get call :name)) "thinking…")
+                           (- now (or (plist-get (car (last superchat-chat--entries)) :at) now)))
+                   'face 'shadow)))))
 
 (defun superchat-chat--queued-line ()
   "The line that shows the queue, or nil when it is empty."
@@ -764,6 +803,9 @@ separator, so the prompt and the input never fold."
         superchat-chat--input (point-min-marker)
         superchat-chat--answers (make-hash-table :test #'equal)
         superchat-chat--waiting (make-overlay (point-min) (point-min)))
+  (font-lock-add-keywords
+   nil '((superchat-chat--cells (0 (get-text-property (match-beginning 0) 'superchat-chat-cell) t)))
+   'append)
   (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t))
 
 ;;; Opening
