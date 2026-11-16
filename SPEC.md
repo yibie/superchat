@@ -61,7 +61,7 @@ Dependencies go one way only:
 ```
 inline → chat
 chat → agent, plugin, recall
-agent → llm, tools, view, context
+agent → llm, tools, recall, view, context
 recall → tools, view
 context → view
 tools → permission

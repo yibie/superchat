@@ -2,7 +2,9 @@
 
 Part of the [specification](../SPEC.md). Modules: `superchat-context.el`,
 `superchat-agent.el`. This layer is the AI layer of Emacs: any package asks
-a model through `superchat-run`. It uses L1 and L2.
+a model through `superchat-run`. It uses L1 and L2. A package that requires
+`superchat-agent` and nothing else gets every built-in tool, `recall`,
+`tape_query` and `note` among them.
 
 ## superchat-context.el
 

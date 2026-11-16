@@ -15,6 +15,7 @@
 (require 'superchat)
 (require 'superchat-llm)
 (require 'superchat-tools)
+(require 'superchat-recall)
 (require 'superchat-view)
 (require 'superchat-context)
 

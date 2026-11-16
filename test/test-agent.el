@@ -1887,5 +1887,22 @@ ones never answer.  Each handle is a fresh list."
       (should-error (superchat-fork "t" (plist-get other :id)))
       (should-error (superchat-fork "t" 0)))))
 
+(ert-deftest superchat-test-agent-alone-has-memory-tools ()
+  "A package that requires only `superchat-agent' can recall and keep notes.
+Run in a fresh Emacs: in this one another test file may have loaded them."
+  (let ((dirs (mapcar (lambda (f) (file-name-directory (locate-library f)))
+                      '("superchat-agent" "superchat-bridge"))))
+    (with-temp-buffer
+      (should (= 0 (apply #'call-process
+                          (expand-file-name invocation-name invocation-directory)
+                          nil t nil "-Q" "--batch"
+                          (append
+                           (mapcan (lambda (d) (list "-L" d)) dirs)
+                           (list "--eval"
+                                 (concat "(progn (require 'superchat-agent) (prin1"
+                                         " (mapcar (lambda (s) (and (plist-get s :description) t))"
+                                         " (superchat-tool-specs '(\"recall\" \"tape_query\" \"note\")))))"))))))
+      (should (equal "(t t t)" (string-trim (buffer-string)))))))
+
 (provide 'test-agent)
 ;;; test-agent.el ends here
