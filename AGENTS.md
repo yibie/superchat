@@ -6,8 +6,12 @@ of the layer you work in, all of it. Of a lower layer read only the public
 functions you call. Build only what they name. When something seems missing,
 write one line in `NOTES.md`, starting with the layer it concerns, and go on.
 
-- Work in one layer at a time: edit only its files, their tests and its
-  specification. A need in another layer goes to `NOTES.md`.
+- Work in one layer at a time: edit only its files, their tests, its
+  specification and its decision notes. A need in another layer goes to
+  `NOTES.md`.
+- A commit that changes a rule of a specification adds or updates a note
+  under `decisions/` in the same commit; `SPEC.md`, "Decisions", gives its
+  shape.
 - Run `scripts/check.sh` before handing work back; `scripts/check.sh L1`
   runs the tests of one layer while you work. It must print `CHECK OK`. It
   runs in a copy under the temporary directory; never run the tests directly

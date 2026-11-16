@@ -151,6 +151,70 @@ EXISTS says if an absolute path is there."
           (push (format "LINK %s: %s leads to no file" file target) problems))))
     (nreverse problems)))
 
+(defun gates-ceilings (spec)
+  "The word ceilings of SPEC as an alist from file to ceiling."
+  (let (rows (start 0))
+    (while (string-match "^| `\\([^`]+\\.md\\)` | \\([0-9]+\\) words |" spec start)
+      (push (cons (match-string 1 spec) (string-to-number (match-string 2 spec))) rows)
+      (setq start (match-end 0)))
+    (nreverse rows)))
+
+(defun gates-words (ceilings texts)
+  "Problems of TEXTS, an alist from file to its text or nil when it is gone,
+against CEILINGS: over a ceiling, a tenth under one, a file with none."
+  (let (problems)
+    (dolist (f texts)
+      (let ((cap (cdr (assoc (car f) ceilings)))
+            (n (and (cdr f) (length (split-string (cdr f) nil t)))))
+        (cond ((not (cdr f)) (push (format "WORDS %s has a ceiling but is gone" (car f)) problems))
+              ((not cap) (push (format "WORDS %s has no ceiling in SPEC.md" (car f)) problems))
+              ((> n cap)
+               (push (format "WORDS %s: %d words, ceiling %d; move, then compress, then raise"
+                             (car f) n cap)
+                     problems))
+              ((> cap (* 1.1 n))
+               (push (format "WORDS %s: %d words, ceiling %d; lower it to %d"
+                             (car f) n cap (ceiling (* 1.05 n)))
+                     problems)))))
+    (nreverse problems)))
+
+(defconst gates--note-sections
+  '(("proposed" ("Problem" "Proposal" "Alternatives considered" "Acceptance criteria" "Risks"))
+    ("implemented" ("Problem" "Decision" "Alternatives considered" "Consequences")
+     ("Proposal" "Plan" "Acceptance criteria"))
+    ("rejected" ("Problem" "Proposal" "Alternatives considered")))
+  "For each state of a decision note: the sections it has, the sections it may not.")
+
+(defun gates-note (file text)
+  "Problems of the decision note TEXT at FILE, a path under the root."
+  (if (not (string-match (concat "\\`decisions/\\(proposed\\|implemented\\|rejected\\)/L[0-4]/"
+                                 "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}-[a-z0-9-]+\\.md\\'")
+                         file))
+      (list (format "NOTE %s: not decisions/STATE/LAYER/YYYY-MM-DD-topic.md" file))
+    (let* ((state (match-string 1 file))
+           (lines (split-string text "\n"))
+           (heads (cl-loop for l in lines when (string-match "^## \\(.+\\)" l)
+                           collect (string-trim (match-string 1 l))))
+           (rule (cdr (assoc state gates--note-sections)))
+           problems)
+      (unless (string-match-p "\\`# Decision: ." (nth 0 lines))
+        (push (format "NOTE %s: line 1 is not # Decision: TITLE" file) problems))
+      (unless (and (equal (nth 1 lines) "") (equal (nth 3 lines) ""))
+        (push (format "NOTE %s: line 2 or 4 is not empty" file) problems))
+      (unless (string-match-p (if (equal state "rejected") "\\`Status: rejected — ."
+                                (concat "\\`Status: " state "\\'"))
+                              (or (nth 2 lines) ""))
+        (push (format "NOTE %s: line 3 is not the status of %s/" file state) problems))
+      (unless (equal (car heads) "Problem")
+        (push (format "NOTE %s: the first section is not ## Problem" file) problems))
+      (dolist (h (car rule))
+        (unless (member h heads)
+          (push (format "NOTE %s: no ## %s" file h) problems)))
+      (dolist (h (cadr rule))
+        (when (member h heads)
+          (push (format "NOTE %s: ## %s is not allowed in a %s note" file h state) problems)))
+      (nreverse problems))))
+
 (defun gates--self-test ()
   "Show every gate an invalid case; the names of those that accept it."
   (let* ((modules '(("superchat.el" "L0" 120) ("superchat-tape.el" "L1" 10)
@@ -170,7 +234,18 @@ EXISTS says if an absolute path is there."
                                   nil))
                   ("stale exception" . ,(gates-exceptions nil '("a.el superchat-x--y why")))
                   ("banned" . ,(gates-banned "superchat-tape.el" "(defcustom x 1 \"\")"))
-                  ("links" . ,(gates-links "SPEC.md" "[a](spec/none.md)" #'ignore)))
+                  ("links" . ,(gates-links "SPEC.md" "[a](spec/none.md)" #'ignore))
+                  ("words over" . ,(gates-words '(("a.md" . 2)) '(("a.md" . "x y z"))))
+                  ("words under" . ,(gates-words '(("a.md" . 20)) '(("a.md" . "x y z"))))
+                  ("words none" . ,(gates-words nil '(("a.md" . "x"))))
+                  ("words gone" . ,(gates-words '(("a.md" . 2)) '(("a.md"))))
+                  ("note path" . ,(gates-note "decisions/done/L1/x.md" ""))
+                  ("note status" . ,(gates-note "decisions/rejected/L1/2026-01-01-x.md"
+                                                "# Decision: x\n\nStatus: rejected\n\n## Problem\n## Proposal\n## Alternatives considered"))
+                  ("note plan" . ,(gates-note "decisions/implemented/L1/2026-01-01-x.md"
+                                              "# Decision: x\n\nStatus: implemented\n\n## Problem\n## Decision\n## Alternatives considered\n## Consequences\n## Plan"))
+                  ("note sections" . ,(gates-note "decisions/proposed/L1/2026-01-01-x.md"
+                                                  "# Decision: x\n\nStatus: proposed\n\n## Problem\n## Proposal\n## Acceptance criteria\n## Risks")))
              unless problems collect name)))
 
 (defun gates-run (root)
@@ -185,6 +260,11 @@ EXISTS says if an absolute path is there."
          (docs (cons "SPEC.md" (mapcar (lambda (f) (concat "spec/" f))
                                        (directory-files (expand-file-name "spec" gates-root)
                                                         nil "\\.md\\'"))))
+         (notes (let ((dir (expand-file-name "decisions" gates-root)))
+                  (when (file-directory-p dir)
+                    (mapcar (lambda (f) (file-relative-name f gates-root))
+                            (directory-files-recursively dir "\\.md\\'")))))
+         (ceilings (gates-ceilings spec))
          (listed (cl-remove-if (lambda (l) (or (string-empty-p l) (string-prefix-p "#" l)))
                                (split-string (gates--read "scripts/gate-exceptions") "\n")))
          (problems
@@ -203,9 +283,16 @@ EXISTS says if an absolute path is there."
                                       when (gates--layer f modules)
                                       append (gates-privates f (gates--read f) modules))
                              listed)
-           (cl-loop for d in docs
+           (cl-loop for d in (append docs notes)
                     append (gates-links d (gates--read d)
-                                        #'file-exists-p)))))
+                                        #'file-exists-p))
+           (gates-words ceilings
+                        (mapcar (lambda (f)
+                                  (cons f (and (file-exists-p (expand-file-name f gates-root))
+                                               (gates--read f))))
+                                (cl-union (cons "AGENTS.md" docs) (mapcar #'car ceilings)
+                                          :test #'equal)))
+           (cl-loop for n in notes append (gates-note n (gates--read n))))))
     (let ((total (cl-loop for f in files sum (with-temp-buffer
                                                (insert-file-contents (expand-file-name f gates-root))
                                                (count-lines (point-min) (point-max))))))

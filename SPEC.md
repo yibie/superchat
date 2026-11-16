@@ -33,7 +33,8 @@ functions and variables of the layers below it, never one of their private
 
 Work in one layer reads this file and that layer's specification, all of
 them, and of the layers below only the public functions it calls. It edits
-only the files of that layer, their tests and its specification. A need in
+only the files of that layer, their tests, its specification and its
+decision notes (`decisions/*/LAYER/`). A need in
 another layer is one line in `NOTES.md`, starting with that layer's name.
 
 ## Modules
@@ -85,6 +86,20 @@ points to require. A file requires nothing else, and
   or later (`LICENSE`); `superchat.el` says so in its header.
 - Every file starts with `;;; NAME.el --- ... -*- lexical-binding: t; -*-` and
   byte-compiles with no warnings.
+- Each specification file has a word ceiling, counted as `wc -w` counts.
+  Over a ceiling, first move text to its one home, then compress; raise the
+  ceiling only when neither works, and say why in the commit. More than a
+  tenth under its ceiling, a file's ceiling is lowered to 5% above its count.
+  The ceilings guard against growth; they are not targets to reach.
+
+| file | ceiling |
+|---|---|
+| `AGENTS.md` | 380 words |
+| `SPEC.md` | 2400 words |
+| `spec/L1-memory.md` | 1070 words |
+| `spec/L2-capabilities.md` | 3750 words |
+| `spec/L3-agent.md` | 2240 words |
+| `spec/L4-interface.md` | 3400 words |
 
 ## Rules against overflow
 
@@ -206,9 +221,44 @@ of that layer's modules. The gates check what can be checked by reading the
 files: the caps and the total, that every `.el` file at the root is a module
 of the table, the dependency arrows and the layer order, that no file uses a
 private name of a module of another layer, the banned forms of the rules
-against overflow, and that every link in the specification files leads to a
-file. A test may use a private name of a module of its own layer. A use
+against overflow, that every link in the specification files and decision
+notes leads to a file, that every specification file is within its word
+ceiling, and that every decision note has the shape "Decisions" gives. A test may use a private name of a module of its own layer. A use
 across layers that is not yet removed is listed, with its reason, in
 `scripts/gate-exceptions`; a line there that no longer matches anything is
 an error too, so the list only shrinks. Before it checks the repository,
 each gate is shown an invalid case and must reject it.
+
+## Decisions
+
+A decision note says why a rule of the specification is what it is and what
+it beat. The specification states the rule; the note keeps the reason, so
+the rule is not argued again. `NOTES.md` holds what seems missing; a note
+holds what was decided.
+
+A commit that adds or changes a rule of a specification (behaviour, a public
+function, an entry or data format, a gate, a working rule) adds or updates a
+note in the same commit. A wording fix, a test, or a fix that makes the code
+do what the specification already says needs none. This is checked in
+review.
+
+A note is `decisions/STATE/LAYER/YYYY-MM-DD-topic.md`: STATE is `proposed`,
+`implemented` or `rejected`; LAYER is the layer it concerns, `L0` for this
+file, the gates and the way of working; the date is the day it was first
+proposed. Its first line is `# Decision: TITLE`, its third `Status: STATE`
+(`Status: rejected — WHY` for a rejected one), lines two and four empty. Its
+first section is `## Problem`. A proposed note has `## Proposal`,
+`## Alternatives considered`, `## Acceptance criteria` and `## Risks`; an
+implemented one `## Decision`, `## Alternatives considered` and
+`## Consequences`, and no `## Proposal`, `## Plan` or
+`## Acceptance criteria`; a rejected one `## Proposal` and
+`## Alternatives considered`.
+
+Alternatives come from the record (the conversation, the commit,
+`NOTES.md`), never invented; when none was weighed, the section says so. A
+proposal that is built moves to `implemented/` and is rewritten in the
+present tense, its acceptance criteria and risks folded into the
+consequences. An implemented note follows the code's facts (names, paths,
+defaults) but is never edited into another decision: a reversal is a new
+note whose alternatives name the old decision, and the old note is deleted
+in the same commit.
