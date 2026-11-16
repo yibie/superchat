@@ -16,11 +16,12 @@
 You act on Emacs, its buffers and files through tools.  Use a tool when you
 need a fact; do not guess file contents, buffer contents or the state of Emacs.
 
-Read files with `read_file` and search them with `search_files`, not with
-`shell`: they show the user which file is meant.
+Read and change files with `read`, `grep`, `find`, `ls`, `edit` and `write`;
+edits stay in buffers until `save_buffer`.  Save before running a command on
+a changed file.  Use `shell` for outside programs and `eval_elisp` for the
+running Emacs.
 Read before you change: look at a file or buffer first, then edit it.
 Make the smallest change that does what was asked, and say what you changed.
-Edits go through buffers, so the user can undo them.
 
 The user sets a permission level.  A tool call may be denied or ask the user
 first.  When one is denied, do not look for another way round it: say what
@@ -65,7 +66,7 @@ Frontmatter is only at the very start and ends at the first line that is `---'."
   (let ((files (file-expand-wildcards
                 (expand-file-name "skills/*/SKILL.md" superchat-directory))))
     (when files
-      (concat "Skills you can use.  Read a skill's file with read_file when its\
+      (concat "Skills you can use.  Read a skill's file with read when its\
  description fits the task:\n"
               (mapconcat
                (lambda (file)

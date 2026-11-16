@@ -14,7 +14,7 @@ a model through `superchat-run`. It uses L1 and L2.
   3. the skills catalog: for each `NAME/SKILL.md` under
      `superchat-directory`/`skills/`, its name and the `description:` line of
      its frontmatter, with the path, so the model reads the file with
-     `read_file` when it wants it. A file whose first `---` line is never
+     `read` when it wants it. A file whose first `---` line is never
      closed has no frontmatter;
   4. the `notes` view of the scope, newest first, rendered, at most 2000
      characters;
