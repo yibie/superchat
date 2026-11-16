@@ -978,10 +978,10 @@
     (dotimes (i 5)
       (superchat-tape-append
        "t" 'assistant "" :data (list :model "m"
-                                     :calls (list (list :id (format "w%d" i) :name "write_file"
+                                     :calls (list (list :id (format "w%d" i) :name "write"
                                                         :args (list :content (make-string 100000 ?q))))))
       (superchat-tape-append "t" 'tool "Wrote."
-                             :data (list :call-id (format "w%d" i) :name "write_file")))
+                             :data (list :call-id (format "w%d" i) :name "write")))
     (superchat-tape-append "t" 'assistant "done" :data '(:model "m"))
     (superchat-test-script (list '(:text "SUM") '(:text "ok"))
       (superchat-run "t" "next")

@@ -57,7 +57,7 @@ model has no window in the data.  A number is used as it is."
   "How many model responses one run may take."
   :type 'natnum)
 
-(defcustom superchat-tool-max-chars 20000
+(defcustom superchat-tool-max-chars 51200
   "How long a tool's result may be before it is cut."
   :type 'natnum)
 

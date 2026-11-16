@@ -174,7 +174,7 @@ a model id of that provider such as `"deepseek-flash"`; required),
 `superchat-llm-reasoning` (nil: the model does not reason; else one of the bridge's
 thinking levels `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, a symbol,
 which the bridge clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
-(nil: follow the model's context window; or a number of characters), `superchat-max-rounds` (40), `superchat-tool-max-chars` (20000),
+(nil: follow the model's context window; or a number of characters), `superchat-max-rounds` (40), `superchat-tool-max-chars` (51200),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
 ## Tests

@@ -136,7 +136,7 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   message: `(funcall DONE nil "what went wrong")`. A signal raised
   before it returns counts as an error result, also when DONE was already
   called: the signal is the result. Emacs stays usable while an
-  asynchronous tool runs. `shell` and `search_files` are asynchronous; the
+  asynchronous tool runs. `shell` and `grep` are asynchronous; the
   others are plain Lisp and return at once (`eval_elisp` runs Lisp, which
   cannot be made asynchronous: `C-g` interrupts it).
 - `superchat-tool-tape` (a `defvar`): bound to the timeline name while a
@@ -171,26 +171,40 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   `Interrupted by the user.`
 - `superchat-tool-call` remembers an `always` answer for that tool name in
   that timeline until Emacs exits, in a hash table, not on the Tape.
-- Results longer than `superchat-tool-max-chars` (20000) are cut, and the
-  text says how many characters were left out.
+- Results longer than `superchat-tool-max-chars` (51200) are cut, and the
+  text says how many characters were left out. A tool that cuts its own
+  output keeps its text within that limit less a quarter of it, at most 1000 characters, the room
+  left for its notices, so that this cut never takes a notice.
+- A notice is one line in brackets. A tool's notices follow its text after
+  a blank line, one a line; with no text they are the whole result. A
+  notice of a cut names the call that gets what was left out.
 - A tool that reads from a process never holds more of its output than a
-  few times `superchat-tool-max-chars`: past that the process is stopped
-  and the result says the output was cut there. A process buffer is killed
-  whatever happens, also when the process cannot be started.
+  few times `superchat-tool-max-chars`: past that `grep` is stopped and
+  `shell` writes what lies before the tail it keeps to its file. A process
+  buffer is killed whatever happens, also when the process cannot be
+  started.
 
 Built-in tools, and no others:
 
 | name | class | arguments | does |
 |---|---|---|---|
-| `read_file` | read | `path`, `start` opt, `count` opt | lines of a file with line numbers; at most 400 lines a call |
-| `read_buffer` | read | `buffer`, `start` opt, `count` opt | the same for a buffer |
+| `read` | read | `path`, `offset` opt, `limit` opt | lines of a file, as Reading says |
+| `read_buffer` | read | `buffer`, `offset` opt, `limit` opt | the same for a buffer |
 | `list_buffers` | read | none | name, mode, file and size of the user's buffers (no names starting with a space) |
-| `search_files` | read | `pattern`, `path` opt | `grep -rn` under the scope, skipping `.git` and binary files; it is stopped at 100 matching lines or after 10 seconds, and the result says which; asynchronous |
-| `edit_buffer` | write | `buffer`, `old`, `new` | replace OLD by NEW in a buffer; OLD must occur exactly once, case and overlapping occurrences counted; does not save |
-| `write_file` | write | `path`, `content` | create or replace a file, through a buffer, and save it |
-| `save_buffer` | write | `buffer` | save |
+| `grep` | read | `pattern`, `path` opt, `glob` opt, `ignore_case` opt, `literal` opt, `context` opt, `limit` opt | matching lines of files, as Searching says; asynchronous |
+| `find` | read | `pattern`, `path` opt, `limit` opt | files whose path matches the glob PATTERN, as Searching says |
+| `ls` | read | `path` opt, `limit` opt | the entries of a directory |
+| `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW in a buffer, as Changing says; does not save |
+| `write` | write | `path`, `content` | CONTENT becomes the whole text of the buffer visiting PATH; does not save |
+| `save_buffer` | write | `buffer` or `path` | save the buffer, or the buffer visiting PATH; the one tool that writes a file |
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order, return the last value printed, with what was printed to `*Messages*` meanwhile |
-| `shell` | exec | `command` | run through `shell-file-name` with no input, at most `superchat-shell-seconds` (60), return the command's output and exit status and nothing else; asynchronous |
+| `shell` | exec | `command`, `timeout` opt | run through `shell-file-name` with no input, at most TIMEOUT seconds (default `superchat-shell-seconds`), return the end of the output and the exit status, as Running says; asynchronous |
+
+The descriptions of the tools state the division: files through `read`,
+`grep`, `find`, `ls`, `edit`, `write` and `save_buffer`; outside programs
+through `shell`; the running Emacs through `eval_elisp`. The description of
+`save_buffer` says to save before a command, the tests or git run on a
+changed file. A boolean argument is false when it is nil (a JSON false).
 
 A path is relative to the scope; `~` and absolute paths work. A call of a
 `read` tool that reads outside the scope and outside `superchat-directory`
@@ -203,8 +217,98 @@ leading `-` cannot make the tool read another file than the one checked. A
 buffer that visits no file is Emacs's own and inside. Such a call: at `ask` the user is asked, at `read-only` it is
 denied, at `auto` it runs. `"home"` is no project, so there only
 `superchat-directory` is inside. The `permission` event and the denial say that
-the call was outside the project. A file a tool edits is edited through its
-buffer, so the user can undo it.
+the call was outside the project.
+
+### Reading
+
+- Files are read and changed through Emacs buffers. `read` reads the buffer
+  visiting the file when there is one, so unsaved edits are seen, else the
+  file in a temporary buffer: a read leaves no buffer open. A directory is
+  an error that names `ls`.
+- `read` and `read_buffer` return the lines from OFFSET (1-indexed, default
+  1), with no line numbers, at most LIMIT lines, 2000 lines and the room of
+  a result, whichever comes first. A line is never cut, except a single
+  line longer than the room, of which the room's worth is shown with a
+  notice. The lines of a text are as `count-lines` counts them: a final
+  newline does not start another line.
+- With lines left after those shown, one notice names the next offset:
+  `[Showing lines X-Y of Z. Use offset=N to continue.]` when 2000 lines
+  stopped it; `[Showing lines X-Y of Z (N characters limit). Use offset=N to continue.]`
+  when the room did; `[K more lines in file. Use offset=N to continue.]`
+  (`in buffer` for `read_buffer`) when LIMIT did.
+- An OFFSET past the last line is an error,
+  `Offset N is beyond end of file (Z lines total)` (`of buffer`); offset 1
+  of an empty text is the empty result.
+
+### Searching
+
+- `grep`, `find` and `ls` take PATH, default the project. The files
+  `grep` and `find` look at are the project's files as `project-files`
+  gives them (so `.gitignore` counts) when PATH is the project or inside
+  it, else every file under PATH by `directory-files-recursively`; nothing
+  under a `.git`. A GLOB without `/` matches a file's name at any depth,
+  one with `/` its path relative to PATH; `*` and `?` stay within a
+  directory, `**` crosses them, `{a,b}` is either, `[...]` a class.
+- `grep` filters those files by GLOB in Lisp, leaves out symbolic links
+  (which it would follow out of PATH, as `grep -r` does not), and runs the
+  `grep` program on what is left, after `--`, a batch at a time so that no
+  command line is too long, with an extended regular expression, or a
+  fixed string with LITERAL, case ignored with IGNORE_CASE, CONTEXT lines
+  before and after; binary files are skipped. A PATH that is a file is
+  searched alone. A match is `PATH:LINE: TEXT`, a context line
+  `PATH-LINE- TEXT`, PATH relative to the searched directory; a line longer
+  than 500 characters is cut. At most LIMIT matches (default 100), with
+  their context, and the room of a result, in whole lines.
+- The notices of `grep`:
+  `[N matches limit reached. Use limit=2N for more, or refine pattern]`,
+  `[N characters limit reached]`,
+  `[Some lines truncated to 500 chars. Use read to see full lines]`; no
+  match is `No matches found`. Listing and searching stop after 10
+  seconds, and a notice says so and to narrow PATH or GLOB. A PATH that
+  does not exist is an error.
+- `find` lists the files PATTERN matches, as a GLOB, relative to PATH and
+  sorted, one a line, a directory with `/` where the listing has it; at
+  most LIMIT (default 1000):
+  `[N results limit reached. Use limit=2N for more, or refine pattern]`;
+  none is `No files found matching pattern`. Its listing stops after 10
+  seconds too, with the same notice.
+- `ls` lists the entries of the directory PATH, dotfiles included, sorted
+  alphabetically ignoring case, `/` after a directory, at most LIMIT
+  (default 500): `[N entries limit reached. Use limit=2N for more]`; an empty
+  one is `(empty directory)`.
+- A list that passes the room of a result keeps whole lines, with
+  `[N characters limit reached]`.
+
+### Changing
+
+- `edit` and `write` change the buffer visiting the file, visiting it when
+  none does, and do not save, so the user can undo them and only
+  `save_buffer` writes to disk. `edit` takes exactly one of PATH and BUFFER;
+  OLD must occur exactly once, case and overlapping occurrences counted; a
+  PATH that names no file and no buffer is an error, and a buffer visited
+  for an edit that fails is killed again. Its result is
+  `Replaced 1 block in PATH (not saved; save_buffer writes it).`, BUFFER in
+  place of PATH for a buffer. `write` creates the buffer of a file that
+  does not exist; its result says how many characters the buffer now holds
+  and that it is not saved.
+- `save_buffer` takes exactly one of BUFFER and PATH; a PATH no buffer
+  visits is an error. It makes the file's directory when needed, writes a
+  buffer whose file does not exist even when it is unchanged, and adds no
+  final newline.
+
+### Running
+
+- `shell` keeps the end of the output, where the errors are: at most 2000
+  lines or the room of a result, whole lines but for a single line longer
+  than the room, of which the end is kept. When it cuts, the whole output
+  is in a file made by `make-temp-file "superchat-shell-"`, and the notice
+  is `[Showing lines X-Y of Z. Full output: FILE]`. Once the output held
+  passes four times `superchat-tool-max-chars`, what lies before its last
+  `superchat-tool-max-chars` characters is appended to that file as it
+  comes. When that file passes 200 times `superchat-tool-max-chars`, the
+  command is stopped. The last notice is `[exit status N]`,
+  `[timed out after N seconds and killed]`, or
+  `[output passed N characters; the command was stopped]`.
 
 ## superchat-recall.el
 

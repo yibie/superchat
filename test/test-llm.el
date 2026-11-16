@@ -143,12 +143,12 @@ RESOLVE, when given, is its API key resolver."
 
 (ert-deftest superchat-llm-calls-have-provider-ids-and-plist-args ()
   (test-llm-with (list (list :text "ok" :thinking "hmm"
-                             :calls `(("call_9" "read_file" ,(test-llm--args-hash))
+                             :calls `(("call_9" "read" ,(test-llm--args-hash))
                                       ("call_10" "list_buffers" nil))))
     (let* ((r (test-llm--ask (list (test-llm--user "hi"))))
            (done (car (plist-get r :done))))
       (should (equal (plist-get done :calls)
-                     '((:id "call_9" :name "read_file"
+                     '((:id "call_9" :name "read"
                         :args (:path "a.el" :count 5 :opts (:deep t :off nil)
                                :list ("x" "y")))
                        (:id "call_10" :name "list_buffers" :args nil))))
@@ -289,14 +289,14 @@ RESOLVE, when given, is its API key resolver."
 (ert-deftest superchat-llm-tool-specs-become-json-schema ()
   (test-llm-with (list '(:text "x"))
     (test-llm--ask (list (test-llm--user "hi"))
-                   :tools '((:name "read_file" :description "Read a file"
+                   :tools '((:name "read" :description "Read a file"
                              :args ((:name "path" :type string :description "File" :required t)
                                     (:name "count" :type number :description "Lines")
                                     (:name "all" :type boolean :required t)))
                             (:name "list_buffers" :description "List" :args nil)))
     (let* ((system (car (test-llm--sent)))
            (tools (superchat-bridge-system-message-tools-added system)))
-      (should (equal (mapcar #'superchat-bridge-tool-name tools) '("read_file" "list_buffers")))
+      (should (equal (mapcar #'superchat-bridge-tool-name tools) '("read" "list_buffers")))
       (should (equal (superchat-bridge-tool-description (car tools)) "Read a file"))
       (should (equal (superchat-bridge-tool-parameters (car tools))
                      '((type . "object")
@@ -311,12 +311,12 @@ RESOLVE, when given, is its API key resolver."
   "Messages that answer CALL-ID's turn: user, assistant with the call, result."
   (list (test-llm--user "hi")
         (list :role 'assistant :text "ok"
-              :calls (list (list :id call-id :name "read_file" :args '(:path "a.el"))))
-        (list :role 'tool :call-id call-id :name "read_file" :text "contents")))
+              :calls (list (list :id call-id :name "read" :args '(:path "a.el"))))
+        (list :role 'tool :call-id call-id :name "read" :text "contents")))
 
 (ert-deftest superchat-llm-kept-message-is-replayed-within-a-turn ()
   (test-llm-with (list (list :text "ok" :thinking "I should read"
-                             :calls '(("call_1" "read_file" nil)))
+                             :calls '(("call_1" "read" nil)))
                        '(:text "all done"))
     (test-llm--ask (list (test-llm--user "hi")))
     (let ((first test-llm--last))
@@ -330,7 +330,7 @@ RESOLVE, when given, is its API key resolver."
 
 (ert-deftest superchat-llm-kept-message-is-dropped-after-a-user-message ()
   (test-llm-with (list '(:text "ok" :thinking "I should read"
-                         :calls (("call_1" "read_file" nil)))
+                         :calls (("call_1" "read" nil)))
                        '(:text "next"))
     (test-llm--ask (list (test-llm--user "hi")))
     (let ((first test-llm--last))
@@ -355,7 +355,7 @@ RESOLVE, when given, is its API key resolver."
                            (superchat-bridge-assistant-message-model assistant)
                            (superchat-bridge-assistant-message-stop-reason assistant))
                      (list (superchat-bridge-model-api model) "stub" "model-a" "toolUse")))
-      (should (equal (superchat-bridge-tool-call-name call) "read_file"))
+      (should (equal (superchat-bridge-tool-call-name call) "read"))
       (should (equal (superchat-bridge-text-content-text
                       (car (superchat-bridge-message-content (cl-find-if #'superchat-bridge-tool-result-message-p
                                                                   (test-llm--sent)))))
@@ -512,8 +512,8 @@ RESOLVE, when given, is its API key resolver."
 (defun test-llm--two-responses-one-turn (id)
   "Two responses of one turn whose first call is ID each; return both
 finished messages and the messages the third request sent."
-  (test-llm-with (list (list :thinking "T1" :calls `((,id "read_file" nil)))
-                       (list :thinking "T2" :calls `((,id "read_file" nil)))
+  (test-llm-with (list (list :thinking "T1" :calls `((,id "read" nil)))
+                       (list :thinking "T2" :calls `((,id "read" nil)))
                        '(:text "fin"))
     (let (first second ids)
       (let ((r (test-llm--ask (list (test-llm--user "hi")))))
@@ -525,11 +525,11 @@ finished messages and the messages the third request sent."
       (test-llm--ask
        (list (test-llm--user "hi")
              (list :role 'assistant :text ""
-                   :calls (list (list :id (nth 1 ids) :name "read_file" :args nil)))
-             (list :role 'tool :call-id (nth 1 ids) :name "read_file" :text "r1")
+                   :calls (list (list :id (nth 1 ids) :name "read" :args nil)))
+             (list :role 'tool :call-id (nth 1 ids) :name "read" :text "r1")
              (list :role 'assistant :text ""
-                   :calls (list (list :id (car ids) :name "read_file" :args nil)))
-             (list :role 'tool :call-id (car ids) :name "read_file" :text "r2")))
+                   :calls (list (list :id (car ids) :name "read" :args nil)))
+             (list :role 'tool :call-id (car ids) :name "read" :text "r2")))
       (list first second (nreverse ids) (test-llm--assistants)))))
 
 (ert-deftest superchat-llm-empty-provider-ids-get-generated-ids-each-replay-its-own ()
@@ -554,8 +554,8 @@ finished messages and the messages the third request sent."
 
 (ert-deftest superchat-llm-kept-message-needs-the-same-names-and-count ()
   (dolist (calls '(((:id "c1" :name "other" :args nil))
-                   ((:id "c1" :name "read_file" :args nil) (:id "c2" :name "x" :args nil))))
-    (test-llm-with (list '(:thinking "T" :calls (("c1" "read_file" nil)))
+                   ((:id "c1" :name "read" :args nil) (:id "c2" :name "x" :args nil))))
+    (test-llm-with (list '(:thinking "T" :calls (("c1" "read" nil)))
                          '(:text "x"))
       (test-llm--ask (list (test-llm--user "hi")))
       (let ((first test-llm--last))
@@ -565,17 +565,17 @@ finished messages and the messages the third request sent."
           (should-not (eq assistant first))
           (should-not (test-llm--thinking-of assistant))))))
   ;; the kept one has two calls, the Tape one
-  (test-llm-with (list '(:thinking "T" :calls (("c1" "read_file" nil) ("c2" "x" nil)))
+  (test-llm-with (list '(:thinking "T" :calls (("c1" "read" nil) ("c2" "x" nil)))
                        '(:text "x"))
     (test-llm--ask (list (test-llm--user "hi")))
     (let ((first test-llm--last))
       (test-llm--ask (list (test-llm--user "hi")
                            (list :role 'assistant :text ""
-                                 :calls '((:id "c1" :name "read_file" :args nil)))))
+                                 :calls '((:id "c1" :name "read" :args nil)))))
       (should-not (eq (car (test-llm--assistants)) first)))))
 
 (ert-deftest superchat-llm-another-conversations-user-turn-keeps-this-ones-message ()
-  (test-llm-with (list '(:thinking "TA" :calls (("call_a" "read_file" nil)))
+  (test-llm-with (list '(:thinking "TA" :calls (("call_a" "read" nil)))
                        '(:text "b")
                        '(:text "a2")
                        '(:text "a3"))
@@ -804,8 +804,8 @@ finished messages and the messages the third request sent."
 (ert-deftest superchat-llm-an-id-an-earlier-message-has-is-made-anew ()
   ;; A's call_0 is no longer kept after the next user turn; B counts from
   ;; call_0 again and must not be replayed in A's place.
-  (test-llm-with (list '(:thinking "TA" :calls (("call_0" "read_file" nil)))
-                       '(:thinking "TB" :calls (("call_0" "read_file" nil)))
+  (test-llm-with (list '(:thinking "TA" :calls (("call_0" "read" nil)))
+                       '(:thinking "TB" :calls (("call_0" "read" nil)))
                        '(:text "fin"))
     (test-llm--ask (list (test-llm--user "hi")))
     (let* ((a-turn (append (test-llm--replay "call_0") (list (test-llm--user "again"))))
@@ -815,8 +815,8 @@ finished messages and the messages the third request sent."
       (should-not (equal id "call_0"))
       (test-llm--ask (append a-turn
                              (list (list :role 'assistant :text ""
-                                         :calls (list (list :id id :name "read_file" :args nil)))
-                                   (list :role 'tool :call-id id :name "read_file" :text "r"))))
+                                         :calls (list (list :id id :name "read" :args nil)))
+                                   (list :role 'tool :call-id id :name "read" :text "r"))))
       (let ((sent (test-llm--assistants)))
         (should (= (length sent) 2))
         (should-not (eq (car sent) b))
@@ -825,7 +825,7 @@ finished messages and the messages the third request sent."
         (should (eq (cadr sent) b))))))
 
 (ert-deftest superchat-llm-one-id-twice-in-a-response-is-made-anew ()
-  (test-llm-with (list '(:calls (("call_0" "read_file" nil) ("call_0" "read_file" nil))))
+  (test-llm-with (list '(:calls (("call_0" "read" nil) ("call_0" "read" nil))))
     (let* ((r (test-llm--ask (list (test-llm--user "hi"))))
            (ids (mapcar (lambda (c) (plist-get c :id))
                         (plist-get (car (plist-get r :done)) :calls))))

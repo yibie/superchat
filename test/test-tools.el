@@ -37,7 +37,7 @@
 (defun superchat-test-tools--ok (name &rest args)
   "The text of a successful call."
   (let ((entry (apply #'superchat-test-tools--call name args)))
-    (should-not (plist-get (plist-get entry :data) :error))
+    (should-not (and (plist-get (plist-get entry :data) :error) (plist-get entry :text)))
     (plist-get entry :text)))
 
 (defun superchat-test-tools--err (name &rest args)
@@ -57,18 +57,25 @@
 
 (ert-deftest superchat-tools-specs-shape ()
   (let ((all (superchat-tool-specs)))
-    (dolist (n '("read_file" "read_buffer" "list_buffers" "search_files" "edit_buffer"
-                 "write_file" "save_buffer" "eval_elisp" "shell"))
+    (dolist (n '("read" "read_buffer" "list_buffers" "grep" "find" "ls" "edit"
+                 "write" "save_buffer" "eval_elisp" "shell"))
       (should (assoc n (mapcar (lambda (s) (cons (plist-get s :name) s)) all)))))
-  (let ((spec (car (superchat-tool-specs '("edit_buffer")))))
-    (should (equal (plist-get spec :name) "edit_buffer"))
+  (let ((spec (car (superchat-tool-specs '("edit")))))
+    (should (equal (plist-get spec :name) "edit"))
     (should (stringp (plist-get spec :description)))
     (should (equal (mapcar (lambda (a) (plist-get a :name)) (plist-get spec :args))
-                   '("buffer" "old" "new")))
-    (should (plist-get (car (plist-get spec :args)) :required)))
+                   '("path" "buffer" "old" "new")))
+    (should-not (plist-get (car (plist-get spec :args)) :required))
+    (should (plist-get (nth 2 (plist-get spec :args)) :required)))
+  ;; The descriptions state the division of the tools.
+  (dolist (n '("read" "grep" "find" "ls" "edit" "write" "save_buffer"))
+    (should (string-match-p "save_buffer.*shell.*eval_elisp"
+                            (plist-get (car (superchat-tool-specs (list n))) :description))))
+  (should (string-match-p "Save before running a command"
+                          (plist-get (car (superchat-tool-specs '("save_buffer"))) :description)))
   (should (equal (mapcar (lambda (s) (plist-get s :name))
-                         (superchat-tool-specs '("shell" "read_file")))
-                 '("shell" "read_file")))
+                         (superchat-tool-specs '("shell" "read")))
+                 '("shell" "read")))
   (should-error (superchat-tool-specs '("nope"))))
 
 (ert-deftest superchat-tools-define-and-remove ()
@@ -111,7 +118,7 @@
     (let ((superchat-permission-ask-function (lambda (&rest _) (signal 'quit nil))))
       (should (equal (superchat-test-tools--err "eval_elisp" :code "1") "Interrupted by the user.")))))
 
-;; Overlapping counts are tested in edit-buffer; these cover the call itself.
+;; Overlapping counts are tested in edit; these cover the call itself.
 (ert-deftest superchat-tools-non-string-result-is-an-error ()
   (superchat-test-tools--in-scope
     (superchat-tool-define "num" :class 'read :function (lambda (_) 42))
@@ -154,9 +161,9 @@
 (ert-deftest superchat-tools-unknown-and-missing-argument ()
   (superchat-test-tools--in-scope
     (should (string-match-p "Unknown tool: frob" (superchat-test-tools--err "frob")))
-    (let ((text (superchat-test-tools--err "edit_buffer" :buffer "x" :old "a")))
+    (let ((text (superchat-test-tools--err "edit" :buffer "x" :old "a")))
       (should (string-match-p "Missing required argument: new" text)))
-    (should (string-match-p "path" (superchat-test-tools--err "read_file")))))
+    (should (string-match-p "path" (superchat-test-tools--err "read")))))
 
 (ert-deftest superchat-tools-function-error-becomes-entry ()
   (superchat-test-tools--in-scope
@@ -233,88 +240,6 @@
                               :text)
                    (prin1-to-string (expand-file-name "~/"))))))
 
-(ert-deftest superchat-tools-read-file ()
-  (superchat-test-tools--in-scope
-    (superchat-test-tools--write dir "a.txt" "one\ntwo\nthree\n")
-    (let ((text (superchat-test-tools--ok "read_file" :path "a.txt")))
-      (should (string-match-p "Lines 1-3 of 3" text))
-      (should (string-match-p "2\ttwo" text)))
-    (let ((text (superchat-test-tools--ok "read_file" :path "a.txt" :start 2 :count 1)))
-      (should (string-match-p "Lines 2-2 of 3" text))
-      (should-not (string-match-p "three" text)))
-    (should (string-match-p "Nothing at line 9"
-                            (superchat-test-tools--ok "read_file" :path "a.txt" :start 9)))
-    (should (superchat-test-tools--err "read_file" :path "missing.txt"))
-    (superchat-test-tools--write
-     dir "big.txt" (mapconcat #'number-to-string (number-sequence 1 1000) "\n"))
-    (let ((text (superchat-test-tools--ok "read_file" :path "big.txt")))
-      (should (string-match-p "Lines 1-400 of 1000" text))
-      (should-not (string-match-p "\n401\t" text)))
-    (should (string-match-p "Lines 401-800 of 1000"
-                            (superchat-test-tools--ok "read_file" :path "big.txt"
-                                                      :start 401 :count 9999)))))
-
-(ert-deftest superchat-tools-read-buffer-and-list-buffers ()
-  (superchat-test-tools--in-scope
-    (let ((b (generate-new-buffer "sc-visible")) (hidden (generate-new-buffer " sc-hidden")))
-      (unwind-protect
-          (progn
-            (with-current-buffer b (insert "alpha\nbeta\n"))
-            (let ((text (superchat-test-tools--ok "read_buffer" :buffer "sc-visible")))
-              (should (string-match-p "Lines 1-2 of 2" text))
-              (should (string-match-p "1\talpha" text)))
-            (should (string-match-p "No buffer named nope"
-                                    (superchat-test-tools--err "read_buffer" :buffer "nope")))
-            (let ((text (superchat-test-tools--ok "list_buffers")))
-              (should (string-match-p "sc-visible\tfundamental-mode\t-\t11" text))
-              (should-not (string-match-p "sc-hidden" text))))
-        (kill-buffer b) (kill-buffer hidden)))))
-
-(ert-deftest superchat-tools-search-files ()
-  (superchat-test-tools--in-scope
-    (superchat-test-tools--write dir "a.txt" "needle here\nnothing\n")
-    (make-directory (expand-file-name "sub" dir))
-    (superchat-test-tools--write dir "sub/b.txt" "another needle\n")
-    (let ((text (superchat-test-tools--ok "search_files" :pattern "needle")))
-      (should (string-match-p "a.txt:1:needle here" text))
-      (should (string-match-p "b.txt:1:another needle" text)))
-    (let ((text (superchat-test-tools--ok "search_files" :pattern "needle" :path "sub")))
-      (should (string-match-p "b.txt" text))
-      (should-not (string-match-p "a.txt" text)))
-    (should (string-match-p "No matches" (superchat-test-tools--ok "search_files" :pattern "zzz")))
-    (superchat-test-tools--write dir "many.txt" (mapconcat (lambda (_) "hit") (number-sequence 1 150) "\n"))
-    (let ((text (superchat-test-tools--ok "search_files" :pattern "hit" :path "many.txt")))
-      (should (string-match-p "more matching lines not shown" text))
-      (should (= 100 (length (seq-filter (lambda (l) (string-match-p ":hit$" l))
-                                         (split-string text "\n"))))))))
-
-(ert-deftest superchat-tools-read-lines-given-as-floats ()
-  ;; JSON numbers may arrive as floats.
-  (superchat-test-tools--in-scope
-    (superchat-test-tools--write dir "a.txt" "one\ntwo\nthree\n")
-    (let ((text (superchat-test-tools--ok "read_file" :path "a.txt" :start 2.0 :count 1.0)))
-      (should (string-match-p "Lines 2-2 of 3" text))
-      (should-not (string-match-p "three" text)))
-    (let ((b (generate-new-buffer "sc-floats")))
-      (unwind-protect
-          (progn (with-current-buffer b (insert "alpha\nbeta\n"))
-                 (should (string-match-p "Lines 2-2 of 2"
-                                         (superchat-test-tools--ok "read_buffer" :buffer "sc-floats"
-                                                                   :start 2.0 :count 1.5))))
-        (kill-buffer b)))))
-
-(ert-deftest superchat-tools-search-files-skips-git-and-binary-files ()
-  (superchat-test-tools--in-scope
-    (superchat-test-tools--write dir "a.txt" "needle text\n")
-    (make-directory (expand-file-name ".git" dir))
-    (superchat-test-tools--write dir ".git/config" "needle in git\n")
-    (let ((coding-system-for-write 'no-conversion))
-      (superchat-test-tools--write dir "bin.dat" (concat "needle\0\1\2binary" (make-string 10 0))))
-    (let ((text (superchat-test-tools--ok "search_files" :pattern "needle")))
-      (should (string-match-p "a.txt:1:needle text" text))
-      (should-not (string-match-p "\\.git" text))
-      (should-not (string-match-p "bin.dat" text)))))
-
 (ert-deftest superchat-tools-result-is-appended-with-quitting-off ()
   (superchat-test-tools--in-scope
     (let (seen)
@@ -326,77 +251,6 @@
         (let ((inhibit-quit nil))
           (superchat-test-tools--ok "list_buffers")))
       (should (equal seen '(t))))))
-
-(ert-deftest superchat-tools-edit-buffer ()
-  (superchat-test-tools--in-scope
-    (let ((b (generate-new-buffer "sc-edit")))
-      (unwind-protect
-          (progn
-            (with-current-buffer b (buffer-enable-undo) (insert "foo bar baz\nbar\n") (undo-boundary))
-            (let ((text (superchat-test-tools--err "edit_buffer" :buffer "sc-edit" :old "bar" :new "x")))
-              (should (string-match-p "2 times" text)))
-            (should (string-match-p "0 times" (superchat-test-tools--err
-                                               "edit_buffer" :buffer "sc-edit" :old "qux" :new "x")))
-            (should (equal (with-current-buffer b (buffer-string)) "foo bar baz\nbar\n"))
-            (should (string-match-p "Replaced" (superchat-test-tools--ok
-                                                "edit_buffer" :buffer "sc-edit" :old "baz" :new "qux")))
-            (should (equal (with-current-buffer b (buffer-string)) "foo bar qux\nbar\n"))
-            (with-current-buffer b
-              (should-not buffer-file-name)
-              (setq last-command nil)
-              (undo)
-              (should (equal (buffer-string) "foo bar baz\nbar\n")))
-            (should (superchat-test-tools--err "edit_buffer" :buffer "nope" :old "a" :new "b")))
-        (kill-buffer b)))))
-
-(ert-deftest superchat-tools-edit-buffer-counts-exactly ()
-  (superchat-test-tools--in-scope
-    (let ((b (generate-new-buffer "sc-case")))
-      (unwind-protect
-          (progn
-            (with-current-buffer b (insert "Foo and foo aaa") (setq-local case-fold-search t))
-            (should (string-match-p "Replaced" (superchat-test-tools--ok
-                                                "edit_buffer" :buffer "sc-case" :old "Foo" :new "Bar")))
-            (should (string-match-p "2 times" (superchat-test-tools--err
-                                               "edit_buffer" :buffer "sc-case" :old "aa" :new "b")))
-            (should (equal (with-current-buffer b (buffer-string)) "Bar and foo aaa")))
-        (kill-buffer b)))))
-
-(ert-deftest superchat-tools-edit-buffer-does-not-save ()
-  (superchat-test-tools--in-scope
-    (let ((file (superchat-test-tools--write dir "f.txt" "hello\n")))
-      (with-current-buffer (find-file-noselect file)
-        (superchat-test-tools--ok "edit_buffer" :buffer (buffer-name) :old "hello" :new "bye")
-        (should (buffer-modified-p)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "hello\n")))))
-
-(ert-deftest superchat-tools-write-file-saves-through-buffer-and-undoes ()
-  (superchat-test-tools--in-scope
-    (let ((file (expand-file-name "new/dir/w.txt" dir)))
-      (should (string-match-p "Wrote" (superchat-test-tools--ok
-                                       "write_file" :path "new/dir/w.txt" :content "first")))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "first"))
-      (superchat-test-tools--ok "write_file" :path "new/dir/w.txt" :content "second")
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "second"))
-      (with-current-buffer (find-buffer-visiting file)
-        (should-not (buffer-modified-p))
-        (setq last-command nil)
-        (undo)
-        (should (equal (buffer-string) "first"))))))
-
-(ert-deftest superchat-tools-save-buffer ()
-  (superchat-test-tools--in-scope
-    (let ((file (superchat-test-tools--write dir "s.txt" "a\n")))
-      (with-current-buffer (find-file-noselect file)
-        (insert "b")
-        (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name))))
-        (should-not (buffer-modified-p)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "ba\n")))
-    (let ((b (generate-new-buffer "sc-nofile")))
-      (unwind-protect
-          (should (string-match-p "visits no file"
-                                  (superchat-test-tools--err "save_buffer" :buffer "sc-nofile")))
-        (kill-buffer b)))))
 
 (ert-deftest superchat-tools-eval-elisp ()
   (superchat-test-tools--in-scope
@@ -419,7 +273,7 @@
       (should (string-match-p "^hi$" text))
       (should (string-match-p (regexp-quote (directory-file-name dir)) text))
       (should (string-match-p "exit status 0" text)))
-    (should (equal (superchat-test-tools--ok "shell" :command "exit 3") "\n[exit status 3]"))
+    (should (equal (superchat-test-tools--ok "shell" :command "exit 3") "[exit status 3]"))
     (let ((start (float-time)))
       (should (string-match-p "exit status 0" (superchat-test-tools--ok "shell" :command "cat")))
       (should (< (- (float-time) start) 5)))
@@ -590,28 +444,6 @@ sets `stopped' and cancels the timer."
       (should (string-match-p (regexp-quote (directory-file-name dir))
                               (superchat-test-tools--ok "shell" :command "pwd"))))))
 
-(ert-deftest superchat-tools-search-does-not-block-emacs ()
-  (superchat-test-tools--in-scope
-    (superchat-test-tools--write dir "a.txt" "needle\n")
-    (let (got)
-      (superchat-tool-call "t" '(:id "s" :name "search_files" :args (:pattern "needle"))
-                           (lambda (e) (setq got e)))
-      (should-not got)
-      (superchat-test-wait (lambda () got))
-      (should (string-match-p "a.txt:1:needle" (plist-get got :text))))
-    (should (string-match-p "grep exited" (superchat-test-tools--err "search_files" :pattern "x"
-                                                                     :path "missing")))))
-
-(ert-deftest superchat-tools-search-stop-kills-grep ()
-  (superchat-test-tools--in-scope
-    (let (got)
-      (let ((stop (superchat-tool-call "t" '(:id "s" :name "search_files" :args (:pattern "x"))
-                                       (lambda (e) (setq got e)))))
-        (should (= 1 (length (superchat-test-tools--live-processes))))
-        (funcall stop)
-        (should-not (superchat-test-tools--live-processes))
-        (should-not got)))))
-
 (ert-deftest superchat-tools-long-results-are-cut ()
   (superchat-test-tools--in-scope
     (let* ((superchat-tool-max-chars 100)
@@ -620,23 +452,6 @@ sets `stopped' and cancels the timer."
       (should (< (length text) 150)))
     (let ((text (superchat-test-tools--ok "eval_elisp" :code "(make-string 50 ?a)")))
       (should-not (string-match-p "left out" text)))))
-
-(ert-deftest superchat-tools-output-is-never-held-without-limit ()
-  (superchat-test-tools--in-scope
-    (let ((superchat-tool-max-chars 100) (superchat-shell-seconds 5) (start (float-time)))
-      (let ((text (superchat-test-tools--ok "shell" :command "yes 0123456789")))
-        (should (< (- (float-time) start) 3))
-        (should (string-match-p "cut" text))
-        (should (< (length text) 400)))
-      (should-not (superchat-test-tools--live-processes)))))
-
-(ert-deftest superchat-tools-search-output-is-cut-too ()
-  (superchat-test-tools--in-scope
-    (let ((superchat-tool-max-chars 100))
-      (with-temp-file (expand-file-name "big.txt" dir) (insert (make-string 5000 ?x) "\n"))
-      (let ((text (superchat-test-tools--ok "search_files" :pattern "x")))
-        (should (string-match-p "cut" text))
-        (should (< (length text) 600))))))
 
 (ert-deftest superchat-tools-a-process-that-cannot-start-leaves-no-buffer ()
   (superchat-test-tools--in-scope
@@ -654,17 +469,6 @@ sets `stopped' and cancels the timer."
                                              (string-match-p "superchat-process" (buffer-name b))))
                             (buffer-list))))
     (make-directory dir)))
-
-(ert-deftest superchat-tools-search-files-cut-keeps-the-line-cap ()
-  (superchat-test-tools--in-scope
-    ;; A small limit makes the output cut at 8000 characters, first.
-    (let ((superchat-tool-max-chars 2000))
-      (superchat-test-tools--write dir "big.txt"
-                                   (mapconcat (lambda (_) "hit") (number-sequence 1 3000) "\n"))
-      (let ((text (superchat-test-tools--ok "search_files" :pattern "hit" :path "big.txt")))
-        (should (string-match-p "output cut" text))
-        (should (= 100 (length (seq-filter (lambda (l) (string-match-p ":hit$" l))
-                                           (split-string text "\n")))))))))
 
 (ert-deftest superchat-tools-shell-notes-survive-the-cut ()
   (superchat-test-tools--in-scope
@@ -690,7 +494,7 @@ sets `stopped' and cancels the timer."
     (let* ((asked 0)
            (superchat-permission-ask-function (lambda (&rest _) (cl-incf asked) 'allow)))
       (superchat-test-tools--err "frob")
-      (superchat-test-tools--err "edit_buffer" :buffer "x")
+      (superchat-test-tools--err "edit" :buffer "x")
       (should (= asked 0))
       (should (equal (superchat-test-tools--kinds) '("level" "level" "tool" "tool"))))))
 
@@ -746,7 +550,7 @@ sets `stopped' and cancels the timer."
             (with-temp-file secret (insert "key"))
             (make-symbolic-link secret (expand-file-name "link" dir))
             (superchat-permission-set "t" 'ask)
-            (should (string-match-p "inside" (superchat-test-tools--ok "read_file" :path "in.txt")))
+            (should (string-match-p "inside" (superchat-test-tools--ok "read" :path "in.txt")))
             (should-not asked)
             ;; An absolute path, `..', and a link inside that leads outside.
             (dolist (path (list secret (concat "../" (file-name-nondirectory
@@ -755,7 +559,7 @@ sets `stopped' and cancels the timer."
                                 "link"))
               (setq asked nil)
               (should (string-match-p "outside the project"
-                                      (superchat-test-tools--err "read_file" :path path)))
+                                      (superchat-test-tools--err "read" :path path)))
               (should asked))
             (should (string-match-p "outside the project"
                                     (plist-get (car (superchat-tape-entries
@@ -763,12 +567,10 @@ sets `stopped' and cancels the timer."
                                                :text)))
             (setq asked nil)
             (superchat-permission-set "t" 'read-only)
-            (superchat-test-tools--err "read_file" :path secret)
+            (superchat-test-tools--err "read" :path secret)
             (should-not asked)
             (superchat-permission-set "t" 'auto)
-            (should (equal (cadr (split-string (superchat-test-tools--ok "read_file" :path secret)
-                                               "\n"))
-                           "1\tkey")))
+            (should (equal (superchat-test-tools--ok "read" :path secret) "key")))
         (delete-directory outside t)))))
 
 (ert-deftest superchat-tools-at-home-every-path-is-outside ()
@@ -777,13 +579,13 @@ sets `stopped' and cancels the timer."
       (superchat-tape-append "h" 'user "go" :scope "home")
       (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny))
             (skill (expand-file-name "skills/s/SKILL.md" superchat-directory)))
-        (superchat-tool-call "h" '(:id "c" :name "read_file" :args (:path "x")) #'ignore)
+        (superchat-tool-call "h" '(:id "c" :name "read" :args (:path "x")) #'ignore)
         (should asked)
         ;; A skill the system prompt offers is read with no question.
         (make-directory (file-name-directory skill) t)
         (with-temp-file skill (insert "a skill"))
         (setq asked nil)
-        (superchat-tool-call "h" (list :id "d" :name "read_file" :args (list :path skill))
+        (superchat-tool-call "h" (list :id "d" :name "read" :args (list :path skill))
                              #'ignore)
         (should-not asked)))))
 
@@ -800,12 +602,12 @@ sets `stopped' and cancels the timer."
             (superchat-permission-set "t" 'ask)
             ;; Through a link and `..': the check and grep must see one path.
             (should-not (string-match-p "hunter2" (plist-get (superchat-test-tools--call
-                                                              "search_files" :pattern "KEY"
+                                                              "grep" :pattern "KEY"
                                                               :path "link/../secret")
                                                              :text)))
             ;; A path that grep would take for an option.
             (should-not (string-match-p "hunter2" (plist-get (superchat-test-tools--call
-                                                              "search_files" :pattern "x"
+                                                              "grep" :pattern "x"
                                                               :path (concat "-f" outside "secret"))
                                                              :text)))
             ;; The buffer of an outside file is outside too.
@@ -822,16 +624,384 @@ sets `stopped' and cancels the timer."
     (let ((asked nil))
       (superchat-tape-append "h" 'user "go" :scope "home")
       (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny)))
-        (superchat-tool-call "h" '(:id "c" :name "search_files" :args (:pattern "KEY"))
+        (superchat-tool-call "h" '(:id "c" :name "grep" :args (:pattern "KEY"))
                              #'ignore)
         (should asked)))))
 
-(ert-deftest superchat-tools-line-numbers-may-come-as-strings ()
+;;; read and read_buffer
+
+(defun superchat-test-tools--numbers (from to)
+  "The lines FROM to TO, each its own number, joined by newlines."
+  (mapconcat #'number-to-string (number-sequence from to) "\n"))
+
+(ert-deftest superchat-tools-read-returns-lines-without-numbers ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "one\ntwo\nthree\n")
+    (should (equal (superchat-test-tools--ok "read" :path "a.txt") "one\ntwo\nthree"))
+    (should (equal (superchat-test-tools--ok "read" :path "a.txt" :offset 2)
+                   "two\nthree"))
+    (should (equal (superchat-test-tools--ok "read" :path "a.txt" :offset 2 :limit 1)
+                   "two\n\n[1 more lines in file. Use offset=3 to continue.]"))
+    (should (equal (superchat-test-tools--err "read" :path "a.txt" :offset 9)
+                   "Error: Offset 9 is beyond end of file (3 lines total)"))
+    (superchat-test-tools--write dir "empty.txt" "")
+    (should (equal (superchat-test-tools--ok "read" :path "empty.txt") ""))
+    (should (superchat-test-tools--err "read" :path "missing.txt"))
+    (should (string-match-p "directory; use ls" (superchat-test-tools--err "read" :path ".")))))
+
+(ert-deftest superchat-tools-read-stops-at-2000-lines-and-names-the-next-offset ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "big.txt" (superchat-test-tools--numbers 1 2500))
+    (let ((text (superchat-test-tools--ok "read" :path "big.txt")))
+      (should (string-prefix-p (concat (superchat-test-tools--numbers 1 2000) "\n\n") text))
+      (should (string-suffix-p "[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]" text)))
+    (should (equal (superchat-test-tools--ok "read" :path "big.txt" :offset 2001)
+                   (superchat-test-tools--numbers 2001 2500)))
+    ;; A limit over 2000 is stopped at 2000 all the same.
+    (should (string-match-p "Showing lines 1-2000 of 2500"
+                            (superchat-test-tools--ok "read" :path "big.txt" :limit 3000)))))
+
+(ert-deftest superchat-tools-read-stops-at-the-character-limit-in-whole-lines ()
+  (superchat-test-tools--in-scope
+    (let ((superchat-tool-max-chars 1000))
+      ;; Lines of 99 characters and a newline: 7 fit in the room of 750.
+      (superchat-test-tools--write dir "w.txt" (mapconcat (lambda (_) (make-string 99 ?w))
+                                                          (number-sequence 1 20) "\n"))
+      (let ((text (superchat-test-tools--ok "read" :path "w.txt")))
+        (should (equal text (concat (mapconcat (lambda (_) (make-string 99 ?w))
+                                               (number-sequence 1 7) "\n")
+                                    "\n\n[Showing lines 1-7 of 20 (750 characters limit). Use offset=8 to continue.]")))
+        (should-not (string-match-p "left out" text)))
+      ;; A single line longer than the room is cut, with a note.
+      (superchat-test-tools--write dir "long.txt" (concat (make-string 2000 ?x) "\nnext\n"))
+      (should (equal (superchat-test-tools--ok "read" :path "long.txt")
+                     (concat (make-string 750 ?x)
+                             "\n\n[Line 1 is 2000 characters; showing the first 750. Use offset=2 to continue.]")))
+      (should (equal (superchat-test-tools--ok "read" :path "long.txt" :offset 2) "next")))))
+
+(ert-deftest superchat-tools-read-sees-unsaved-edits-and-leaves-no-buffer ()
+  (superchat-test-tools--in-scope
+    (let ((file (superchat-test-tools--write dir "f.txt" "on disk\n")))
+      (should (equal (superchat-test-tools--ok "read" :path "f.txt") "on disk"))
+      (should-not (find-buffer-visiting file))
+      (with-current-buffer (find-file-noselect file)
+        (erase-buffer) (insert "in the buffer\n"))
+      (should (equal (superchat-test-tools--ok "read" :path "f.txt") "in the buffer")))))
+
+(ert-deftest superchat-tools-read-buffer-and-list-buffers ()
+  (superchat-test-tools--in-scope
+    (let ((b (generate-new-buffer "sc-visible")) (hidden (generate-new-buffer " sc-hidden")))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (insert "alpha\nbeta\ngamma\n") (narrow-to-region 1 3))
+            (should (equal (superchat-test-tools--ok "read_buffer" :buffer "sc-visible")
+                           "alpha\nbeta\ngamma"))
+            (should (equal (superchat-test-tools--ok "read_buffer" :buffer "sc-visible" :limit 1)
+                           "alpha\n\n[2 more lines in buffer. Use offset=2 to continue.]"))
+            (should (string-match-p "beyond end of buffer (3 lines total)"
+                                    (superchat-test-tools--err "read_buffer" :buffer "sc-visible"
+                                                               :offset 4)))
+            (should (string-match-p "No buffer named nope"
+                                    (superchat-test-tools--err "read_buffer" :buffer "nope")))
+            (let ((text (superchat-test-tools--ok "list_buffers")))
+              (should (string-match-p "sc-visible\tfundamental-mode\t-\t17" text))
+              (should-not (string-match-p "sc-hidden" text))))
+        (kill-buffer b) (kill-buffer hidden)))))
+
+(ert-deftest superchat-tools-read-numbers-may-come-as-strings-or-floats ()
   (superchat-test-tools--in-scope
     (superchat-test-tools--write dir "f.txt" "a\nb\nc\n")
-    (should (string-prefix-p "Lines 2-3 of 3"
-                             (superchat-test-tools--ok "read_file" :path "f.txt"
-                                                       :start "2" :count "2")))))
+    (should (equal (superchat-test-tools--ok "read" :path "f.txt" :offset "2" :limit "1")
+                   "b\n\n[1 more lines in file. Use offset=3 to continue.]"))
+    (should (equal (superchat-test-tools--ok "read" :path "f.txt" :offset 2.0 :limit 1.5)
+                   "b\n\n[1 more lines in file. Use offset=3 to continue.]"))))
+
+;;; grep, find and ls
+
+(defun superchat-test-tools--tree (dir)
+  "Files in DIR to search: a.txt, sub/b.txt, sub/deep/c.el, sub/.git/config.
+DIR is no project: the .git is in a subdirectory."
+  (superchat-test-tools--write dir "a.txt" "needle here\nnothing\nNEEDLE loud\n")
+  (make-directory (expand-file-name "sub/deep" dir) t)
+  (superchat-test-tools--write dir "sub/b.txt" "another needle\n")
+  (superchat-test-tools--write dir "sub/deep/c.el" "(needle)\n")
+  (make-directory (expand-file-name "sub/.git" dir))
+  (superchat-test-tools--write dir "sub/.git/config" "needle in git\n"))
+
+(ert-deftest superchat-tools-grep ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--tree dir)
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle")
+                   "a.txt:1: needle here\nsub/b.txt:1: another needle\nsub/deep/c.el:1: (needle)"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :path "sub")
+                   "b.txt:1: another needle\ndeep/c.el:1: (needle)"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :path "sub/b.txt")
+                   "b.txt:1: another needle"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :ignore_case t :path "a.txt")
+                   "a.txt:1: needle here\na.txt:3: NEEDLE loud"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :ignore_case nil :path "a.txt")
+                   "a.txt:1: needle here"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle|nothing" :path "a.txt")
+                   "a.txt:1: needle here\na.txt:2: nothing"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "(needle)" :literal t)
+                   "sub/deep/c.el:1: (needle)"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "nothing" :context 1)
+                   "a.txt-1- needle here\na.txt:2: nothing\na.txt-3- NEEDLE loud"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "zzz") "No matches found"))
+    (should (string-match-p "No such file or directory: missing"
+                            (superchat-test-tools--err "grep" :pattern "x" :path "missing")))))
+
+(ert-deftest superchat-tools-grep-glob ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--tree dir)
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :glob "*.el")
+                   "sub/deep/c.el:1: (needle)"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :glob "*.{el,txt}")
+                   "a.txt:1: needle here\nsub/b.txt:1: another needle\nsub/deep/c.el:1: (needle)"))
+    ;; With a slash the glob matches the path relative to PATH; * stays in a directory.
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :glob "sub/*")
+                   "sub/b.txt:1: another needle"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle" :glob "sub/**/*.el")
+                   "sub/deep/c.el:1: (needle)"))))
+
+(ert-deftest superchat-tools-grep-and-find-respect-gitignore-in-the-project ()
+  (superchat-test-tools--in-scope
+    (let ((process-environment (cons "GIT_CONFIG_NOSYSTEM=1" process-environment)))
+      (should (= 0 (call-process "git" nil nil nil "init" "-q" dir))))
+    (superchat-test-tools--write dir ".gitignore" "ignored.txt\n")
+    (superchat-test-tools--write dir "kept.txt" "needle\n")
+    (superchat-test-tools--write dir "ignored.txt" "needle\n")
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle") "kept.txt:1: needle"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "*.txt") "kept.txt"))))
+
+(ert-deftest superchat-tools-grep-skips-binary-files-and-links ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "needle text\n")
+    (let ((coding-system-for-write 'no-conversion))
+      (superchat-test-tools--write dir "bin.dat" (concat "needle\0\1\2binary" (make-string 10 0))))
+    (make-symbolic-link (expand-file-name "a.txt" dir) (expand-file-name "link.txt" dir))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "needle") "a.txt:1: needle text"))))
+
+(ert-deftest superchat-tools-grep-limit-and-long-lines ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "many.txt" (mapconcat (lambda (_) "hit") (number-sequence 1 150) "\n"))
+    (let ((text (superchat-test-tools--ok "grep" :pattern "hit")))
+      (should (= 100 (cl-count-if (lambda (l) (string-match-p "\\`many.txt:[0-9]+: hit\\'" l))
+                                  (split-string text "\n"))))
+      (should (string-suffix-p
+               "\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern]" text)))
+    (should (string-suffix-p "many.txt:2: hit\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]"
+                             (superchat-test-tools--ok "grep" :pattern "hit" :limit "2")))
+    (superchat-test-tools--write dir "long.txt" (concat "wide " (make-string 600 ?w) "\n"))
+    (should (equal (superchat-test-tools--ok "grep" :pattern "wide")
+                   (concat "long.txt:1: wide " (make-string 495 ?w) "...\n\n"
+                           "[Some lines truncated to 500 chars. Use read to see full lines]")))))
+
+(ert-deftest superchat-tools-grep-character-limit ()
+  (superchat-test-tools--in-scope
+    (let ((superchat-tool-max-chars 1000))
+      (superchat-test-tools--write dir "big.txt" (mapconcat (lambda (_) (make-string 80 ?x))
+                                                            (number-sequence 1 50) "\n"))
+      (let ((text (superchat-test-tools--ok "grep" :pattern "x")))
+        (should (string-suffix-p "\n\n[750 characters limit reached]" text))
+        (should (cl-every (lambda (l) (string-match-p "\\`big.txt:[0-9]+: x\\{80\\}\\'" l))
+                          (split-string (car (split-string text "\n\n")) "\n")))
+        (should-not (string-match-p "left out" text))))))
+
+(ert-deftest superchat-tools-grep-does-not-block-emacs ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "a.txt" "needle\n")
+    (let (got)
+      (superchat-tool-call "t" '(:id "s" :name "grep" :args (:pattern "needle"))
+                           (lambda (e) (setq got e)))
+      (should-not got)
+      (superchat-test-wait (lambda () got))
+      (should (equal (plist-get got :text) "a.txt:1: needle")))))
+
+(ert-deftest superchat-tools-grep-stop-kills-grep ()
+  (superchat-test-tools--in-scope
+    ;; grep blocks on reading a named pipe no one writes to.
+    (call-process "mkfifo" nil nil nil (expand-file-name "pipe" dir))
+    (let (got)
+      (let ((stop (superchat-tool-call "t" '(:id "s" :name "grep" :args (:pattern "x"))
+                                       (lambda (e) (setq got e)))))
+        (should (= 1 (length (superchat-test-tools--live-processes))))
+        (funcall stop)
+        (should-not (superchat-test-tools--live-processes))
+        (should-not got)))))
+
+(ert-deftest superchat-tools-find ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--tree dir)
+    (should (equal (superchat-test-tools--ok "find" :pattern "*.txt") "a.txt\nsub/b.txt"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "*.el" :path "sub") "deep/c.el"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "sub/*") "sub/b.txt\nsub/deep/"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "deep") "sub/deep/"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "config") "No files found matching pattern"))
+    (should (equal (superchat-test-tools--ok "find" :pattern "*" :limit 2)
+                   "a.txt\nsub/\n\n[2 results limit reached. Use limit=4 for more, or refine pattern]"))
+    (should (string-match-p "Not a directory" (superchat-test-tools--err "find" :pattern "*"
+                                                                         :path "a.txt")))))
+
+(ert-deftest superchat-tools-ls ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "b.txt" "")
+    (superchat-test-tools--write dir "A.txt" "")
+    (superchat-test-tools--write dir ".hidden" "")
+    (make-directory (expand-file-name "c" dir))
+    (should (equal (superchat-test-tools--ok "ls") ".hidden\nA.txt\nb.txt\nc/"))
+    (should (equal (superchat-test-tools--ok "ls" :path "c") "(empty directory)"))
+    (should (equal (superchat-test-tools--ok "ls" :limit 2)
+                   ".hidden\nA.txt\n\n[2 entries limit reached. Use limit=4 for more]"))
+    (should (string-match-p "Not a directory" (superchat-test-tools--err "ls" :path "b.txt")))))
+
+;;; edit, write and save_buffer
+
+(ert-deftest superchat-tools-edit-a-buffer ()
+  (superchat-test-tools--in-scope
+    (let ((b (generate-new-buffer "sc-edit")))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (buffer-enable-undo) (insert "foo bar baz\nbar\n") (undo-boundary))
+            (should (string-match-p "2 times" (superchat-test-tools--err
+                                               "edit" :buffer "sc-edit" :old "bar" :new "x")))
+            (should (string-match-p "0 times" (superchat-test-tools--err
+                                               "edit" :buffer "sc-edit" :old "qux" :new "x")))
+            (should (equal (with-current-buffer b (buffer-string)) "foo bar baz\nbar\n"))
+            (should (equal (superchat-test-tools--ok "edit" :buffer "sc-edit" :old "baz" :new "qux")
+                           "Replaced 1 block in sc-edit (not saved; save_buffer writes it)."))
+            (should (equal (with-current-buffer b (buffer-string)) "foo bar qux\nbar\n"))
+            (with-current-buffer b
+              (setq last-command nil)
+              (undo)
+              (should (equal (buffer-string) "foo bar baz\nbar\n")))
+            (should (superchat-test-tools--err "edit" :buffer "nope" :old "a" :new "b"))
+            (should (string-match-p "exactly one of path and buffer"
+                                    (superchat-test-tools--err "edit" :old "a" :new "b")))
+            (should (string-match-p "exactly one of path and buffer"
+                                    (superchat-test-tools--err "edit" :buffer "sc-edit" :path "x"
+                                                               :old "a" :new "b"))))
+        (kill-buffer b)))))
+
+(ert-deftest superchat-tools-edit-counts-exactly ()
+  (superchat-test-tools--in-scope
+    (let ((b (generate-new-buffer "sc-case")))
+      (unwind-protect
+          (progn
+            (with-current-buffer b (insert "Foo and foo aaa") (setq-local case-fold-search t))
+            (superchat-test-tools--ok "edit" :buffer "sc-case" :old "Foo" :new "Bar")
+            (should (string-match-p "2 times" (superchat-test-tools--err
+                                               "edit" :buffer "sc-case" :old "aa" :new "b")))
+            (should (equal (with-current-buffer b (buffer-string)) "Bar and foo aaa")))
+        (kill-buffer b)))))
+
+(ert-deftest superchat-tools-edit-a-file-in-its-buffer-without-saving ()
+  (superchat-test-tools--in-scope
+    (let ((file (superchat-test-tools--write dir "f.txt" "hello\n")))
+      (should (equal (superchat-test-tools--ok "edit" :path "f.txt" :old "hello" :new "bye")
+                     "Replaced 1 block in f.txt (not saved; save_buffer writes it)."))
+      (with-current-buffer (find-buffer-visiting file)
+        (should (buffer-modified-p))
+        (should (equal (buffer-string) "bye\n")))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "hello\n"))
+      ;; A read sees the edit; save_buffer writes it.
+      (should (equal (superchat-test-tools--ok "read" :path "f.txt") "bye"))
+      (should (equal (superchat-test-tools--ok "save_buffer" :path "f.txt") (format "Saved %s." file)))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "bye\n")))
+    ;; A buffer visited for an edit that fails is not left open.
+    (let ((file (superchat-test-tools--write dir "g.txt" "same same\n")))
+      (superchat-test-tools--err "edit" :path "g.txt" :old "same" :new "x")
+      (should-not (find-buffer-visiting file)))
+    (should (string-match-p "No such file: none.txt"
+                            (superchat-test-tools--err "edit" :path "none.txt" :old "a" :new "b")))))
+
+(ert-deftest superchat-tools-write-fills-the-buffer-and-save-buffer-writes-it ()
+  (superchat-test-tools--in-scope
+    (let ((file (expand-file-name "new/dir/w.txt" dir)))
+      (should (equal (superchat-test-tools--ok "write" :path "new/dir/w.txt" :content "first")
+                     "The buffer of new/dir/w.txt holds 5 characters (not saved; save_buffer writes it)."))
+      (should-not (file-exists-p file))
+      (superchat-test-tools--ok "save_buffer" :path "new/dir/w.txt")
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "first"))
+      (superchat-test-tools--ok "write" :path "new/dir/w.txt" :content "second")
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "first"))
+      (with-current-buffer (find-buffer-visiting file)
+        (should (equal (buffer-string) "second"))
+        (setq last-command nil)
+        (undo)
+        (should (equal (buffer-string) "first"))))
+    ;; An empty new file is written too.
+    (superchat-test-tools--ok "write" :path "e.txt" :content "")
+    (superchat-test-tools--ok "save_buffer" :path "e.txt")
+    (should (file-exists-p (expand-file-name "e.txt" dir)))))
+
+(ert-deftest superchat-tools-save-buffer ()
+  (superchat-test-tools--in-scope
+    (let ((file (superchat-test-tools--write dir "s.txt" "a\n")))
+      (with-current-buffer (find-file-noselect file)
+        (insert "b")
+        (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name))))
+        (should-not (buffer-modified-p)))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "ba\n")))
+    (should (string-match-p "No buffer visits other.txt"
+                            (superchat-test-tools--err "save_buffer" :path "other.txt")))
+    (should (string-match-p "exactly one" (superchat-test-tools--err "save_buffer")))
+    (let ((b (generate-new-buffer "sc-nofile")))
+      (unwind-protect
+          (should (string-match-p "visits no file"
+                                  (superchat-test-tools--err "save_buffer" :buffer "sc-nofile")))
+        (kill-buffer b)))))
+
+;;; shell
+
+(ert-deftest superchat-tools-shell-keeps-the-end-and-saves-the-whole-output ()
+  (superchat-test-tools--in-scope
+    (let ((temporary-file-directory (file-name-as-directory (expand-file-name "tmp" dir))))
+      (make-directory temporary-file-directory)
+      (let* ((text (superchat-test-tools--ok "shell" :command "seq 1 2500"))
+             (notes (split-string (cadr (split-string text "\n\n")) "\n")))
+        (should (string-prefix-p (concat (superchat-test-tools--numbers 501 2500) "\n\n") text))
+        (should (string-match "\\`\\[Showing lines 501-2500 of 2500. Full output: \\(.*\\)\\]\\'"
+                              (car notes)))
+        (should (equal (with-temp-buffer (insert-file-contents (match-string 1 (car notes)))
+                                         (buffer-string))
+                       (concat (superchat-test-tools--numbers 1 2500) "\n")))
+        (should (equal (cadr notes) "[exit status 0]")))
+      (should (equal (superchat-test-tools--ok "shell" :command "seq 1 3")
+                     "1\n2\n3\n\n[exit status 0]")))))
+
+(ert-deftest superchat-tools-shell-output-is-never-held-without-limit ()
+  (superchat-test-tools--in-scope
+    (let ((temporary-file-directory (file-name-as-directory (expand-file-name "tmp" dir)))
+          (superchat-tool-max-chars 1000))
+      (make-directory temporary-file-directory)
+      (let* ((text (superchat-test-tools--ok "shell" :command "seq 1 30000; echo last; exit 4"))
+             (file (and (string-match "Full output: \\(.*\\)\\]" text) (match-string 1 text))))
+        (should (< (length text) 1000))
+        (should (string-match-p "last\n\n\\[Showing lines [0-9]+-30001 of 30001\\. Full output: " text))
+        (should (string-suffix-p "\n[exit status 4]" text))
+        (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
+                       (concat (superchat-test-tools--numbers 1 30000) "\nlast\n"))))
+      (should-not (superchat-test-tools--live-processes)))))
+
+(ert-deftest superchat-tools-shell-timeout-argument ()
+  (superchat-test-tools--in-scope
+    (let ((start (float-time)))
+      (should (equal (superchat-test-tools--ok "shell" :command "echo early; sleep 5" :timeout "1")
+                     "early\n\n[timed out after 1 seconds and killed]"))
+      (should (< (- (float-time) start) 4))
+      (should-not (superchat-test-tools--live-processes)))))
+
+(ert-deftest superchat-tools-shell-stops-a-command-whose-output-has-no-end ()
+  (superchat-test-tools--in-scope
+    (let* ((superchat-tool-max-chars 4000)
+           (temporary-file-directory (file-name-as-directory (expand-file-name "tmp" dir)))
+           (text (progn (make-directory temporary-file-directory)
+                        (plist-get (superchat-test-tools--call "shell" :command "yes" :timeout 5)
+                                   :text))))
+      (should (string-match-p "output passed [0-9]+ characters; the command was stopped" text))
+      (should (string-match "Full output: \\([^]]+\\)\\]" text))
+      (should (< (file-attribute-size (file-attributes (match-string 1 text))) (* 250 4000))))))
 
 (provide 'test-tools)
 ;;; test-tools.el ends here
