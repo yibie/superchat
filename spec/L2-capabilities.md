@@ -204,7 +204,10 @@ The descriptions of the tools state the division: files through `read`,
 `grep`, `find`, `ls`, `edit`, `write` and `save_buffer`; outside programs
 through `shell`; the running Emacs through `eval_elisp`. The description of
 `save_buffer` says to save before a command, the tests or git run on a
-changed file. A boolean argument is false when it is nil (a JSON false).
+changed file. The description of `shell` says never to read, list or
+search files with it (`cat`, `head`, `tail`, `sed -n`, `ls`, `find`,
+`grep`) and names the tool for each. A boolean argument is false when it is
+nil (a JSON false).
 
 A path is relative to the scope; `~` and absolute paths work. A call of a
 `read` tool that reads outside the scope and outside `superchat-directory`

@@ -67,6 +67,10 @@
                    '("path" "buffer" "old" "new")))
     (should-not (plist-get (car (plist-get spec :args)) :required))
     (should (plist-get (nth 2 (plist-get spec :args)) :required)))
+  ;; shell sends the model to the file tools for reading and searching.
+  (let ((shell (plist-get (car (superchat-tool-specs '("shell"))) :description)))
+    (dolist (word '("Never use it to read, list or search files" "read" "ls" "find" "grep"))
+      (should (string-search word shell))))
   ;; The descriptions state the division of the tools.
   (dolist (n '("read" "grep" "find" "ls" "edit" "write" "save_buffer"))
     (should (string-match-p "save_buffer.*shell.*eval_elisp"

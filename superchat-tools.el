@@ -734,7 +734,7 @@ When something is cut the whole output is in FILE, made here if needed."
 
 (superchat-tool-define
  "shell" :class 'exec :async t
- :description "Run a shell command in the project directory, with no input: for outside programs (build, tests, git). Returns the end of its output, at most 2000 lines or the character limit (the whole output is then saved to a file the notice names), and its exit status. Save changed buffers with save_buffer first. Read and search files with read, grep, find and ls; act on the running Emacs with eval_elisp."
+ :description "Run a shell command in the project directory, with no input: for outside programs (build, tests, git). Returns the end of its output, at most 2000 lines or the character limit (the whole output is then saved to a file the notice names), and its exit status. Save changed buffers with save_buffer first. Never use it to read, list or search files (cat, head, tail, sed -n, ls, find, grep): use read (offset and limit for a range of lines), ls, find and grep (glob, ignore_case, context), which the user can see and judge. Act on the running Emacs with eval_elisp."
  :args '((:name "command" :type string :description "Command line" :required t)
          (:name "timeout" :type number :description "Seconds, default superchat-shell-seconds"))
  :function (lambda (args done)
