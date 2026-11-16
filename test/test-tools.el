@@ -71,6 +71,12 @@
   (let ((shell (plist-get (car (superchat-tool-specs '("shell"))) :description)))
     (dolist (word '("Never use it to read, list or search files" "read" "ls" "find" "grep"))
       (should (string-search word shell))))
+  ;; grep, find and read steer the model away from extra calls.
+  (let ((d (lambda (n) (plist-get (car (superchat-tool-specs (list n))) :description))))
+    (should (string-search "(?i)" (funcall d "grep")))
+    (should (string-search "context" (funcall d "grep")))
+    (should (string-search "*diary*" (funcall d "find")))
+    (should (string-search "limit 1" (funcall d "read"))))
   ;; The descriptions state the division of the tools.
   (dolist (n '("read" "grep" "find" "ls" "edit" "write" "save_buffer"))
     (should (string-match-p "save_buffer.*shell.*eval_elisp"

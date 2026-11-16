@@ -206,7 +206,13 @@ through `shell`; the running Emacs through `eval_elisp`. The description of
 `save_buffer` says to save before a command, the tests or git run on a
 changed file. The description of `shell` says never to read, list or
 search files with it (`cat`, `head`, `tail`, `sed -n`, `ls`, `find`,
-`grep`) and names the tool for each. A boolean argument is false when it is
+`grep`) and names the tool for each. The description of `grep` says its
+PATTERN is POSIX extended syntax, with no inline flags such as `(?i)`
+(IGNORE_CASE is the way), and that CONTEXT shows the lines around a match
+without another `read`; that of `find` says a name pattern such as
+`*diary*` finds a file at any depth, so no directory needs walking with
+`ls`; that of `read` says a read with LIMIT 1 gives a file's line count
+in its notice. A boolean argument is false when it is
 nil (a JSON false).
 
 A path is relative to the scope; `~` and absolute paths work. A call of a

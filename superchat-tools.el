@@ -300,7 +300,7 @@ WHAT, \"file\" or \"buffer\", is what the notices call the text."
  :description (superchat-tools--describe
                "Read a file as text, without line numbers, at most 2000 lines or the"
                "character limit a call; a notice at the end names the offset to continue from."
-               "Unsaved edits in the file's buffer are seen."
+               "Unsaved edits in the file's buffer are seen. To learn a file's line count, read it with limit 1."
                superchat-tools--path-note)
  :args (cons '(:name "path" :type string :description "File to read" :required t)
              superchat-tools--read-args)
@@ -496,7 +496,9 @@ after the first batch.  Return a function that stops it."
 (superchat-tool-define
  "grep" :class 'read :async t
  :description (superchat-tools--describe
-               "Search the contents of files for an extended regular expression (grep -E)."
+               "Search the contents of files for a POSIX extended regular expression (grep -E):"
+               "no inline flags such as (?i); ignore case with ignore_case."
+               "To see the lines around a match, give context rather than reading the file again."
                "Lines come as PATH:LINE: TEXT, context lines as PATH-LINE- TEXT."
                "The project's files respect .gitignore. Notices at the end say what was left out."
                superchat-tools--path-note)
@@ -537,6 +539,7 @@ after the first batch.  Return a function that stops it."
  :description (superchat-tools--describe
                "Find files whose path matches a glob: without / it matches names at any depth"
                "(*.el), with / the path relative to PATH (src/**/*.ts). Paths come relative to PATH."
+               "To find a file by name, give a name pattern such as *diary*: never walk directories with ls."
                superchat-tools--path-note)
  :args '((:name "pattern" :type string :description "Glob" :required t)
          (:name "path" :type string :description "Directory to search, default the project")
