@@ -127,7 +127,10 @@ derived from `org-mode`.
   command it was (`/new`, `/resume`, `/fork`) shows another buffer.
 - When an entry or streamed text is shown, point, and the point of every
   window showing the buffer, stays where it was when above the input area
-  and moves with the input when in it.
+  and moves with the input when in it. A window whose point is in the input
+  area then shows the end of the buffer on its last line, and as much of
+  the entries above it as fits; any other window keeps the position it
+  starts at.
 - Sending from the input area while the timeline is busy (a run or a
   handoff) queues the input instead, when it is not empty and not a
   command: the input is cleared, and a dimmed line `⏸ queued: FIRST-LINE`

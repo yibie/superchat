@@ -1123,6 +1123,33 @@ tool `echo', and no chat buffers left behind."
         (should (equal (char-after) ?▮))
         (should (eq (get-text-property (point) 'face) 'error))))))
 
+(ert-deftest superchat-chat-a-window-at-the-input-shows-the-answer-above-it ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (set-window-buffer (selected-window) buffer)
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (superchat-test-script
+            (list (list :text (mapconcat #'number-to-string (number-sequence 1 200) "\n")))
+          (superchat-chat-send "go"))
+        (let ((w (selected-window)))
+          ;; The window ends at the input: what is above it is the answer, not
+          ;; empty lines below the prompt.
+          (should (< (window-start w) superchat-chat--block))
+          (should (= (save-excursion
+                       (goto-char (window-start w))
+                       (vertical-motion (1- (window-body-height w)) w)
+                       (line-beginning-position))
+                     (save-excursion (goto-char (point-max)) (line-beginning-position))))
+          ;; A window reading above the input keeps its place.
+          (goto-char (point-min))
+          (search-forward "\n100\n")
+          (set-window-point w (point))
+          (set-window-start w (line-beginning-position))
+          (let ((start (window-start w)))
+            (superchat-note "later")
+            (should (= (window-start w) start))))))))
+
 (ert-deftest superchat-chat-user-text-is-never-a-heading ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))

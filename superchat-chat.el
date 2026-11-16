@@ -462,15 +462,26 @@ their position above it."
                                   ((< at superchat-chat--block) at)
                                   (t (copy-marker at)))))
          (here (funcall keep (point)))
-         ;; A window not selected has a point of its own.
-         (windows (mapcar (lambda (w) (cons w (funcall keep (window-point w))))
+         ;; A window not selected has a point of its own.  Its start is a
+         ;; marker that an insertion before markers would carry down to the
+         ;; prompt: it is kept as a position.
+         (windows (mapcar (lambda (w) (list w (funcall keep (window-point w)) (window-start w)))
                           (get-buffer-window-list nil nil t))))
     (funcall function)
     (let ((back (lambda (at) (cond ((markerp at) (prog1 (marker-position at) (set-marker at nil)))
                                    ((<= at 0) (+ (point-max) at))
                                    (t (min at superchat-chat--input))))))
       (goto-char (funcall back here))
-      (pcase-dolist (`(,w . ,at) windows) (set-window-point w (funcall back at))))))
+      (pcase-dolist (`(,w ,at ,start) windows)
+        (set-window-point w (funcall back at))
+        (set-window-start
+         w (if (and (integerp at) (<= at 0))
+               ;; Following the input: the end on the window's last line.
+               (save-excursion (goto-char (point-max))
+                               (vertical-motion (- 1 (window-body-height w)) w)
+                               (point))
+             (min start (point-max)))
+         t)))))
 
 (defun superchat-chat--put (at string &rest stay)
   "Insert STRING at marker AT, before every marker there but those of STAY."
