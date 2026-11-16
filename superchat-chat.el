@@ -121,7 +121,8 @@ private-use characters, which no rule matches."
         (setq blocks (length kept))
         (each "`\\([^`\n]+\\)`"
               (lambda ()
-                (let ((code (string-trim (match-string 1))))
+                ;; `string-trim' matches a regexp: the match data must outlive it.
+                (let ((code (save-match-data (string-trim (match-string 1)))))
                   (replace-match (keep (if (string-search "=" code) (concat "~" code "~")
                                          (concat "=" code "=")))
                                  t t))))
@@ -148,7 +149,7 @@ private-use characters, which no rule matches."
                           (if level
                               (concat (make-string (- (+ (length (match-string 1)) level) top) ?\uE003)
                                       " " (match-string 2))
-                            (concat "\uE003" (string-trim (match-string 2)) "\uE003"))
+                            (concat "\uE003" (save-match-data (string-trim (match-string 2))) "\uE003"))
                           t t)))
         (each "^[ \t]*|\\(?:[ \t]*:?-+:?[ \t]*|\\)+[ \t]*$" (lambda () (replace-match "|-" t t)))
         (emphasis "**" "\uE003" "" nil)

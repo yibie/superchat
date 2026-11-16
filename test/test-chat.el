@@ -841,6 +841,8 @@ tool `echo', and no chat buffers left behind."
                      ("```\n# open to the end" "#+begin_src\n# open to the end\n#+end_src")
                      ;; Inline code first: nothing converts inside it.
                      ("use `**x**` and `a=b`" "use =**x**= and ~a=b~")
+                     ;; Spaces at either end are left out: Org's =x= cannot hold them.
+                     ("is ` M a.org` here" "is =M a.org= here")
                      ;; Only # to ###### headings, the shallowest at level 3, under Answer.
                      ("# A\n## B\ntext" "*** A\n**** B\ntext")
                      ("## B\n### C" "*** B\n**** C")
@@ -949,7 +951,7 @@ tool `echo', and no chat buffers left behind."
     (let ((buffer (superchat-chat-open "t1")))
       (superchat-test-script
           (list '(:text "" :calls ((:id "c1" :name "echo" :args (:x "a"))))
-                '(:text "# Step\nLooking" :calls ((:id "c2" :name "echo" :args (:x "b"))))
+                '(:text "#  Step\nLooking" :calls ((:id "c2" :name "echo" :args (:x "b"))))
                 '(:text "# Notes\nDone\n## Next\nmore"))
         (with-current-buffer buffer (superchat-chat-send "go")))
       ;; Progress folded, the Answer open, its headings under it at level 3.
