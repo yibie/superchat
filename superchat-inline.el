@@ -133,7 +133,7 @@ The replacement shows after the region, which is struck through;
   (let* ((region (and (use-region-p) (superchat-inline--region)))
          (origin (superchat-chat--origin-here))
          (scope (superchat-chat--scope))
-         (tape (or (superchat-chat-recent-tape scope) (superchat-tape-new-name)))
+         (tape (or (superchat-chat--tape-here) (superchat-tape-new-name)))
          (buffer (superchat-chat-open tape scope))
          (text (if region
                    (format "%s\n\n> %s" question (replace-regexp-in-string "\n" "\n> " region))

@@ -155,9 +155,14 @@ derived from `org-mode`.
 - `superchat` remembers the buffer it was called from as the origin of the
   next request sent from the chat buffer. Called from a chat buffer it
   records no origin.
-- `superchat` (an autoloaded command): open the chat buffer of the most
-  recent timeline of the current buffer's scope, or a new one. With a prefix
-  argument, always a new one. It enables the plugins of `superchat-plugins`
+- `superchat` (an autoloaded command): open the chat buffer of the current
+  buffer's own conversation, or of a new timeline when it has none. With a
+  prefix argument, always a new one. A buffer's own conversation is: in a
+  chat buffer, its own; else a chat buffer opened from this buffer that has
+  sent nothing yet; else the most recently active timeline of the scope, not
+  ephemeral, that has a `user` entry whose origin `:file` is this buffer's
+  file (or, for a buffer visiting no file, whose origin has no `:file` and
+  this buffer's name as `:buffer`). It enables the plugins of `superchat-plugins`
   that are not enabled yet.
 - `(superchat-chat-open TAPE &optional SCOPE)` → the chat buffer of timeline
   TAPE, made and rendered when there is none. It does not display it. SCOPE
@@ -233,8 +238,8 @@ the conversations it showed.
   fenced code block around the whole answer is unwrapped.
 - `superchat-ask` (a command): read a question; the origin is the current
   buffer, and the region when active is quoted in the request. It opens the
-  chat buffer of `superchat-chat-recent-tape` for the scope (a new timeline
-  when there is none) beside the current window and sends the question
+  chat buffer of the current buffer's own conversation, as `superchat`
+  finds it (a new timeline when there is none), beside the current window and sends the question
   there with `superchat-chat-send`. When that timeline is busy, the question
   joins the chat buffer's queue instead, and the message names the chat
   buffer and says the question is queued.

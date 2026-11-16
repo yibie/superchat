@@ -215,11 +215,15 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
           (call-interactively #'superchat-inline-accept)
           (should (equal (buffer-string) "alpha BETA gamma")))))))
 
-(defun superchat-test-inline--ask (recent)
-  "Ask \"why?\" with the region active; return (OPENED SENT) of the fake chat."
+(defun superchat-test-inline--ask (earlier)
+  "Ask \"why?\" with the region active; return (OPENED SENT) of the fake chat.
+EARLIER, when given, is a timeline this buffer asked in before."
+  (when earlier
+    (superchat-tape-append earlier 'user "before" :scope (superchat-tape-scope-of default-directory)
+                           :data (list :origin (list :buffer (buffer-name) :file buffer-file-name
+                                                     :mode "text-mode" :line 1))))
   (let (opened sent)
-    (cl-letf (((symbol-function 'superchat-chat-recent-tape) (lambda (_) recent))
-              ((symbol-function 'superchat-chat-open)
+    (cl-letf (((symbol-function 'superchat-chat-open)
                (lambda (tape &optional _scope) (setq opened tape) (generate-new-buffer " *sc-chat*")))
               ((symbol-function 'superchat-chat-send)
                (lambda (text &optional origin) (setq sent (list text origin))))
@@ -250,7 +254,9 @@ the region over \"beta\" (the second word) and an instruction read as \"shout\".
     (let ((chat (superchat-chat-open "t1" (superchat-tape-scope-of default-directory)))
           (superchat-llm-request-function (lambda (&rest _) (list :request nil)))
           said)
-      (with-current-buffer chat (superchat-chat-send "one"))
+      ;; The chat is this buffer's own: its request came from here.
+      (let ((origin (superchat-chat--origin-here)))
+        (with-current-buffer chat (superchat-chat-send "one" origin)))
       (save-window-excursion
         (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "why?"))
                   ((symbol-function 'message)

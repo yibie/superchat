@@ -561,19 +561,31 @@ tool `echo', and no chat buffers left behind."
       (superchat-tape-append "e-p" 'assistant "again")
       (should (equal (superchat-chat-recent-tape p) "20240102-b")))))
 
-(ert-deftest superchat-chat-command-reuses-recent-timeline ()
+(ert-deftest superchat-chat-command-follows-the-buffer ()
   (superchat-test-chat--with
-    (superchat-tape-append "20240101-a" 'user "earlier" :scope (superchat-test-chat--scope))
-    (superchat)
-    (let ((first (current-buffer)))
-      (should (equal (superchat-test-chat--tape-of first) "20240101-a"))
-      (should (equal (superchat-test-chat--text first) "* You\nearlier\n\n"))
-      (superchat)
-      (should (eq (current-buffer) first))
-      (superchat '(4))
-      (should-not (eq (current-buffer) first))
-      (should-not (superchat-tape-entries
-                   :tape (superchat-test-chat--tape-of (current-buffer)))))))
+    (let* ((scope (superchat-test-chat--scope))
+           (file (expand-file-name "a.txt" superchat-test-chat--dir))
+           (visiting (find-file-noselect file)))
+      (superchat-tape-append "20240101-a" 'user "from a" :scope scope
+                             :data (list :origin (list :buffer "a.txt" :file file :mode "text-mode" :line 1)))
+      (superchat-tape-append "20240101-b" 'user "from elsewhere, later" :scope scope)
+      (unwind-protect
+          ;; `superchat' answers the chat buffer it shows.
+          (let ((first (with-current-buffer visiting (superchat))))
+            ;; The buffer's own conversation, not the most recent of the project.
+            (should (equal (superchat-test-chat--tape-of first) "20240101-a"))
+            (should (eq (with-current-buffer visiting (superchat)) first))
+            ;; From the chat buffer itself: that chat.
+            (should (eq (with-current-buffer first (superchat)) first))
+            (should-not (eq (with-current-buffer visiting (superchat '(4))) first)))
+        (kill-buffer visiting))
+      ;; A buffer that started nothing gets a new conversation, and the same one
+      ;; again while it has sent nothing.
+      (with-temp-buffer
+        (rename-buffer "never-asked" t)
+        (let ((fresh (superchat)))
+          (should-not (member (superchat-test-chat--tape-of fresh) '("20240101-a" "20240101-b")))
+          (should (eq (with-current-buffer (get-buffer "never-asked") (superchat)) fresh)))))))
 
 (ert-deftest superchat-chat-note-from-a-chat-buffer-uses-its-scope ()
   (superchat-test-chat--with

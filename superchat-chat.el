@@ -735,15 +735,46 @@ SCOPE is the scope of a timeline that has no entry yet."
                  " GROUP BY tape ORDER BY MAX(id) DESC LIMIT 1")
          (list scope))))
 
+(defun superchat-chat--tape-here ()
+  "The timeline of this buffer's own conversation, or nil when it has none.
+A conversation belongs to the buffer it was started from: the chat buffer
+itself, a chat buffer opened from here with nothing sent yet, else the most
+recently active timeline of this scope that has a `user' entry whose origin is
+this file, or this buffer when it visits none."
+  (let ((origin (superchat-chat--origin-here)))
+    (cl-flet ((mine (o) (if (plist-get origin :file)
+                            (equal (plist-get o :file) (plist-get origin :file))
+                          (and (null (plist-get o :file))
+                               (equal (plist-get o :buffer) (plist-get origin :buffer))))))
+      (or superchat-chat--tape
+          (cl-some (lambda (b)
+                     (with-current-buffer b
+                       (and superchat-chat--tape superchat-chat--origin
+                            (mine superchat-chat--origin)
+                            (not (superchat-tape-entries :tape superchat-chat--tape :limit 1))
+                            superchat-chat--tape)))
+                   (buffer-list))
+          (caar (superchat-tape-select
+                 (concat "SELECT tape FROM entry WHERE scope = ? AND tape IN"
+                         " (SELECT tape FROM entry WHERE kind = 'user' AND "
+                         (if (plist-get origin :file)
+                             "json_extract(data, '$.origin.file') = ?"
+                           "json_extract(data, '$.origin.file') IS NULL AND json_extract(data, '$.origin.buffer') = ?")
+                         ") AND tape NOT IN (SELECT tape FROM entry WHERE kind = 'user'"
+                         " AND json_extract(data, '$.ephemeral') = 1)"
+                         " GROUP BY tape ORDER BY MAX(id) DESC LIMIT 1")
+                 (list (superchat-chat--scope)
+                       (or (plist-get origin :file) (plist-get origin :buffer)))))))))
+
 ;;;###autoload
 (defun superchat (&optional new)
-  "Open the chat of the most recent timeline of this buffer's project.
-With a prefix argument NEW, start a new timeline."
+  "Open the chat of this buffer's own conversation, or a new one when it has
+none.  With a prefix argument NEW, always a new one."
   (interactive "P")
   (superchat-plugin-enable-configured)
   (let* ((origin (and (not superchat-chat--tape) (superchat-chat--origin-here)))
          (scope (superchat-chat--scope))
-         (tape (or (and (not new) (superchat-chat-recent-tape scope))
+         (tape (or (and (not new) (superchat-chat--tape-here))
                    (superchat-tape-new-name)))
          (buffer (superchat-chat-open tape scope)))
     (when origin
