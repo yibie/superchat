@@ -278,6 +278,26 @@
       (should (string-match-p "Cannot read the code" text))
       (should-not (string-match-p "killed buffer" text)))))
 
+(ert-deftest superchat-tools-eval-elisp-never-enters-the-debugger ()
+  (superchat-test-tools--in-scope
+    (let* ((entered nil)
+           (debug-on-error t)
+           ;; With it the debugger comes even for an error that is caught.
+           (debug-on-signal t)
+           (debugger (lambda (&rest _) (setq entered t))))
+      (should (string-match-p "boom" (superchat-test-tools--err "eval_elisp" :code "(error \"boom\")")))
+      ;; An error in a hook the code runs, as a user's mode hook would.
+      (should (string-match-p
+               "hooked"
+               (superchat-test-tools--err
+                "eval_elisp"
+                :code "(with-temp-buffer (let ((text-mode-hook (list (lambda () (error \"hooked\"))))) (text-mode)))")))
+      (should-not entered)
+      ;; The code runs with the debugger off.
+      (should (equal (superchat-test-tools--ok "eval_elisp"
+                                               :code "(list debug-on-error debug-on-signal debug-on-quit)")
+                     "(nil nil nil)")))))
+
 (ert-deftest superchat-tools-shell ()
   (superchat-test-tools--in-scope
     (let ((text (superchat-test-tools--ok "shell" :command "echo hi; pwd")))

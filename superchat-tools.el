@@ -706,7 +706,10 @@ Case and overlapping occurrences count."
                                            (point) (error-message-string err))))
                            forms))))
                (let ((from (with-current-buffer log (copy-marker (point-max)))))
-                 (dolist (form (nreverse forms)) (setq value (eval form t)))
+                 ;; The debugger would hold the run, and Emacs with it, until
+                 ;; the person leaves it: an error is the result instead.
+                 (let ((debug-on-error nil) (debug-on-signal nil) (debug-on-quit nil))
+                   (dolist (form (nreverse forms)) (setq value (eval form t))))
                  (concat (with-current-buffer log (buffer-substring-no-properties from (point-max)))
                          (prin1-to-string value))))))
 
