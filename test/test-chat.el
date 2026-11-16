@@ -631,10 +631,10 @@ tool `echo', and no chat buffers left behind."
         (superchat-chat-send "/note aside")
         (funcall (plist-get answer :on-text) "lo"))
       (should (equal (superchat-test-chat--text buffer)
-                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\nnote: aside\naside\n\n"))
+                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\n** note: aside\naside\n\n"))
       (funcall (plist-get answer :on-done) '(:text "Hello" :model "m"))
       (should (equal (superchat-test-chat--text buffer)
-                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\nnote: aside\naside\n\n")))))
+                     "* You\nhi\n\n* Assistant\n** Answer\nHello\n\n** note: aside\naside\n\n")))))
 
 (ert-deftest superchat-chat-recall-command-uses-the-chat-scope ()
   (superchat-test-chat--with
@@ -777,7 +777,17 @@ tool `echo', and no chat buffers left behind."
     (superchat-tape-append "t1" 'user "hi" :scope (superchat-test-chat--scope))
     (superchat-tape-append "t1" 'note "the text" :data '(:title "The title"))
     (let ((text (superchat-test-chat--text (superchat-chat-open "t1"))))
-      (should (equal text "* You\nhi\n\nnote: The title\nthe text\n\n")))))
+      (should (equal text "* You\nhi\n\n** note: The title\nthe text\n\n"))
+      ;; Folded by default, its heading in sight; TAB opens it.
+      (with-current-buffer (superchat-chat-open "t1")
+        (goto-char (point-min))
+        (search-forward "the text")
+        (should (invisible-p (match-beginning 0)))
+        (search-backward "** note")
+        (should-not (invisible-p (point)))
+        (call-interactively (key-binding (kbd "TAB")))
+        (search-forward "the text")
+        (should-not (invisible-p (match-beginning 0)))))))
 
 (ert-deftest superchat-chat-recall-with-no-query-shows-the-notes ()
   (superchat-test-chat--with

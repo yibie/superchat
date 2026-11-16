@@ -189,6 +189,17 @@ plain: its last character passes on no property, neither a face nor the id."
   "STRING in FACE, `shadow' by default, as a face Org's fontification keeps."
   (propertize string 'font-lock-face (or face 'shadow)))
 
+(defun superchat-chat--loose (string)
+  "STRING with `superchat-chat-loose' 1, a line that stops every body, wherever
+it has none."
+  (let ((at 0))
+    (while (< at (length string))
+      (let ((next (next-single-property-change at 'superchat-chat-loose string (length string))))
+        (unless (get-text-property at 'superchat-chat-loose string)
+          (put-text-property at next 'superchat-chat-loose 1 string))
+        (setq at next)))
+    string))
+
 (defun superchat-chat--cut (line width)
   "LINE cut to WIDTH characters and `…' when longer."
   (if (> (length line) width) (concat (substring line 0 width) "…") line))
@@ -262,8 +273,13 @@ and carrying its id."
                              (let ((next (string-trim (or (plist-get data :next) ""))))
                                (unless (string-empty-p next)
                                  (concat "What comes next: " next "\n\n")))))
-            ('note (concat (superchat-chat--dim (format "note: %s" (plist-get data :title)))
-                           "\n" text "\n\n"))
+            ;; A heading folded by default: a note often repeats the answer.
+            ;; Its text is no line that stops a body, so the heading folds it.
+            ('note (superchat-chat--heading
+                    (superchat-chat--dim (format "** note: %s" (plist-get data :title)))
+                    (propertize (concat "\n" (replace-regexp-in-string "^\\*" " *" text) "\n")
+                                'superchat-chat-loose most-positive-fixnum)
+                    (format "note %s" (plist-get entry :id)) (plist-get entry :id) t))
             (_ (superchat-chat--dim (concat text "\n")
                                     (if (equal (plist-get data :type) "error") 'error 'shadow))))))
     (superchat-chat--seal string (plist-get entry :id))))
@@ -354,7 +370,7 @@ once the final answer is there or the turn is OVER."
                                   (superchat-chat--seal (concat (superchat-chat--answer final 3) "\n\n")
                                                         (plist-get final :id)))
                                 ;; A line no heading's body takes in.
-                                (propertize (others nil) 'superchat-chat-loose 1))))
+                                (superchat-chat--loose (others nil)))))
               ;; Streamed text has no end of line of its own.
               (if (and streaming (not (string-empty-p tail)))
                   (concat (superchat-chat--seal "\n\n") tail)

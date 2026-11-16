@@ -60,7 +60,8 @@ derived from `org-mode`.
   - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
     empty, `What comes next: NEXT`; an anchor with empty text (a fork)
     shows only its line;
-  - `note`: a dimmed line `note: TITLE`, then its text;
+  - `note`: a dimmed heading `** note: TITLE`, its text the body, folded
+    by default (a note often repeats the answer);
   - `event`: its text as one dimmed line, an `error` event in the `error`
     face.
   Faces are `font-lock-face`, so Org's fontification keeps them.
