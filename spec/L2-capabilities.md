@@ -201,7 +201,7 @@ Built-in tools, and no others:
 | `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW in a buffer, as Changing says; does not save |
 | `write` | write | `path`, `content` | CONTENT becomes the whole text of the buffer visiting PATH; does not save |
 | `save_buffer` | write | `buffer` or `path` | save the buffer, or the buffer visiting PATH; the one tool that writes a file |
-| `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return the last value printed, with what was printed to `*Messages*` meanwhile; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
+| `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return what was printed to `*Messages*` meanwhile, then the value of each form printed, one line each in order, a newline inside a value written `\n`; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
 | `shell` | exec | `command`, `timeout` opt | run through `shell-file-name` with no input, at most TIMEOUT seconds (default `superchat-shell-seconds`), return the end of the output and the exit status, as Running says; asynchronous |
 
 The descriptions of the tools state the division: files through `read`,

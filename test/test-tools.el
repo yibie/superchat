@@ -266,13 +266,14 @@
 (ert-deftest superchat-tools-eval-elisp ()
   (superchat-test-tools--in-scope
     (should (equal (superchat-test-tools--ok "eval_elisp" :code "(setq x 2) ; note\n(let ((y 3)) (* x y)) ; end")
-                   "6"))
+                   "2\n6"))
+    (should (equal (superchat-test-tools--ok "eval_elisp" :code "\"a\nb\"") "\"a\\nb\""))
     (should (equal (superchat-test-tools--ok "eval_elisp" :code "\"s\"") "\"s\""))
     (should (equal (superchat-test-tools--ok "eval_elisp"
                                              :code "(funcall (let ((n 5)) (lambda () n)))")
                    "5"))
     (let ((text (superchat-test-tools--ok "eval_elisp" :code "(message \"hello %d\" 1)\n42")))
-      (should (string-match-p "\\`hello 1\n42\\'" text)))
+      (should (equal "hello 1\n\"hello 1\"\n42" text)))
     (should (string-match-p "boom" (superchat-test-tools--err "eval_elisp" :code "(error \"boom\")")))
     (let ((text (superchat-test-tools--err "eval_elisp" :code "(+ 1 2)\n(unclosed")))
       (should (string-match-p "Cannot read the code" text))

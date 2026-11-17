@@ -691,10 +691,10 @@ Case and overlapping occurrences count."
 
 (superchat-tool-define
  "eval_elisp" :class 'exec
- :description "Evaluate Emacs Lisp forms in order (lexical binding) in the running Emacs. Returns what was messaged, then the last value. Files go through read, edit and the other file tools; outside programs through shell."
+ :description "Evaluate Emacs Lisp forms in order (lexical binding) in the running Emacs. Returns what was messaged, then the value of each form, one line each. Files go through read, edit and the other file tools; outside programs through shell."
  :args '((:name "code" :type string :description "One or more forms" :required t))
  :function (lambda (args)
-             (let ((forms nil) (value nil)
+             (let ((forms nil) (values nil)
                    (log (get-buffer-create "*Messages*")))
                (with-temp-buffer
                  (insert (plist-get args :code))
@@ -709,9 +709,10 @@ Case and overlapping occurrences count."
                  ;; The debugger would hold the run, and Emacs with it, until
                  ;; the person leaves it: an error is the result instead.
                  (let ((debug-on-error nil) (debug-on-signal nil) (debug-on-quit nil))
-                   (dolist (form (nreverse forms)) (setq value (eval form t))))
+                   (dolist (form (nreverse forms)) (push (eval form t) values)))
                  (concat (with-current-buffer log (buffer-substring-no-properties from (point-max)))
-                         (prin1-to-string value))))))
+                         (let ((print-escape-newlines t))
+                           (mapconcat #'prin1-to-string (nreverse values) "\n")))))))
 
 (defun superchat-tools--tail (output file spilled)
   "The end of a command's OUTPUT that fits, whole lines, with the notice of
