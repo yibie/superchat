@@ -166,7 +166,7 @@ There is no "session" object and no "memory" store. A session is the
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
 | `note` | the conclusion | `(:title STRING)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
