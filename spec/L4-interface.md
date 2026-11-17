@@ -45,7 +45,7 @@ derived from `org-mode`.
     Org (the Tape keeps the Markdown). Answer is never folded but by the
     person;
   - the turn's other entries (permission events but those tied to no
-    call, cancelled, error and level events, notes, anchors), each as its
+    call, cancelled, error, level and retry events, notes, anchors), each as its
     own lines, in order.
   The strip of a turn is one cell for each of its calls and intermediate
   texts, in order: `•` in `shadow` for an intermediate text, `▮` for a
@@ -160,7 +160,10 @@ derived from `org-mode`.
   a waiting line just above the separator shows the strip of the current
   turn on a line of its own, when the turn has a call, then a spinner and
   the seconds since the latest entry: `⠋ NAME running… Ns` while a call of
-  the turn has no result (the first such), else `⠋ thinking… Ns`. While
+  the turn has no result (the first such), else `⠋ thinking… Ns`; when the
+  latest entry is a `retry` event, `⟳ trying again in Ns (I/N)`, N the whole
+  seconds left of its wait, and the text streamed for the failed request is
+  removed. While
   the person is asked about a call of this timeline
   (`superchat-permission-asking`), the cell of that call, the first with no
   result, is `⏸` in `warning`, and the spinner's line is, in `warning`,

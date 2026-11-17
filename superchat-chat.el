@@ -559,7 +559,10 @@ A question to the person looks like a slow tool unless it says so."
                                      superchat-chat--entries)))
          (call (seq-find (lambda (c) (not (member (plist-get c :id) answered)))
                          (mapcan (lambda (e) (copy-sequence (plist-get (plist-get e :data) :calls)))
-                                 superchat-chat--entries))))
+                                 superchat-chat--entries)))
+         (last (car (last superchat-chat--entries)))
+         (retry (and (equal (plist-get (plist-get last :data) :type) "retry")
+                     (plist-get last :data))))
     (concat
      (unless (string-empty-p strip) (concat strip "\n"))
      (if asking
@@ -567,10 +570,15 @@ A question to the person looks like a slow tool unless it says so."
                              (plist-get asking :tool)
                              (superchat-chat--cut (plist-get asking :summary) 60))
                      'face 'warning)
+       (if retry
+           (propertize (format "⟳ trying again in %ds (%d/%d)\n"
+                               (max 0 (ceiling (- (+ (plist-get last :at) (plist-get retry :wait)) now)))
+                               (plist-get retry :attempt) (plist-get retry :of))
+                       'face 'shadow)
        (propertize (format "%c %s %ds\n" (aref "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" (mod (floor (* now 10)) 10))
                            (if call (format "%s running…" (plist-get call :name)) "thinking…")
-                           (- now (or (plist-get (car (last superchat-chat--entries)) :at) now)))
-                   'face 'shadow)))))
+                           (- now (or (plist-get last :at) now)))
+                   'face 'shadow))))))
 
 (defun superchat-chat--queued-line ()
   "The line that shows the queue, or nil when it is empty."
@@ -634,8 +642,10 @@ appended among them: one that reached the Tape another way is shown too."
            (pcase (plist-get entry :kind)
              ('user (set-marker superchat-chat--turn superchat-chat--block)
                     (setq superchat-chat--entries nil))
-             ;; The entry replaces what streamed.
-             ('assistant (delete-region superchat-chat--stream superchat-chat--stream-end)))
+             ;; The entry replaces what streamed; a retry discards it.
+             ('assistant (delete-region superchat-chat--stream superchat-chat--stream-end))
+             ('event (when (equal (plist-get (plist-get entry :data) :type) "retry")
+                       (delete-region superchat-chat--stream superchat-chat--stream-end))))
            (setq superchat-chat--entries (append superchat-chat--entries (list entry))
                  superchat-chat--shown (plist-get entry :id)))
          (superchat-chat--draw)))))

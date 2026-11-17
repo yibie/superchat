@@ -1050,6 +1050,26 @@ tool `echo', and no chat buffers left behind."
   (with-current-buffer buffer
     (seq-some (lambda (o) (overlay-get o 'before-string)) (overlays-in (point-min) (point-max)))))
 
+(ert-deftest superchat-chat-a-retry-drops-what-streamed-and-counts-down ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) (asked 0) after-retry
+          (superchat-agent-retry-waits '(5)))
+      (let ((superchat-llm-request-function
+             (lambda (_messages &rest keys)
+               (cl-incf asked)
+               (funcall (plist-get keys :on-text) "Half an ans")
+               (funcall (plist-get keys :on-error) '(:message "503 overloaded" :kind server :status 503))
+               (list :cancelled nil :finished nil :request nil))))
+        (with-current-buffer buffer (superchat-chat-send "hi"))
+        (setq after-retry (superchat-test-chat--text buffer))
+        (should (= asked 1))
+        (should-not (string-match-p "Half an ans" after-retry))
+        (should (string-match-p "Request failed: 503 overloaded. Trying again in 5 s (1/1)." after-retry))
+        (should (string-match-p "\\`⟳ trying again in [45]s (1/1)\n\\'"
+                                (superchat-test-chat--waiting buffer)))
+        (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-k"))))
+        (should-not (superchat-test-chat--waiting buffer))))))
+
 (ert-deftest superchat-chat-waiting-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during)
