@@ -274,6 +274,10 @@ the bridge's own classifier tells a passing failure from a quota or a refusal."
                        ((or (eql status 429) (string-match-p "rate.?limit\\|too many requests" text))
                         'rate-limit)
                        ((string-match-p "timed? out\\|timeout" text) 'timeout)
+                       ;; Before `server': curl says "Could not connect to server".
+                       ((and (not status)
+                             (string-match-p "connect\\|network\\|socket\\|fetch\\|reset\\|closed\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN" text))
+                        'network)
                        ((or status (string-match-p "overload\\|capacity\\|busy\\|unavailable\\|server"
                                                    text))
                         'server)

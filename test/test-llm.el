@@ -722,6 +722,8 @@ STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
 (ert-deftest superchat-llm-a-timeout-and-a-lost-connection-say-their-kind ()
   (dolist (case '(("Request timed out." . timeout)
                   ("Connection error: connection refused" . network)
+                  ("Connection error: curl: (7) Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server"
+                   . network)
                   ("Some refusal" . other)))
     (test-llm-with (list (list :stop "error" :error (car case)))
       (let ((failure (car (plist-get (test-llm--ask (list (test-llm--user "hi"))) :errors))))
