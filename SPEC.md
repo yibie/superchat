@@ -98,7 +98,7 @@ points to require. A file requires nothing else, and
 | `SPEC.md` | 2400 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3750 words |
-| `spec/L3-agent.md` | 2240 words |
+| `spec/L3-agent.md` | 2460 words |
 | `spec/L4-interface.md` | 3400 words |
 
 ## Rules against overflow
@@ -166,7 +166,7 @@ There is no "session" object and no "memory" store. A session is the
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
 | `note` | the conclusion | `(:title STRING)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
