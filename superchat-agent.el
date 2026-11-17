@@ -22,6 +22,10 @@
 (defvar superchat-agent--runs (make-hash-table :test #'equal)
   "Timeline name to its run, while it has one.")
 
+(defvar superchat-agent-retry-waits '(2 4 8 16 32)
+  "Seconds to wait before each retry of a failed request; their number is
+the number of retries.")
+
 (defun superchat-agent--message (entry)
   "The neutral message of ENTRY, or nil when the model is told nothing."
   (let ((text (plist-get entry :text))
@@ -202,6 +206,9 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
                   (superchat-agent--try tape (lambda () (superchat-agent--add-user run)))))
         (unwind-protect
             (progn
+              (when-let* ((timer (plist-get run :timer)))
+                (setf (plist-get run :timer) nil)
+                (cancel-timer timer))
               (when-let* ((stop (plist-get run :stop)))
                 (setf (plist-get run :stop) nil)
                 (superchat-agent--try tape stop))
@@ -346,14 +353,47 @@ tool that has not answered yet."
                                   (funcall on-text text)))
                      :on-done (lambda (response)
                                 (superchat-agent--answered-request run)
+                                (setf (plist-get run :tries) 0)
                                 (when (superchat-agent--live run)
                                   (superchat-agent--guard
                                    run (lambda () (superchat-agent--respond run response)))))
                      :on-error (lambda (failure)
                                  (superchat-agent--answered-request run)
                                  (when (superchat-agent--live run)
-                                   (superchat-agent--end
-                                    run 'error (plist-get failure :message)))))))))))))
+                                   (superchat-agent--guard
+                                    run (lambda ()
+                                          (unless (superchat-agent--retry run failure)
+                                            (superchat-agent--end
+                                             run 'error (plist-get failure :message))))))))))))))))
+
+(defun superchat-agent--retry (run failure)
+  "Make RUN's failed request again after a wait, when FAILURE may pass by
+waiting and retries are left; nil otherwise.  Nothing of the failed request
+is on the Tape, so the next request is built from it as the first was."
+  (let* ((tries (plist-get run :tries))
+         (wait (nth tries superchat-agent-retry-waits))
+         (kind (plist-get failure :kind))
+         (status (plist-get failure :status)))
+    (when (and wait (memq kind '(rate-limit server timeout network empty)))
+      (setf (plist-get run :tries) (1+ tries))
+      (superchat-tape-append
+       (plist-get run :tape) 'event
+       (format "Request failed: %s. Trying again in %s s (%d/%d)."
+               (truncate-string-to-width
+                (car (split-string (plist-get failure :message) "\n")) 120 nil nil "...")
+               wait (1+ tries) (length superchat-agent-retry-waits))
+       :data (list :type "retry" :kind (symbol-name kind) :status status :wait wait
+                   :attempt (1+ tries) :of (length superchat-agent-retry-waits)))
+      (superchat-agent--emit run)
+      (when (superchat-agent--live run)
+        (setf (plist-get run :timer)
+              (run-at-time wait nil
+                           (lambda ()
+                             (setf (plist-get run :timer) nil)
+                             (when (superchat-agent--live run)
+                               (superchat-agent--guard
+                                run (lambda () (superchat-agent--step run))))))))
+      t)))
 
 (defun superchat-agent--add-user (run)
   "Append the user entry of RUN, if it is unsent."
@@ -394,6 +434,7 @@ the user entry: the timeline is one question, not a conversation."
          (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                     ;; Unsent from the start: whatever signals, the user's text is written.
                     :stop nil :unsent t :done nil :text nil :error nil :user-id nil
+                    :tries 0 :timer nil
                     :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
                     :request text :origin origin :ephemeral ephemeral :first id :seen id
                     :tools tools :system system :model model

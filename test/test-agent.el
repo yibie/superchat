@@ -110,6 +110,88 @@
         (should (string-match-p "boom" (plist-get last :text))))
       (should-not (superchat-run-active "t")))))
 
+(defmacro superchat-test-agent--retrying (responses &rest body)
+  "BODY with RESPONSES scripted and waits of 0.01 s between retries."
+  (declare (indent 1))
+  `(let ((superchat-agent-retry-waits '(0.01 0.01 0.01 0.01 0.01)))
+     (superchat-test-script ,responses ,@body)))
+
+(defun superchat-test-agent--events (tape)
+  (cl-loop for e in (superchat-tape-entries :tape tape)
+           when (eq (plist-get e :kind) 'event) collect (plist-get (plist-get e :data) :type)))
+
+(ert-deftest superchat-agent-a-passing-failure-is-retried-where-it-failed ()
+  (superchat-test-agent--with
+    (let (status seen)
+      (superchat-test-agent--retrying
+          (list `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))
+                '(:error "503 overloaded" :kind server :status 503)
+                '(:error "timed out" :kind timeout)
+                '(:text "done"))
+        (superchat-run "t" "go" :on-entry (lambda (e) (push e seen))
+                       :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (superchat-run-active "t"))
+        (superchat-test-wait (lambda () status))
+        (should (= (length superchat-test-requests) 4))
+        ;; the retries send what the failed request sent
+        (should (equal (plist-get (nth 0 superchat-test-requests) :messages)
+                       (plist-get (nth 2 superchat-test-requests) :messages))))
+      (should (eq status 'done))
+      (should (equal (superchat-test-agent--events "t") '("retry" "retry")))
+      (should (= 1 (length (superchat-tape-entries :tape "t" :kinds '(tool)))))
+      (let ((retry (cl-find-if (lambda (e) (eq (plist-get e :kind) 'event)) (reverse seen))))
+        (should (equal (plist-get retry :data)
+                       '(:type "retry" :kind "server" :status 503 :wait 0.01 :attempt 1 :of 5)))
+        (should (string-match-p "503 overloaded.*0.01 s (1/5)" (plist-get retry :text)))))))
+
+(ert-deftest superchat-agent-the-count-of-retries-starts-again-after-an-answer ()
+  (superchat-test-agent--with
+    (let ((superchat-agent-retry-waits '(0.01)) status)
+      (superchat-test-script
+          (list '(:error "x" :kind network)
+                `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))
+                '(:error "x" :kind network)
+                '(:text "done"))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (superchat-test-wait (lambda () status)))
+      (should (eq status 'done))
+      (should (equal (superchat-test-agent--events "t") '("retry" "retry"))))))
+
+(ert-deftest superchat-agent-a-failure-that-will-not-pass-ends-the-run ()
+  (superchat-test-agent--with
+    (let (status)
+      (superchat-test-agent--retrying (list '(:error "401 bad key" :kind other :status 401))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (= (length superchat-test-requests) 1)))
+      (should (eq status 'error))
+      (should (equal (superchat-test-agent--events "t") '("error"))))))
+
+(ert-deftest superchat-agent-retries-run-out ()
+  (superchat-test-agent--with
+    (let (status)
+      (superchat-test-agent--retrying (make-list 6 '(:error "429 slow" :kind rate-limit :status 429))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (superchat-test-wait (lambda () status))
+        (should (= (length superchat-test-requests) 6)))
+      (should (eq status 'error))
+      (should (equal (superchat-test-agent--events "t")
+                     '("retry" "retry" "retry" "retry" "retry" "error"))))))
+
+(ert-deftest superchat-agent-cancel-stops-the-wait ()
+  (superchat-test-agent--with
+    (let ((superchat-agent-retry-waits '(0.05)) status)
+      (superchat-test-script (list '(:error "x" :kind server))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (plist-get (superchat-run-active "t") :timer))
+        (superchat-cancel "t")
+        (should (eq status 'cancelled))
+        (let ((end (+ (float-time) 0.1)))
+          (while (< (float-time) end) (accept-process-output nil 0.01)))
+        ;; no request after the cancel: the script has no response left for one
+        (should (= (length superchat-test-requests) 1)))
+      (should-not (superchat-run-active "t"))
+      (should (equal (superchat-test-agent--events "t") '("retry" "cancelled"))))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status

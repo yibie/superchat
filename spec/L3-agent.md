@@ -67,8 +67,16 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - After `superchat-max-rounds` model responses in one run, the run ends with
   status `error` and an `error` event that says so. The calls of the last
   response are run first: the limit stops the next request.
-- An error from the model appends an `error` event and ends the run with
-  status `error`.
+- A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
+  `empty` is retried: the run appends an `event` with `:data`
+  `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a
+  line,
+  waits, and goes back to step 1. `superchat-agent-retry-waits` (a
+  `defvar`, `(2 4 8 16 32)`) holds a wait in seconds per retry; the count
+  restarts when a request answers. Tool calls and handoffs are never
+  retried. A run that waits is running.
+- Any other failure, or one with no wait left, appends an `error` event with
+  its message and ends the run with status `error`.
 - At most one run per timeline. `superchat-run` on a timeline that has one is
   an error. A handoff occupies its timeline like a run: while it is pending,
   `superchat-run` and a second handoff are errors, and `superchat-handoff`
@@ -130,8 +138,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   timer. A throw or a quit out of `superchat-tool-call` ends the run with
   status `error` (`cancelled` when it was cancelled meanwhile), the event
   saying that the call was interrupted, and goes on to where it is caught.
-- When a run ends, in this order: a tool of it that has not answered is
-  stopped; every call of its responses gets a result, a `tool` entry with
+- When a run ends, in this order: a wait for a retry is stopped; a tool of
+  it that has not answered is stopped; every call of its responses gets a result, a `tool` entry with
   `:error t` and the text `Cancelled.` for one that has none; the `user`
   entry is appended if it was not (before the `cancelled` event, after the
   `error` event); the `cancelled` or `error` event is appended; ON-ENTRY gets
@@ -152,7 +160,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   is still called exactly once. A cancel while the run is ending (ON-ENTRY
   given an entry the ending appended) does nothing: the status stays what
   the ending set.
-- `(superchat-cancel TAPE)` for a run: cancel its request, stop a tool that
+- `(superchat-cancel TAPE)` for a run: cancel its request or its wait, stop a tool that
   is running through the function `superchat-tool-call` returned, run no
   call of the current response that has not started, and end the run with
   status `cancelled`. The request is cancelled only while it has not
