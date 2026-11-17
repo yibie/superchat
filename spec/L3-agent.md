@@ -49,6 +49,15 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
     `error`, `:text` the text of the last `assistant` entry of this run (nil
     when it made none) and, for `error`, `:error` the text of the error
     event.
+- First, if the timeline's last run never ended (Emacs stopped during it),
+  the run appends, for each of its calls with no result, a `tool` entry with
+  `:error t` and the text
+  `Interrupted: Emacs stopped while this call ran; it may have had effects.`,
+  then an `interrupted` event; nothing is run or requested again. A run never
+  ended when, after the latest `user` entry, no `error` or `cancelled` event
+  comes and the last entry but events and notes is a `tool` entry, an
+  `assistant` entry with calls, or that `user` entry, unless an `error` event
+  comes right before it (a failed handoff).
 - After the `user` entry the run loops:
   1. it builds the messages (see "Messages"), or ends with the refusal;
   2. `superchat-llm-request` with the messages, `superchat-context-system`
@@ -70,8 +79,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
   `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a
-  line,
-  waits, and goes back to step 1. `superchat-agent-retry-waits` (a
+  line, waits, and goes back to step 1. `superchat-agent-retry-waits` (a
   `defvar`, `(2 4 8 16 32)`) holds a wait in seconds per retry; the count
   restarts when a request answers. Tool calls and handoffs are never
   retried. A run that waits is running.

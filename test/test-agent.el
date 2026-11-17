@@ -192,6 +192,60 @@
       (should-not (superchat-run-active "t"))
       (should (equal (superchat-test-agent--events "t") '("retry" "cancelled"))))))
 
+(defun superchat-test-agent--cut-off (&rest entries)
+  "Append ENTRIES, each (KIND TEXT DATA), to timeline t after a user entry."
+  (superchat-tape-append "t" 'user "first" :scope "home")
+  (pcase-dolist (`(,kind ,text ,data) entries)
+    (superchat-tape-append "t" kind text :data data)))
+
+(ert-deftest superchat-agent-a-run-cut-off-by-emacs-is-marked-before-the-next ()
+  (superchat-test-agent--with
+    (superchat-test-agent--cut-off
+     `(assistant "" (:calls (,(superchat-test-agent--call "c1" "echo" :x "a")
+                             ,(superchat-test-agent--call "c2" "poke"))))
+     '(tool "echo:a" (:call-id "c1" :name "echo" :error nil)))
+    (superchat-test-script (list '(:text "ok"))
+      (superchat-run "t" "again")
+      (let ((sent (plist-get (car superchat-test-requests) :messages)))
+        (should (string-match-p "\\`Interrupted: Emacs stopped"
+                                (plist-get (cl-find "c2" sent :key (lambda (m) (plist-get m :call-id))
+                                                    :test #'equal)
+                                           :text)))))
+    (let ((entries (nthcdr 3 (superchat-tape-entries :tape "t"))))
+      (should (equal (mapcar (lambda (e) (plist-get e :kind)) entries) '(tool event user assistant)))
+      (should (equal (plist-get (car entries) :data) '(:call-id "c2" :name "poke" :error t)))
+      (should (equal (plist-get (plist-get (nth 1 entries) :data) :type) "interrupted")))))
+
+(ert-deftest superchat-agent-only-a-run-that-never-ended-is-marked ()
+  (dolist (case `((((assistant "done" nil)) nil)
+                  (((assistant "" (:calls (,(superchat-test-agent--call "c1" "poke"))))
+                    (tool "Cancelled." (:call-id "c1" :name "poke" :error t))
+                    (event "Cancelled by the user." (:type "cancelled")))
+                   nil)
+                  (((tool "x" (:call-id "c9" :name "echo" :error nil))
+                    (event "boom" (:type "error")))
+                   nil)
+                  (() ("interrupted"))
+                  (((assistant "" (:calls (,(superchat-test-agent--call "c1" "note"))))
+                    (note "kept" (:title "k")))
+                   ("interrupted"))
+                  (((event "x" (:type "retry"))) ("interrupted"))))
+    (superchat-test-agent--with
+      (apply #'superchat-test-agent--cut-off (car case))
+      (let ((before (length (superchat-tape-entries :tape "t"))))
+        (superchat-test-script (list '(:text "ok")) (superchat-run "t" "again"))
+        (should (equal (cl-loop for e in (nthcdr before (superchat-tape-entries :tape "t"))
+                                when (eq (plist-get e :kind) 'event)
+                                collect (plist-get (plist-get e :data) :type))
+                       (cadr case))))))
+  ;; A failed handoff ends with its error event and then the user entry.
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'event "Handoff failed: x" :data '(:type "error") :scope "home")
+    (superchat-tape-append "t" 'user "hello")
+    (superchat-test-script (list '(:text "ok")) (superchat-run "t" "again"))
+    (should-not (cl-find "interrupted" (superchat-tape-entries :tape "t" :kinds '(event))
+                         :key (lambda (e) (plist-get (plist-get e :data) :type)) :test #'equal))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status
@@ -1002,15 +1056,16 @@
 (ert-deftest superchat-agent-run-start-handoff-that-cannot-start-keeps-the-user-text ()
   (superchat-test-agent--with
     (superchat-tape-append "t" 'user (make-string 500 ?x) :scope "home")
+    (superchat-tape-append "t" 'assistant "ok")
     (let ((superchat-context-chars 100) res
           (superchat-llm-request-function (lambda (&rest _) (user-error "No model set"))))
       (superchat-run "t" "MY TEXT" :on-done (lambda (r) (setq res r)))
       (should (eq (plist-get res :status) 'error))
       (should (string-match-p "No model set" (plist-get res :error)))
       (should-not (superchat-run-active "t"))
-      (should (equal (superchat-test-agent--types "t") '(user error user)))
+      (should (equal (superchat-test-agent--types "t") '(user assistant error user)))
       (should (equal (plist-get (car (last (superchat-tape-entries :tape "t"))) :text) "MY TEXT"))
-      (should (equal (plist-get (nth 1 (superchat-tape-entries :tape "t")) :text)
+      (should (equal (plist-get (nth 2 (superchat-tape-entries :tape "t")) :text)
                      (plist-get res :error))))))
 
 (ert-deftest superchat-agent-run-start-handoff-uses-the-runs-model ()
@@ -1025,11 +1080,12 @@
 (ert-deftest superchat-agent-failed-handoff-error-is-the-events-text ()
   (superchat-test-agent--with
     (superchat-tape-append "t" 'user (make-string 500 ?x) :scope "home")
+    (superchat-tape-append "t" 'assistant "ok")
     (let ((superchat-context-chars 100) res)
       (superchat-test-script (list '(:error "boom"))
         (superchat-run "t" "hello" :on-done (lambda (r) (setq res r))))
       (should (equal (plist-get res :error) "Handoff failed: boom"))
-      (should (equal (plist-get (nth 1 (superchat-tape-entries :tape "t")) :text)
+      (should (equal (plist-get (nth 2 (superchat-tape-entries :tape "t")) :text)
                      "Handoff failed: boom")))))
 
 (ert-deftest superchat-agent-on-entry-cancelling-the-user-entry-ends-once ()
@@ -1395,6 +1451,7 @@ request made from the same entries with room for all of them."
 (ert-deftest superchat-agent-a-cancel-that-cannot-stop-the-request-drops-its-answer ()
   (superchat-test-agent--with
     (superchat-tape-append "t" 'user (make-string 500 ?x) :scope "home")
+    (superchat-tape-append "t" 'assistant "ok")
     (let ((superchat-context-chars 100) (superchat-test-async t) dones)
       (superchat-test-script (list '(:text "SUM\nNEXT: n") '(:text "ans"))
         (cl-letf (((symbol-function 'superchat-llm-cancel) (lambda (_) (error "cancel broke"))))
@@ -1402,7 +1459,7 @@ request made from the same entries with room for all of them."
           (superchat-cancel "t"))
         (superchat-test-agent--idle))
       (should (equal dones '(cancelled)))
-      (should (equal (superchat-test-agent--types "t") '(user error user cancelled)))
+      (should (equal (superchat-test-agent--types "t") '(user assistant error user cancelled)))
       (should-not (superchat-tape-entries :tape "t" :kinds '(anchor))))))
 
 (ert-deftest superchat-agent-a-cancelled-handoff-drops-its-late-answer ()

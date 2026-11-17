@@ -408,6 +408,36 @@ is on the Tape, so the next request is built from it as the first was."
                                     (and (plist-get run :ephemeral) (list :ephemeral t))))
                      :id))))
 
+(defun superchat-agent--mark-interrupted (tape)
+  "When the last run of TAPE never ended (Emacs stopped during it), append a
+result for each call it left unanswered and an `interrupted' event, so the
+model and the person know that a call may have had its effect."
+  (when-let* ((user (car (superchat-tape-entries :tape tape :kinds '(user) :newest t :limit 1))))
+    (let* ((tail (superchat-tape-entries :tape tape :after (plist-get user :id)))
+           (before (car (superchat-tape-entries :tape tape :before (plist-get user :id)
+                                                :newest t :limit 1)))
+           (last (or (car (last (seq-remove (lambda (e) (memq (plist-get e :kind) '(event note)))
+                                            tail)))
+                     user))
+           (answered (mapcar (lambda (e) (plist-get (plist-get e :data) :call-id))
+                             (seq-filter (lambda (e) (eq (plist-get e :kind) 'tool)) tail))))
+      (when (and (not (seq-find (lambda (e) (member (plist-get (plist-get e :data) :type)
+                                                    '("error" "cancelled")))
+                                tail))
+                 (pcase (plist-get last :kind)
+                   ;; A failed handoff ends with its error event, then the user entry.
+                   ('user (not (equal (plist-get (plist-get before :data) :type) "error")))
+                   ('assistant (plist-get (plist-get last :data) :calls))
+                   ('tool t)))
+        (dolist (e tail)
+          (dolist (call (and (eq (plist-get e :kind) 'assistant) (plist-get (plist-get e :data) :calls)))
+            (unless (member (plist-get call :id) answered)
+              (superchat-tape-append
+               tape 'tool "Interrupted: Emacs stopped while this call ran; it may have had effects."
+               :data (list :call-id (plist-get call :id) :name (plist-get call :name) :error t)))))
+        (superchat-tape-append tape 'event "The last run was cut off: Emacs stopped before it ended."
+                               :data (list :type "interrupted"))))))
+
 (defun superchat-agent--begin (run)
   "Append the user entry of RUN and make its first request, unless ON-ENTRY
 ended the run on that entry."
@@ -428,6 +458,7 @@ entry appended, ON-DONE the run, once, with :status done, cancelled or error,
 the user entry: the timeline is one question, not a conversation."
   (when (gethash tape superchat-agent--runs)
     (error "Timeline %s is busy with a run or a handoff" tape))
+  (superchat-agent--mark-interrupted tape)
   (let* ((last (car (superchat-tape-entries :tape tape :newest t :limit 1)))
          (id (if last (plist-get last :id) 0))
          ;; Every key is there from the start: `setf' of a missing one makes a new list.
