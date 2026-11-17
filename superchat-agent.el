@@ -349,10 +349,11 @@ tool that has not answered yet."
                                 (when (superchat-agent--live run)
                                   (superchat-agent--guard
                                    run (lambda () (superchat-agent--respond run response)))))
-                     :on-error (lambda (why)
+                     :on-error (lambda (failure)
                                  (superchat-agent--answered-request run)
                                  (when (superchat-agent--live run)
-                                   (superchat-agent--end run 'error why))))))))))))
+                                   (superchat-agent--end
+                                    run 'error (plist-get failure :message)))))))))))))
 
 (defun superchat-agent--add-user (run)
   "Append the user entry of RUN, if it is unsent."
@@ -509,9 +510,9 @@ left `superchat-agent--runs' (it was cancelled) is dropped."
                               why (unless anchor "The model gave no summary."))
                       (error (setq why (error-message-string err))))
                     (funcall on-done anchor why))))
-     :on-error (lambda (why)
+     :on-error (lambda (failure)
                  (when (eq (gethash tape superchat-agent--runs) owner)
-                   (funcall on-done nil why))))))
+                   (funcall on-done nil (plist-get failure :message)))))))
 
 (defun superchat-handoff (tape &optional name on-done)
   "Ask the model, with no tools, to summarise TAPE and say what comes next;

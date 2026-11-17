@@ -175,7 +175,8 @@ RESOLVE, when given, is its API key resolver."
 (ert-deftest superchat-llm-error-stop-goes-to-on-error ()
   (test-llm-with (list '(:stop "error" :error "429 slow down"))
     (let ((r (test-llm--ask (list (test-llm--user "hi")))))
-      (should (equal (plist-get r :errors) '("429 slow down")))
+      (should (equal (plist-get r :errors)
+                     '((:message "429 slow down" :kind rate-limit :status 429))))
       (should-not (plist-get r :done)))))
 
 (ert-deftest superchat-llm-aborted-stop-calls-neither ()
@@ -208,13 +209,13 @@ RESOLVE, when given, is its API key resolver."
   (test-llm-with (list '(:raise t))
     (let ((r (test-llm--ask (list (test-llm--user "hi")))))
       (should (= (length (plist-get r :errors)) 1))
-      (should (string-match-p "Boom at start" (car (plist-get r :errors))))
+      (should (string-match-p "Boom at start" (plist-get (car (plist-get r :errors)) :message)))
       (should-not (plist-get r :done))))
   ;; a message the bridge cannot be given fails inside the module, same route
   (test-llm-with nil
     (let ((r (test-llm--ask (list '(:role system :text "x")))))
       (should (= (length (plist-get r :errors)) 1))
-      (should (string-match-p "role" (car (plist-get r :errors))))
+      (should (string-match-p "role" (plist-get (car (plist-get r :errors)) :message)))
       (should-not test-llm--calls))))
 
 (ert-deftest superchat-llm-an-error-in-on-done-is-the-callers ()
@@ -442,7 +443,7 @@ RESOLVE, when given, is its API key resolver."
                     :on-done (lambda (x) (push x done))
                     :on-error (lambda (x) (push x errors)))))
       (test-llm--settle)
-      (should (equal errors '("bad a")))
+      (should (equal errors '((:message "bad a" :kind other))))
       (should-not done)
       (should (equal texts '("a")))
       (should (superchat-bridge-abort-signal-aborted-p
@@ -669,14 +670,14 @@ finished messages and the messages the third request sent."
     (test-llm--ask (list (test-llm--user "hi")))
     (let ((options (plist-get (car test-llm--calls) :options)))
       (should (equal (plist-get options :timeout-ms) 600000))
-      (should (equal (plist-get options :max-retries) 2)))))
+      (should (equal (plist-get options :max-retries) 0)))))
 
-(ert-deftest superchat-llm-deepseek-429-retry-after-0-then-200 ()
-  (let* ((starts 0) (requests nil) (timers nil)
+(defun test-llm--http (status-line body)
+  "Ask DeepSeek through the real bridge; its one HTTP request answers
+STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
+  (let* ((starts 0) (requests nil)
          (process-environment (list "DEEPSEEK_API_KEY=dummy" "HOME=/nonexistent"))
-         (superchat-bridge-retry-run-at-time-function
-          ;; the 600 s response timeout is never run; only the short backoff
-          (lambda (secs _repeat fn) (when (< secs 100) (push fn timers)) fn))
+         (superchat-bridge-retry-run-at-time-function (lambda (_secs _repeat fn) fn))
          (superchat-bridge-retry-cancel-timer-function #'ignore)
          (superchat-bridge-http-start-function
           (lambda (_args _config _stdin on-output on-exit)
@@ -688,36 +689,52 @@ finished messages and the messages the third request sent."
          (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
          (superchat-llm-request-function #'superchat-llm--request)
          (r (test-llm--ask (list (test-llm--user "hi")))))
-    (should (= starts 1))
     (pcase-let ((`(,on-output ,on-exit) (car requests)))
       (funcall on-output
                (encode-coding-string
-                (concat "HTTP/1.1 429 Too Many Requests\r\nretry-after: 0\r\n"
-                        "Content-Type: application/json\r\n\r\n"
-                        "{\"error\":{\"message\":\"slow down\"}}")
-                'utf-8))
-      (funcall on-exit 0 ""))
-    (should-not (plist-get r :done))
-    (should-not (plist-get r :errors))
-    (let ((end (+ (float-time) 3)))
-      (while (and (< starts 2) (< (float-time) end))
-        (while timers (funcall (pop timers)))
-        (accept-process-output nil 0.01)))
-    (should (= starts 2))
-    (pcase-let ((`(,on-output ,on-exit) (car requests)))
-      (funcall on-output
-               (encode-coding-string
-                (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
-                        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}\n\n"
-                        "data: {\"id\":\"c\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
-                        "data: [DONE]\n\n")
+                (concat status-line "\r\nretry-after: 0\r\nContent-Type: application/json\r\n\r\n"
+                        body)
                 'utf-8))
       (funcall on-exit 0 ""))
     (test-llm--settle)
-    (should-not (plist-get r :errors))
-    (should (= (length (plist-get r :done)) 1))
-    (should (equal (plist-get (car (plist-get r :done)) :text) "hi"))
-    (should (= starts 2))))
+    (cons starts r)))
+
+(ert-deftest superchat-llm-a-failure-is-tried-once-and-says-its-kind ()
+  (pcase-dolist (`(,line ,body ,kind ,status)
+                 '(("HTTP/1.1 429 Too Many Requests" "{\"error\":{\"message\":\"slow down\"}}"
+                    rate-limit 429)
+                   ("HTTP/1.1 503 Service Unavailable" "{\"error\":{\"message\":\"overloaded\"}}"
+                    server 503)
+                   ("HTTP/1.1 429 Too Many Requests"
+                    "{\"error\":{\"message\":\"insufficient_quota: out of credit\"}}"
+                    other 429)
+                   ("HTTP/1.1 401 Unauthorized" "{\"error\":{\"message\":\"bad key\"}}"
+                    other 401)))
+    (pcase-let ((`(,starts . ,r) (test-llm--http line body)))
+      (should (= starts 1))
+      (should-not (plist-get r :done))
+      (should (= (length (plist-get r :errors)) 1))
+      (let ((failure (car (plist-get r :errors))))
+        (should (eq (plist-get failure :kind) kind))
+        (should (eql (plist-get failure :status) status))
+        (should (string-match-p (number-to-string status) (plist-get failure :message)))))))
+
+(ert-deftest superchat-llm-a-timeout-and-a-lost-connection-say-their-kind ()
+  (dolist (case '(("Request timed out." . timeout)
+                  ("Connection error: connection refused" . network)
+                  ("Some refusal" . other)))
+    (test-llm-with (list (list :stop "error" :error (car case)))
+      (let ((failure (car (plist-get (test-llm--ask (list (test-llm--user "hi"))) :errors))))
+        (should (equal failure (list :message (car case) :kind (cdr case))))))))
+
+(ert-deftest superchat-llm-an-empty-response-is-a-failure ()
+  (test-llm-with (list '(:stop "stop") '(:thinking "hm" :stop "stop"))
+    (dotimes (_ 2)
+      (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+        (should-not (plist-get r :done))
+        (should (eq (plist-get (car (plist-get r :errors)) :kind) 'empty)))))
+  (test-llm-with (list '(:calls (("c1" "t" nil))))
+    (should (plist-get (test-llm--ask (list (test-llm--user "hi"))) :done))))
 
 (ert-deftest superchat-llm-a-provider-entry-that-signals-is-named-and-isolated ()
   (test-llm-with (list '(:text "ok"))
@@ -797,7 +814,7 @@ finished messages and the messages the third request sent."
                                 nil (lambda (&rest _) (error "Vault locked")))))))
     (let ((r (test-llm--ask (list (test-llm--user "hi")))))
       (should (= (length (plist-get r :errors)) 1))
-      (should (string-match-p "Vault locked" (car (plist-get r :errors))))
+      (should (string-match-p "Vault locked" (plist-get (car (plist-get r :errors)) :message)))
       (should-not (plist-get r :done))
       (should-not test-llm--calls))))
 

@@ -30,7 +30,8 @@ binds `superchat-directory' to."
 
 (defmacro superchat-test-script (responses &rest body)
   "Run BODY with a model that answers from RESPONSES, in order.
-Each response is (:text S :calls CALLS), or (:error S), or a function of
+Each response is (:text S :calls CALLS), or (:error S :kind K :status N),
+K default `other' and N optional, or a function of
 the request plist returning one of those.  Each is delivered at once, the
 text first through ON-TEXT.  Asking after the last response is an error."
   (declare (indent 1) (debug t))
@@ -51,7 +52,10 @@ text first through ON-TEXT.  Asking after the last response is an error."
                 handle
                 (lambda ()
                   (if-let* ((why (plist-get response :error)))
-                      (funcall (plist-get keys :on-error) why)
+                      (funcall (plist-get keys :on-error)
+                               (append (list :message why :kind (or (plist-get response :kind) 'other))
+                                       (and (plist-get response :status)
+                                            (list :status (plist-get response :status)))))
                     (when-let* ((on-text (plist-get keys :on-text))
                                 (text (plist-get response :text)))
                       (funcall on-text text))

@@ -26,19 +26,22 @@ appended.
 
 - **L2.** `superchat-llm-request` makes one attempt: it passes
   `:max-retries 0` to the bridge. ON-ERROR is called with a plist
-  `(:message S :kind KIND :status N :retry-after SECONDS)`; `:status` and
-  `:retry-after` are present only when known. KIND is one of `rate-limit`
+  `(:message S :kind KIND :status N)`; `:status` is present only when
+  known. KIND is one of `rate-limit`
   (status 429), `server` (status 500 and above), `timeout`, `network`,
   `empty` (the response ended with neither text nor calls) and `other`.
   `superchat-llm.el`, the only file that knows the bridge, takes these
-  facts from what the bridge gives; nothing above it reads error text.
+  facts from the bridge's error message, with the bridge's own classifier
+  of passing failures (`superchat-bridge-retryable-assistant-error-p`), so
+  a quota or billing limit sent as a 429 is `other`; nothing above it reads
+  error text.
 - **L3.** When a request of a run fails with KIND `rate-limit`, `server`,
   `timeout`, `network` or `empty`, the run does not end. It appends an
   `event` of type `retry` with `:data` `(:kind :status :wait :attempt :of)`
   and a line a person can read, such as
   `Request failed (429); trying again in 8 s (2/5).`, waits, and goes back
   to step 1. The waits are 2, 4, 8, 16 and 32 seconds, from a `defvar` a
-  test can bind; a `:retry-after` is used instead, up to 60 seconds. After
+  test can bind. After
   the fifth retry the run ends with status `error` as it does now. The count
   starts again for each request of the run. `superchat-cancel` during a wait
   stops the timer and ends the run with status `cancelled`.
@@ -65,6 +68,10 @@ Each layer's part is its own commit, L2 first.
 - Let L3 decide from the error text. Not taken: the text is the bridge's
   and the provider's, and it would be read in a file that must not know the
   bridge.
+- Wait as long as the provider's `Retry-After` header says. Not taken: the
+  bridge reads that header for its own retries and gives the caller only
+  the error message; carrying it out would change the bridge, which is a
+  port of pi's package kept close to its source.
 - User options for the count and the waits. Not taken now: rule 2 allows
   no `defcustom` the specification does not list; constants come first.
 - Switch to another model or provider when a request keeps failing. Not
@@ -80,8 +87,6 @@ Each layer's part is its own commit, L2 first.
   now.
 - Five retryable failures and a sixth end the run with status `error`
   after five `retry` events.
-- A `:retry-after` of 3 seconds makes the wait 3 seconds; one of 600 makes
-  it 60.
 - `superchat-cancel` during a wait ends the run `cancelled`, and no request
   is made after it.
 - `superchat-llm-request` passes `:max-retries 0`, and a test pins how the

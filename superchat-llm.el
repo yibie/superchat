@@ -13,6 +13,7 @@
 (require 'superchat-bridge-provider-deepseek)
 (require 'superchat-bridge-providers)
 (require 'superchat-bridge-utils-abort)
+(require 'superchat-bridge-utils-retry)
 
 (defvar superchat-llm-providers
   (cons '("deepseek" . superchat-bridge-deepseek-provider)
@@ -259,6 +260,26 @@ keeps it if it made calls."
           :calls calls
           :model (superchat-bridge-assistant-message-model message))))
 
+(defun superchat-llm--failure (message)
+  "The failure of MESSAGE, a bridge message that ended with an error, as
+ON-ERROR gets it.  Its text is all the bridge gives: the status leads it, and
+the bridge's own classifier tells a passing failure from a quota or a refusal."
+  (let* ((text (or (superchat-bridge-assistant-message-error-message message) ""))
+         (status (and (string-match "\\`\\([1-5][0-9][0-9]\\)[ :]" text)
+                      (string-to-number (match-string 1 text))))
+         (case-fold-search t))
+    (append
+     (list :message (if (string-empty-p text) "The model failed with no message" text)
+           :kind (cond ((not (superchat-bridge-retryable-assistant-error-p message)) 'other)
+                       ((or (eql status 429) (string-match-p "rate.?limit\\|too many requests" text))
+                        'rate-limit)
+                       ((string-match-p "timed? out\\|timeout" text) 'timeout)
+                       ((or status (string-match-p "overload\\|capacity\\|busy\\|unavailable\\|server"
+                                                   text))
+                        'server)
+                       (t 'network)))
+     (and status (list :status status)))))
+
 (cl-defun superchat-llm--request (messages &key system tools model
                                            on-text on-done on-error)
   "Ask the provider once.  Arguments as `superchat-llm-request'."
@@ -279,13 +300,13 @@ keeps it if it made calls."
                 (superchat-bridge-models-stream-simple
                  (superchat-llm--models) pi-model
                  (superchat-llm--context messages system tools pi-model)
-                 ;; As pi's own client: ten minutes for the response to start,
-                 ;; two more tries when the provider says to try again.
-                 (append (list :signal abort :timeout-ms 600000 :max-retries 2)
+                 ;; Ten minutes for the response to start, one try: a retry
+                 ;; is the run's, which shows it, and two owners multiply.
+                 (append (list :signal abort :timeout-ms 600000 :max-retries 0)
                          (when superchat-llm-reasoning
                            (list :reasoning (symbol-name superchat-llm-reasoning)))))))
       (error (setf (plist-get handle :finished) t)
-             (funcall on-error (error-message-string err))))
+             (funcall on-error (list :message (error-message-string err) :kind 'other))))
     (when keyless
       (let* ((provider (superchat-bridge-models-get-provider
                         (superchat-llm--models) superchat-llm-provider))
@@ -309,18 +330,23 @@ keeps it if it made calls."
                (funcall on-text (superchat-bridge-assistant-message-event-delta event))
              (error (setf (plist-get handle :finished) t)
                     (superchat-bridge-abort-signal-abort abort)
-                    (funcall on-error (error-message-string err))))))
+                    (funcall on-error (list :message (error-message-string err)
+                                            :kind 'other))))))
        (lambda ()
          (unless (or (plist-get handle :cancelled) (plist-get handle :finished))
            (setf (plist-get handle :finished) t)
            (let* ((message (superchat-bridge-event-stream-result stream))
                   (reason (and message (superchat-bridge-assistant-message-stop-reason message))))
              (cond ((equal reason "aborted"))
-                   ((or (null message) (equal reason "error"))
-                    (funcall on-error
-                             (or (and message (superchat-bridge-assistant-message-error-message message))
-                                 "The model gave no response")))
-                   (t (funcall on-done (superchat-llm--result message messages)))))))))
+                   ((null message)
+                    (funcall on-error (list :message "The model gave no response" :kind 'network)))
+                   ((equal reason "error") (funcall on-error (superchat-llm--failure message)))
+                   (t (let ((result (superchat-llm--result message messages)))
+                        (if (or (plist-get result :calls)
+                                (not (string-empty-p (plist-get result :text))))
+                            (funcall on-done result)
+                          (funcall on-error (list :message "The model gave an empty response"
+                                                  :kind 'empty)))))))))))
     handle))
 
 (cl-defun superchat-llm-request (messages &key system tools model
@@ -328,7 +354,8 @@ keeps it if it made calls."
   "Ask the model once for a response to MESSAGES; return a handle.
 SYSTEM is the system prompt, TOOLS a list of tool specs, MODEL overrides
 `superchat-llm-model'.  ON-TEXT gets each new piece of streamed text,
-ON-DONE gets (:text S :calls CALLS :model S), ON-ERROR a string.  Tool
+ON-DONE gets (:text S :calls CALLS :model S), ON-ERROR a plist
+(:message S :kind KIND :status N), :status only when known.  Tool
 calls come back in ON-DONE and are never run here."
   (funcall superchat-llm-request-function messages
            :system system :tools tools :model model

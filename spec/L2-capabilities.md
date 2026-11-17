@@ -21,8 +21,17 @@ requires `llm.el`.
     They become the bridge tools with a JSON-schema object as parameters.
   - ON-TEXT is called with each piece of streamed text. ON-DONE is called
     once with `(:text S :calls CALLS :model S)`. ON-ERROR is called once
-    with a string. Exactly one of ON-DONE and ON-ERROR is called, unless the
-    request is cancelled, and then neither.
+    with `(:message S :kind KIND :status N)`, `:status` only when the
+    provider gave one. Exactly one of ON-DONE and ON-ERROR is called, unless
+    the request is cancelled, and then neither.
+  - KIND says whether waiting may help: `rate-limit` (status 429 or a rate
+    limit named), `timeout`, `server` (a status of 500 and above, an
+    overloaded or unavailable server), `network` (the connection failed, or
+    the stream ended with no response), `empty` (a response with neither
+    text nor calls) and `other`: everything else, a quota or a billing limit
+    among them. The kind is taken from the bridge's error message by the
+    bridge's own classifier of passing failures; nothing above this module
+    reads error text.
   - The `:model` of ON-DONE is the id of the model that was asked.
   - Every call the model made comes back in CALLS with the id the provider
     gave it and `:args` as a plist with keyword keys, also a call that names
@@ -31,18 +40,19 @@ requires `llm.el`.
     with `:args` nil. A call the provider gave no id, or an id that a kept
     message, an assistant message of this request's MESSAGES or an earlier
     call of the same response already has, gets one made here.
-  - A request waits ten minutes for the response to start and is tried up to
-    two more times when the provider says to try again.
+  - A request waits ten minutes for the response to start and is tried once;
+    trying again is the run's (L3).
   - A response that ends with the bridge's stop reason `error` goes to ON-ERROR
     with its error message; `aborted` calls neither; every other stop reason
-    goes to ON-DONE.
+    goes to ON-DONE, but a response with neither text nor calls, which goes
+    to ON-ERROR with kind `empty`.
   - A signal raised while the request is started is delivered through
-    ON-ERROR; `superchat-llm-request` itself signals a `user-error` only when
+    ON-ERROR, kind `other`; `superchat-llm-request` itself signals a `user-error` only when
     `superchat-llm-provider` or the model is not set or not known, when
     `superchat-llm-reasoning` is not one of its values, or when the provider
     has no API key; the message says what to set.
   - When ON-TEXT signals, the request is aborted and ON-ERROR is called once
-    with the error's message. An error raised by ON-DONE or ON-ERROR is the
+    with the error's message, kind `other`. An error raised by ON-DONE or ON-ERROR is the
     caller's to catch: it is not delivered anywhere.
   - The model's reasoning is never on the Tape and never in ON-DONE. This
     module keeps, in memory, the whole assistant message the bridge gave for a response
