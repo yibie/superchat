@@ -640,7 +640,9 @@ appended among them: one that reached the Tape another way is shown too."
        (lambda ()
          (dolist (entry new)
            (pcase (plist-get entry :kind)
-             ('user (set-marker superchat-chat--turn superchat-chat--block)
+             ;; Entries of the turn before that came with it are drawn first.
+             ('user (when superchat-chat--entries (superchat-chat--draw))
+                    (set-marker superchat-chat--turn superchat-chat--block)
                     (setq superchat-chat--entries nil))
              ;; The entry replaces what streamed; a retry discards it.
              ('assistant (delete-region superchat-chat--stream superchat-chat--stream-end))

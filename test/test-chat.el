@@ -1070,6 +1070,18 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-k"))))
         (should-not (superchat-test-chat--waiting buffer))))))
 
+(ert-deftest superchat-chat-shows-a-run-cut-off-by-emacs ()
+  (superchat-test-chat--with
+    (superchat-tape-append "t1" 'user "first" :scope (superchat-test-chat--scope))
+    (superchat-tape-append "t1" 'assistant ""
+                           :data '(:calls ((:id "c1" :name "echo" :args (:x "a")))))
+    (let ((buffer (superchat-chat-open "t1")))
+      (superchat-test-script (list '(:text "Back."))
+        (with-current-buffer buffer (superchat-chat-send "again")))
+      (let ((text (superchat-test-chat--text buffer)))
+        (should (string-match-p "✗ echo" text))
+        (should (string-match-p "The last run was cut off: Emacs stopped before it ended." text))))))
+
 (ert-deftest superchat-chat-waiting-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during)

@@ -45,7 +45,8 @@ derived from `org-mode`.
     Org (the Tape keeps the Markdown). Answer is never folded but by the
     person;
   - the turn's other entries (permission events but those tied to no
-    call, cancelled, error, level and retry events, notes, anchors), each as its
+    call, cancelled, error, level, retry and interrupted events, notes,
+    anchors), each as its
     own lines, in order.
   The strip of a turn is one cell for each of its calls and intermediate
   texts, in order: `•` in `shadow` for an intermediate text, `▮` for a
