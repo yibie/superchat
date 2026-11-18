@@ -64,7 +64,7 @@
 
 (ert-deftest superchat-tape-holds-every-kind-of-spec-md ()
   (superchat-test-with-tape
-    (dolist (kind '(user assistant tool anchor note event inbox))
+    (dolist (kind '(user assistant tool anchor note event inbox timer))
       (should (eq (plist-get (superchat-tape-append "t" kind "x" :scope "home") :kind) kind)))))
 
 (ert-deftest superchat-tape-rejects-unknown-kind ()

@@ -11,7 +11,7 @@
 (require 'project)
 (require 'superchat)
 
-(defconst superchat-tape--kinds '("user" "assistant" "tool" "anchor" "note" "event" "inbox"))
+(defconst superchat-tape--kinds '("user" "assistant" "tool" "anchor" "note" "event" "inbox" "timer"))
 
 (defconst superchat-tape--schema
   '("CREATE TABLE IF NOT EXISTS entry (
