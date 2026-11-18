@@ -306,4 +306,6 @@ Plugins live in another repository. This one ships none.
   (`superchat-question`), oldest first: `YYYY-MM-DD HH:MM  TIMELINE
   FIRST-LINE`, a question's ending `  ? waits for y, n or a`; `Nothing was sent.` when there is none. Point goes to the
   newest. `g` draws it again; `RET` (`superchat-messages-open`) opens the
-  chat buffer of the line's timeline.
+  chat buffer of the line's timeline. On a question's line, `y`, `n` or `a`
+  (`superchat-messages-answer`) sends that key from its chat buffer, draws
+  the buffer again and shows the chat buffer.

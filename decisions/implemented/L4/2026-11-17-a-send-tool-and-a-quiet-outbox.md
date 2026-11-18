@@ -57,3 +57,6 @@ Tape needs no state and no hook into the inbox.
 `? waits for y, n or a`, and `RET` opens its timeline. In the person's own
 use an unattended run stopped at a question that no buffer showed and no
 command opened: the person saw the run's return value and nothing else.
+On a question's line, `y`, `n` or `a` answers it from its chat buffer: the
+person, shown the question there, typed `y` in the messages buffer, where it
+did nothing.

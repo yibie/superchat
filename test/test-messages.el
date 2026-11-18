@@ -34,8 +34,17 @@
             (superchat-messages)
             (should (string-match-p "  c  shell (:command \"ls\")  \\? waits for y, n or a\n\\'"
                                     (with-current-buffer "*superchat: messages*" (buffer-string))))
-            (superchat-tape-append "c" 'event "yes" :data '(:type "answer" :call-id "q1"))
-            (superchat-messages)
+            ;; y on its line answers it from the chat buffer.
+            (let (answered)
+              (cl-letf (((symbol-function 'superchat-answer)
+                         (lambda (tape answer &rest _) (setq answered (list tape answer))
+                           (superchat-tape-append "c" 'event "yes"
+                                                  :data '(:type "answer" :call-id "q1")))))
+                (with-current-buffer "*superchat: messages*"
+                  (goto-char (point-max))
+                  (forward-line -1)
+                  (let ((last-command-event ?y)) (superchat-messages-answer))))
+              (should (equal answered '("c" allow))))
             (should-not (string-search "waits for"
                                        (with-current-buffer "*superchat: messages*" (buffer-string)))))
         (dolist (b (buffer-list))

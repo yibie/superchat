@@ -14,6 +14,9 @@
 (defvar-keymap superchat-messages-mode-map
   :parent special-mode-map
   "RET" #'superchat-messages-open
+  "y" #'superchat-messages-answer
+  "n" #'superchat-messages-answer
+  "a" #'superchat-messages-answer
   "g" #'superchat-messages)
 
 (define-derived-mode superchat-messages-mode special-mode "Superchat-Messages"
@@ -39,7 +42,8 @@ the person, newest last."
           (insert (propertize (format "%s  %s  %s%s\n" (format-time-string "%F %R" at) tape
                                       (car (split-string text "\n"))
                                       (if (equal type "question") "  ? waits for y, n or a" ""))
-                              'superchat-messages-tape tape)))
+                              'superchat-messages-tape tape
+                              'superchat-messages-question (equal type "question"))))
         (unless sent (insert "Nothing was sent.\n")))
       (goto-char (point-max))
       (forward-line -1)
@@ -51,6 +55,18 @@ the person, newest last."
   (pop-to-buffer (superchat-chat-open
                   (or (get-text-property (point) 'superchat-messages-tape)
                       (user-error "No message on this line")))))
+
+(defun superchat-messages-answer ()
+  "Answer the question at point with the key typed, y, n or a, as its chat
+buffer would, and show that buffer."
+  (interactive)
+  (unless (get-text-property (point) 'superchat-messages-question)
+    (user-error "No question on this line"))
+  (let ((chat (superchat-chat-open (get-text-property (point) 'superchat-messages-tape))))
+    (with-current-buffer chat
+      (superchat-chat-send (string last-command-event)))
+    (superchat-messages)
+    (pop-to-buffer chat)))
 
 (provide 'superchat-messages)
 ;;; superchat-messages.el ends here
