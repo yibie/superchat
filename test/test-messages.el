@@ -26,7 +26,18 @@
                                       (buffer-string)))
               ;; Point is on the newest; RET opens its conversation.
               (superchat-messages-open)
-              (should (equal (buffer-local-value 'superchat-chat--tape (current-buffer)) "b"))))
+              (should (equal (buffer-local-value 'superchat-chat--tape (current-buffer)) "b")))
+            ;; A question shows while it waits, and not once answered.
+            (superchat-tape-append "c" 'user "go" :scope "home")
+            (superchat-tape-append "c" 'event "shell (:command \"ls\")"
+                                   :data '(:type "question" :call-id "q1"))
+            (superchat-messages)
+            (should (string-match-p "  c  shell (:command \"ls\")  \\? waits for y, n or a\n\\'"
+                                    (with-current-buffer "*superchat: messages*" (buffer-string))))
+            (superchat-tape-append "c" 'event "yes" :data '(:type "answer" :call-id "q1"))
+            (superchat-messages)
+            (should-not (string-search "waits for"
+                                       (with-current-buffer "*superchat: messages*" (buffer-string)))))
         (dolist (b (buffer-list))
           (when (or (buffer-local-value 'superchat-chat--tape b)
                     (equal (buffer-name b) "*superchat: messages*"))

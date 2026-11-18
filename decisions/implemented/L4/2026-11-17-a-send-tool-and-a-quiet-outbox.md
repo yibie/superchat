@@ -50,3 +50,10 @@ Tape needs no state and no hook into the inbox.
   evals, and this repository has none yet.
 - The tool and the prompt are in `spec/L4-background.md`, the buffer in
   `spec/L5-interface.md`, which may hold 3600 words.
+
+## Refinement, 2026-11-18
+
+`superchat-messages` also lists each question that waits, ending
+`? waits for y, n or a`, and `RET` opens its timeline. In the person's own
+use an unattended run stopped at a question that no buffer showed and no
+command opened: the person saw the run's return value and nothing else.

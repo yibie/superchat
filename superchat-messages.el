@@ -20,18 +20,25 @@
   "What runs sent to the person, newest last.  RET opens its conversation.")
 
 (defun superchat-messages ()
-  "Show what runs sent with the `send' tool, newest last."
+  "Show what runs sent with the `send' tool and the questions that wait for
+the person, newest last."
   (interactive)
-  (let ((sent (superchat-tape-select
-               (concat "SELECT tape, text, at FROM entry WHERE kind = 'event'"
-                       " AND json_extract(data, '$.type') = 'sent' ORDER BY id"))))
+  (let ((sent (seq-filter
+               (pcase-lambda (`(,id ,tape ,_ ,_ ,type))
+                 (or (equal type "sent")
+                     (equal (plist-get (superchat-question tape) :id) id)))
+               (superchat-tape-select
+                (concat "SELECT id, tape, text, at, json_extract(data, '$.type') FROM entry"
+                        " WHERE kind = 'event' AND json_extract(data, '$.type')"
+                        " IN ('sent', 'question') ORDER BY id")))))
     (with-current-buffer (get-buffer-create "*superchat: messages*")
       (let ((inhibit-read-only t))
         (superchat-messages-mode)
         (erase-buffer)
-        (pcase-dolist (`(,tape ,text ,at) sent)
-          (insert (propertize (format "%s  %s  %s\n" (format-time-string "%F %R" at) tape
-                                      (car (split-string text "\n")))
+        (pcase-dolist (`(,_ ,tape ,text ,at ,type) sent)
+          (insert (propertize (format "%s  %s  %s%s\n" (format-time-string "%F %R" at) tape
+                                      (car (split-string text "\n"))
+                                      (if (equal type "question") "  ? waits for y, n or a" ""))
                               'superchat-messages-tape tape)))
         (unless sent (insert "Nothing was sent.\n")))
       (goto-char (point-max))

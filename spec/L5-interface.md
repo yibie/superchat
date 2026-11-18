@@ -302,7 +302,8 @@ Plugins live in another repository. This one ships none.
 
 - `superchat-messages`, a command: the buffer `*superchat: messages*`, in
   `superchat-messages-mode` (from `special-mode`), one line for each
-  `event` of type `sent` on the Tape, oldest first: `YYYY-MM-DD HH:MM  TIMELINE
-  FIRST-LINE`; `Nothing was sent.` when there is none. Point goes to the
+  `event` of type `sent` on the Tape and each `question` that waits
+  (`superchat-question`), oldest first: `YYYY-MM-DD HH:MM  TIMELINE
+  FIRST-LINE`, a question's ending `  ? waits for y, n or a`; `Nothing was sent.` when there is none. Point goes to the
   newest. `g` draws it again; `RET` (`superchat-messages-open`) opens the
   chat buffer of the line's timeline.
