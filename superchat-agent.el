@@ -14,6 +14,7 @@
 (require 'subr-x)
 (require 'superchat)
 (require 'superchat-llm)
+(require 'superchat-permission)
 (require 'superchat-tools)
 (require 'superchat-recall)
 (require 'superchat-view)
@@ -190,7 +191,8 @@ as an error event, so that no step can keep the others from happening."
                                   (plist-get (plist-get e :data) :calls)))))
 
 (defun superchat-agent--end (run status &optional why)
-  "End RUN with STATUS (done, cancelled, error): the one way a run ends.
+  "End RUN with STATUS (done, cancelled, error, waiting): the one way a run ends.
+A run that waits for an answer leaves its calls without results.
 WHY is the text of the error event.  In order, each step guarded by
 `superchat-agent--try': stop a tool still running; append `Cancelled.' for
 each call of this run without a result; append the user entry if it was never
@@ -214,7 +216,8 @@ call ON-DONE.  Afterwards ON-ENTRY gets nothing."
                 (superchat-agent--try tape stop))
               (superchat-agent--try
                tape (lambda ()
-                      (dolist (call (superchat-agent--unanswered run))
+                      (dolist (call (unless (eq status 'waiting)
+                                      (superchat-agent--unanswered run)))
                         (superchat-tape-append tape 'tool "Cancelled."
                                                :data (list :call-id (plist-get call :id)
                                                            :name (plist-get call :name)
@@ -284,15 +287,18 @@ tool that has not answered yet."
   (let ((waiting nil))
     (while (and calls (not waiting) (superchat-agent--live run))
       (let ((call (pop calls)) (rest calls) (returned nil) (answered nil) (stop nil)
-            (ok nil) (why nil))
+            (ok nil) (why nil) (result nil)
+            (superchat-permission-ask-function
+             (if (plist-get run :unattended) (lambda (&rest _) 'later)
+               superchat-permission-ask-function)))
         (setf (plist-get run :calling) t)
         (unwind-protect
             (condition-case err
                 (setq stop (superchat-tool-call
                             (plist-get run :tape) call
-                            (lambda (_)
+                            (lambda (entry)
                               (if (not returned)
-                                  (setq answered t)
+                                  (setq answered t result entry)
                                 (setf (plist-get run :stop) nil)
                                 (when (superchat-agent--live run)
                                   (superchat-agent--guard
@@ -304,6 +310,8 @@ tool that has not answered yet."
           (setq returned t)
           (setf (plist-get run :calling) nil (plist-get run :stop) (unless answered stop))
           (cond (why (superchat-agent--end run 'error why))
+                ;; Nobody can answer now: the run ends and the call waits.
+                ((eq (plist-get result :kind) 'event) (superchat-agent--end run 'waiting))
                 ((eq (plist-get run :status) 'cancelled) (superchat-agent--end run 'cancelled))
                 ((and (not ok) (superchat-agent--live run))
                  (superchat-agent--end
@@ -446,8 +454,25 @@ ended the run on that entry."
   (when (superchat-agent--live run)
     (superchat-agent--step run)))
 
+(defun superchat-agent--make-run (tape &rest keys)
+  "A run of TAPE with KEYS.  Every key is there from the start: `setf' of a
+missing one would make a new list."
+  (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
+                     :stop nil :done nil :text nil :error nil :tries 0 :timer nil)))
+
+(defun superchat-question (tape)
+  "The `question' event of timeline TAPE that waits for its answer, or nil."
+  (when-let* ((question (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :type)
+                                                     "question"))
+                                  (superchat-tape-entries :tape tape :kinds '(event)
+                                                          :newest t :limit 50)))
+              (id (plist-get (plist-get question :data) :call-id)))
+    (unless (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :call-id) id))
+                      (superchat-tape-entries :tape tape :after (plist-get question :id)))
+      question)))
+
 (cl-defun superchat-run (tape text &key scope origin tools system model ephemeral
-                              on-text on-entry on-done)
+                              unattended on-text on-entry on-done)
   "Append TEXT as a user entry of timeline TAPE and answer it; return the run.
 SCOPE is that of a new timeline's first entry, by default that of
 `default-directory'.
@@ -458,18 +483,20 @@ entry appended, ON-DONE the run, once, with :status done, cancelled or error,
 the user entry: the timeline is one question, not a conversation."
   (when (gethash tape superchat-agent--runs)
     (error "Timeline %s is busy with a run or a handoff" tape))
+  (when (superchat-question tape)
+    (error "Timeline %s waits for an answer; give it with `superchat-answer'" tape))
   (superchat-agent--mark-interrupted tape)
   (let* ((last (car (superchat-tape-entries :tape tape :newest t :limit 1)))
          (id (if last (plist-get last :id) 0))
          ;; Every key is there from the start: `setf' of a missing one makes a new list.
-         (run (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
-                    ;; Unsent from the start: whatever signals, the user's text is written.
-                    :stop nil :unsent t :done nil :text nil :error nil :user-id nil
-                    :tries 0 :timer nil
-                    :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
-                    :request text :origin origin :ephemeral ephemeral :first id :seen id
-                    :tools tools :system system :model model
-                    :on-text on-text :on-entry on-entry :on-done on-done)))
+         (run (superchat-agent--make-run
+               tape
+               ;; Unsent from the start: whatever signals, the user's text is written.
+               :unsent t :user-id nil
+               :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
+               :request text :origin origin :ephemeral ephemeral :first id :seen id
+               :tools tools :system system :model model :unattended unattended
+               :on-text on-text :on-entry on-entry :on-done on-done)))
     (puthash tape run superchat-agent--runs)
     (superchat-agent--guard
      run (lambda ()
@@ -491,6 +518,32 @@ the user entry: the timeline is one question, not a conversation."
                                    run 'error (format "Handoff failed: %s" why))))))
                        model)))
              (superchat-agent--begin run))))
+    run))
+
+(cl-defun superchat-answer (tape answer &key unattended on-text on-entry on-done)
+  "Answer the open question of timeline TAPE with ANSWER (`allow', `deny' or
+`always') and go on with the run it ended: that call, the calls after it in
+its response, then the next request.  Return the run."
+  (when (gethash tape superchat-agent--runs)
+    (error "Timeline %s is busy with a run or a handoff" tape))
+  (let* ((question (or (superchat-question tape)
+                       (error "Timeline %s has no question waiting" tape)))
+         (id (plist-get (plist-get question :data) :call-id))
+         (head (car (superchat-tape-entries :tape tape :kinds '(assistant) :newest t
+                                            :before (plist-get question :id) :limit 1)))
+         (calls (seq-drop-while (lambda (c) (not (equal (plist-get c :id) id)))
+                                (plist-get (plist-get head :data) :calls)))
+         (user (car (superchat-tape-entries :tape tape :kinds '(user) :newest t :limit 1)))
+         (run nil))
+    (superchat-permission-answer tape id answer)
+    (setq run (superchat-agent--make-run
+               tape :unsent nil :user-id (plist-get user :id)
+               ;; The calls of the response it goes on with are its own.
+               :first (1- (plist-get head :id))
+               :seen (plist-get (car (superchat-tape-entries :tape tape :newest t :limit 1)) :id)
+               :unattended unattended :on-text on-text :on-entry on-entry :on-done on-done))
+    (puthash tape run superchat-agent--runs)
+    (superchat-agent--guard run (lambda () (superchat-agent--calls run calls)))
     run))
 
 (defun superchat-run-active (tape)

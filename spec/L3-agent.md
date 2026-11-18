@@ -31,7 +31,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 
 ### A run
 
-- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral on-text on-entry on-done)`
+- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral unattended on-text on-entry on-done)`
   → the run, a plist. It appends TEXT as a `user` entry of timeline TAPE and
   answers it.
   - SCOPE: the scope of the first entry of a new timeline; the scope of
@@ -43,10 +43,12 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   - MODEL: the model of every request of the run and of its handoff; nil
     for `superchat-llm-model`.
   - EPHEMERAL: when non-nil, `:ephemeral t` in the `user` entry's data.
+  - UNATTENDED: when non-nil, nobody is asked: a call that needs asking
+    comes back as a `question` (L2) and the run ends `waiting`.
   - ON-TEXT: gets each piece of streamed text.
   - ON-ENTRY: gets each entry of the run as it is appended.
-  - ON-DONE: gets the run once, with `:status` `done`, `cancelled` or
-    `error`, `:text` the text of the last `assistant` entry of this run (nil
+  - ON-DONE: gets the run once, with `:status` `done`, `cancelled`,
+    `waiting` or `error`, `:text` the text of the last `assistant` entry of this run (nil
     when it made none) and, for `error`, `:error` the text of the error
     event.
 - First, if the timeline's last run never ended (Emacs stopped during it),
@@ -85,6 +87,14 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   retried. A run that waits is running.
 - Any other failure, or one with no wait left, appends an `error` event with
   its message and ends the run with status `error`.
+- A run that ends `waiting` runs no more calls and gives none a result.
+  `(superchat-question TAPE)` → the `question` event still without an
+  `answer` event or result for its call, or nil; `superchat-run` on such a
+  timeline is an error. `(superchat-answer TAPE ANSWER &key unattended
+  on-text on-entry on-done)` → a run: it appends the answer
+  (`superchat-permission-answer`), runs that call and the rest of its
+  response, then goes on as any run, with no new `user` entry. With no
+  question waiting, or a run going, it is an error.
 - At most one run per timeline. `superchat-run` on a timeline that has one is
   an error. A handoff occupies its timeline like a run: while it is pending,
   `superchat-run` and a second handoff are errors, and `superchat-handoff`

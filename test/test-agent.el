@@ -246,6 +246,60 @@
     (should-not (cl-find "interrupted" (superchat-tape-entries :tape "t" :kinds '(event))
                          :key (lambda (e) (plist-get (plist-get e :data) :type)) :test #'equal))))
 
+(defmacro superchat-test-agent--asking-nobody (&rest body)
+  "BODY at level ask, where asking the person in the minibuffer is an error."
+  (declare (indent 0))
+  `(let ((superchat-permission-ask-function (lambda (&rest _) (error "Asked in the minibuffer"))))
+     (superchat-permission-set "t" 'ask)
+     ,@body))
+
+(ert-deftest superchat-agent-an-unattended-run-waits-for-its-answer ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'event "" :data '(:type "level" :level "ask") :scope "home")
+    (superchat-test-agent--asking-nobody
+      (let (status)
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "echo" :x "a")
+                            ,(superchat-test-agent--call "c2" "poke")
+                            ,(superchat-test-agent--call "c3" "echo" :x "b")))
+                  '(:text "done"))
+          (superchat-run "t" "go" :unattended t
+                         :on-done (lambda (r) (setq status (plist-get r :status))))
+          (should (eq status 'waiting))
+          (should-not (superchat-run-active "t"))
+          (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :call-id))
+                                 (superchat-tape-entries :tape "t" :kinds '(tool)))
+                         '("c1")))
+          (should (equal (plist-get (plist-get (superchat-question "t") :data) :call-id) "c2"))
+          (should-error (superchat-run "t" "again"))
+          (setq status nil)
+          (superchat-answer "t" 'allow :on-done (lambda (r) (setq status (plist-get r :status))))
+          (should (eq status 'done))
+          (should-not (superchat-question "t"))
+          (should (equal (mapcar (lambda (e) (cons (plist-get (plist-get e :data) :call-id)
+                                                   (plist-get e :text)))
+                                 (superchat-tape-entries :tape "t" :kinds '(tool)))
+                         '(("c1" . "echo:a") ("c2" . "poked") ("c3" . "echo:b"))))
+          (should (= (length superchat-test-requests) 2)))))))
+
+(ert-deftest superchat-agent-a-denied-answer-goes-on ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'event "" :data '(:type "level" :level "ask") :scope "home")
+    (superchat-test-agent--asking-nobody
+      (let (status)
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c2" "poke"))) '(:text "fine"))
+          (superchat-run "t" "go" :unattended t)
+          ;; Emacs starts again: no run in memory, the question on the Tape.
+          (clrhash superchat-agent--runs)
+          (superchat-answer "t" 'deny :on-done (lambda (r) (setq status (plist-get r :status)))))
+        (should (eq status 'done))
+        (should (string-match-p "Permission denied"
+                                (plist-get (car (superchat-tape-entries :tape "t" :kinds '(tool)))
+                                           :text)))
+        (should-not (member "interrupted" (superchat-test-agent--events "t")))
+        (should-error (superchat-answer "t" 'allow))))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status
