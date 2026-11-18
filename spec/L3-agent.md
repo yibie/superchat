@@ -1,7 +1,7 @@
 # L3 agent: `superchat-run`
 
 Part of the [specification](../SPEC.md). Modules: `superchat-context.el`,
-`superchat-agent.el`. This layer is the AI layer of Emacs: any package asks
+`superchat-agent.el`, `superchat-request.el`. This layer is the AI layer of Emacs: any package asks
 a model through `superchat-run`. It uses L1 and L2. A package that requires
 `superchat-agent` and nothing else gets every built-in tool, `recall`,
 `tape_query` and `note` among them.
@@ -62,7 +62,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   `assistant` entry with calls, or that `user` entry, unless an `error` event
   comes right before it (a failed handoff).
 - After the `user` entry the run loops:
-  1. it builds the messages (see "Messages"), or ends with the refusal;
+  1. it builds the messages (`superchat-request.el`), or ends with the refusal;
   2. `superchat-llm-request` with the messages, `superchat-context-system`
      and the tool specs of TOOLS;
   3. on done it appends the `assistant` entry. If it has calls, it runs each
@@ -104,48 +104,6 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   handoff is pending, a plist whose `:status` is `handoff`; while a run is
   going, the run, whose `:status` is `running` (`cancelled` while a cancelled
   run waits for a call to return from `superchat-tool-call`).
-
-### Messages
-
-- The messages of a request are the `conversation` view of TAPE turned into
-  neutral messages:
-  - a `user` entry is a `user` message; an `assistant` entry an `assistant`
-    message with its text and calls; a `tool` entry a `tool` message with its
-    call id and name;
-  - an anchor with an empty text gives no message; any other anchor is a
-    `user` message, `Summary of the conversation so far:\n` and its summary,
-    then, when its `:next` is not empty, `\n\nWhat comes next:\n` and that;
-    an entry of any other kind gives no message;
-  - a `tool` entry that does not answer a call of the `assistant` entry
-    before it is not sent; a call with no `tool` entry answering it is not
-    sent, and an `assistant` message left with no text and no calls is not
-    sent.
-- The size of a message is its text plus the printed arguments of its calls.
-- The budget of a run, in characters, is `superchat-context-chars` when that
-  is a number. When it is nil, it is half of `superchat-llm-context-window`
-  of the run's model, one token taken as one character; 120000 when the
-  model has no window in the data. The handoff before a run, the text given
-  to a handoff and the leaving out within a run use this one budget. It is
-  worked out each time a request is built, so a change of the model's data
-  or of `superchat-context-chars` during a run is seen at its next request.
-- When the messages together are larger than the budget, the oldest are left
-  out of this request until the rest fits: never the anchor message, never
-  the `user` entry of this run, never the latest `assistant` entry and its
-  results. An `assistant` entry is left out together with the `tool` entries
-  that answer it and the entries among them that give no message. One `user`
-  message, `[N earlier entries of this conversation are left out of this
-  request; recall and tape_query can read them.]`, stands at the place of the
-  oldest entry left out, also when the entries left out are not contiguous;
-  N counts the entries left out, of any kind. When leaving entries out would
-  not make the request smaller than sending all of them, all are sent, so a
-  request may pass the budget by the length of that message. Nothing is
-  removed from the Tape and no event is appended.
-- The refusal: when the messages of the entries that are never left out,
-  without that message, are larger than twice the budget, no request is
-  made. The run ends with status `error` and an event that gives the size of
-  the request and the budget, names the model or says that none is set, and
-  says to start a new conversation; it advises raising
-  `superchat-context-chars` too only when that is a number.
 
 ### How a run ends
 
@@ -232,3 +190,55 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   the entries of that view with an id up to ENTRY-ID (id ≤ ENTRY-ID), and of
   the `tool` entries that answer the calls of every `assistant` entry among
   them.
+
+## superchat-request.el
+
+The messages of a request, built from entries; the run of
+`superchat-agent.el` calls it for every request, the refusal and the
+handoff. `(superchat-request-message ENTRY)` → an entry's message or nil;
+`(superchat-request-budget &optional MODEL)` → the budget;
+`(superchat-request-messages ENTRIES)` → all their messages;
+`(superchat-request-size MESSAGES)` → their size;
+`(superchat-request-fit ENTRIES USER-ID BUDGET)` → the messages that fit;
+`(superchat-request-kept-size ENTRIES USER-ID)` → the size of what is never
+left out.
+
+- The messages of a request are the `conversation` view of TAPE turned into
+  neutral messages:
+  - a `user` entry is a `user` message; an `assistant` entry an `assistant`
+    message with its text and calls; a `tool` entry a `tool` message with its
+    call id and name;
+  - an anchor with an empty text gives no message; any other anchor is a
+    `user` message, `Summary of the conversation so far:\n` and its summary,
+    then, when its `:next` is not empty, `\n\nWhat comes next:\n` and that;
+    an entry of any other kind gives no message;
+  - a `tool` entry that does not answer a call of the `assistant` entry
+    before it is not sent; a call with no `tool` entry answering it is not
+    sent, and an `assistant` message left with no text and no calls is not
+    sent.
+- The size of a message is its text plus the printed arguments of its calls.
+- The budget of a run, in characters, is `superchat-context-chars` when that
+  is a number. When it is nil, it is half of `superchat-llm-context-window`
+  of the run's model, one token taken as one character; 120000 when the
+  model has no window in the data. The handoff before a run, the text given
+  to a handoff and the leaving out within a run use this one budget. It is
+  worked out each time a request is built, so a change of the model's data
+  or of `superchat-context-chars` during a run is seen at its next request.
+- When the messages together are larger than the budget, the oldest are left
+  out of this request until the rest fits: never the anchor message, never
+  the `user` entry of this run, never the latest `assistant` entry and its
+  results. An `assistant` entry is left out together with the `tool` entries
+  that answer it and the entries among them that give no message. One `user`
+  message, `[N earlier entries of this conversation are left out of this
+  request; recall and tape_query can read them.]`, stands at the place of the
+  oldest entry left out, also when the entries left out are not contiguous;
+  N counts the entries left out, of any kind. When leaving entries out would
+  not make the request smaller than sending all of them, all are sent, so a
+  request may pass the budget by the length of that message. Nothing is
+  removed from the Tape and no event is appended.
+- The refusal: when the messages of the entries that are never left out,
+  without that message, are larger than twice the budget, no request is
+  made. The run ends with status `error` and an event that gives the size of
+  the request and the budget, names the model or says that none is set, and
+  says to start a new conversation; it advises raising
+  `superchat-context-chars` too only when that is a number.

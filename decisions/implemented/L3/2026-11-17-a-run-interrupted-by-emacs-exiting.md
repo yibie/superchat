@@ -11,7 +11,7 @@ nothing on the Tape said that a run was cut off.
 
 The worst place to be cut off is between an `assistant` entry with calls
 and the `tool` entries that answer them. A call with no `tool` entry is not
-sent (L3, "Messages"), so the next request dropped it without a word. That
+sent (L3, `superchat-request.el`), so the next request dropped it without a word. That
 call may have run halfway: a `shell` command started, an `edit` made, a file
 saved. Neither the model nor the person was told.
 

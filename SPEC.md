@@ -53,6 +53,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L2 | `superchat-recall.el` | 200 | the three tools the model uses on the Tape |
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
+| L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
 | L4 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
 | L5 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
@@ -66,7 +67,8 @@ inline → chat
 messages → chat
 chat → agent, plugin, recall, inbox
 inbox → agent
-agent → llm, tools, recall, view, context
+agent → llm, tools, recall, view, context, request
+request → llm
 recall → tools, view
 context → view
 tools → permission
@@ -100,7 +102,7 @@ points to require. A file requires nothing else, and
 | file | ceiling |
 |---|---|
 | `AGENTS.md` | 380 words |
-| `SPEC.md` | 2400 words |
+| `SPEC.md` | 2550 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3800 words |
 | `spec/L3-agent.md` | 2600 words |
