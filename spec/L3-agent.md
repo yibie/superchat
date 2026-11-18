@@ -1,7 +1,7 @@
 # L3 agent: `superchat-run`
 
 Part of the [specification](../SPEC.md). Modules: `superchat-context.el`,
-`superchat-agent.el`. This layer is the AI layer of Emacs: any package asks
+`superchat-agent.el`, `superchat-inbox.el`. This layer is the AI layer of Emacs: any package asks
 a model through `superchat-run`. It uses L1 and L2. A package that requires
 `superchat-agent` and nothing else gets every built-in tool, `recall`,
 `tape_query` and `note` among them.
@@ -31,7 +31,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 
 ### A run
 
-- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral unattended on-text on-entry on-done)`
+- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral unattended refs on-text on-entry on-done)`
   → the run, a plist. It appends TEXT as a `user` entry of timeline TAPE and
   answers it.
   - SCOPE: the scope of the first entry of a new timeline; the scope of
@@ -43,6 +43,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   - MODEL: the model of every request of the run and of its handoff; nil
     for `superchat-llm-model`.
   - EPHEMERAL: when non-nil, `:ephemeral t` in the `user` entry's data.
+  - REFS: the `:refs` of the `user` entry.
   - UNATTENDED: when non-nil, nobody is asked: a call that needs asking
     comes back as a `question` (L2) and the run ends `waiting`.
   - ON-TEXT: gets each piece of streamed text.
@@ -230,3 +231,25 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   the entries of that view with an id up to ENTRY-ID (id ≤ ENTRY-ID), and of
   the `tool` entries that answer the calls of every `assistant` entry among
   them.
+
+## superchat-inbox.el
+
+Work for a timeline that nobody is typing into goes through the inbox, so
+that it waits while the timeline is busy and is not lost when Emacs exits.
+
+- `(superchat-inbox-put TAPE TEXT &key source id unattended scope)` → the
+  `inbox` entry it appends to TAPE, `:data` `(:source :id :unattended)`,
+  and wakes the worker; nil, appending nothing, when an `inbox` entry with
+  that SOURCE and ID is on the Tape. SCOPE is that of a new timeline, by
+  default that of `default-directory`.
+- An item is pending until a `user` entry of its timeline has its id in
+  `:refs`. `(superchat-inbox-pending &optional TAPE)` → the pending items,
+  oldest first, of TAPE or of every timeline.
+- `(superchat-inbox-wake)`: the worker looks, from a timer of 0 seconds,
+  once for any number of wakes. It is woken by a put, by the end of a run it
+  started, and by the person or a package when Emacs starts. For each
+  timeline with pending items, no run, no handoff and no question waiting,
+  it starts one `superchat-run`: TEXT the items' texts, oldest first,
+  joined by a blank line; REFS their ids; UNATTENDED when any item is. A
+  timeline whose run cannot start is shown with `message` and keeps its
+  items; the others start.

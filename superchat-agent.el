@@ -406,11 +406,11 @@ is on the Tape, so the next request is built from it as the first was."
 (defun superchat-agent--add-user (run)
   "Append the user entry of RUN, if it is unsent."
   (when (plist-get run :unsent)
-    (setf (plist-get run :unsent) nil)
-    (setf (plist-get run :user-id)
+    (setf (plist-get run :unsent) nil
+          (plist-get run :user-id)
           (plist-get (superchat-tape-append
                       (plist-get run :tape) 'user (plist-get run :request)
-                      :scope (plist-get run :scope)
+                      :scope (plist-get run :scope) :refs (plist-get run :refs)
                       :data (append (and (plist-get run :origin)
                                          (list :origin (plist-get run :origin)))
                                     (and (plist-get run :ephemeral) (list :ephemeral t))))
@@ -472,7 +472,7 @@ missing one would make a new list."
       question)))
 
 (cl-defun superchat-run (tape text &key scope origin tools system model ephemeral
-                              unattended on-text on-entry on-done)
+                              unattended refs on-text on-entry on-done)
   "Append TEXT as a user entry of timeline TAPE and answer it; return the run.
 SCOPE is that of a new timeline's first entry, by default that of
 `default-directory'.
@@ -480,7 +480,8 @@ TOOLS is a list of tool names, nil for every tool, or `none'.  SYSTEM is
 extra text for the system prompt.  ON-TEXT gets streamed text, ON-ENTRY each
 entry appended, ON-DONE the run, once, with :status done, cancelled or error,
 :text the last answer of this run and, for error, :error.  EPHEMERAL marks
-the user entry: the timeline is one question, not a conversation."
+the user entry: the timeline is one question, not a conversation; REFS go on
+it too.  An UNATTENDED run asks nobody: it ends `waiting' at a question."
   (when (gethash tape superchat-agent--runs)
     (error "Timeline %s is busy with a run or a handoff" tape))
   (when (superchat-question tape)
@@ -495,7 +496,7 @@ the user entry: the timeline is one question, not a conversation."
                :unsent t :user-id nil
                :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
                :request text :origin origin :ephemeral ephemeral :first id :seen id
-               :tools tools :system system :model model :unattended unattended
+               :tools tools :system system :model model :unattended unattended :refs refs
                :on-text on-text :on-entry on-entry :on-done on-done)))
     (puthash tape run superchat-agent--runs)
     (superchat-agent--guard
