@@ -87,5 +87,91 @@
             (should (= 1 (length (superchat-inbox-pending "t"))))))
       (superchat-tool-remove "poke"))))
 
+(defun superchat-test-inbox--tool (name &rest args)
+  "Call tool NAME with ARGS for timeline t; its result entry."
+  (let (entry)
+    (superchat-tool-call "t" (list :id "c" :name name :args args) (lambda (e) (setq entry e)))
+    entry))
+
+(defun superchat-test-inbox--fired ()
+  (mapcar (lambda (e) (plist-get e :text)) (superchat-tape-entries :tape "t" :kinds '(inbox))))
+
+(ert-deftest superchat-inbox-a-follow-up-fires-once ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (let ((now (float-time)))
+      (should (string-match-p "\\`Timer [0-9]+ set"
+                              (plist-get (superchat-test-inbox--tool "follow_up" :in "60" :text "check")
+                                         :text)))
+      (superchat-inbox--fire now)
+      (should-not (superchat-test-inbox--fired))
+      (superchat-inbox--fire (+ now 61))
+      (superchat-inbox--fire (+ now 120))
+      (should (equal (superchat-test-inbox--fired) '("check")))
+      (should (plist-get (plist-get (car (superchat-tape-entries :tape "t" :kinds '(inbox))) :data)
+                         :unattended))
+      (should-not (superchat-inbox-timers)))))
+
+(ert-deftest superchat-inbox-a-schedule-missed-many-times-fires-once ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (let ((now (float-time)))
+      (superchat-tape-append "t" 'timer "daily brief" :data '(:daily "09:00") :at (- now (* 3 86400)))
+      (superchat-tape-append "t" 'timer "tick" :data (list :every 300 :from (- now 1000))
+                             :at (- now 1000))
+      (superchat-inbox--fire now)
+      (superchat-inbox--fire (+ now 10))
+      (should (equal (sort (superchat-test-inbox--fired) #'string<) '("daily brief" "tick")))
+      (superchat-inbox--fire (+ now 300))
+      (should (equal (sort (superchat-test-inbox--fired) #'string<) '("daily brief" "tick" "tick")))
+      (should (= 2 (length (superchat-inbox-timers)))))))
+
+(ert-deftest superchat-inbox-a-schedule-does-not-fire-for-a-time-before-it-was-set ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (should (string-match-p "set" (plist-get (superchat-test-inbox--tool "schedule" :daily "0:00"
+                                                                         :text "x")
+                                             :text)))
+    (should (string-match-p "set" (plist-get (superchat-test-inbox--tool "schedule" :every 60
+                                                                         :text "y")
+                                             :text)))
+    (superchat-inbox--fire (+ (float-time) 1))
+    (should-not (superchat-test-inbox--fired))))
+
+(ert-deftest superchat-inbox-a-cancelled-timer-never-fires ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (superchat-test-inbox--tool "follow_up" :in 0 :text "never")
+    (let ((id (plist-get (car (superchat-inbox-timers)) :id)))
+      (should (string-match-p "cancelled"
+                              (plist-get (superchat-test-inbox--tool "cancel_timer" :id id) :text)))
+      (superchat-inbox--fire (+ (float-time) 10))
+      (should-not (superchat-test-inbox--fired))
+      (should (plist-get (plist-get (superchat-test-inbox--tool "cancel_timer" :id id) :data)
+                         :error)))))
+
+(ert-deftest superchat-inbox-a-timer-tool-refuses-what-it-cannot-keep ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (dolist (args '((:every 10 :text "x") (:daily "25:00" :text "x") (:text "x")
+                    (:every 60 :daily "09:00" :text "x")))
+      (should (plist-get (plist-get (apply #'superchat-test-inbox--tool "schedule" args) :data)
+                         :error)))
+    (should-not (superchat-inbox-timers))))
+
+(ert-deftest superchat-inbox-start-fires-due-timers-and-runs-them ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (superchat-tape-append "t" 'assistant "hello")
+    (superchat-tape-append "t" 'timer "look again" :data (list :at (float-time)))
+    (let ((superchat-inbox-poll-seconds 0.05) (superchat-inbox--poll nil))
+      (unwind-protect
+          (superchat-test-script (list '(:text "looked"))
+            (superchat-inbox-start)
+            (superchat-test-wait (lambda () (cdr (superchat-tape-entries :tape "t" :kinds '(user)))))
+            (superchat-test-inbox--idle)
+            (should (equal (plist-get (car (last (superchat-tape-entries :tape "t"))) :text) "looked")))
+        (cancel-timer superchat-inbox--poll)))))
+
 (provide 'test-inbox)
 ;;; test-inbox.el ends here

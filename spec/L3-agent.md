@@ -253,3 +253,17 @@ that it waits while the timeline is busy and is not lost when Emacs exits.
   joined by a blank line; REFS their ids; UNATTENDED when any item is. A
   timeline whose run cannot start is shown with `message` and keeps its
   items; the others start.
+- A `timer` (`SPEC.md`) may still fire unless a `:cancel t` timer refs it
+  or, a follow-up (`:at`), it fired.
+  `(superchat-inbox-timers &optional TAPE)` → those, oldest first. A timer
+  is due at the latest time, at or before now and, for a schedule, not
+  before its own `:at`, that its `:at`, `:every` from `:from`, or local
+  `:daily` names. A due timer puts its text, unattended, as source
+  `"timer"`, id `ID@SECONDS`: once per time, and once for all times missed
+  while Emacs was closed.
+- `(superchat-inbox-start)`, a command: put what is due and wake the worker
+  now and every `superchat-inbox-poll-seconds` (a `defvar`, 60).
+  `(superchat-inbox-cancel-timer ID)` cancels.
+- Tools, class `read`: `follow_up` (`in` seconds, `text`); `schedule`
+  (`every` ≥ 60 or `daily` `"HH:MM"`, `text`), first due one period after
+  it is set; `cancel_timer` (`id`).
