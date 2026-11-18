@@ -21,6 +21,21 @@
   "Nobody is watching this run. The person sees only what you send with the send tool, and the question when a call needs their permission. Send only what they need to act on or asked for; send nothing when there is nothing new."
   "The system prompt's extra text for a run nobody watches: start quiet.")
 
+(defvar superchat-inbox-notify-functions nil
+  "Functions called with TAPE, TEXT and KIND, `sent' after the `send' tool or
+`question' when a run of the worker waits for an answer: a system notification.")
+
+(defun superchat-inbox--notify (tape text kind)
+  "Show TEXT of KIND from timeline TAPE and run `superchat-inbox-notify-functions'.
+A function that fails is shown and does not stop the others or the run."
+  (let ((line (car (split-string text "\n"))))
+    (message "Superchat: %s" (if (eq kind 'question)
+                                 (format "%s waits for your answer: %s" tape line)
+                               line)))
+  (dolist (f superchat-inbox-notify-functions)
+    (condition-case err (funcall f tape text kind)
+      (error (message "Superchat: notify %s failed: %s" f (error-message-string err))))))
+
 (defun superchat-inbox-pending (&optional tape)
   "The pending items, oldest first; with TAPE, those of that timeline."
   (let* ((rows (superchat-tape-select
@@ -78,8 +93,9 @@ no handoff, no question waiting.  Its text is the items' texts, oldest first."
                            :system (and unattended superchat-inbox--quiet)
                            :on-done (lambda (run)
                                       (when (eq (plist-get run :status) 'waiting)
-                                        (message "Superchat: %s waits for your answer: %s" tape
-                                                 (plist-get (superchat-question tape) :text)))
+                                        (superchat-inbox--notify
+                                         tape (plist-get (superchat-question tape) :text)
+                                         'question))
                                       (superchat-inbox-wake))))
         (error (message "Superchat inbox: %s: %s" tape (error-message-string err)))))))
 
@@ -227,7 +243,7 @@ return its timer; with OFF, turn it off and return nil."
  :function (lambda (args)
              (let ((text (plist-get args :text)))
                (superchat-tape-append superchat-tool-tape 'event text :data '(:type "sent"))
-               (message "Superchat: %s" (car (split-string text "\n")))
+               (superchat-inbox--notify superchat-tool-tape text 'sent)
                "Sent.")))
 
 (provide 'superchat-inbox)

@@ -60,3 +60,14 @@ command opened: the person saw the run's return value and nothing else.
 On a question's line, `y`, `n` or `a` answers it from its chat buffer: the
 person, shown the question there, typed `y` in the messages buffer, where it
 did nothing.
+
+## Refinement, 2026-11-18: a notification hook
+
+`superchat-inbox-notify-functions` is called with TAPE, TEXT and KIND after
+`send` and when a worker's run waits for an answer. A line in the echo area
+and a buffer reach the person only while they look at Emacs; on macOS Emacs
+has no notification of its own. The hook holds no platform's code, since
+plugins live in another repository: the person's configuration adds, for
+instance, `terminal-notifier`. Considered and not taken: calling
+`terminal-notifier` or `ns-do-applescript` from this repository, which ties
+a layer to one platform.

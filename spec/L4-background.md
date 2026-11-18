@@ -46,6 +46,9 @@ waits while the timeline is busy and survives Emacs exiting.
   it is set; `cancel_timer` (`id`).
 - A tool `send` (`text`), class `read`, appends an `event` of type `sent`
   with TEXT, shows its first line with `message`, and answers `Sent.`.
+- `superchat-inbox-notify-functions` (a `defvar`, nil) are called with
+  TAPE, TEXT and KIND: `sent` after `send`, `question` with that `message`
+  of a waiting run. One that fails is shown; the others run.
 - `(superchat-inbox-dream SCOPE &optional OFF)` turns dreaming on for
   SCOPE and returns its timer: a `daily` `"03:00"` timer on a new timeline
   of SCOPE whose text asks to review the notes, to replace with `note`
