@@ -42,7 +42,7 @@ appended.
   kind, the run ends with status `error` as before. Ending a run stops the
   wait, so `superchat-cancel` during it ends the run `cancelled`. Tool
   calls and handoff requests are never retried.
-- **L4.** On a `retry` event the chat buffer removes the text streamed for
+- **L5.** On a `retry` event the chat buffer removes the text streamed for
   the failed request, shows the event among the turn's other entries, and
   its waiting line reads `⟳ trying again in Ns (I/N)`.
 - **L0.** The event types of `SPEC.md` include `retry`.

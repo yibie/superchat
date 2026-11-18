@@ -37,7 +37,7 @@ the person, and the answer comes back and resumes it.
   error. `superchat-answer` appends the answer and starts a run, with no new
   `user` entry, that runs that call and the rest of its response, then goes
   on as any run.
-- **L4.** While a question waits, the chat buffer's line above the
+- **L5.** While a question waits, the chat buffer's line above the
   separator reads `⏸ waiting for your answer: NAME SUMMARY — send y, n or
   a`, and sending `y`, `n` or `a` answers it; other text is refused and
   stays in the input. A run started from the chat buffer is attended and

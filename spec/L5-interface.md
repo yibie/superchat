@@ -1,4 +1,4 @@
-# L4 interface: the chat buffer, inline commands, plugins
+# L5 interface: the chat buffer, inline commands, plugins
 
 Part of the [specification](../SPEC.md). Modules: `superchat-chat.el`,
 `superchat-inline.el`, `superchat-plugin.el`, `superchat-messages.el`. This

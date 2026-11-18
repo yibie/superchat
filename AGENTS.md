@@ -22,7 +22,7 @@ write one line in `NOTES.md`, starting with the layer it concerns, and go on.
   write the missing public function into the lower layer's specification.
 - Stay in this directory. Do not read or search any other Superchat checkout
   on this machine: this is a clean implementation and must not borrow from an
-  earlier one. One exception: for the Org display of the L4 chat buffer
+  earlier one. One exception: for the Org display of the L5 chat buffer
   (Markdown shown as Org, the look of the chat), the earlier Superchat in
   `~/Documents/emacs/package/superchat` may be read and its code borrowed.
   What is borrowed is reshaped toward the display of agent-shell, which is

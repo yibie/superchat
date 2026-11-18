@@ -29,7 +29,7 @@ functions and variables of the layers below it, never one of their private
 | L1 | memory | [`spec/L1-memory.md`](spec/L1-memory.md) | use 3, the personal agent |
 | L2 | capabilities | [`spec/L2-capabilities.md`](spec/L2-capabilities.md) | use 2, the coding assistant |
 | L3 | agent | [`spec/L3-agent.md`](spec/L3-agent.md) | use 1, `superchat-run` |
-| L4 | interface | [`spec/L4-interface.md`](spec/L4-interface.md) | the person at the keyboard |
+| L5 | interface | [`spec/L5-interface.md`](spec/L5-interface.md) | the person at the keyboard |
 
 Work in one layer reads this file and that layer's specification, all of
 them, and of the layers below only the public functions it calls. It edits
@@ -53,10 +53,10 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
-| L4 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
-| L4 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
-| L4 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
-| L4 | `superchat-messages.el` | 100 | the buffer of what runs sent |
+| L5 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
+| L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
+| L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
+| L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 
 Dependencies go one way only:
 
@@ -103,7 +103,7 @@ points to require. A file requires nothing else, and
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3800 words |
 | `spec/L3-agent.md` | 3010 words |
-| `spec/L4-interface.md` | 3600 words |
+| `spec/L5-interface.md` | 3600 words |
 
 ## Rules against overflow
 
