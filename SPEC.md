@@ -52,6 +52,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L2 | `superchat-recall.el` | 200 | the three tools the model uses on the Tape |
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
+| L3 | `superchat-inbox.el` | 250 | the inbox and its worker |
 | L4 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
 | L4 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
 | L4 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
@@ -61,6 +62,7 @@ Dependencies go one way only:
 ```
 inline → chat
 chat → agent, plugin, recall
+inbox → agent
 agent → llm, tools, recall, view, context
 recall → tools, view
 context → view
@@ -166,6 +168,7 @@ There is no "session" object and no "memory" store. A session is the
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
 | `note` | the conclusion | `(:title STRING)` |
+| `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)`; pending until a `user` entry has it in `:refs` |
 | `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
