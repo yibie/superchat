@@ -26,7 +26,8 @@ waits while the timeline is busy and survives Emacs exiting.
   joined by a blank line; REFS their ids; UNATTENDED when any item is,
   and then SYSTEM a few lines saying that nobody watches, that the person
   sees only what is sent and the questions, and to send only what they
-  need to act on or asked for. A
+  need to act on or asked for. A run of its that ends `waiting` is shown
+  with `message`: `Superchat: TIMELINE waits for your answer: QUESTION`. A
   timeline whose run cannot start is shown with `message` and keeps its
   items; the others start.
 - A `timer` (`SPEC.md`) may still fire unless a `:cancel t` timer refs it
@@ -34,7 +35,7 @@ waits while the timeline is busy and survives Emacs exiting.
   `(superchat-inbox-timers &optional TAPE)` → those, oldest first. A timer
   is due at the latest time, at or before now and, for a schedule, not
   before its own `:at`, that its `:at`, `:every` from `:from`, or local
-  `:daily` names. A due timer puts its text, unattended, as source
+  `:daily` names. A due timer puts `Your timer ID is due: TEXT`, unattended, as source
   `"timer"`, id `ID@SECONDS`: once per time, and once for all times missed
   while Emacs was closed.
 - `(superchat-inbox-start)`, a command: put what is due and wake the worker

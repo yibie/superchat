@@ -76,7 +76,11 @@ no handoff, no question waiting.  Its text is the items' texts, oldest first."
                            :refs (mapcar (lambda (e) (plist-get e :id)) items)
                            :unattended unattended
                            :system (and unattended superchat-inbox--quiet)
-                           :on-done (lambda (_) (superchat-inbox-wake))))
+                           :on-done (lambda (run)
+                                      (when (eq (plist-get run :status) 'waiting)
+                                        (message "Superchat: %s waits for your answer: %s" tape
+                                                 (plist-get (superchat-question tape) :text)))
+                                      (superchat-inbox-wake))))
         (error (message "Superchat inbox: %s: %s" tape (error-message-string err)))))))
 
 ;;; Timers
@@ -130,7 +134,9 @@ it is due; nil when there is none."
 the latest time it is due, however many were missed while Emacs was closed."
   (dolist (timer (superchat-inbox-timers))
     (when-let* ((time (superchat-inbox--due timer now)))
-      (superchat-inbox-put (plist-get timer :tape) (plist-get timer :text)
+      (superchat-inbox-put (plist-get timer :tape)
+                           (format "Your timer %d is due: %s" (plist-get timer :id)
+                                   (plist-get timer :text))
                            :source "timer" :id (format "%d@%d" (plist-get timer :id) (floor time))
                            :unattended t))))
 

@@ -79,9 +79,12 @@ timelines the tests use."
         (let ((superchat-default-level 'ask)
               (superchat-permission-ask-function (lambda (&rest _) (error "Asked in the minibuffer"))))
           (superchat-test-script (list '(:text "" :calls ((:id "c1" :name "poke" :args nil))))
-            (superchat-inbox-put "t" "poke it" :unattended t)
-            (superchat-test-inbox--idle)
+            (let ((inhibit-message t) (message-log-max t))
+              (superchat-inbox-put "t" "poke it" :unattended t)
+              (superchat-test-inbox--idle))
             (should (superchat-question "t"))
+            (should (string-match-p "^Superchat: t waits for your answer: poke"
+                                    (with-current-buffer "*Messages*" (buffer-string))))
             (superchat-inbox-put "t" "and then")
             (superchat-test-inbox--idle)
             ;; The new item waits behind the question.
@@ -95,7 +98,12 @@ timelines the tests use."
     entry))
 
 (defun superchat-test-inbox--fired ()
-  (mapcar (lambda (e) (plist-get e :text)) (superchat-tape-entries :tape "t" :kinds '(inbox))))
+  "The texts the timers put, each without its `Your timer ID is due: '."
+  (mapcar (lambda (e)
+            (let ((text (plist-get e :text)))
+              (should (string-match "\\`Your timer [0-9]+ is due: " text))
+              (substring text (match-end 0))))
+          (superchat-tape-entries :tape "t" :kinds '(inbox))))
 
 (ert-deftest superchat-inbox-a-follow-up-fires-once ()
   (superchat-test-inbox--with
@@ -228,7 +236,8 @@ timelines the tests use."
         (should (equal (plist-get (car (superchat-tape-entries :tape (plist-get timer :tape)
                                                                :kinds '(user)))
                                   :text)
-                       superchat-inbox--dream)))
+                       (format "Your timer %d is due: %s" (plist-get timer :id)
+                               superchat-inbox--dream))))
       (should-not (superchat-inbox-dream "/p/" t))
       (should-not (superchat-inbox-timers)))))
 

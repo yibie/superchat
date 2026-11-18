@@ -62,3 +62,13 @@ side effect of `require`, which no other file here has.
   pending when Emacs exited are answered once it runs.
 - `superchat-inbox.el` is at 194 of 250 lines, `superchat-chat.el` at 1086
   of 1100.
+
+## Refinement, 2026-11-18
+
+A due timer's item reads `Your timer ID is due: TEXT`, not TEXT alone. With
+TEXT alone, in the person's own use, a follow-up "提醒用户喝水" reached the
+model as if the person had said it; the model answered "该喝水了。" in the
+conversation, called no `send`, and the person was told nothing. With the
+prefix, three runs of the same case with `deepseek-flash` each called `send`.
+A run of the worker that ends `waiting` is now shown with `message`, since
+nothing else told the person that a question waited.
