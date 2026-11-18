@@ -14,14 +14,14 @@ agent to start quiet and then earn more of the user's attention over time."
 
 ## Decision
 
-- **L3.** A tool `send` (`text`), class `read`, in `superchat-inbox.el`: it
+- **L4.** A tool `send` (`text`), class `read`, in `superchat-inbox.el`: it
   appends an `event` of type `sent` with the text, shows its first line
   with `message`, and answers `Sent.`.
-- **L3.** The inbox worker gives an unattended run, as SYSTEM, a few lines
+- **L4.** The inbox worker gives an unattended run, as SYSTEM, a few lines
   saying that nobody watches, that the person sees only what is sent and
   the questions, and to send only what they need to act on or asked for.
   A run started any other way is told nothing new.
-- **L4.** A new module, `superchat-messages.el`, cap 100 lines, with the
+- **L5.** A new module, `superchat-messages.el`, cap 100 lines, with the
   arrow `messages → chat`: the command `superchat-messages` shows every
   `sent` event of the Tape in `*superchat: messages*`, one line each with
   its time and timeline, oldest first and point on the newest; `RET` opens
@@ -48,5 +48,5 @@ Tape needs no state and no hook into the inbox.
   answer is still on the Tape.
 - The model may send too much or too little; the article tunes this with
   evals, and this repository has none yet.
-- `spec/L3-agent.md` and `spec/L4-interface.md` may hold more words: the
-  tool, the prompt and the module are new and have no other home.
+- The tool and the prompt are in `spec/L4-background.md`, the buffer in
+  `spec/L5-interface.md`, which may hold 3600 words.

@@ -21,7 +21,7 @@ An Emacs package with three uses:
 
 Superchat is built one layer at a time. A layer uses only the public
 functions and variables of the layers below it, never one of their private
-(`--`) names; a layer above it never reaches into it either.
+(`--`) names.
 
 | layer | name | specification | serves |
 |---|---|---|---|
@@ -29,13 +29,14 @@ functions and variables of the layers below it, never one of their private
 | L1 | memory | [`spec/L1-memory.md`](spec/L1-memory.md) | use 3, the personal agent |
 | L2 | capabilities | [`spec/L2-capabilities.md`](spec/L2-capabilities.md) | use 2, the coding assistant |
 | L3 | agent | [`spec/L3-agent.md`](spec/L3-agent.md) | use 1, `superchat-run` |
+| L4 | background | [`spec/L4-background.md`](spec/L4-background.md) | use 3, while nobody watches |
 | L5 | interface | [`spec/L5-interface.md`](spec/L5-interface.md) | the person at the keyboard |
 
 Work in one layer reads this file and that layer's specification, all of
 them, and of the layers below only the public functions it calls. It edits
 only the files of that layer, their tests, its specification and its
-decision notes (`decisions/*/LAYER/`). A need in
-another layer is one line in `NOTES.md`, starting with that layer's name.
+decision notes (`decisions/*/LAYER/`). A need in another layer is one line
+in `NOTES.md`, starting with that layer's name.
 
 ## Modules
 
@@ -52,7 +53,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L2 | `superchat-recall.el` | 200 | the three tools the model uses on the Tape |
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
-| L3 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
+| L4 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
 | L5 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
@@ -102,7 +103,8 @@ points to require. A file requires nothing else, and
 | `SPEC.md` | 2400 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3800 words |
-| `spec/L3-agent.md` | 3010 words |
+| `spec/L3-agent.md` | 2600 words |
+| `spec/L4-background.md` | 480 words |
 | `spec/L5-interface.md` | 3600 words |
 
 ## Rules against overflow
@@ -229,19 +231,19 @@ of the table, the dependency arrows and the layer order, that no file uses a
 private name of a module of another layer, the banned forms of the rules
 against overflow, that every link in the specification files and decision
 notes leads to a file, that every specification file is within its word
-ceiling, and that every decision note has the shape "Decisions" gives.
-`scripts/check.sh` also shows `scripts/hooks/commit-msg` the invalid cases
-it must refuse. A test may use a private name of a module of its own layer. A use
-across layers that is not yet removed is listed, with its reason, in
+ceiling, and that every decision note has the shape "Decisions" gives. A
+test may use a private name of a module of its own layer. A use across
+layers that is not yet removed is listed, with its reason, in
 `scripts/gate-exceptions`; a line there that no longer matches anything is
 an error too, so the list only shrinks. Before it checks the repository,
-each gate is shown an invalid case and must reject it.
+each gate, and `scripts/hooks/commit-msg`, is shown an invalid case and
+must reject it.
 
 ## Decisions
 
 A decision note keeps why a rule of the specification is what it is and
-what it beat, so the rule is not argued again. `NOTES.md` holds what seems missing; a note
-holds what was decided.
+what it beat, so the rule is not argued again. `NOTES.md` holds what seems
+missing; a note holds what was decided.
 
 A commit that adds or changes a rule of a specification (behaviour, a public
 function, an entry or data format, a gate, a working rule) adds or updates a

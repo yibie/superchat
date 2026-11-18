@@ -12,16 +12,17 @@
   (declare (indent 0))
   `(superchat-test-with-tape
      (let ((default-directory (file-name-as-directory (make-temp-file "sc-inbox-" t)))
-           (superchat-agent--runs (make-hash-table :test #'equal))
            (superchat-inbox--timer nil))
        (unwind-protect (progn ,@body)
          (when superchat-inbox--timer (cancel-timer superchat-inbox--timer))
          (delete-directory default-directory t)))))
 
 (defun superchat-test-inbox--idle ()
-  "Wait until the worker has nothing more to start and no run goes."
+  "Wait until the worker has nothing more to start and no run goes on the
+timelines the tests use."
   (superchat-test-wait (lambda () (and (null superchat-inbox--timer)
-                                       (= 0 (hash-table-count superchat-agent--runs))))))
+                                       (not (superchat-run-active "t"))
+                                       (not (superchat-run-active "u"))))))
 
 (ert-deftest superchat-inbox-items-put-together-are-one-run ()
   (superchat-test-inbox--with

@@ -16,9 +16,10 @@ ids to drop duplicates and several pending events folded into one run.
 
 ## Decision
 
-- A new L3 module, `superchat-inbox.el`, cap 250 lines, with the arrow
+- A new module, `superchat-inbox.el`, cap 250 lines, with the arrow
   `inbox → agent`. It owns the inbox and its worker; the timers of a later
-  decision belong here too.
+  decision belong here too. It is the module of layer L4, background
+  (`2026-11-17-a-layer-for-work-nobody-watches`).
 - An item is an entry of the new kind `inbox` on the timeline it is for,
   `:data` `(:source :id :unattended)`. `superchat-inbox-put` appends one,
   unless an item with the same source and id is already on the Tape, and
@@ -69,6 +70,5 @@ packages, and the timers to come.
 - An item that comes while its timeline waits for an answer stays pending;
   the run that `superchat-answer` starts does not wake the worker, so the
   item waits for the next wake.
-- `superchat-agent.el` is at 699 of 700 lines. `spec/L3-agent.md` may hold
-  2810 words, up from 2460: the module is new and its rules have no other
-  home.
+- `superchat-agent.el` is at 699 of 700 lines. The module's rules are in
+  `spec/L4-background.md`.
