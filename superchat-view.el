@@ -138,17 +138,21 @@ cited by."
       and append (superchat-tape-entries :tape tape :after id :limit around)))))
 
 (defun superchat-view--notes (args)
-  "Notes, newest first; with :scope, that scope and \"home\"."
+  "Notes, newest first; with :scope, that scope and \"home\".  A note that a
+later note cites is corrected by it and left out."
   (let* ((scope (plist-get args :scope))
          (query (plist-get args :query))
          (limit (or (plist-get args :limit) 20))
+         (replaced (mapcar #'car (superchat-tape-select
+                                  (concat "SELECT DISTINCT r.value FROM entry n, json_each(n.refs) r"
+                                          " WHERE n.kind = 'note'"))))
          (found (cl-loop
                  for s in (if scope (delete-dups (list scope "home")) '(nil))
                  append (if query
                             (superchat-tape-search query :scope s :kinds '(note))
-                          (superchat-tape-entries :scope s :kinds '(note)
-                                                  :newest t :limit limit)))))
-    (take limit (nreverse (superchat-view--in-order found)))))
+                          (superchat-tape-entries :scope s :kinds '(note) :newest t)))))
+    (take limit (seq-remove (lambda (e) (memql (plist-get e :id) replaced))
+                            (nreverse (superchat-view--in-order found))))))
 
 (defun superchat-view--timelines (args)
   "Per timeline, newest first: its latest anchor, else its first user entry."

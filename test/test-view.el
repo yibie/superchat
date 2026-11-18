@@ -114,6 +114,21 @@
     (should (equal (superchat-test-view--texts (superchat-view 'notes :query "home"))
                    '("n2 home")))))
 
+(ert-deftest superchat-view-notes-leaves-out-a-corrected-note ()
+  (superchat-test-with-tape
+    (let* ((old (superchat-tape-append "t" 'note "deploy on Mondays" :scope "/p/"
+                                       :data '(:title "deploy")))
+           (other (superchat-tape-append "t" 'note "codename Heron" :data '(:title "name")))
+           (new (superchat-tape-append "t" 'note "deploy on Fridays" :data '(:title "deploy")
+                                       :refs (list (plist-get old :id)))))
+      (should (equal (mapcar (lambda (e) (plist-get e :id)) (superchat-view 'notes :scope "/p/"))
+                     (list (plist-get new :id) (plist-get other :id))))
+      (should (equal (length (superchat-view 'notes :scope "/p/" :limit 2)) 2))
+      (should-not (superchat-view 'notes :scope "/p/" :query "Mondays"))
+      (should (= 1 (length (superchat-view 'notes :scope "/p/" :query "Fridays"))))
+      (should (cl-find (plist-get old :id) (superchat-view 'search :query "Mondays")
+                       :key (lambda (e) (plist-get e :id)))))))
+
 (ert-deftest superchat-view-notes-query-is-the-newest-matches ()
   (superchat-test-with-tape
     ;; The older notes match best; the limit still takes the newest.

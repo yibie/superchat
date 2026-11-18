@@ -93,7 +93,7 @@ Built-in views:
 | `conversation` | `:tape` | the timeline from its latest anchor, inclusive, to its end; the whole timeline when it has no anchor. When that anchor has `:refs` and an empty `:text` (a fork), the entries it refers to that exist come first, in id order. No `:tape` is an error |
 | `topic` | `:name`, `:scope` optional | for every anchor with that name: the entries from that anchor up to the next anchor of the same timeline |
 | `search` | `:query`, `:scope`, `:kinds`, `:limit` (default 8), `:around` (default 1) | each hit with AROUND neighbours before and after it in its timeline, no entry twice, in id order. SCOPE and KINDS filter the hits only; a neighbour is of any kind. A nil or empty `:query` is an error |
-| `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"`; with `:query`, the newest LIMIT of the notes that match it |
+| `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"`; with `:query`, the newest LIMIT of the notes that match it. A note that a later note has in `:refs` is corrected (`SPEC.md`) and left out |
 | `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline that has no `user` entry with `:ephemeral t`, most recently active first: its latest anchor if it has one, else its first `user` entry; a timeline with neither is left out |
 | `sources` | `:id` | the entries named by the `:refs` of entry ID |
 
