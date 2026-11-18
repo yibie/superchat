@@ -17,6 +17,10 @@
 
 (defvar superchat-inbox--timer nil "The timer of the worker's next look, or nil.")
 
+(defconst superchat-inbox--quiet
+  "Nobody is watching this run. The person sees only what you send with the send tool, and the question when a call needs their permission. Send only what they need to act on or asked for; send nothing when there is nothing new."
+  "The system prompt's extra text for a run nobody watches: start quiet.")
+
 (defun superchat-inbox-pending (&optional tape)
   "The pending items, oldest first; with TAPE, those of that timeline."
   (let* ((rows (superchat-tape-select
@@ -66,12 +70,13 @@ no handoff, no question waiting.  Its text is the items' texts, oldest first."
       ;; One timeline that cannot start must not keep the others waiting;
       ;; its items stay pending and the person is told.
       (condition-case err
-          (superchat-run tape (mapconcat (lambda (e) (plist-get e :text)) items "\n\n")
-                         :refs (mapcar (lambda (e) (plist-get e :id)) items)
-                         :unattended (seq-some (lambda (e) (plist-get (plist-get e :data)
-                                                                      :unattended))
-                                               items)
-                         :on-done (lambda (_) (superchat-inbox-wake)))
+          (let ((unattended (seq-some (lambda (e) (plist-get (plist-get e :data) :unattended))
+                                      items)))
+            (superchat-run tape (mapconcat (lambda (e) (plist-get e :text)) items "\n\n")
+                           :refs (mapcar (lambda (e) (plist-get e :id)) items)
+                           :unattended unattended
+                           :system (and unattended superchat-inbox--quiet)
+                           :on-done (lambda (_) (superchat-inbox-wake))))
         (error (message "Superchat inbox: %s: %s" tape (error-message-string err)))))))
 
 ;;; Timers
@@ -189,6 +194,18 @@ the latest time it is due, however many were missed while Emacs was closed."
  :args '((:name "id" :type number :description "The timer's id" :required t))
  :function (lambda (args)
              (superchat-inbox-cancel-timer (superchat-inbox--number (plist-get args :id)))))
+
+;;; Sending
+
+(superchat-tool-define
+ "send" :class 'read
+ :description "Tell the person something now: a line they see even when they are not reading this conversation. Only what they need to act on or asked for."
+ :args '((:name "text" :type string :description "The message" :required t))
+ :function (lambda (args)
+             (let ((text (plist-get args :text)))
+               (superchat-tape-append superchat-tool-tape 'event text :data '(:type "sent"))
+               (message "Superchat: %s" (car (split-string text "\n")))
+               "Sent.")))
 
 (provide 'superchat-inbox)
 ;;; superchat-inbox.el ends here

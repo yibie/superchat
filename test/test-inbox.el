@@ -185,5 +185,29 @@
                        '((:id "f1" :name "follow_up" :args (:in 600 :text "x")))))))
     (superchat-test-inbox--idle)))
 
+(ert-deftest superchat-inbox-send-tells-the-person ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (let (said)
+      (cl-letf (((symbol-function 'message) (lambda (&rest args) (push (apply #'format args) said))))
+        (should (equal (plist-get (superchat-test-inbox--tool "send" :text "Build broke\nlog: ...") :text)
+                       "Sent.")))
+      (should (equal said '("Superchat: Build broke")))
+      (let ((sent (car (superchat-tape-entries :tape "t" :kinds '(event)))))
+        (should (equal (plist-get sent :data) '(:type "sent")))
+        (should (equal (plist-get sent :text) "Build broke\nlog: ..."))))))
+
+(ert-deftest superchat-inbox-only-a-run-nobody-watches-is-told-to-be-quiet ()
+  (superchat-test-inbox--with
+    (superchat-test-script (list '(:text "a") '(:text "b"))
+      (superchat-inbox-put "t" "watched")
+      (superchat-test-inbox--idle)
+      (superchat-inbox-put "u" "alone" :unattended t)
+      (superchat-test-inbox--idle)
+      (should-not (string-search superchat-inbox--quiet
+                                 (plist-get (nth 1 superchat-test-requests) :system)))
+      (should (string-search superchat-inbox--quiet
+                             (plist-get (nth 0 superchat-test-requests) :system))))))
+
 (provide 'test-inbox)
 ;;; test-inbox.el ends here

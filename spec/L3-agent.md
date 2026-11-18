@@ -251,7 +251,10 @@ waits while the timeline is busy and survives Emacs exiting.
   started, and by the person or a package when Emacs starts. For each
   timeline with pending items, no run, no handoff and no question waiting,
   it starts one `superchat-run`: TEXT the items' texts, oldest first,
-  joined by a blank line; REFS their ids; UNATTENDED when any item is. A
+  joined by a blank line; REFS their ids; UNATTENDED when any item is,
+  and then SYSTEM a few lines saying that nobody watches, that the person
+  sees only what is sent and the questions, and to send only what they
+  need to act on or asked for. A
   timeline whose run cannot start is shown with `message` and keeps its
   items; the others start.
 - A `timer` (`SPEC.md`) may still fire unless a `:cancel t` timer refs it
@@ -268,3 +271,5 @@ waits while the timeline is busy and survives Emacs exiting.
 - Tools, class `read`: `follow_up` (`in` seconds, `text`); `schedule`
   (`every` ≥ 60 or `daily` `"HH:MM"`, `text`), first due one period after
   it is set; `cancel_timer` (`id`).
+- A tool `send` (`text`), class `read`, appends an `event` of type `sent`
+  with TEXT, shows its first line with `message`, and answers `Sent.`.
