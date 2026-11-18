@@ -173,5 +173,17 @@
             (should (equal (plist-get (car (last (superchat-tape-entries :tape "t"))) :text) "looked")))
         (cancel-timer superchat-inbox--poll)))))
 
+(ert-deftest superchat-inbox-the-model-sees-what-a-timer-tool-answered ()
+  (superchat-test-inbox--with
+    (superchat-test-script (list '(:text "" :calls ((:id "f1" :name "follow_up" :args (:in 600 :text "x"))))
+                                 '(:text "Set."))
+      (superchat-run "t" "remind me")
+      (superchat-inbox-put "t" "meanwhile")
+      (let ((sent (plist-get (car superchat-test-requests) :messages)))
+        (should (equal (mapcar (lambda (m) (plist-get m :role)) sent) '(user assistant tool)))
+        (should (equal (plist-get (nth 1 sent) :calls)
+                       '((:id "f1" :name "follow_up" :args (:in 600 :text "x")))))))
+    (superchat-test-inbox--idle)))
+
 (provide 'test-inbox)
 ;;; test-inbox.el ends here

@@ -111,7 +111,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   neutral messages:
   - a `user` entry is a `user` message; an `assistant` entry an `assistant`
     message with its text and calls; a `tool` entry a `tool` message with its
-    call id and name; `event` and `note` entries give no message;
+    call id and name; `event`, `note`, `timer` and `inbox` entries give no
+    message;
   - an anchor with an empty text gives no message; any other anchor is a
     `user` message, `Summary of the conversation so far:\n` and its summary,
     then, when its `:next` is not empty, `\n\nWhat comes next:\n` and that;
@@ -131,7 +132,7 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   out of this request until the rest fits: never the anchor message, never
   the `user` entry of this run, never the latest `assistant` entry and its
   results. An `assistant` entry is left out together with the `tool` entries
-  that answer it and the `event` and `note` entries among them. One `user`
+  that answer it and the entries among them that give no message. One `user`
   message, `[N earlier entries of this conversation are left out of this
   request; recall and tape_query can read them.]`, stands at the place of the
   oldest entry left out, also when the entries left out are not contiguous;
@@ -234,8 +235,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 
 ## superchat-inbox.el
 
-Work for a timeline that nobody is typing into goes through the inbox, so
-that it waits while the timeline is busy and is not lost when Emacs exits.
+Work for a timeline that nobody is typing into goes through the inbox: it
+waits while the timeline is busy and survives Emacs exiting.
 
 - `(superchat-inbox-put TAPE TEXT &key source id unattended scope)` → the
   `inbox` entry it appends to TAPE, `:data` `(:source :id :unattended)`,
