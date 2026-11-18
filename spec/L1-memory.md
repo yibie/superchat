@@ -42,7 +42,7 @@ Public functions, and no others:
 - `(superchat-tape-append TAPE KIND TEXT &key data refs scope at)` → the new
   entry. A timeline has one scope, set by its first entry: SCOPE defaults to
   it, giving another one is an error, and so is giving none for the first
-  entry. KIND is one of the six kind symbols.
+  entry. KIND is one of the seven kind symbols.
 - `(superchat-tape-get ID)` → entry or nil.
 - `(superchat-tape-entries &key tape scope kinds after before limit newest)`
   → entries in id order. AFTER and BEFORE are ids, exclusive. With NEWEST

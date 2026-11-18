@@ -62,6 +62,11 @@
     (should (equal (superchat-test-tape--texts (superchat-tape-entries :tape "t1"))
                    '("a" "b" "c")))))
 
+(ert-deftest superchat-tape-holds-every-kind-of-spec-md ()
+  (superchat-test-with-tape
+    (dolist (kind '(user assistant tool anchor note event inbox))
+      (should (eq (plist-get (superchat-tape-append "t" kind "x" :scope "home") :kind) kind)))))
+
 (ert-deftest superchat-tape-rejects-unknown-kind ()
   (superchat-test-with-tape
     (should-error (superchat-tape-append "t1" 'bogus "x" :scope "home"))
