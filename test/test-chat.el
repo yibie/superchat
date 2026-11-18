@@ -1082,6 +1082,30 @@ tool `echo', and no chat buffers left behind."
         (should (string-match-p "✗ echo" text))
         (should (string-match-p "The last run was cut off: Emacs stopped before it ended." text))))))
 
+(ert-deftest superchat-chat-answers-a-question-that-waits ()
+  (superchat-test-chat--with
+    (superchat-tool-define "poke" :class 'write :description "Poke" :function (lambda (_) "poked"))
+    (unwind-protect
+        (let ((superchat-permission-ask-function (lambda (&rest _) (error "Asked in the minibuffer"))))
+          (superchat-test-script (list '(:text "" :calls ((:id "c1" :name "poke" :args nil)))
+                                       '(:text "Poked it."))
+            (let ((default-directory superchat-test-chat--dir))
+              (superchat-run "t1" "poke it" :unattended t))
+            (let ((buffer (superchat-chat-open "t1")))
+              (should (string-match-p "\\`⏸ waiting for your answer: poke nil — send y, n or a\n\\'"
+                                      (superchat-test-chat--waiting buffer)))
+              (superchat-test-chat--type buffer "hello")
+              (with-current-buffer buffer (superchat-chat--send-input))
+              (should (equal (superchat-test-chat--input buffer) "hello"))
+              (with-current-buffer buffer
+                (delete-region superchat-chat--input (point-max))
+                (superchat-chat-send "y"))
+              (should-not (superchat-question "t1"))
+              (should-not (superchat-test-chat--waiting buffer))
+              (should (string-match-p "✓ poke" (superchat-test-chat--text buffer)))
+              (should (string-match-p "Poked it." (superchat-test-chat--text buffer))))))
+      (superchat-tool-remove "poke"))))
+
 (ert-deftest superchat-chat-waiting-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during)

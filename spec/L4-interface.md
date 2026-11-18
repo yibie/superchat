@@ -173,6 +173,12 @@ derived from `org-mode`.
   text of the buffer and not an entry; a timer of the buffer updates it and
   the mode line, and is cancelled when the run ends or the buffer is
   killed; the line is gone when the run ends.
+- While no run is active and a call of the timeline waits for an answer
+  (`superchat-question`), the line above the separator is, in `warning`,
+  `⏸ waiting for your answer: NAME SUMMARY — send y, n or a`. Sending `y`,
+  `n` or `a` then answers it with `superchat-answer` (`allow`, `deny`,
+  `always`), shown as a run of this buffer; other text is refused with a
+  message and stays in the input; a command is not refused.
 - While a run is active the input stays editable. Streamed text that never became an entry is removed when
   the run ends (cancelled or error). A run that ends with `error` says so
   in the echo area with the error's text. An entry is shown once, however

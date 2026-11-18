@@ -624,6 +624,13 @@ waiting line; a timer keeps them current while the timeline is busy."
     (overlay-put superchat-chat--waiting 'before-string
                  (when-let* ((lines (delq nil (list (and run (not (eq (plist-get run :status) 'handoff))
                                                          (superchat-chat--waiting-line now))
+                                                    (when-let* ((question (and (not run)
+                                                                               (superchat-question
+                                                                                superchat-chat--tape))))
+                                                      (propertize
+                                                       (format "⏸ waiting for your answer: %s — send y, n or a\n"
+                                                               (plist-get question :text))
+                                                       'face 'warning))
                                                     (superchat-chat--queued-line)))))
                    (apply #'concat lines)))
     (force-mode-line-update)))
@@ -705,30 +712,41 @@ A line starting with / is a command.  Return nil when nothing was sent."
       (message "Unknown command %s; /help lists them" (car (split-string text)))
       nil))
    ((superchat-chat--busy) nil)
+   ((superchat-question superchat-chat--tape)
+    (if-let* ((answer (cdr (assoc text '(("y" . allow) ("n" . deny) ("a" . always))))))
+        (unwind-protect
+            (progn (apply #'superchat-answer superchat-chat--tape answer
+                          (superchat-chat--callbacks superchat-chat--tape))
+                   t)
+          (superchat-chat--status))
+      (message "A call waits for your answer: send y, n or a")
+      nil))
    (t
     (let ((tape superchat-chat--tape)
           (origin (or origin superchat-chat--origin)))
       (setq superchat-chat--origin nil)
       (unwind-protect
           (apply #'superchat-run superchat-chat--tape text
-                         :origin origin :model superchat-chat--model
-                         :on-text (superchat-chat--in tape #'superchat-chat--on-text)
-                         :on-entry (superchat-chat--in tape #'superchat-chat--add)
-                         :on-done (superchat-chat--in
-                                   tape (lambda (run)
-                                            (superchat-chat--unstream)
-                                            (superchat-chat--status)
-                                            (when (eq (plist-get run :status) 'error)
-                                              (message "Request failed: %s"
-                                                       (plist-get run :error)))
-                                            (superchat-chat--release
-                                             (eq (plist-get run :status) 'done))))
+                 :origin origin :model superchat-chat--model
+                 (append (superchat-chat--callbacks tape)
                          ;; The first request of a timeline fixes its scope.
                          (and superchat-chat--pending-scope
                               (not (superchat-tape-entries :tape tape :limit 1))
-                              (list :scope superchat-chat--pending-scope)))
+                              (list :scope superchat-chat--pending-scope))))
         (superchat-chat--status))
       t))))
+
+(defun superchat-chat--callbacks (tape)
+  "The callbacks of a run of TAPE that this buffer shows."
+  (list :on-text (superchat-chat--in tape #'superchat-chat--on-text)
+        :on-entry (superchat-chat--in tape #'superchat-chat--add)
+        :on-done (superchat-chat--in
+                  tape (lambda (run)
+                         (superchat-chat--unstream)
+                         (superchat-chat--status)
+                         (when (eq (plist-get run :status) 'error)
+                           (message "Request failed: %s" (plist-get run :error)))
+                         (superchat-chat--release (eq (plist-get run :status) 'done))))))
 
 (defun superchat-chat--enqueue (text)
   "Queue TEXT, sent when the timeline is free."
