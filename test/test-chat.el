@@ -1120,6 +1120,17 @@ tool `echo', and no chat buffers left behind."
         (with-current-buffer buffer (superchat-chat-send (format "/timers cancel %d" id)))
         (should-not (superchat-inbox-timers))))))
 
+(ert-deftest superchat-chat-dream-turns-dreaming-on-and-off ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (with-current-buffer buffer (superchat-chat-send "/dream"))
+      (should (equal (mapcar (lambda (e) (plist-get e :scope)) (superchat-inbox-timers))
+                     (list (superchat-test-chat--scope))))
+      (with-current-buffer buffer (superchat-chat-send "/dream"))
+      (should (= 1 (length (superchat-inbox-timers))))
+      (with-current-buffer buffer (superchat-chat-send "/dream off"))
+      (should-not (superchat-inbox-timers)))))
+
 (ert-deftest superchat-chat-waiting-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during)

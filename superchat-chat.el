@@ -1074,6 +1074,14 @@ it showed."
                               timers "")
                  "No timers."))))
  "[cancel ID] Show the timers that may still fire, or cancel one.")
+(superchat-command-define
+ "dream" (lambda (arg)
+           (let ((scope (superchat-chat--scope)))
+             (if (equal arg "off")
+                 (progn (superchat-inbox-dream scope t) (message "Dreaming is off for %s" scope))
+               (message "Dreaming is on for %s: timer %d, each day at 03:00" scope
+                        (plist-get (superchat-inbox-dream scope) :id)))))
+ "[off] Review this scope's notes each night while nobody watches, or stop.")
 (superchat-command-define "note" #'superchat-chat--note
                           "text. Keep TEXT as a note, as the note tool does.")
 (superchat-command-define "level" #'superchat-chat--level

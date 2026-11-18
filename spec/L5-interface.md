@@ -243,6 +243,7 @@ Built-in commands, and no others:
 | `/topic name` | open the `topic` view of that name in a read-only buffer; no name is a `user-error` |
 | `/recall [query]` | `superchat-recall` with QUERY: the `search` view, or the `notes` view when it is empty |
 | `/notes` | open the `notes` view in a read-only buffer |
+| `/dream` | `superchat-inbox-dream` for this buffer's scope, and says so; `/dream off` turns it off |
 | `/timers` | list `superchat-inbox-timers`, one line each: id, timeline, data, text, or `No timers.`; `/timers cancel ID` cancels one |
 | `/note text` | append TEXT as a `note` entry to this timeline, as `superchat-note` does |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
