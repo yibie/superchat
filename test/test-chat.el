@@ -1106,6 +1106,20 @@ tool `echo', and no chat buffers left behind."
               (should (string-match-p "Poked it." (superchat-test-chat--text buffer))))))
       (superchat-tool-remove "poke"))))
 
+(ert-deftest superchat-chat-timers-lists-and-cancels ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      (with-current-buffer buffer (superchat-chat-send "/timers"))
+      (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string)) "No timers."))
+      (let ((id (plist-get (superchat-tape-append "t1" 'timer "brief" :data '(:daily "09:00")
+                                                  :scope (superchat-test-chat--scope))
+                           :id)))
+        (with-current-buffer buffer (superchat-chat-send "/timers"))
+        (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string))
+                       (format "%d  t1  :daily \"09:00\"  brief\n" id)))
+        (with-current-buffer buffer (superchat-chat-send (format "/timers cancel %d" id)))
+        (should-not (superchat-inbox-timers))))))
+
 (ert-deftest superchat-chat-waiting-line ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) during)

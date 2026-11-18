@@ -17,6 +17,7 @@
 (require 'superchat-permission)
 (require 'superchat-agent)
 (require 'superchat-recall)
+(require 'superchat-inbox)
 (require 'superchat-plugin)
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
@@ -1060,6 +1061,19 @@ it showed."
  "notes" (lambda (_) (superchat-chat--show-entries
                       "notes" (superchat-view 'notes :scope (superchat-chat--scope))))
  "Show the notes of this scope.")
+(superchat-command-define
+ "timers" (lambda (arg)
+            (if (string-match "\\`cancel +\\([0-9]+\\)\\'" arg)
+                (message "%s" (superchat-inbox-cancel-timer (string-to-number (match-string 1 arg))))
+              (superchat-chat--show
+               "timers"
+               (if-let* ((timers (superchat-inbox-timers)))
+                   (mapconcat (lambda (e) (format "%d  %s  %s  %s\n" (plist-get e :id) (plist-get e :tape)
+                                                  (string-trim (format "%S" (plist-get e :data)) "(" ")")
+                                                  (plist-get e :text)))
+                              timers "")
+                 "No timers."))))
+ "[cancel ID] Show the timers that may still fire, or cancel one.")
 (superchat-command-define "note" #'superchat-chat--note
                           "text. Keep TEXT as a note, as the note tool does.")
 (superchat-command-define "level" #'superchat-chat--level
