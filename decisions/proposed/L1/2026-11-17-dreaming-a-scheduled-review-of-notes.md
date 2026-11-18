@@ -17,7 +17,8 @@ This depends on `2026-11-17-follow-ups-and-schedules-that-survive-emacs`.
 - **L1.** The `notes` view leaves out a note that a later note has in its
   `:refs`: by `SPEC.md`, a new entry whose `:refs` names an entry corrects
   it. The `search` view still finds both.
-- **L3.** A schedule the person turns on with `/dream` (off by default):
+- **L4, L5.** A schedule of L4 that the person turns on with `/dream`, a
+  command of L5 (off by default):
   daily, an unattended run per scope that has new notes, which reads the
   notes and the timelines since the last such run with `recall`, and writes
   with `note` a note that replaces two that say the same or one that is
