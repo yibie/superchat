@@ -127,9 +127,14 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   is not one of the three is an error.
 - `(superchat-permission-decide TAPE CLASS)` → `allow`, `deny` or `ask`.
 - `(superchat-permission-ask TOOL-NAME SUMMARY &optional TAPE)` → `allow`,
-  `deny` or `always`, by calling `superchat-permission-ask-function` (a
-  `defvar`) with TOOL-NAME and SUMMARY. The default reads one key in the
-  minibuffer: y, n, or a for "always in this conversation".
+  `deny`, `always` or `later`, by calling `superchat-permission-ask-function`
+  (a `defvar`) with TOOL-NAME and SUMMARY. The default reads one key in the
+  minibuffer: y, n, or a for "always in this conversation". `later`: nobody
+  can answer now.
+- `(superchat-permission-answer TAPE CALL-ID ANSWER)` appends the `event`
+  `(:type "answer" :call-id ID :answer NAME)`; ANSWER is `allow`, `deny` or
+  `always`. `(superchat-permission-answered TAPE CALL-ID)` → the latest, a
+  symbol, or nil.
 - `superchat-permission-asking` (a `defvar`): while that function runs,
   `(:tape TAPE :tool TOOL-NAME :summary SUMMARY)`, else nil, also after it
   signalled; so what shows a run can say that it waits for the person's
@@ -167,7 +172,11 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   appends the result as a `tool` entry and calls ON-RESULT with that entry,
   exactly once: before it returns for a synchronous tool, later for an
   asynchronous one. A call that names no known tool or lacks a required
-  argument is answered first, with no question and no event. For an `ask`
+  argument is answered first, with no question and no event. An `ask`
+  decision is taken from the call's answer on the Tape when there is one.
+  When the ask function returns `later`, nothing runs or is recorded and
+  ON-RESULT gets the `event` `(:type "question" :call-id ID :tool NAME
+  :summary S)` instead of a `tool` entry. For an `ask`
   or `deny` decision it appends a `permission` event once the decision is
   known, before the result; it says whether the call was allowed. A quit
   while the user is asked leaves no `permission` event, only the result. When the returned function is called before the

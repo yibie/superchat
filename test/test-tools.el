@@ -227,6 +227,33 @@
       (should (>= (length permission-events) 4))
       (should (string-match-p "allowed" (plist-get (nth 1 permission-events) :text))))))
 
+(ert-deftest superchat-tools-a-question-can-wait-for-its-answer ()
+  (superchat-test-tools--in-scope
+    (superchat-permission-set "t" 'ask)
+    (let* ((ran 0) (asks 0)
+           (call (list :id "q1" :name "eval_elisp" :args '(:code "(setq ran (1+ ran)) \"ran\"")))
+           (superchat-permission-ask-function (lambda (&rest _) (cl-incf asks) 'later))
+           (entry (superchat-test-tools--await "t" call)))
+      (ignore ran)
+      (should (eq (plist-get entry :kind) 'event))
+      (should (equal (plist-get entry :data)
+                     (list :type "question" :call-id "q1" :tool "eval_elisp"
+                           :summary (format "%S" (plist-get call :args)))))
+      (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))
+      (should-not (cl-find "permission" (superchat-tape-entries :tape "t" :kinds '(event))
+                           :key (lambda (e) (plist-get (plist-get e :data) :type)) :test #'equal))
+      ;; The answer on the Tape decides the same call; nobody is asked again.
+      (superchat-permission-answer "t" "q1" 'allow)
+      (let ((result (superchat-test-tools--await "t" (plist-put (copy-sequence call) :args '(:code "\"ran\"")))))
+        (should (eq (plist-get result :kind) 'tool))
+        (should (equal (plist-get result :text) "\"ran\"")))
+      (should (= asks 1))
+      (superchat-permission-answer "t" "q2" 'deny)
+      (should (string-match-p "Permission denied"
+                              (plist-get (superchat-test-tools--await
+                                          "t" '(:id "q2" :name "eval_elisp" :args (:code "1")))
+                                         :text))))))
+
 (ert-deftest superchat-tools-always-is-per-timeline ()
   (superchat-test-tools--in-scope
     (superchat-tape-append "u" 'user "go" :scope dir)

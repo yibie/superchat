@@ -92,11 +92,13 @@ inside it."
                       (and (not (equal scope "home")) (file-in-directory-p file scope)))))
            (superchat-tools--reads tool args)))
 
-(defun superchat-tools--permit (tape name tool args scope)
-  "Decide whether the call may run; append the permission event when it was
-asked about or denied.  Return nil to run, or the text that says why not.
-A read outside SCOPE is decided as a write: the user agrees to it first."
-  (let* ((class (if (and (eq (plist-get tool :class) 'read)
+(defun superchat-tools--permit (tape call tool args scope)
+  "Decide whether CALL may run; append the permission event when it was
+asked about or denied.  Return nil to run, `later' when the question waits,
+or the text that says why not.  A read outside SCOPE is decided as a write:
+the user agrees to it first."
+  (let* ((name (plist-get call :name))
+         (class (if (and (eq (plist-get tool :class) 'read)
                          (superchat-tools--outside-p scope tool args))
                     'write
                   (plist-get tool :class)))
@@ -104,21 +106,24 @@ A read outside SCOPE is decided as a write: the user agrees to it first."
          (key (cons tape name))
          (answer (cond ((not (eq decision 'ask)) decision)
                        ((gethash key superchat-tools--always) 'always)
+                       ((superchat-permission-answered tape (plist-get call :id)))
                        (t (superchat-permission-ask name (superchat-tools--summary args) tape))))
          (allowed (memq answer '(allow always))))
     (when (eq answer 'always) (puthash key t superchat-tools--always))
-    (unless (eq decision 'allow)
+    (unless (or (eq decision 'allow) (eq answer 'later))
       (superchat-tape-append
        tape 'event (format "%s (%s%s): %s -> %s" name (plist-get tool :class)
                            (if (eq class (plist-get tool :class)) "" ", outside the project")
                            decision (if allowed "allowed" "denied"))
        :data (list :type "permission" :tool name :decision (symbol-name decision)
                    :allowed (and allowed t))))
-    (unless allowed
+    (cond
+     ((eq answer 'later) 'later)
+     ((not allowed)
       (format "Permission denied: %s is a %s tool%s and the level is %s."
               name (plist-get tool :class)
               (if (eq class (plist-get tool :class)) "" ", used outside the project")
-              (superchat-permission-level tape)))))
+              (superchat-permission-level tape))))))
 
 (defun superchat-tools--start (tape call finish cancelled)
   "Start CALL for timeline TAPE.  FINISH is called with (TEXT ERRORP) once.
@@ -134,8 +139,9 @@ user was asked.  Return the tool's stop function or nil.  May signal."
          ;; A process made by the tool takes its directory from here.
          (default-directory (if (equal scope "home") (expand-file-name "~/") scope))
          (superchat-tool-tape tape)
-         (why (unless missing (superchat-tools--permit tape name tool args scope))))
+         (why (unless missing (superchat-tools--permit tape call tool args scope))))
     (cond
+     ((eq why 'later) (funcall finish 'later nil) nil)
      (missing (funcall finish (format "Missing required argument: %s"
                                       (mapconcat (lambda (a) (plist-get a :name)) missing ", "))
                        t)
@@ -160,18 +166,27 @@ user was asked.  Return the tool's stop function or nil.  May signal."
 CANCELLED, a function of no arguments, is asked once the user has answered:
 when it says yes the tool does not run and its result is `Cancelled.'.
 Append the result as a tool entry and call ON-RESULT with it once: before this
-returns for a synchronous tool, later for an asynchronous one.  Return nil, or
+returns for a synchronous tool, later for an asynchronous one.  When the
+question about it must wait (the ask function said `later'), nothing runs and
+ON-RESULT gets the `question' event instead.  Return nil, or
 a function that stops the tool: then nothing is appended and ON-RESULT is
 not called.  Whatever the tool or the user does, the result is an entry."
   (let ((starting t) finished pending stop)
     (cl-labels ((deliver (text errorp)
                   (funcall on-result
                            ;; A quit must not leave a call without its result.
-                           (let ((inhibit-quit t))
-                             (superchat-tape-append
-                              tape 'tool (superchat-tools--cut text)
-                              :data (list :call-id (plist-get call :id) :name (plist-get call :name)
-                                          :error (and errorp t))))))
+                           (let ((inhibit-quit t)
+                                 (summary (superchat-tools--summary (plist-get call :args))))
+                             (if (eq text 'later)
+                                 (superchat-tape-append
+                                  tape 'event (format "%s %s" (plist-get call :name) summary)
+                                  :data (list :type "question" :call-id (plist-get call :id)
+                                              :tool (plist-get call :name) :summary summary))
+                               (superchat-tape-append
+                                tape 'tool (superchat-tools--cut text)
+                                :data (list :call-id (plist-get call :id)
+                                            :name (plist-get call :name)
+                                            :error (and errorp t)))))))
                 (finish (text errorp)
                   (unless finished
                     (setq finished t)

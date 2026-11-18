@@ -6,6 +6,17 @@
 (require 'superchat-tape)
 (require 'superchat-permission)
 
+(ert-deftest superchat-permission-an-answer-is-on-the-tape ()
+  (superchat-test-with-tape
+    (superchat-tape-append "t" 'user "hi" :scope "home")
+    (should-not (superchat-permission-answered "t" "c1"))
+    (superchat-permission-answer "t" "c1" 'deny)
+    (superchat-permission-answer "t" "c2" 'always)
+    (should (eq (superchat-permission-answered "t" "c1") 'deny))
+    (should (eq (superchat-permission-answered "t" "c2") 'always))
+    (should-not (superchat-permission-answered "u" "c1"))
+    (should-error (superchat-permission-answer "t" "c3" 'later))))
+
 (ert-deftest superchat-permission-table ()
   (superchat-test-with-tape
     (superchat-tape-append "t" 'user "hi" :scope "home")
