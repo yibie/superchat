@@ -34,6 +34,10 @@
             (superchat-messages)
             (should (string-match-p "  c  shell (:command \"ls\")  \\? waits for y, n or a\n\\'"
                                     (with-current-buffer "*superchat: messages*" (buffer-string))))
+            (with-current-buffer "*superchat: messages*"
+              (search-forward "waits for ")
+              (should (memq 'bold (ensure-list (get-text-property (point) 'face))))
+              (should-not (get-text-property (1+ (point)) 'face)))
             ;; y on its line answers it from the chat buffer.
             (let (answered)
               (cl-letf (((symbol-function 'superchat-answer)

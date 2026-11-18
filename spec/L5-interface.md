@@ -175,7 +175,9 @@ derived from `org-mode`.
   killed; the line is gone when the run ends.
 - While no run is active and a call of the timeline waits for an answer
   (`superchat-question`), the line above the separator is, in `warning`,
-  `⏸ waiting for your answer: NAME SUMMARY — send y, n or a`. Sending `y`,
+  `⏸ waiting for your answer: NAME SUMMARY — send y, n or a`, the keys
+  in bold (`(superchat-chat-answer-keys &optional FACE)` → `y, n or a` in
+  FACE, its keys also bold). Sending `y`,
   `n` or `a` then answers it with `superchat-answer` (`allow`, `deny`,
   `always`), shown as a run of this buffer; other text is refused with a
   message and stays in the input; a command is not refused.
@@ -304,7 +306,7 @@ Plugins live in another repository. This one ships none.
   `superchat-messages-mode` (from `special-mode`), one line for each
   `event` of type `sent` on the Tape and each `question` that waits
   (`superchat-question`), oldest first: `YYYY-MM-DD HH:MM  TIMELINE
-  FIRST-LINE`, a question's ending `  ? waits for y, n or a`; `Nothing was sent.` when there is none. Point goes to the
+  FIRST-LINE`, a question's ending `  ? waits for y, n or a`, the keys in bold; `Nothing was sent.` when there is none. Point goes to the
   newest. `g` draws it again; `RET` (`superchat-messages-open`) opens the
   chat buffer of the line's timeline. On a question's line, `y`, `n` or `a`
   (`superchat-messages-answer`) sends that key from its chat buffer, draws

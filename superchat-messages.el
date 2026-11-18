@@ -41,7 +41,9 @@ the person, newest last."
         (pcase-dolist (`(,_ ,tape ,text ,at ,type) sent)
           (insert (propertize (format "%s  %s  %s%s\n" (format-time-string "%F %R" at) tape
                                       (car (split-string text "\n"))
-                                      (if (equal type "question") "  ? waits for y, n or a" ""))
+                                      (if (equal type "question")
+                                          (concat "  ? waits for " (superchat-chat-answer-keys))
+                                        ""))
                               'superchat-messages-tape tape
                               'superchat-messages-question (equal type "question"))))
         (unless sent (insert "Nothing was sent.\n")))

@@ -628,13 +628,18 @@ waiting line; a timer keeps them current while the timeline is busy."
                                                     (when-let* ((question (and (not run)
                                                                                (superchat-question
                                                                                 superchat-chat--tape))))
-                                                      (propertize
-                                                       (format "⏸ waiting for your answer: %s — send y, n or a\n"
-                                                               (plist-get question :text))
-                                                       'face 'warning))
+                                                      (format (propertize "⏸ waiting for your answer: %s — send %s\n"
+                                                                          'face 'warning)
+                                                              (plist-get question :text)
+                                                              (superchat-chat-answer-keys 'warning)))
                                                     (superchat-chat--queued-line)))))
                    (apply #'concat lines)))
     (force-mode-line-update)))
+
+(defun superchat-chat-answer-keys (&optional face)
+  "The string \"y, n or a\", in FACE, with the three keys also in bold."
+  (apply #'format (propertize "%s, %s or %s" 'face face)
+         (mapcar (lambda (k) (propertize k 'face (delq nil (list 'bold face)))) '("y" "n" "a"))))
 
 (defun superchat-chat--add (_entry)
   "Show the entries of the timeline after the latest one shown, the entry just
