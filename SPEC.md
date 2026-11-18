@@ -56,11 +56,13 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L4 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
 | L4 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
 | L4 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
+| L4 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 
 Dependencies go one way only:
 
 ```
 inline → chat
+messages → chat
 chat → agent, plugin, recall, inbox
 inbox → agent
 agent → llm, tools, recall, view, context
@@ -170,7 +172,7 @@ There is no "session" object and no "memory" store. A session is the
 | `note` | the conclusion | `(:title STRING)` |
 | `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
@@ -237,9 +239,8 @@ each gate is shown an invalid case and must reject it.
 
 ## Decisions
 
-A decision note says why a rule of the specification is what it is and what
-it beat. The specification states the rule; the note keeps the reason, so
-the rule is not argued again. `NOTES.md` holds what seems missing; a note
+A decision note keeps why a rule of the specification is what it is and
+what it beat, so the rule is not argued again. `NOTES.md` holds what seems missing; a note
 holds what was decided.
 
 A commit that adds or changes a rule of a specification (behaviour, a public
@@ -249,12 +250,12 @@ do what the specification already says needs none; its message says so in a
 line `Decision: none — WHY`. `scripts/hooks/commit-msg` refuses a commit
 that changes `SPEC.md` or a `spec/` file with neither a file under
 `decisions/` nor that line; `git config core.hooksPath scripts/hooks` turns
-it on. Whether a note is needed, and whether a waiver's reason holds, is
-checked in review.
+it on. Review judges whether a note is needed and a waiver's reason
+holds.
 
 A note is `decisions/STATE/LAYER/YYYY-MM-DD-topic.md`: STATE is `proposed`,
 `implemented` or `rejected`; LAYER is the layer it concerns, `L0` for this
-file, the gates and the way of working; the date is the day it was first
+file, the gates and the way of working; the date, the day it was first
 proposed. Its first line is `# Decision: TITLE`, its third `Status: STATE`
 (`Status: rejected — WHY` for a rejected one), lines two and four empty. Its
 first section is `## Problem`. A proposed note has `## Proposal`,
@@ -265,9 +266,8 @@ implemented one `## Decision`, `## Alternatives considered` and
 `## Alternatives considered`.
 
 Alternatives come from the record (the conversation, the commit,
-`NOTES.md`), never invented; when none was weighed, the section says so. A
-proposal that is built moves to `implemented/` and is rewritten in the
-present tense, its acceptance criteria and risks folded into the
+`NOTES.md`), never invented; if none was weighed, it says so. A
+built proposal moves to `implemented/`, rewritten in the present tense, its acceptance criteria and risks folded into the
 consequences. An implemented note follows the code's facts (names, paths,
 defaults) but is never edited into another decision: a reversal is a new
 note whose alternatives name the old decision, and the old note is deleted
