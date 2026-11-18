@@ -91,7 +91,7 @@ write notes through this one function."
 
 (superchat-tool-define
  "note" :class 'read :function #'superchat-recall--note
- :description "Keep a conclusion worth remembering, with the entries it comes from."
+ :description "Keep a conclusion worth remembering, with the entries it comes from. A note among its sources is replaced by this one: cite a note only to correct it or merge it."
  :args '((:name "title" :type string :description "Short title" :required t)
          (:name "text" :type string :description "The conclusion" :required t)
          (:name "sources" :type string :description "Comma-separated entry ids" :required t)))

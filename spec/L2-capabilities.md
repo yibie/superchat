@@ -351,7 +351,7 @@ Three tools, defined with `superchat-tool-define`, all of class `read`:
 |---|---|---|
 | `recall` | `view`, `query` opt, `name` opt, `id` opt, `limit` opt | run a built-in or plugin view for the current scope and return `superchat-view-render` of it, at most 6000 characters |
 | `tape_query` | `sql` | `superchat-tape-select`, rows as JSON lines, at most 200 rows; the limit is part of the statement that runs, so a query that would return a million rows does not fetch them |
-| `note` | `title`, `text`, `sources` (comma-separated entry ids) | append a `note` entry to the current timeline |
+| `note` | `title`, `text`, `sources` (comma-separated entry ids) | append a `note` entry to the current timeline; a note among its sources is corrected by it (L1, `notes`), as its description says |
 
 - `(superchat-recall-note TAPE TITLE TEXT &optional REFS SCOPE)` → the
   `note` entry appended to TAPE; SCOPE is needed only for a timeline with no

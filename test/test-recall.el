@@ -33,6 +33,16 @@
     (should (eq t (plist-get (plist-get e :data) :error)))
     (plist-get e :text)))
 
+(ert-deftest superchat-test-recall-a-note-citing-a-note-replaces-it ()
+  (superchat-test-recall--with
+    (should (string-match-p "replaced" (plist-get (car (superchat-tool-specs '("note"))) :description)))
+    (superchat-test-recall--ok "note" :title "deploy" :text "Mondays" :sources "1")
+    (let ((old (plist-get (car (superchat-view 'notes :scope "/p/")) :id)))
+      (superchat-test-recall--ok "note" :title "deploy" :text "Fridays"
+                                 :sources (number-to-string old))
+      (should (equal (mapcar (lambda (e) (plist-get e :text)) (superchat-view 'notes :scope "/p/"))
+                     '("Fridays"))))))
+
 (ert-deftest superchat-test-recall-views ()
   (superchat-test-recall--with
     (superchat-tape-append "t" 'anchor "sum" :data '(:name "plans" :summary "sum" :next ""))
