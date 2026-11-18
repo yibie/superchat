@@ -195,6 +195,23 @@ the latest time it is due, however many were missed while Emacs was closed."
  :function (lambda (args)
              (superchat-inbox-cancel-timer (superchat-inbox--number (plist-get args :id)))))
 
+;;; Dreaming
+
+(defconst superchat-inbox--dream
+  "Review the notes of this project while nobody watches. Read them with recall (view notes), and what happened since your last review with recall (views timelines and search). When two notes say the same, or one is wrong or out of date, write one note with the note tool that replaces them: its sources are the ids of the notes it replaces. Delete nothing. Send nothing unless a note contradicts what the person said. When nothing is new since your last review, write nothing."
+  "The task of a dreaming run, and how its timer is known.")
+
+(defun superchat-inbox-dream (scope &optional off)
+  "Turn dreaming on for SCOPE, a daily review of its notes at 03:00, and
+return its timer; with OFF, turn it off and return nil."
+  (let ((timer (seq-find (lambda (e) (and (equal (plist-get e :text) superchat-inbox--dream)
+                                          (equal (plist-get e :scope) scope)))
+                         (superchat-inbox-timers))))
+    (cond (off (when timer (superchat-inbox-cancel-timer (plist-get timer :id))) nil)
+          (timer)
+          (t (superchat-tape-append (superchat-tape-new-name) 'timer superchat-inbox--dream
+                                    :data '(:daily "03:00") :scope scope)))))
+
 ;;; Sending
 
 (superchat-tool-define

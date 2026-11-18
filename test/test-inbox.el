@@ -210,5 +210,27 @@ timelines the tests use."
       (should (string-search superchat-inbox--quiet
                              (plist-get (nth 0 superchat-test-requests) :system))))))
 
+(ert-deftest superchat-inbox-dreaming-is-one-daily-timer-per-scope ()
+  (superchat-test-inbox--with
+    (let ((timer (superchat-inbox-dream "/p/")))
+      (should (equal (plist-get timer :data) '(:daily "03:00")))
+      (should (equal (plist-get timer :scope) "/p/"))
+      (should (equal (plist-get (superchat-inbox-dream "/p/") :id) (plist-get timer :id)))
+      (should-not (equal (plist-get (superchat-inbox-dream "/q/") :id) (plist-get timer :id)))
+      (should (= 2 (length (superchat-inbox-timers))))
+      (should-not (superchat-inbox-dream "/q/" t))
+      ;; Due a day after it was set, it is a quiet run on its own timeline.
+      (superchat-test-script (list '(:text "nothing new"))
+        (superchat-inbox--fire (+ (float-time) 86400))
+        (superchat-test-inbox--idle)
+        (should (string-search superchat-inbox--quiet
+                               (plist-get (car superchat-test-requests) :system)))
+        (should (equal (plist-get (car (superchat-tape-entries :tape (plist-get timer :tape)
+                                                               :kinds '(user)))
+                                  :text)
+                       superchat-inbox--dream)))
+      (should-not (superchat-inbox-dream "/p/" t))
+      (should-not (superchat-inbox-timers)))))
+
 (provide 'test-inbox)
 ;;; test-inbox.el ends here

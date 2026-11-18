@@ -45,3 +45,8 @@ waits while the timeline is busy and survives Emacs exiting.
   it is set; `cancel_timer` (`id`).
 - A tool `send` (`text`), class `read`, appends an `event` of type `sent`
   with TEXT, shows its first line with `message`, and answers `Sent.`.
+- `(superchat-inbox-dream SCOPE &optional OFF)` turns dreaming on for
+  SCOPE and returns its timer: a `daily` `"03:00"` timer on a new timeline
+  of SCOPE whose text asks to review the notes, to replace with `note`
+  those that repeat or are wrong, citing them, and to delete and send
+  nothing; one per scope. With OFF it cancels that timer.
