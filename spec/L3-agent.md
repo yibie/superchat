@@ -111,11 +111,11 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   neutral messages:
   - a `user` entry is a `user` message; an `assistant` entry an `assistant`
     message with its text and calls; a `tool` entry a `tool` message with its
-    call id and name; `event`, `note`, `timer` and `inbox` entries give no
-    message;
+    call id and name;
   - an anchor with an empty text gives no message; any other anchor is a
     `user` message, `Summary of the conversation so far:\n` and its summary,
     then, when its `:next` is not empty, `\n\nWhat comes next:\n` and that;
+    an entry of any other kind gives no message;
   - a `tool` entry that does not answer a call of the `assistant` entry
     before it is not sent; a call with no `tool` entry answering it is not
     sent, and an `assistant` message left with no text and no calls is not

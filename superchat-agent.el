@@ -66,14 +66,14 @@ The handoff check and the budget of a request both use this."
 
 (defun superchat-agent--groups (entries)
   "ENTRIES in lists: an assistant entry with the tool entries that answer its
-calls and every event, note, timer and inbox entry up to the next entry of
-another kind, and every other entry alone.  A tool entry that answers no
+calls and every entry that gives no message up to the next entry of another
+kind, and every other entry alone.  A tool entry that answers no
 call of the assistant entry heading its group is in no group: no request
 ever has it."
   (let (groups)
     (dolist (e entries)
       (let* ((kind (plist-get e :kind)) (head (car (last (car groups)))))
-        (cond ((not (and (memq kind '(tool event note timer inbox)) (eq (plist-get head :kind) 'assistant)))
+        (cond ((not (and (or (eq kind 'tool) (null (superchat-agent--message e))) (eq (plist-get head :kind) 'assistant)))
                (unless (eq kind 'tool) (push (list e) groups)))
               ((or (not (eq kind 'tool))
                    (cl-some (lambda (c) (equal (plist-get c :id)
