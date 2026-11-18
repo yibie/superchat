@@ -1,9 +1,9 @@
 # L4 interface: the chat buffer, inline commands, plugins
 
 Part of the [specification](../SPEC.md). Modules: `superchat-chat.el`,
-`superchat-inline.el`, `superchat-plugin.el`. This layer is what the person
-uses; every effect it has goes through `superchat-run` and the public
-functions of the layers below.
+`superchat-inline.el`, `superchat-plugin.el`, `superchat-messages.el`. This
+layer is what the person uses; every effect it has goes through
+`superchat-run` and the public functions of the layers below.
 
 ## superchat-chat.el
 
@@ -296,3 +296,12 @@ the conversations it showed.
   is an error that names it.
 
 Plugins live in another repository. This one ships none.
+
+## superchat-messages.el
+
+- `superchat-messages`, a command: the buffer `*superchat: messages*`, in
+  `superchat-messages-mode` (from `special-mode`), one line for each
+  `event` of type `sent` on the Tape, oldest first: `YYYY-MM-DD HH:MM  TIMELINE
+  FIRST-LINE`; `Nothing was sent.` when there is none. Point goes to the
+  newest. `g` draws it again; `RET` (`superchat-messages-open`) opens the
+  chat buffer of the line's timeline.

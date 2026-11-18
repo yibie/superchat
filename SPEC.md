@@ -103,7 +103,7 @@ points to require. A file requires nothing else, and
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3800 words |
 | `spec/L3-agent.md` | 3010 words |
-| `spec/L4-interface.md` | 3400 words |
+| `spec/L4-interface.md` | 3600 words |
 
 ## Rules against overflow
 
