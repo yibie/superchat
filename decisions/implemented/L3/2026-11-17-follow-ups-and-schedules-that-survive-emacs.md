@@ -60,5 +60,5 @@ side effect of `require`, which no other file here has.
   schedule only what the person asked for. `every` is at least 60 seconds.
 - `superchat-inbox-start` also wakes the inbox worker, so items left
   pending when Emacs exited are answered once it runs.
-- `superchat-inbox.el` is at 195 of 250 lines, `superchat-chat.el` at 1086
+- `superchat-inbox.el` is at 194 of 250 lines, `superchat-chat.el` at 1086
   of 1100.
