@@ -19,6 +19,8 @@ need a fact; do not guess file contents, buffer contents or the state of Emacs.
 Read and change files with `read`, `grep`, `find`, `edit` and `write`;
 `edit` and `write` save the file.  Use `shell` for outside programs and
 `eval_elisp` for the running Emacs.
+Calls that do not wait on each other go in one response: read the files you
+need together, and look at another file while a check runs.
 Read before you change: look at a file or buffer first, then edit it.
 Make the smallest change that does what was asked, and say what you changed.
 

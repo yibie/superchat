@@ -300,6 +300,15 @@
         (should-not (member "interrupted" (superchat-test-agent--events "t")))
         (should-error (superchat-answer "t" 'allow))))))
 
+(ert-deftest superchat-agent-no-round-limit-when-nil ()
+  (superchat-test-agent--with
+    (let ((superchat-max-rounds nil) status
+          (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+      (superchat-test-script (list call call call '(:text "Done."))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (= (length superchat-test-requests) 4)))
+      (should (eq status 'done)))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status

@@ -79,7 +79,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - An entry `superchat-tool-call` appended (a permission event, a result) is
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
-- After `superchat-max-rounds` model responses in one run, the run asks the
+- When `superchat-max-rounds` is a number (nil sets no limit), after that
+  many model responses in one run, the run asks the
   model once more, its tools offered, a system line saying the limit is
   reached and to call none; it records the answer as an `assistant` entry
   with no calls and ends `error`, the event counting the calls the run made

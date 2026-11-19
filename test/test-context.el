@@ -136,5 +136,10 @@
   (superchat-test-with-tape
    (should (<= (length (split-string (superchat-context-system "empty") "\n")) 40))))
 
+(ert-deftest superchat-context-the-base-instructions-ask-for-calls-together ()
+  (superchat-test-with-tape
+   (should (string-search "Calls that do not wait on each other go in one response"
+                          (superchat-context-system "empty")))))
+
 (provide 'test-context)
 ;;; test-context.el ends here

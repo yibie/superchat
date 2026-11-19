@@ -233,7 +233,7 @@ for an answer."
          (size (superchat-request-kept-size entries (plist-get run :user-id)))
          (model (or (plist-get run :model) superchat-llm-model))
          (tools (plist-get run :tools))
-         (last (>= (plist-get run :rounds) superchat-max-rounds)))
+         (last (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds))))
     (setf (plist-get run :last) last)
     (cond
      ((> size (* 2 budget))
