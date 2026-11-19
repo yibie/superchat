@@ -71,7 +71,9 @@ yet.
 
 `M-x superchat` opens the most recent conversation of the current project,
 or a new one. Outside a project the conversation belongs to "home". With a
-prefix argument it always starts a new one.
+prefix argument it always starts a new one. A path the model uses is
+relative to that root, or to your home directory outside a project, and the
+prompt tells it which.
 
 | key | does |
 |---|---|
@@ -89,6 +91,8 @@ prefix argument it always starts a new one.
 | `/recall query` | search everything kept |
 | `/notes` | show the notes |
 | `/note text` | keep a note |
+| `/timers` | what may still fire; `/timers cancel ID` drops one |
+| `/dream` | review this project's notes each night; `/dream off` stops it |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model of this buffer |
 | `/help` | list the commands |
@@ -148,6 +152,27 @@ says how large it was.
 - A skill is `skills/NAME/SKILL.md` in `superchat-directory`. The model sees
   each skill's name and `description:` line and reads the file when it needs
   it.
+
+### While you are away
+
+A conversation can be given work that nobody is typing into. It waits in an
+inbox until the conversation is free, survives Emacs being closed, and is
+answered by a run of its own; the items of one batch are answered together.
+
+| what | does |
+|---|---|
+| `follow_up` (seconds), `schedule` (every, or daily `"HH:MM"`) | the model asks to be woken with a task later, or again and again; `cancel_timer` drops one |
+| `send` | a run you are not watching shows you a line now |
+| `M-x superchat-inbox-start` | starts the clock when Emacs starts |
+| `superchat-inbox-notify-functions` | each `send` and each waiting question, for a notification hook of your own |
+
+An unattended run asks nobody: a call that needs permission comes back as a
+question, the run waits, and a message says so. Answer it with `y`, `n` or
+`a` on its line in `M-x superchat-messages`.
+
+`/dream` gives this project's notes a night review: at 03:00 the model
+reads them and replaces, with `note`, those that repeat or are wrong. It
+sends nothing. It is off until you ask for it.
 
 ## Options
 
@@ -216,5 +241,5 @@ which upstream files are ported.
 
 ## What it does not do
 
-No scheduled or unattended runs, no sub-agents, no MCP, no workflows. A
-permission answered "always" is forgotten when Emacs exits.
+No sub-agents, no MCP, no workflows, no permission that survives Emacs
+restarting. Anthropic, OpenAI and Gemini are not among the wire formats yet.
