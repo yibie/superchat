@@ -39,12 +39,14 @@ One query for the newest, because every tool call asks."
       (intern level)
     superchat-default-level))
 
-(defun superchat-permission-set (tape level)
-  "Append the event that makes LEVEL the level of timeline TAPE."
+(defun superchat-permission-set (tape level &optional scope)
+  "Append the event that makes LEVEL the level of timeline TAPE.
+SCOPE is that of a timeline with no entry yet, whose first entry this is."
   (unless (assq level superchat-permission--table)
     (error "Unknown permission level: %S" level))
   (superchat-tape-append tape 'event (format "Permission level: %s" level)
-                         :data (list :type "level" :level (symbol-name level))))
+                         :data (list :type "level" :level (symbol-name level))
+                         :scope (unless (superchat-tape-entries :tape tape :limit 1) scope)))
 
 (defun superchat-permission-decide (tape class)
   "`allow', `deny' or `ask' for a tool of CLASS in timeline TAPE."

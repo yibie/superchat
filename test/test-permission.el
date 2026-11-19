@@ -42,6 +42,16 @@
     (superchat-permission-set "t" 'auto)
     (should (eq (superchat-permission-level "t") 'auto))))
 
+(ert-deftest superchat-permission-set-starts-a-timeline-with-its-scope ()
+  (superchat-test-with-tape
+    (should-error (superchat-permission-set "new" 'auto))
+    (let ((entry (superchat-permission-set "new" 'auto "/p/")))
+      (should (equal (plist-get entry :scope) "/p/")))
+    (should (eq (superchat-permission-level "new") 'auto))
+    ;; Once the timeline has an entry, SCOPE is not given again.
+    (superchat-permission-set "new" 'ask "/p/")
+    (should (eq (superchat-permission-level "new") 'ask))))
+
 (ert-deftest superchat-permission-set-rejects-unknown-level ()
   (superchat-test-with-tape
     (superchat-tape-append "t" 'user "hi" :scope "home")

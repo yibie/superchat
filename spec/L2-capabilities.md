@@ -128,8 +128,9 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
 
 - `(superchat-permission-level TAPE)` → the level of a timeline: the level of
   its latest `event` entry of type `level`, else `superchat-default-level`.
-- `(superchat-permission-set TAPE LEVEL)`: append that event. A LEVEL that
-  is not one of the three is an error.
+- `(superchat-permission-set TAPE LEVEL &optional SCOPE)`: append that
+  event; SCOPE is that of a timeline with no entry yet. A LEVEL that is not
+  one of the three is an error.
 - `(superchat-permission-decide TAPE CLASS)` → `allow`, `deny` or `ask`.
 - `(superchat-permission-ask TOOL-NAME SUMMARY &optional TAPE)` → `allow`,
   `deny`, `always` or `later`, by calling `superchat-permission-ask-function`
