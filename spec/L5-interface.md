@@ -202,7 +202,7 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
     heading `** Progress  STRIP  N calls, K failed` (`1 call`; `, K failed`
     only when K > 0; `** Progress` when it holds no call), N the calls in
     it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
-    while a call of it has no result. Under it, in order, the intermediate texts, each followed
+    only while the turn still runs. Under it, in order, the intermediate texts, each followed
     by its calls, each call a level 3 heading. A `permission` event of the
     turn belongs to the call it was asked for, the first call of the turn
     without a `tool` entry when the event came: it is a dimmed line just

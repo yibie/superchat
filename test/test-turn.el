@@ -35,6 +35,18 @@
     (should (string-match-p "\\*\\* ⏳ Progress  ▮  1 call" head))
     (should (string-match-p "\\*\\*\\* ⏳ read  :path \"a.el\"" head))))
 
+(ert-deftest superchat-turn-text-of-a-turn-that-is-over-has-no-hourglass ()
+  (let* ((user (superchat-test-turn--entry 1 'user "hi" nil))
+         (assistant (superchat-test-turn--entry
+                     2 'assistant ""
+                     '(:calls ((:id "c1" :name "read" :args (:path "a.el"))))))
+         (head (lambda (over) (car (superchat-turn-text (list user assistant) nil over)))))
+    (should (string-match-p "\\*\\* ⏳ Progress  ▮  1 call" (funcall head nil)))
+    (should (string-match-p "\\*\\* Progress  ▮  1 call" (funcall head t)))
+    (should-not (string-match-p "\n\\*\\* ⏳" (funcall head t)))
+    ;; The call's own heading still says it has no result.
+    (should (string-match-p "\\*\\*\\* ⏳ read" (funcall head t)))))
+
 (ert-deftest superchat-turn-text-has-no-progress-without-a-call ()
   (let* ((user (superchat-test-turn--entry 1 'user "hi" nil))
          (assistant (superchat-test-turn--entry 2 'assistant "done" nil))

@@ -296,7 +296,7 @@ unless a call failed."
                 inside))))
     (when inside
       (superchat-turn--heading
-       (concat "** " (and waiting "⏳ ") "Progress"
+       (concat "** " (and waiting (not done) "⏳ ") "Progress"
                (when (> calls 0)
                  (format "  %s  %d call%s%s" strip calls (if (= calls 1) "" "s")
                          (if (> failed 0) (format ", %d failed" failed) ""))))
