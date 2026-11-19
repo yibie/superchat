@@ -173,6 +173,9 @@ body, after the lines of the permission events ASKED for it; it carries the id
 of its tool entry, or of its assistant entry before."
   (let* ((result (plist-get call :result))
          (args (plist-get (plist-get call :call) :args))
+         ;; Emacs stopped while the call ran: the next run marks it long after
+         ;; the call, so that time is no duration of the call.
+         (cut (string-prefix-p "Interrupted: " (or (plist-get result :text) "")))
          (short (superchat-turn--args args)))
     (concat
      ;; A line no call's body takes in: it ends the body of the call before.
@@ -185,7 +188,8 @@ of its tool entry, or of its assistant entry before."
                                                  (t "✓"))
                                            " " (plist-get (plist-get call :call) :name))
                                    (and (not (string-empty-p short)) short)
-                                   (and result (format "(%.1fs)" (plist-get call :seconds)))))
+                                   ;; A cut-off call has no duration.
+                                   (and result (not cut) (format "(%.1fs)" (plist-get call :seconds)))))
                    "  ")
       (mapconcat (lambda (part) (format "\n#+begin_example\n%s\n#+end_example"
                                         (org-escape-code-in-string part)))

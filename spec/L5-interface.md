@@ -234,8 +234,9 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
   `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
   printed with `%S` without its outer parentheses, newlines escaped, cut to
   60 characters and `…` (left out with its spaces when empty); DURATION is
-  `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, and
-  is left out while there is none. The body is the arguments, one key and
+  `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, left
+  out while there is none or when that entry's text begins `Interrupted:`.
+  The body is the arguments, one key and
   value per line, then the result, each in a `#+begin_example` block escaped
   with `org-escape-code-in-string`; an empty part has no block. The other
   entries look like:
