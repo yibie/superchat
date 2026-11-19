@@ -19,10 +19,11 @@ instead of asking for the cheapest useful thing left.
 
 ## Decision
 
-When the count reaches the limit, the run makes one last request: no tools,
-and a system line (`superchat-agent--limit-note`) saying the limit is reached
-and to answer with what it has, saying what it did, what is left, and what
-the person should check. The model cannot call a tool, so it can only write.
+When the count reaches the limit, the run makes one last request: a system
+line (`superchat-agent--limit-note`) saying the limit is reached, to call no
+tool, and to answer with what it has — what it did, what is left, and what
+the person should check. The tools stay offered; a call the answer still
+claims is dropped, so the model can only write an answer.
 
 That answer is recorded as an `assistant` entry with no `:calls`, whatever
 calls the response claims — the Tape then holds a true fact, and the chat
@@ -49,8 +50,13 @@ follows reads their results.
   response. It is usually a sentence announcing calls to come, and it is
   already on the Tape; more of the same tells the person nothing new.
 - Ask the last request for a summary through an extra tool, or a second
-  short request after the stop. Both cost more than one request with no
-  tools, and the second has no picture of the run that the first lacks.
+  short request after the stop. Both cost more than one request, and the
+  second has no picture of the run that the first lacks.
+- Send the last request with no tool specs. That was done first, and it put
+  a provider's call syntax in the answer as text: with nothing to call,
+  DeepSeek wrote `<｜｜DSML｜｜ invoke …>` where the person expects a
+  sentence. The tools stay offered and the answer's calls are dropped
+  instead.
 
 ## Consequences
 

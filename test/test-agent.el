@@ -309,7 +309,9 @@
         ;; Two responses, then the one the limit asks for, with no tools.
         (should (= (length superchat-test-requests) 3))
         (let ((ended (car superchat-test-requests)))
-          (should-not (plist-get ended :tools))
+          ;; The tools stay offered, so a provider cannot leak its call syntax
+          ;; as text; the system line says to call none.
+          (should (plist-get ended :tools))
           (should (string-search superchat-agent--limit-note (plist-get ended :system)))))
       (should (eq status 'error))
       ;; The calls of the last response ran: every call has its result.

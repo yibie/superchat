@@ -210,7 +210,7 @@ tool that has not answered yet."
       (superchat-agent--step run))))
 
 (defconst superchat-agent--limit-note
-  "The limit of model responses in one run is reached. No tool can be called now: answer with what you have, saying what you did, what is left, and what the person should check."
+  "The limit of model responses in one run is reached. Call no tool now, even if one would help: answer with what you have, saying what you did, what is left, and what the person should check."
   "What the system prompt says of a run's last request, the round limit reached.")
 
 (defun superchat-agent--stopped ()
@@ -218,8 +218,8 @@ tool that has not answered yet."
   (format "Stopped: %d model responses without an answer." superchat-max-rounds))
 
 (defun superchat-agent--step (run)
-  "Make the next request of RUN; the model's last, with no tools, at the round
-limit."
+  "Make the next request of RUN; at the round limit, the last one, which asks
+for an answer."
   (let* ((tape (plist-get run :tape))
          (budget (superchat-request-budget (plist-get run :model)))
          (entries (superchat-view 'conversation :tape tape))
@@ -247,7 +247,10 @@ limit."
                      messages
                      :system (concat (superchat-context-system tape (plist-get run :system))
                                      (and last (concat "\n\n" superchat-agent--limit-note)))
-                     :tools (unless (or last (eq tools 'none)) (superchat-tool-specs tools))
+                     ;; The tools stay: a provider that has no tool in the
+                     ;; request may leak its call syntax as text. A call of
+                     ;; this answer is dropped by --respond.
+                     :tools (unless (eq tools 'none) (superchat-tool-specs tools))
                      :model (plist-get run :model)
                      :on-text (lambda (text)
                                 (when-let* (((superchat-agent--live run))

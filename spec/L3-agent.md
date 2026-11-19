@@ -80,10 +80,10 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
 - After `superchat-max-rounds` model responses in one run, the run asks the
-  model once more, no tools and a system line saying the limit is reached, to
-  answer with what it has, records that answer as an `assistant` entry with
-  no calls, and ends with status `error` and an `error` event saying so. The
-  calls of the last response run first: the limit stops the next request.
+  model once more, its tools offered, a system line saying the limit is
+  reached and to call none; it records the answer as an `assistant` entry
+  with no calls, and ends with status `error` and an `error` event saying so.
+  The calls of the last response run first.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
   `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a
