@@ -42,9 +42,10 @@ waits while the timeline is busy and survives Emacs exiting.
 - `(superchat-inbox-start)`, a command: put what is due and wake the worker
   now and every `superchat-inbox-poll-seconds` (a `defvar`, 60).
   `(superchat-inbox-cancel-timer ID)` cancels.
-- Tools, class `read`: `follow_up` (`in` seconds, `text`); `schedule`
-  (`every` ≥ 60 or `daily` `"HH:MM"`, `text`), first due one period after
-  it is set; `cancel_timer` (`id`).
+- Tools, class `write` (they make unwatched work): `follow_up` (`in` ≥ 60
+  seconds, `text`), not to split work; `schedule` (`every` ≥ 60 or `daily`
+  `"HH:MM"`, `text`), first due one period after it is set. Class `read`:
+  `cancel_timer` (`id`).
 - A tool `send` (`text`), class `read`, appends an `event` of type `sent`
   with TEXT, shows its first line with `message`, and answers `Sent.`.
 - `superchat-inbox-notify-functions` (a `defvar`, nil) are called with

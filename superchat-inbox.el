@@ -184,17 +184,20 @@ the latest time it is due, however many were missed while Emacs was closed."
     (format "Timer %d set; cancel_timer with that id stops it." (plist-get timer :id))))
 
 (superchat-tool-define
- "follow_up" :class 'read
- :description "Come back to this conversation later: after IN seconds you get TEXT as a new message, with nobody watching. Use it to check on something that takes time; do not poll."
+ "follow_up" :class 'write
+ :description "Come back to this conversation later, with nobody watching: after IN seconds (60 or more) you get TEXT as a new message. Only for what waits on time or on someone else, or a reminder the person asked for; never to split work you can do now: go on with it in this response. Do not poll."
  :args '((:name "in" :type number :description "Seconds from now" :required t)
          (:name "text" :type string :description "What to do then" :required t))
  :function (lambda (args)
              (let ((in (superchat-inbox--number (plist-get args :in))))
-               (unless (and (numberp in) (>= in 0)) (error "IN is a number of seconds, 0 or more"))
+               ;; The timers are looked at once a minute: a sooner time is a promise
+               ;; they cannot keep, and an invitation to pace work by timer.
+               (unless (and (numberp in) (>= in 60))
+                 (error "IN is 60 seconds or more: timers are looked at once a minute"))
                (superchat-inbox--set (list :at (+ (float-time) in)) (plist-get args :text)))))
 
 (superchat-tool-define
- "schedule" :class 'read
+ "schedule" :class 'write
  :description "Do TEXT again and again in this conversation, with nobody watching: every EVERY seconds (at least 60), or daily at DAILY (\"HH:MM\", local time). Only when the person asked for it."
  :args '((:name "every" :type number :description "Seconds between two times")
          (:name "daily" :type string :description "\"HH:MM\" each day")
@@ -248,7 +251,7 @@ return its timer; with OFF, turn it off and return nil."
 
 (superchat-tool-define
  "send" :class 'read
- :description "Tell the person something now: a line they see even when they are not reading this conversation. Only what they need to act on or asked for."
+ :description "Tell the person something now: a line they see even when they are not reading this conversation. Only in a run the system prompt says nobody watches, and only what they need to act on or asked for; when the person reads the conversation, answer there."
  :args '((:name "text" :type string :description "The message" :required t))
  :function (lambda (args)
              (let ((text (plist-get args :text)))

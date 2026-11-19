@@ -12,7 +12,9 @@
   (declare (indent 0))
   `(superchat-test-with-tape
      (let ((default-directory (file-name-as-directory (make-temp-file "sc-inbox-" t)))
-           (superchat-inbox--timer nil))
+           (superchat-inbox--timer nil)
+           ;; The timer tools are write tools: no one is asked in these tests.
+           (superchat-default-level 'auto))
        (unwind-protect (progn ,@body)
          (when superchat-inbox--timer (cancel-timer superchat-inbox--timer))
          (delete-directory default-directory t)))))
@@ -80,6 +82,19 @@ timelines the tests use."
       (should (equal (plist-get (car (superchat-tape-entries :tape "t" :kinds '(user))) :text)
                      "left over"))
       (should-not (superchat-inbox-pending "t")))))
+
+(ert-deftest superchat-inbox-a-run-nobody-watches-cannot-set-a-timer-unasked ()
+  (superchat-test-inbox--with
+    (let ((superchat-default-level 'ask)
+          (superchat-permission-ask-function (lambda (&rest _) (error "Asked in the minibuffer"))))
+      (superchat-test-script
+          (list '(:text "" :calls ((:id "f1" :name "follow_up" :args (:in 60 :text "again")))))
+        (let ((inhibit-message t))
+          (superchat-inbox-put "t" "Your timer 1 is due: again" :unattended t)
+          (superchat-test-inbox--idle))
+        ;; A timer makes more work nobody watches: the run waits for the person.
+        (should (superchat-question "t"))
+        (should-not (superchat-inbox-timers "t"))))))
 
 (ert-deftest superchat-inbox-an-unattended-item-waits-at-a-question ()
   (superchat-test-inbox--with
@@ -162,7 +177,7 @@ timelines the tests use."
 (ert-deftest superchat-inbox-a-cancelled-timer-never-fires ()
   (superchat-test-inbox--with
     (superchat-tape-append "t" 'user "hi" :scope "home")
-    (superchat-test-inbox--tool "follow_up" :in 0 :text "never")
+    (superchat-test-inbox--tool "follow_up" :in 60 :text "never")
     (let ((id (plist-get (car (superchat-inbox-timers)) :id)))
       (should (string-match-p "cancelled"
                               (plist-get (superchat-test-inbox--tool "cancel_timer" :id id) :text)))
@@ -174,6 +189,9 @@ timelines the tests use."
 (ert-deftest superchat-inbox-a-timer-tool-refuses-what-it-cannot-keep ()
   (superchat-test-inbox--with
     (superchat-tape-append "t" 'user "hi" :scope "home")
+    ;; Timers are looked at once a minute: a follow-up sooner is refused.
+    (should (string-match-p "60 seconds or more"
+                            (plist-get (superchat-test-inbox--tool "follow_up" :in 5 :text "x") :text)))
     (dolist (args '((:every 10 :text "x") (:daily "25:00" :text "x") (:text "x")
                     (:every 60 :daily "09:00" :text "x")))
       (should (plist-get (plist-get (apply #'superchat-test-inbox--tool "schedule" args) :data)
