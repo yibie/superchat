@@ -171,20 +171,23 @@ limit, record the answer and end RUN as stopped."
             ((and last (not (eq (car status) 'blocked))
                   (eq (superchat-permission-level (plist-get run :tape)) 'auto)
                   (< (plist-get run :continues) superchat-agent-continues))
-             (superchat-agent--go-on run))
+             (superchat-agent--go-on run (car status)))
             (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
 
-(defun superchat-agent--go-on (run)
-  "RUN reached the round limit at the `auto' level and looked back: record that
-it goes on, start its count of responses again, and make the next request."
+(defun superchat-agent--go-on (run status)
+  "RUN reached the round limit at the `auto' level and looked back with STATUS,
+`continue' or nil when it named none: record that it goes on, start its count
+of responses again, and make the next request."
   (cl-incf (plist-get run :continues))
   (setf (plist-get run :rounds) 0 (plist-get run :resumed) t)
   (superchat-tape-append (plist-get run :tape) 'event
-                         (format "Round limit reached; going on after the look-back above (%d/%d)."
-                                 (plist-get run :continues) superchat-agent-continues)
-                         :data (list :type "continued" :count (plist-get run :continues)))
+                         (format "Round limit reached; going on after the look-back above (%d/%d)%s."
+                                 (plist-get run :continues) superchat-agent-continues
+                                 (if status "" ", which named no status"))
+                         :data (list :type "continued" :count (plist-get run :continues)
+                                     :status (and status (symbol-name status))))
   (superchat-agent--emit run)
   (superchat-agent--step run))
 

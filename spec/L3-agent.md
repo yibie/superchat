@@ -89,8 +89,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   answer, less its status line, as an `assistant` entry with no calls.
   `finished` ends the run `done`. Else, at the `auto`
   level, not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2)
-  times a run, the run goes on: an `event` `(:type "continued" :count N)`,
-  the count of responses starts again, and the next request's system prompt
+  times a run, the run goes on: an `event` `(:type "continued" :count N :status S)`,
+  the count starts again, and the next request's system prompt
   says to follow the plan, with the facts. Otherwise it ends `error`, the event counting the calls the run made
   on the Tape, so the account is there even when the model says nothing. The
   calls of the last response run first.

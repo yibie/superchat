@@ -326,6 +326,11 @@
           (should (string-search superchat-agent--resume-note (plist-get (nth 3 sent) :system)))
           (should-not (string-search superchat-agent--resume-note (plist-get (nth 4 sent) :system)))
           (should (string-search superchat-agent--limit-note (plist-get (nth 5 sent) :system)))))
+      ;; The look-back named no status; the event says so.
+      (should (string-search "named no status"
+                             (plist-get (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :type) "continued"))
+                                                  (superchat-tape-entries :tape "t" :kinds '(event)))
+                                        :text)))
       ;; It went on once, then stopped as at any level.
       (should (eq status 'error))
       (should (equal (seq-filter (lambda (ty) (memq ty '(continued error)))
