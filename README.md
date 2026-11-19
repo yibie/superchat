@@ -185,7 +185,7 @@ sends nothing. It is off until you ask for it.
 | `superchat-llm-reasoning` | nil | nil for none, or `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `superchat-default-level` | `ask` | permission level of a new conversation |
 | `superchat-context-chars` | nil | how much conversation one request may carry; nil follows the model's context window, or give a number of characters |
-| `superchat-max-rounds` | nil | model responses in one run before it stops; nil, as in Pi, sets no limit |
+| `superchat-max-rounds` | 80 | model responses in one run before it looks back; at the `auto` level it then goes on, twice at most; nil sets no limit |
 | `superchat-tool-max-chars` | 20000 | longest tool result kept |
 | `superchat-shell-seconds` | 60 | longest a `shell` command may run |
 | `superchat-plugins` | nil | plugins to enable |

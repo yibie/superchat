@@ -53,10 +53,10 @@ Nil follows the model: half of its context window, or 120000 when the
 model has no window in the data.  A number is used as it is."
   :type '(choice (const :tag "Follow the model" nil) natnum))
 
-(defcustom superchat-max-rounds nil
-  "How many model responses one run may take.
-Nil, as in Pi, sets no limit: a run goes on until the model answers without
-a call, or the person stops it."
+(defcustom superchat-max-rounds 80
+  "How many model responses one run may take before it looks back.
+Nil sets no limit: a run goes on until the model answers without a call, or
+the person stops it."
   :type '(choice (const :tag "No limit" nil) natnum))
 
 (defcustom superchat-tool-max-chars 51200

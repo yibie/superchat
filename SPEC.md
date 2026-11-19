@@ -177,7 +177,7 @@ There is no "session" object and no "memory" store. A session is the
 | `note` | the conclusion | `(:title STRING)` |
 | `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
@@ -200,7 +200,7 @@ a model id of that provider such as `"deepseek-flash"`; required),
 `superchat-llm-reasoning` (nil: the model does not reason; else one of the bridge's
 thinking levels `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, a symbol,
 which the bridge clamps to what the model has), `superchat-default-level` (`ask`), `superchat-context-chars`
-(nil: follow the model's context window; or a number of characters), `superchat-max-rounds` (nil: no limit, as in Pi; or a number), `superchat-tool-max-chars` (51200),
+(nil: follow the model's context window; or a number of characters), `superchat-max-rounds` (80; nil sets no limit), `superchat-tool-max-chars` (51200),
 `superchat-shell-seconds` (60), `superchat-plugins` (nil).
 
 ## Tests
