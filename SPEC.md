@@ -177,7 +177,7 @@ There is no "session" object and no "memory" store. A session is the
 | `note` | the conclusion | `(:title STRING)` |
 | `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
