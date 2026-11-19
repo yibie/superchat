@@ -1,6 +1,6 @@
 # Decision: A run going round is told once, and dreaming learns from it
 
-Status: proposed
+Status: rejected — the person chose a look-back at the round limit instead (L3, "A run looks back at the limit and goes on"); learning from such runs in dreaming may come back on its own
 
 ## Problem
 

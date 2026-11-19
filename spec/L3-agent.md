@@ -82,8 +82,14 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - When `superchat-max-rounds` is a number (nil sets no limit), after that
   many model responses in one run, the run asks the
   model once more, its tools offered, a system line saying the limit is
-  reached and to call none; it records the answer as an `assistant` entry
-  with no calls and ends `error`, the event counting the calls the run made
+  reached, to call none, and to look back over the run's calls: what is
+  done, what failed and why, what is left, the plan for the next step. It
+  records the answer as an `assistant` entry with no calls. At the `auto`
+  level, at most `superchat-agent-continues` (a `defvar`, 2) times a run,
+  the run then goes on: an `event` `(:type "continued" :count N)`, the
+  count of responses starts again, and the next request's system prompt
+  says to follow the plan and change what the look-back found wrong.
+  Otherwise it ends `error`, the event counting the calls the run made
   on the Tape, so the account is there even when the model says nothing. The
   calls of the last response run first.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or

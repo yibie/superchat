@@ -24,6 +24,10 @@
 (defvar superchat-agent--runs (make-hash-table :test #'equal)
   "Timeline name to its run, while it has one.")
 
+(defvar superchat-agent-continues 2
+  "At the `auto' level, how many times a run that reached the round limit goes
+on after its look-back, its count of responses starting again.")
+
 (defvar superchat-agent-retry-waits '(2 4 8 16 32)
   "Seconds to wait before each retry of a failed request; their number is
 the number of retries.")
@@ -160,9 +164,24 @@ limit, record the answer and end RUN as stopped."
                                        :calls (unless last calls)))
     (superchat-agent--emit run)
     (when (superchat-agent--live run)
-      (cond (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
+      (cond ((and last (eq (superchat-permission-level (plist-get run :tape)) 'auto)
+                  (< (plist-get run :continues) superchat-agent-continues))
+             (superchat-agent--go-on run))
+            (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
+
+(defun superchat-agent--go-on (run)
+  "RUN reached the round limit at the `auto' level and looked back: record that
+it goes on, start its count of responses again, and make the next request."
+  (cl-incf (plist-get run :continues))
+  (setf (plist-get run :rounds) 0 (plist-get run :resumed) t)
+  (superchat-tape-append (plist-get run :tape) 'event
+                         (format "Round limit reached; going on after the look-back above (%d/%d)."
+                                 (plist-get run :continues) superchat-agent-continues)
+                         :data (list :type "continued" :count (plist-get run :continues)))
+  (superchat-agent--emit run)
+  (superchat-agent--step run))
 
 (defun superchat-agent--calls (run calls)
   "Run CALLS one after the other, then make the next request.  A loop, so that
@@ -210,8 +229,12 @@ tool that has not answered yet."
       (superchat-agent--step run))))
 
 (defconst superchat-agent--limit-note
-  "The limit of model responses in one run is reached. Call no tool now, even if one would help: answer with what you have, saying what you did, what is left, and what the person should check."
+  "The limit of model responses in one run is reached. Call no tool now, even if one would help. Look back over the calls of this run: say what is done, what failed and why, what you learned, and what is left; then the plan for the next step, and what the person should check."
   "What the system prompt says of a run's last request, the round limit reached.")
+
+(defconst superchat-agent--resume-note
+  "You reached the limit of model responses and looked back above. Go on: follow your plan, and change the approach where your look-back found what went wrong."
+  "What the system prompt says of the first request after a run went on.")
 
 (defun superchat-agent--stopped (run)
   "The `error' event of a run RUN the round limit stopped: what it did, asked
@@ -233,7 +256,9 @@ for an answer."
          (size (superchat-request-kept-size entries (plist-get run :user-id)))
          (model (or (plist-get run :model) superchat-llm-model))
          (tools (plist-get run :tools))
-         (last (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds))))
+         (last (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds)))
+         ;; The note after a look-back goes with the first request only.
+         (resumed (prog1 (plist-get run :resumed) (setf (plist-get run :resumed) nil))))
     (setf (plist-get run :last) last)
     (cond
      ((> size (* 2 budget))
@@ -252,7 +277,8 @@ for an answer."
                     (superchat-llm-request
                      messages
                      :system (concat (superchat-context-system tape (plist-get run :system))
-                                     (and last (concat "\n\n" superchat-agent--limit-note)))
+                                     (and last (concat "\n\n" superchat-agent--limit-note))
+                                     (and resumed (concat "\n\n" superchat-agent--resume-note)))
                      ;; The tools stay: a provider that has no tool in the
                      ;; request may leak its call syntax as text. A call of
                      ;; this answer is dropped by --respond.
@@ -361,7 +387,8 @@ ended the run on that entry."
   "A run of TAPE with KEYS.  Every key is there from the start: `setf' of a
 missing one would make a new list."
   (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
-                     :stop nil :done nil :text nil :error nil :tries 0 :timer nil)))
+                     :stop nil :done nil :text nil :error nil :tries 0 :timer nil
+                     :continues 0 :resumed nil)))
 
 (defun superchat-question (tape)
   "The `question' event of timeline TAPE that waits for its answer, or nil."

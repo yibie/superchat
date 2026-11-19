@@ -309,6 +309,29 @@
         (should (= (length superchat-test-requests) 4)))
       (should (eq status 'done)))))
 
+(ert-deftest superchat-agent-at-auto-a-run-looks-back-and-goes-on ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "earlier" :scope "home")
+    (superchat-permission-set "t" 'auto)
+    (let ((superchat-max-rounds 2) (superchat-agent-continues 1) status
+          (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+      (superchat-test-script (list call call '(:text "Look-back one.")
+                                   call call '(:text "Look-back two."))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        ;; Two rounds of two responses, each ended by the look-back the limit asks for.
+        (should (= (length superchat-test-requests) 6))
+        (let ((sent (reverse superchat-test-requests)))
+          (should (string-search superchat-agent--limit-note (plist-get (nth 2 sent) :system)))
+          ;; The request after the first look-back says to go on, once.
+          (should (string-search superchat-agent--resume-note (plist-get (nth 3 sent) :system)))
+          (should-not (string-search superchat-agent--resume-note (plist-get (nth 4 sent) :system)))
+          (should (string-search superchat-agent--limit-note (plist-get (nth 5 sent) :system)))))
+      ;; It went on once, then stopped as at any level.
+      (should (eq status 'error))
+      (should (equal (seq-filter (lambda (ty) (memq ty '(continued error)))
+                                 (superchat-test-agent--types "t"))
+                     '(continued error))))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status
