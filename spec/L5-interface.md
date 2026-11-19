@@ -165,7 +165,7 @@ Built-in commands, and no others:
 | command | does |
 |---|---|
 | `/new` | a new timeline in the same scope as this buffer's timeline, in a new buffer |
-| `/resume` | choose a timeline from the `timelines` view with `completing-read` and open it |
+| `/resume [name]` | choose a timeline from the `timelines` view with `completing-read` and open it; with NAME, open the timeline of that name, of any scope, and a NAME with no entry is a `user-error` |
 | `/fork` | fork at the entry at point, or at the latest entry when point is in the input area; open the new timeline |
 | `/handoff [name]` | `superchat-handoff`; refused while the timeline is busy; the mode line shows `[running Ns]` until it is over, and `C-c C-k` cancels it |
 | `/topic name` | open the `topic` view of that name in a read-only buffer; no name is a `user-error` |

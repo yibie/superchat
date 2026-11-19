@@ -1507,5 +1507,17 @@ heading."
         (should (= (length (split-string seen (regexp-quote event))) 3))
         (should-not (string-match-p "put done" seen))))))
 
+(ert-deftest superchat-chat-resume-opens-a-timeline-by-its-name ()
+  (superchat-test-chat--with
+    ;; Another scope's timeline: not in this buffer's view, so not choosable.
+    (superchat-tape-append "elsewhere" 'user "another project" :scope "/other/")
+    (let ((buffer (superchat-chat-open "t1")))
+      (with-current-buffer buffer
+        (should (equal (superchat-test-chat--tape-of
+                        (progn (superchat-chat-send "/resume elsewhere") (current-buffer)))
+                       "elsewhere")))
+      (with-current-buffer (superchat-chat-open "t1")
+        (should-error (superchat-chat-send "/resume nope") :type 'user-error)))))
+
 (provide 'test-chat)
 ;;; test-chat.el ends here

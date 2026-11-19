@@ -670,18 +670,25 @@ it showed."
   (set-window-buffer nil buffer)
   (set-buffer buffer))
 
-(defun superchat-chat--resume (_)
-  "Choose a timeline of this scope and open it."
-  (let ((choices (mapcar (lambda (e)
-                           (cons (format "%s  [%s]"
-                                         (superchat-chat--line (plist-get e :text) 60)
-                                         (plist-get e :tape))
-                                 (plist-get e :tape)))
-                         (superchat-view 'timelines :scope (superchat-chat--scope)))))
-    (unless choices (user-error "No timelines in this scope"))
+(defun superchat-chat--resume (name)
+  "Open another timeline: the one called NAME, any scope, or one chosen from
+this scope's `timelines' view with `completing-read'."
+  (let ((name (and name (string-trim name))))
     (superchat-chat--switch
      (superchat-chat-open
-      (cdr (assoc (completing-read "Resume: " choices nil t) choices))))))
+      (if (and name (not (string-empty-p name)))
+          (progn
+            (unless (superchat-tape-entries :tape name :limit 1)
+              (user-error "No timeline named %s" name))
+            name)
+        (let ((choices (mapcar (lambda (e)
+                                 (cons (format "%s  [%s]"
+                                               (superchat-chat--line (plist-get e :text) 60)
+                                               (plist-get e :tape))
+                                       (plist-get e :tape)))
+                               (superchat-view 'timelines :scope (superchat-chat--scope)))))
+          (unless choices (user-error "No timelines in this scope"))
+          (cdr (assoc (completing-read "Resume: " choices nil t) choices))))))))
 
 (defun superchat-chat--fork (_)
   "Fork at the entry at point and open the new timeline."
@@ -732,7 +739,8 @@ it showed."
  "new" (lambda (_)
          (superchat-chat--switch (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
  "Start a new timeline in this scope, in this window.")
-(superchat-command-define "resume" #'superchat-chat--resume "Open another timeline of this scope.")
+(superchat-command-define "resume" #'superchat-chat--resume
+                          "[name] Open another timeline of this scope, or the one named NAME.")
 (superchat-command-define "fork" #'superchat-chat--fork
                           "Fork at the entry at point and open the new timeline.")
 (superchat-command-define "handoff" #'superchat-chat--handoff
