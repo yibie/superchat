@@ -714,7 +714,7 @@ this scope's `timelines' view with `completing-read'."
   "Show the permission level, or set it to NAME."
   (if (string-empty-p name)
       (message "Permission level: %s" (superchat-permission-level superchat-chat--tape))
-    (superchat-permission-set superchat-chat--tape (intern name))
+    (superchat-permission-set superchat-chat--tape (intern name) (superchat-chat--scope))
     (superchat-chat--add nil)))
 
 (defun superchat-chat--model-command (name)

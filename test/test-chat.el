@@ -529,6 +529,16 @@ tool `echo', and no chat buffers left behind."
         (should (equal shown "Permission level: auto"))
         (should-error (superchat-chat-send "/level bogus"))))))
 
+(ert-deftest superchat-chat-level-command-in-a-new-chat ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t2" (superchat-test-chat--scope))))
+      (with-current-buffer buffer
+        ;; The level is the first entry of the timeline: it takes the buffer's scope.
+        (superchat-chat-send "/level auto")
+        (should (eq (superchat-permission-level "t2") 'auto))
+        (should (equal (plist-get (car (superchat-tape-entries :tape "t2" :limit 1)) :scope)
+                       (superchat-test-chat--scope)))))))
+
 (ert-deftest superchat-chat-model-command ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) shown)
