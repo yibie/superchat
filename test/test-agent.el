@@ -322,6 +322,10 @@
         (should (equal (plist-get answer :text) "Here is what I have."))
         (should-not (plist-get (plist-get answer :data) :calls)))
       (should (string-match-p "Stopped: 2 model responses"
+                              (plist-get (car (last (superchat-tape-entries :tape "t"))) :text)))
+      ;; The event says what the run did, from the Tape: the last response
+      ;; claims a call it never ran, so two calls were made, not three.
+      (should (string-match-p "; above is what it did: 2 tool calls\\."
                               (plist-get (car (last (superchat-tape-entries :tape "t"))) :text))))))
 
 (ert-deftest superchat-agent-one-run-per-timeline ()

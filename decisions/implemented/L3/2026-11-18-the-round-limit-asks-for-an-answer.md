@@ -28,9 +28,14 @@ claims is dropped, so the model can only write an answer.
 That answer is recorded as an `assistant` entry with no `:calls`, whatever
 calls the response claims — the Tape then holds a true fact, and the chat
 buffer does not show a call with no result. The run keeps its status `error`
-and its `Stopped: N model responses without an answer.` event after the
-answer, so nothing that reads the status changes and the person is told what
-happened.
+and its `Stopped: N model responses without an answer; above is what it did:
+K tool calls.` event after the answer, so nothing that reads the status
+changes and the person is told what happened.
+
+K is counted on the Tape, from the `assistant` entries the run appended, not
+taken from the model: a run that could not finish must leave an account of
+itself even when the model's last answer is empty, which is exactly what
+happened to a run dispatched in this repository.
 
 The calls of the last ordinary response still run before this last request:
 the run does not abandon a call it has already started, and the request that

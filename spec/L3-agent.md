@@ -82,8 +82,9 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - After `superchat-max-rounds` model responses in one run, the run asks the
   model once more, its tools offered, a system line saying the limit is
   reached and to call none; it records the answer as an `assistant` entry
-  with no calls, and ends with status `error` and an `error` event saying so.
-  The calls of the last response run first.
+  with no calls and ends `error`, the event counting the calls the run made
+  on the Tape, so the account is there even when the model says nothing. The
+  calls of the last response run first.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
   `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a

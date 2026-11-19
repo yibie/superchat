@@ -160,7 +160,7 @@ limit, record the answer and end RUN as stopped."
                                        :calls (unless last calls)))
     (superchat-agent--emit run)
     (when (superchat-agent--live run)
-      (cond (last (superchat-agent--end run 'error (superchat-agent--stopped)))
+      (cond (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
 
@@ -213,9 +213,15 @@ tool that has not answered yet."
   "The limit of model responses in one run is reached. Call no tool now, even if one would help: answer with what you have, saying what you did, what is left, and what the person should check."
   "What the system prompt says of a run's last request, the round limit reached.")
 
-(defun superchat-agent--stopped ()
-  "The text of the `error' event of a run the round limit stopped."
-  (format "Stopped: %d model responses without an answer." superchat-max-rounds))
+(defun superchat-agent--stopped (run)
+  "The `error' event of a run RUN the round limit stopped: what it did, asked
+of the Tape, since the model's own account may be empty."
+  (let* ((entries (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id)))
+                              (superchat-view 'conversation :tape (plist-get run :tape))))
+         (calls (cl-loop for e in entries when (eq (plist-get e :kind) 'assistant)
+                         sum (length (plist-get (plist-get e :data) :calls)))))
+    (format "Stopped: %d model responses without an answer; above is what it did: %d tool call%s."
+            superchat-max-rounds calls (if (= calls 1) "" "s"))))
 
 (defun superchat-agent--step (run)
   "Make the next request of RUN; at the round limit, the last one, which asks
