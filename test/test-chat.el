@@ -716,7 +716,10 @@ tool `echo', and no chat buffers left behind."
       (with-current-buffer (superchat-chat-open "t1") (superchat-chat-send "hi"))
       (let ((names (mapcar (lambda (s) (plist-get s :name))
                            (plist-get (car superchat-test-requests) :tools))))
-        (dolist (n '("recall" "tape_query" "note")) (should (member n names)))))))
+        (dolist (n '("recall" "tape_query" "note" "follow_up")) (should (member n names)))
+        ;; The person reads the answer here; send is for runs nobody watches.
+        (should (superchat-tool-specs '("send")))
+        (should-not (member "send" names))))))
 
 ;; What a test sees `message' say, the latest last.
 (defmacro superchat-test-chat--said (var &rest body)

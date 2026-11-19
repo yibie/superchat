@@ -414,6 +414,10 @@ A line starting with / is a command.  Return nil when nothing was sent."
       (unwind-protect
           (apply #'superchat-run superchat-chat--tape text
                  :origin origin :model superchat-chat--model
+                 ;; The person reads the answer here: `send' is for runs
+                 ;; nobody watches.
+                 :tools (delete "send" (mapcar (lambda (s) (plist-get s :name))
+                                               (superchat-tool-specs)))
                  (append (superchat-chat--callbacks tape)
                          ;; The first request of a timeline fixes its scope.
                          (and superchat-chat--pending-scope

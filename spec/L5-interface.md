@@ -61,6 +61,8 @@ derived from `org-mode`.
   starts at. Input that grows past a window's bottom scrolls it a line at a
   time (`scroll-conservatively` 101 in the buffer), so the input stays at
   the bottom.
+- A run sent from the input area is given every tool but `send`: the person
+  reads its answer in the buffer, and `send` is for runs nobody watches.
 - Sending from the input area while the timeline is busy (a run or a
   handoff) queues the input instead, when it is not empty and not a
   command: the input is cleared, and a dimmed line `⏸ queued: FIRST-LINE`
