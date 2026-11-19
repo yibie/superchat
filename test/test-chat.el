@@ -539,6 +539,13 @@ tool `echo', and no chat buffers left behind."
         (should (equal (plist-get (car (superchat-tape-entries :tape "t2" :limit 1)) :scope)
                        (superchat-test-chat--scope)))))))
 
+(ert-deftest superchat-chat-input-stays-at-the-bottom ()
+  (superchat-test-chat--with
+    (with-current-buffer (superchat-chat-open "t3" (superchat-test-chat--scope))
+      ;; Input past the window's bottom scrolls a line, it does not recenter.
+      (should (= scroll-conservatively 101))
+      (should (= scroll-margin 0)))))
+
 (ert-deftest superchat-chat-model-command ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")) shown)

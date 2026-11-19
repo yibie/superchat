@@ -58,7 +58,9 @@ derived from `org-mode`.
   and moves with the input when in it. A window whose point is in the input
   area then shows the end of the buffer on its last line, and as much of
   the entries above it as fits; any other window keeps the position it
-  starts at.
+  starts at. Input that grows past a window's bottom scrolls it a line at a
+  time (`scroll-conservatively` 101 in the buffer), so the input stays at
+  the bottom.
 - Sending from the input area while the timeline is busy (a run or a
   handoff) queues the input instead, when it is not empty and not a
   command: the input is cleared, and a dimmed line `⏸ queued: FIRST-LINE`

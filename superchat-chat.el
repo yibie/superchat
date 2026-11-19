@@ -532,6 +532,9 @@ separator, so the prompt and the input never fold."
         superchat-chat--waiting (make-overlay (point-min) (point-min)))
   ;; Each buffer keeps its own converted answers.
   (setq-local superchat-turn-answers (make-hash-table :test #'equal))
+  ;; Input that grows past the window's bottom scrolls it a line, so the
+  ;; input stays at the bottom instead of jumping to the middle.
+  (setq-local scroll-conservatively 101 scroll-margin 0)
   (font-lock-add-keywords
    nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
    'append)
