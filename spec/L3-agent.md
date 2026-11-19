@@ -82,14 +82,16 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - When `superchat-max-rounds` is a number (nil sets no limit), after that
   many model responses in one run, the run asks the
   model once more, its tools offered, a system line saying the limit is
-  reached, to call none, and to look back over the run's calls: what is
-  done, what failed and why, what is left, the plan for the next step. It
-  records the answer as an `assistant` entry with no calls. At the `auto`
-  level, at most `superchat-agent-continues` (a `defvar`, 2) times a run,
-  the run then goes on: an `event` `(:type "continued" :count N)`, the
-  count of responses starts again, and the next request's system prompt
-  says to follow the plan and change what the look-back found wrong.
-  Otherwise it ends `error`, the event counting the calls the run made
+  reached, to call none, to begin with `Status: finished`, `blocked` or
+  `continue`, and to look back over the run's calls: what is done, what
+  failed and why, what is left, the plan for the next step; then the facts
+  `superchat-request-digest` counts over the run's entries. It records the
+  answer, less its status line, as an `assistant` entry with no calls.
+  `finished` ends the run `done`. Else, at the `auto`
+  level, not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2)
+  times a run, the run goes on: an `event` `(:type "continued" :count N)`,
+  the count of responses starts again, and the next request's system prompt
+  says to follow the plan, with the facts. Otherwise it ends `error`, the event counting the calls the run made
   on the Tape, so the account is there even when the model says nothing. The
   calls of the last response run first.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
@@ -214,7 +216,8 @@ handoff. `(superchat-request-message ENTRY)` → an entry's message or nil;
 `(superchat-request-size MESSAGES)` → their size;
 `(superchat-request-fit ENTRIES USER-ID BUDGET)` → the messages that fit;
 `(superchat-request-kept-size ENTRIES USER-ID)` → the size of what is never
-left out.
+left out; `(superchat-request-digest ENTRIES)` → lines counting their
+calls: per tool, failed, files changed, repeated calls, last 3 failures.
 
 - The messages of a request are the `conversation` view of TAPE turned into
   neutral messages:

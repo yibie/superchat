@@ -332,6 +332,37 @@
                                  (superchat-test-agent--types "t"))
                      '(continued error))))))
 
+(ert-deftest superchat-agent-a-look-back-that-says-finished-ends-the-run ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "earlier" :scope "home")
+    (superchat-permission-set "t" 'auto)
+    (let ((superchat-max-rounds 2) status
+          (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+      (superchat-test-script (list call call '(:text "**Status: finished**\nThe sum is 21."))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (= (length superchat-test-requests) 3))
+        ;; The look-back request carries the facts counted from the Tape.
+        (let ((system (plist-get (car superchat-test-requests) :system)))
+          (should (string-search "Facts of this run, counted from the Tape:" system))
+          (should (string-search "Calls: echo 2." system))))
+      (should (eq status 'done))
+      (should-not (memq 'continued (superchat-test-agent--types "t")))
+      ;; The answer is the look-back without its status line.
+      (should (equal (plist-get (car (last (superchat-tape-entries :tape "t" :kinds '(assistant)))) :text)
+                     "The sum is 21.")))))
+
+(ert-deftest superchat-agent-a-look-back-that-says-blocked-stops-at-auto ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "earlier" :scope "home")
+    (superchat-permission-set "t" 'auto)
+    (let ((superchat-max-rounds 1) status
+          (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+      (superchat-test-script (list call '(:text "Status: blocked\nI need the key."))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (should (= (length superchat-test-requests) 2)))
+      (should (eq status 'error))
+      (should-not (memq 'continued (superchat-test-agent--types "t"))))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status

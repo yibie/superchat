@@ -153,18 +153,23 @@ not cancel it, and `superchat-agent--track' must not keep it."
 (defun superchat-agent--respond (run response)
   "Record RESPONSE, run its calls in order, make the next request; at the round
 limit, record the answer and end RUN as stopped."
-  (let ((calls (plist-get response :calls))
-        (last (plist-get run :last)))
+  (let* ((calls (plist-get response :calls))
+         (last (plist-get run :last))
+         ;; A look-back begins with its status; the entry keeps the rest.
+         (status (and last (superchat-agent--status (plist-get response :text))))
+         (text (if last (cdr status) (plist-get response :text))))
     (cl-incf (plist-get run :rounds))
-    (setf (plist-get run :text) (plist-get response :text))
+    (setf (plist-get run :text) text)
     ;; A call of the last response is not run and not recorded: no tool was
     ;; called, and the person's answer must not claim otherwise.
-    (superchat-tape-append (plist-get run :tape) 'assistant (plist-get response :text)
+    (superchat-tape-append (plist-get run :tape) 'assistant text
                            :data (list :model (plist-get response :model)
                                        :calls (unless last calls)))
     (superchat-agent--emit run)
     (when (superchat-agent--live run)
-      (cond ((and last (eq (superchat-permission-level (plist-get run :tape)) 'auto)
+      (cond ((and last (eq (car status) 'finished)) (superchat-agent--end run 'done))
+            ((and last (not (eq (car status) 'blocked))
+                  (eq (superchat-permission-level (plist-get run :tape)) 'auto)
                   (< (plist-get run :continues) superchat-agent-continues))
              (superchat-agent--go-on run))
             (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
@@ -229,12 +234,30 @@ tool that has not answered yet."
       (superchat-agent--step run))))
 
 (defconst superchat-agent--limit-note
-  "The limit of model responses in one run is reached. Call no tool now, even if one would help. Look back over the calls of this run: say what is done, what failed and why, what you learned, and what is left; then the plan for the next step, and what the person should check."
+  "The limit of model responses in one run is reached. Call no tool now, even if one would help. Begin with one line: \"Status: finished\" when the task is done (what follows is then your answer to the person), \"Status: blocked\" when you need the person, or \"Status: continue\" when there is more to do. Then look back over the calls of this run, with the facts below: what is done, what failed and why, what is left, the plan for the next step, and what the person should check."
   "What the system prompt says of a run's last request, the round limit reached.")
 
 (defconst superchat-agent--resume-note
-  "You reached the limit of model responses and looked back above. Go on: follow your plan, and change the approach where your look-back found what went wrong."
+  "You reached the limit of model responses and looked back above. Go on: follow your plan, and change the approach where your look-back or the facts below show what went wrong."
   "What the system prompt says of the first request after a run went on.")
+
+(defun superchat-agent--facts (run note)
+  "NOTE, then the facts of RUN's calls counted from the Tape."
+  (concat "\n\n" note "\n\nFacts of this run, counted from the Tape:\n"
+          (superchat-request-digest
+           (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id)))
+                       (superchat-view 'conversation :tape (plist-get run :tape))))))
+
+(defun superchat-agent--status (text)
+  "The status a look-back TEXT begins with, `finished', `blocked' or
+`continue', and TEXT without that line: (STATUS . REST).  STATUS is nil when
+the first line names none."
+  ;; A model may set the line in Markdown: **Status: finished**.
+  (if (let ((case-fold-search t))
+        (string-match "\\`[ \t\n*`]*Status:[ \t*`]*\\(finished\\|blocked\\|continue\\)[ \t.*`]*\\(?:\n\\|\\'\\)"
+                      (or text "")))
+      (cons (intern (downcase (match-string 1 text))) (string-trim (substring text (match-end 0))))
+    (cons nil text)))
 
 (defun superchat-agent--stopped (run)
   "The `error' event of a run RUN the round limit stopped: what it did, asked
@@ -277,8 +300,8 @@ for an answer."
                     (superchat-llm-request
                      messages
                      :system (concat (superchat-context-system tape (plist-get run :system))
-                                     (and last (concat "\n\n" superchat-agent--limit-note))
-                                     (and resumed (concat "\n\n" superchat-agent--resume-note)))
+                                     (and last (superchat-agent--facts run superchat-agent--limit-note))
+                                     (and resumed (superchat-agent--facts run superchat-agent--resume-note)))
                      ;; The tools stay: a provider that has no tool in the
                      ;; request may leak its call syntax as text. A call of
                      ;; this answer is dropped by --respond.

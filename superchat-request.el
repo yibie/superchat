@@ -141,5 +141,51 @@ of the run: what the refusal measures against twice the budget."
    (cl-loop for g in (superchat-request--never-left-out (superchat-request--grouped entries) user-id)
             append (cadr g))))
 
+(defun superchat-request-digest (entries)
+  "Facts of the calls among ENTRIES, counted, for a run that looks back: how
+many calls each tool had and how many failed, the files changed most, the
+calls made more than once, the last failures.  Lines of text."
+  (let ((tools nil) (files nil) (same nil) (failures nil))
+    (dolist (e entries)
+      (pcase (plist-get e :kind)
+        ('assistant
+         (dolist (c (plist-get (plist-get e :data) :calls))
+           (let ((path (plist-get (plist-get c :args) :path)))
+             (when (and path (member (plist-get c :name) '("edit" "write")))
+               (cl-incf (alist-get path files 0 nil #'equal))))
+           (cl-incf (alist-get (format "%s %s" (plist-get c :name)
+                                       (truncate-string-to-width
+                                        (format "%S" (plist-get c :args)) 80 nil nil "…"))
+                               same 0 nil #'equal))))
+        ('tool
+         (let* ((data (plist-get e :data)) (name (plist-get data :name))
+                (count (or (assoc name tools) (car (push (list name 0 0) tools)))))
+           (cl-incf (nth 1 count))
+           (when (plist-get data :error)
+             (cl-incf (nth 2 count))
+             (push (format "%s: %s" name (truncate-string-to-width
+                                          (car (split-string (plist-get e :text) "\n")) 120 nil nil "…"))
+                   failures))))))
+    (cl-flet ((top (alist n) (take n (sort alist (lambda (a b) (> (cdr a) (cdr b)))))))
+      (string-join
+       (delq nil
+             (list (if tools
+                       (concat "Calls: " (mapconcat (pcase-lambda (`(,name ,n ,bad))
+                                                      (if (> bad 0) (format "%s %d (%d failed)" name n bad)
+                                                        (format "%s %d" name n)))
+                                                    (reverse tools) ", ") ".")
+                     "No tool calls.")
+                   (and files (concat "Files changed: "
+                                      (mapconcat (lambda (f) (format "%s %d times" (car f) (cdr f)))
+                                                 (top files 5) ", ") "."))
+                   (when-let* ((again (seq-filter (lambda (c) (> (cdr c) 1)) same)))
+                     (concat "Same call made more than once: "
+                             (mapconcat (lambda (c) (format "%s, %d times" (car c) (cdr c)))
+                                        (top again 3) "; ") "."))
+                   (and failures (concat "Last failures:\n"
+                                         (mapconcat (lambda (f) (concat "- " f))
+                                                    (reverse (take 3 failures)) "\n")))))
+       "\n"))))
+
 (provide 'superchat-request)
 ;;; superchat-request.el ends here
