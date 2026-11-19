@@ -93,10 +93,10 @@ inside it."
            (superchat-tools--reads tool args)))
 
 (defun superchat-tools--permit (tape call tool args scope)
-  "Decide whether CALL may run; append the permission event when it was
-asked about or denied.  Return nil to run, `later' when the question waits,
-or the text that says why not.  A read outside SCOPE is decided as a write:
-the user agrees to it first."
+  "Decide whether CALL may run; append the permission event when the user
+was asked now or the call is denied.  Return nil to run, `later' when the
+question waits, or the text that says why not.  A read outside SCOPE is
+decided as a write: the user agrees to it first."
   (let* ((name (plist-get call :name))
          (class (if (and (eq (plist-get tool :class) 'read)
                          (superchat-tools--outside-p scope tool args))
@@ -104,13 +104,17 @@ the user agrees to it first."
                   (plist-get tool :class)))
          (decision (superchat-permission-decide tape class))
          (key (cons tape name))
+         (asked nil)
          (answer (cond ((not (eq decision 'ask)) decision)
                        ((gethash key superchat-tools--always) 'always)
                        ((superchat-permission-answered tape (plist-get call :id)))
-                       (t (superchat-permission-ask name (superchat-tools--summary args) tape))))
+                       (t (setq asked t)
+                          (superchat-permission-ask name (superchat-tools--summary args) tape))))
          (allowed (memq answer '(allow always))))
     (when (eq answer 'always) (puthash key t superchat-tools--always))
-    (unless (or (eq decision 'allow) (eq answer 'later))
+    ;; An "always" given earlier or an answer already on the Tape asks nobody:
+    ;; an event for each such call would only crowd the Tape.
+    (when (and (not (eq answer 'later)) (or asked (not allowed)))
       (superchat-tape-append
        tape 'event (format "%s (%s%s): %s -> %s" name (plist-get tool :class)
                            (if (eq class (plist-get tool :class)) "" ", outside the project")
@@ -215,7 +219,7 @@ not called.  Whatever the tool or the user does, the result is an entry."
 to the project and turn to `shell', which the user cannot judge as well.")
 
 (defconst superchat-tools--division
-  "Files go through read, grep, find, ls, edit and write; edits stay in Emacs buffers until save_buffer writes them. Outside programs go through shell, the running Emacs through eval_elisp."
+  "Files go through read, grep, find, edit and write; edit and write save the file. Outside programs go through shell, the running Emacs through eval_elisp."
   "What each tool that touches files says of the division of the tools.")
 
 (defun superchat-tools--describe (&rest parts)
@@ -310,44 +314,45 @@ WHAT, \"file\" or \"buffer\", is what the notices call the text."
     (:name "limit" :type number :description "Most lines to read"))
   "The arguments that choose which lines a read returns.")
 
+(defun superchat-tools--listing (dir args)
+  "The entries of directory DIR, sorted ignoring case, a / after a directory,
+at most ARGS' :limit (default 500)."
+  (let* ((limit (superchat-tools--count (plist-get args :limit) 500))
+         (names (sort (directory-files dir nil directory-files-no-dot-files-regexp t)
+                      (lambda (a b) (string< (downcase a) (downcase b)))))
+         (joined (superchat-tools--join
+                  (mapcar (lambda (n) (if (file-directory-p (expand-file-name n dir)) (concat n "/") n))
+                          (take limit names)))))
+    (superchat-tools--noted
+     (if names (car joined) "(empty directory)")
+     (list (and (> (length names) limit)
+                (format "%d entries limit reached. Use limit=%d for more" limit (* 2 limit)))
+           (cdr joined)))))
+
 (superchat-tool-define
  "read" :class 'read
  :description (superchat-tools--describe
-               "Read a file as text, without line numbers, at most 2000 lines or the"
+               "Read a file or an Emacs buffer as text, without line numbers, at most 2000 lines or the"
                "character limit a call; a notice at the end names the offset to continue from."
-               "Unsaved edits in the file's buffer are seen. To learn a file's line count, read it with limit 1."
-               superchat-tools--path-note)
- :args (cons '(:name "path" :type string :description "File to read" :required t)
-             superchat-tools--read-args)
+               "Unsaved edits in a file's buffer are seen. A directory is listed: its entries, a / after"
+               "directories, dotfiles included, LIMIT entries at most. To learn a file's line count,"
+               "read it with limit 1." superchat-tools--path-note)
+ :args (append '((:name "path" :type string :description "File or directory to read; or give buffer")
+                 (:name "buffer" :type string :description "Buffer to read; or give path"))
+               superchat-tools--read-args)
  :function (lambda (args)
-             (let ((file (superchat-tools--path (plist-get args :path))))
-               (when (file-directory-p file)
-                 (error "%s is a directory; use ls" (plist-get args :path)))
-               (if-let* ((buffer (find-buffer-visiting file)))
-                   (with-current-buffer buffer (superchat-tools--lines args "file"))
-                 (with-temp-buffer (insert-file-contents file)
-                                   (superchat-tools--lines args "file"))))))
-
-(superchat-tool-define
- "read_buffer" :class 'read
- :description "Read an Emacs buffer as text, as read reads a file."
- :args (cons '(:name "buffer" :type string :description "Buffer name" :required t)
-             superchat-tools--read-args)
- :function (lambda (args)
-             (with-current-buffer (superchat-tools--buffer (plist-get args :buffer))
-               (superchat-tools--lines args "buffer"))))
-
-(superchat-tool-define
- "list_buffers" :class 'read
- :description "List the user's buffers: name, mode, file, size in characters."
- :function (lambda (_)
-             (mapconcat (lambda (b)
-                          (with-current-buffer b
-                            (format "%s\t%s\t%s\t%d" (buffer-name) major-mode
-                                    (or buffer-file-name "-") (buffer-size))))
-                        (cl-remove-if (lambda (b) (string-prefix-p " " (buffer-name b)))
-                                      (buffer-list))
-                        "\n")))
+             (let ((path (plist-get args :path)) (name (plist-get args :buffer)))
+               (superchat-tools--either path name)
+               (if name
+                   (with-current-buffer (superchat-tools--buffer name)
+                     (superchat-tools--lines args "buffer"))
+                 (let ((file (superchat-tools--path path)))
+                   (cond ((file-directory-p file) (superchat-tools--listing file args))
+                         ((find-buffer-visiting file)
+                          (with-current-buffer (find-buffer-visiting file)
+                            (superchat-tools--lines args "file")))
+                         (t (with-temp-buffer (insert-file-contents file)
+                                              (superchat-tools--lines args "file")))))))))
 
 ;;; Searching
 
@@ -554,7 +559,7 @@ after the first batch.  Return a function that stops it."
  :description (superchat-tools--describe
                "Find files whose path matches a glob: without / it matches names at any depth"
                "(*.el), with / the path relative to PATH (src/**/*.ts). Paths come relative to PATH."
-               "To find a file by name, give a name pattern such as *diary*: never walk directories with ls."
+               "To find a file by name, give a name pattern such as *diary*: never walk directories by reading them."
                superchat-tools--path-note)
  :args '((:name "pattern" :type string :description "Glob" :required t)
          (:name "path" :type string :description "Directory to search, default the project")
@@ -574,31 +579,6 @@ after the first batch.  Return a function that stops it."
                                    limit (* 2 limit)))
                       (cdr joined)
                       (and (>= (float-time) deadline) superchat-tools--late))))))
-
-(superchat-tool-define
- "ls" :class 'read
- :description (superchat-tools--describe
-               "List a directory: entries sorted, a / after directories, dotfiles included."
-               superchat-tools--path-note)
- :args '((:name "path" :type string :description "Directory, default the project")
-         (:name "limit" :type number :description "Most entries, default 500"))
- :function (lambda (args)
-             (let* ((dir (superchat-tools--path (or (plist-get args :path) ".")))
-                    (limit (superchat-tools--count (plist-get args :limit) 500))
-                    (names (if (file-directory-p dir)
-                               (sort (directory-files dir nil directory-files-no-dot-files-regexp t)
-                                     (lambda (a b) (string< (downcase a) (downcase b))))
-                             (error "Not a directory: %s" (plist-get args :path))))
-                    (joined (superchat-tools--join
-                             (mapcar (lambda (n) (if (file-directory-p (expand-file-name n dir))
-                                                     (concat n "/")
-                                                   n))
-                                     (take limit names)))))
-               (superchat-tools--noted
-                (if names (car joined) "(empty directory)")
-                (list (and (> (length names) limit)
-                           (format "%d entries limit reached. Use limit=%d for more" limit (* 2 limit)))
-                      (cdr joined))))))
 
 ;;; Changing
 
@@ -638,11 +618,35 @@ Case and overlapping occurrences count."
         (replace-match new t t)
         (undo-boundary)))))
 
+(defun superchat-tools--save (unsaved)
+  "Save the current buffer to its file, unless it visits none or UNSAVED, the
+person's own changes it held before the tool changed it, which are theirs to
+save.  Return the notice to add to the result, or nil."
+  (cond
+   ((not buffer-file-name) nil)
+   (unsaved "Not saved: the buffer held unsaved changes of the person's; they save it")
+   (t (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+        (make-directory (file-name-directory buffer-file-name) t)
+        (unless (file-exists-p buffer-file-name) (set-buffer-modified-p t))
+        (let ((require-final-newline nil) (make-backup-files nil)) (save-buffer))
+        (unless (string= before (buffer-substring-no-properties (point-min) (point-max)))
+          "Saving changed the text (a hook of the person's, such as a formatter); read it before the next edit")))))
+
+(defun superchat-tools--change (path name function)
+  "Call FUNCTION in buffer NAME, or in the buffer visiting PATH (visited when
+none does), then save it; the notice of the save, or nil."
+  (cl-flet ((change () (let ((unsaved (and buffer-file-name (buffer-modified-p))))
+                         (funcall function)
+                         (superchat-tools--save unsaved))))
+    (if name
+        (with-current-buffer (superchat-tools--buffer name) (change))
+      (superchat-tools--visit (superchat-tools--path path) #'change))))
+
 (superchat-tool-define
  "edit" :class 'write
  :description (superchat-tools--describe
-               "Replace OLD by NEW in a file's buffer (visited if needed) or in a buffer."
-               "OLD must occur exactly once. The change is not saved.")
+               "Replace OLD by NEW in a file, or in an Emacs buffer, and save it."
+               "OLD must occur exactly once. The person can undo it in the file's buffer.")
  :args '((:name "path" :type string :description "File to edit; or give buffer")
          (:name "buffer" :type string :description "Buffer to edit; or give path")
          (:name "old" :type string :description "Text to replace, exactly once" :required t)
@@ -650,57 +654,37 @@ Case and overlapping occurrences count."
  :function (lambda (args)
              (let ((path (plist-get args :path)) (name (plist-get args :buffer)))
                (superchat-tools--either path name)
-               (cl-flet ((edit () (superchat-tools--replace (plist-get args :old) (plist-get args :new))))
-                 (if name
-                     (with-current-buffer (superchat-tools--buffer name) (edit))
-                   (let ((file (superchat-tools--path path)))
-                     (unless (or (find-buffer-visiting file) (file-exists-p file))
-                       (error "No such file: %s" path))
-                     (superchat-tools--visit file #'edit))))
-               (format "Replaced 1 block in %s (not saved; save_buffer writes it)." (or name path)))))
+               (when (and path (not (find-buffer-visiting (superchat-tools--path path)))
+                          (not (file-exists-p (superchat-tools--path path))))
+                 (error "No such file: %s" path))
+               (superchat-tools--noted
+                (format "Replaced 1 block in %s." (or name path))
+                (list (superchat-tools--change
+                       path name (lambda () (superchat-tools--replace (plist-get args :old)
+                                                                      (plist-get args :new)))))))))
 
 (superchat-tool-define
  "write" :class 'write
  :description (superchat-tools--describe
-               "Make CONTENT the whole text of the buffer of a file, created if the file"
-               "does not exist. The buffer is not saved.")
+               "Make CONTENT the whole text of a file, created with its directory if it does"
+               "not exist, and save it.")
  :args '((:name "path" :type string :description "File to write" :required t)
          (:name "content" :type string :description "The whole new content" :required t))
  :function (lambda (args)
              (let ((content (plist-get args :content)))
-               (superchat-tools--visit (superchat-tools--path (plist-get args :path))
-                                       (lambda ()
-                                         ;; A new file in a new directory is visited read-only.
-                                         (unless (file-exists-p buffer-file-name)
-                                           (setq buffer-read-only nil))
-                                         (save-restriction
-                                           (widen)
-                                           (undo-boundary)
-                                           (erase-buffer)
-                                           (insert content)
-                                           (undo-boundary))))
-               (format "The buffer of %s holds %d characters (not saved; save_buffer writes it)."
-                       (plist-get args :path) (length content)))))
-
-(superchat-tool-define
- "save_buffer" :class 'write
- :description (superchat-tools--describe
-               "Save a buffer, or the buffer visiting PATH, to its file: the one tool that"
-               "writes to disk. Save before running a command, the tests or git on a changed file.")
- :args '((:name "buffer" :type string :description "Buffer to save; or give path")
-         (:name "path" :type string :description "File whose buffer to save; or give buffer"))
- :function (lambda (args)
-             (let ((path (plist-get args :path)) (name (plist-get args :buffer)))
-               (superchat-tools--either path name)
-               (with-current-buffer (if name
-                                        (superchat-tools--buffer name)
-                                      (or (find-buffer-visiting (superchat-tools--path path))
-                                          (error "No buffer visits %s" path)))
-                 (unless buffer-file-name (error "Buffer %s visits no file" (buffer-name)))
-                 (make-directory (file-name-directory buffer-file-name) t)
-                 (unless (file-exists-p buffer-file-name) (set-buffer-modified-p t))
-                 (let ((require-final-newline nil) (make-backup-files nil)) (save-buffer))
-                 (format "Saved %s." buffer-file-name)))))
+               (superchat-tools--noted
+                (format "Wrote %d characters to %s." (length content) (plist-get args :path))
+                (list (superchat-tools--change
+                       (plist-get args :path) nil
+                       (lambda ()
+                         ;; A new file in a new directory is visited read-only.
+                         (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
+                         (save-restriction
+                           (widen)
+                           (undo-boundary)
+                           (erase-buffer)
+                           (insert content)
+                           (undo-boundary)))))))))
 
 ;;; Executing
 
@@ -756,7 +740,7 @@ When something is cut the whole output is in FILE, made here if needed."
 
 (superchat-tool-define
  "shell" :class 'exec :async t
- :description "Run a shell command in the project directory, with no input: for outside programs (build, tests, git). Returns the end of its output, at most 2000 lines or the character limit (the whole output is then saved to a file the notice names), and its exit status. Save changed buffers with save_buffer first. Never use it to read, list or search files (cat, head, tail, sed -n, ls, find, grep): use read (offset and limit for a range of lines), ls, find and grep (glob, ignore_case, context), which the user can see and judge. Act on the running Emacs with eval_elisp."
+ :description "Run a shell command in the project directory, with no input: for outside programs (build, tests, git). Returns the end of its output, at most 2000 lines or the character limit (the whole output is then saved to a file the notice names), and its exit status. Never use it to read, list or search files (cat, head, tail, sed -n, ls, find, grep): use read (offset and limit for a range of lines; a directory is listed), find and grep (glob, ignore_case, context), which the user can see and judge. Act on the running Emacs with eval_elisp."
  :args '((:name "command" :type string :description "Command line" :required t)
          (:name "timeout" :type number :description "Seconds, default superchat-shell-seconds"))
  :function (lambda (args done)

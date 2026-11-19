@@ -57,9 +57,12 @@
 
 (ert-deftest superchat-tools-specs-shape ()
   (let ((all (superchat-tool-specs)))
-    (dolist (n '("read" "read_buffer" "list_buffers" "grep" "find" "ls" "edit"
-                 "write" "save_buffer" "eval_elisp" "shell"))
-      (should (assoc n (mapcar (lambda (s) (cons (plist-get s :name) s)) all)))))
+    (let ((names (mapcar (lambda (s) (plist-get s :name)) all)))
+      (dolist (n '("read" "grep" "find" "edit" "write" "eval_elisp" "shell"))
+        (should (member n names)))
+      ;; Coarser tools: these four are gone into read, edit and write.
+      (dolist (n '("read_buffer" "list_buffers" "ls" "save_buffer"))
+        (should-not (member n names)))))
   (let ((spec (car (superchat-tool-specs '("edit")))))
     (should (equal (plist-get spec :name) "edit"))
     (should (stringp (plist-get spec :description)))
@@ -69,7 +72,7 @@
     (should (plist-get (nth 2 (plist-get spec :args)) :required)))
   ;; shell sends the model to the file tools for reading and searching.
   (let ((shell (plist-get (car (superchat-tool-specs '("shell"))) :description)))
-    (dolist (word '("Never use it to read, list or search files" "read" "ls" "find" "grep"))
+    (dolist (word '("Never use it to read, list or search files" "read" "find" "grep"))
       (should (string-search word shell))))
   ;; grep, find and read steer the model away from extra calls.
   (let ((d (lambda (n) (plist-get (car (superchat-tool-specs (list n))) :description))))
@@ -78,11 +81,9 @@
     (should (string-search "*diary*" (funcall d "find")))
     (should (string-search "limit 1" (funcall d "read"))))
   ;; The descriptions state the division of the tools.
-  (dolist (n '("read" "grep" "find" "ls" "edit" "write" "save_buffer"))
-    (should (string-match-p "save_buffer.*shell.*eval_elisp"
+  (dolist (n '("read" "grep" "find" "edit" "write"))
+    (should (string-match-p "edit and write save the file.*shell.*eval_elisp"
                             (plist-get (car (superchat-tool-specs (list n))) :description))))
-  (should (string-match-p "Save before running a command"
-                          (plist-get (car (superchat-tool-specs '("save_buffer"))) :description)))
   (should (equal (mapcar (lambda (s) (plist-get s :name))
                          (superchat-tool-specs '("shell" "read")))
                  '("shell" "read")))
@@ -195,7 +196,7 @@
         (should (< (plist-get last-event :id) (plist-get (car tools) :id))))
       (should-not asked)
       (let ((before (length (superchat-tape-entries :tape "t" :kinds '(event)))))
-        (superchat-test-tools--ok "list_buffers")
+        (superchat-test-tools--ok "find" :pattern "*")
         (should (= before (length (superchat-tape-entries :tape "t" :kinds '(event)))))))))
 
 (ert-deftest superchat-tools-ask-allow-deny-always ()
@@ -224,7 +225,9 @@
     (let ((permission-events
            (cl-remove-if-not (lambda (e) (equal (plist-get (plist-get e :data) :type) "permission"))
                              (superchat-tape-entries :tape "t" :kinds '(event)))))
-      (should (>= (length permission-events) 4))
+      ;; One event a question; a call that an earlier "always" allows asks
+      ;; nobody and leaves none.
+      (should (= (length permission-events) 4))
       (should (string-match-p "allowed" (plist-get (nth 1 permission-events) :text))))))
 
 (ert-deftest superchat-tools-a-question-can-wait-for-its-answer ()
@@ -287,7 +290,7 @@
                     (when (eq kind 'tool) (push inhibit-quit seen))
                     (apply append tape kind rest))))
         (let ((inhibit-quit nil))
-          (superchat-test-tools--ok "list_buffers")))
+          (superchat-test-tools--ok "find" :pattern "*")))
       (should (equal seen '(t))))))
 
 (ert-deftest superchat-tools-eval-elisp ()
@@ -673,7 +676,7 @@ sets `stopped' and cancels the timer."
             (let ((b (find-file-noselect (expand-file-name "secret" outside))))
               (unwind-protect
                   (progn (setq asked 0)
-                         (superchat-test-tools--err "read_buffer" :buffer (buffer-name b))
+                         (superchat-test-tools--err "read" :buffer (buffer-name b))
                          (should (= asked 1)))
                 (kill-buffer b))))
         (delete-directory outside t)))))
@@ -687,7 +690,7 @@ sets `stopped' and cancels the timer."
                              #'ignore)
         (should asked)))))
 
-;;; read and read_buffer
+;;; read
 
 (defun superchat-test-tools--numbers (from to)
   "The lines FROM to TO, each its own number, joined by newlines."
@@ -705,8 +708,7 @@ sets `stopped' and cancels the timer."
                    "Error: Offset 9 is beyond end of file (3 lines total)"))
     (superchat-test-tools--write dir "empty.txt" "")
     (should (equal (superchat-test-tools--ok "read" :path "empty.txt") ""))
-    (should (superchat-test-tools--err "read" :path "missing.txt"))
-    (should (string-match-p "directory; use ls" (superchat-test-tools--err "read" :path ".")))))
+    (should (superchat-test-tools--err "read" :path "missing.txt"))))
 
 (ert-deftest superchat-tools-read-stops-at-2000-lines-and-names-the-next-offset ()
   (superchat-test-tools--in-scope
@@ -747,25 +749,26 @@ sets `stopped' and cancels the timer."
         (erase-buffer) (insert "in the buffer\n"))
       (should (equal (superchat-test-tools--ok "read" :path "f.txt") "in the buffer")))))
 
-(ert-deftest superchat-tools-read-buffer-and-list-buffers ()
+(ert-deftest superchat-tools-read-a-buffer ()
   (superchat-test-tools--in-scope
-    (let ((b (generate-new-buffer "sc-visible")) (hidden (generate-new-buffer " sc-hidden")))
+    (let ((b (generate-new-buffer "sc-visible")))
       (unwind-protect
           (progn
             (with-current-buffer b (insert "alpha\nbeta\ngamma\n") (narrow-to-region 1 3))
-            (should (equal (superchat-test-tools--ok "read_buffer" :buffer "sc-visible")
+            (should (equal (superchat-test-tools--ok "read" :buffer "sc-visible")
                            "alpha\nbeta\ngamma"))
-            (should (equal (superchat-test-tools--ok "read_buffer" :buffer "sc-visible" :limit 1)
+            (should (equal (superchat-test-tools--ok "read" :buffer "sc-visible" :limit 1)
                            "alpha\n\n[2 more lines in buffer. Use offset=2 to continue.]"))
             (should (string-match-p "beyond end of buffer (3 lines total)"
-                                    (superchat-test-tools--err "read_buffer" :buffer "sc-visible"
+                                    (superchat-test-tools--err "read" :buffer "sc-visible"
                                                                :offset 4)))
             (should (string-match-p "No buffer named nope"
-                                    (superchat-test-tools--err "read_buffer" :buffer "nope")))
-            (let ((text (superchat-test-tools--ok "list_buffers")))
-              (should (string-match-p "sc-visible\tfundamental-mode\t-\t17" text))
-              (should-not (string-match-p "sc-hidden" text))))
-        (kill-buffer b) (kill-buffer hidden)))))
+                                    (superchat-test-tools--err "read" :buffer "nope")))
+            (should (string-match-p "exactly one of path and buffer"
+                                    (superchat-test-tools--err "read")))
+            (should (string-match-p "exactly one of path and buffer"
+                                    (superchat-test-tools--err "read" :buffer "sc-visible" :path "x"))))
+        (kill-buffer b)))))
 
 (ert-deftest superchat-tools-read-numbers-may-come-as-strings-or-floats ()
   (superchat-test-tools--in-scope
@@ -902,19 +905,18 @@ DIR is no project: the .git is in a subdirectory."
     (should (string-match-p "Not a directory" (superchat-test-tools--err "find" :pattern "*"
                                                                          :path "a.txt")))))
 
-(ert-deftest superchat-tools-ls ()
+(ert-deftest superchat-tools-read-a-directory-lists-it ()
   (superchat-test-tools--in-scope
     (superchat-test-tools--write dir "b.txt" "")
     (superchat-test-tools--write dir "A.txt" "")
     (superchat-test-tools--write dir ".hidden" "")
     (make-directory (expand-file-name "c" dir))
-    (should (equal (superchat-test-tools--ok "ls") ".hidden\nA.txt\nb.txt\nc/"))
-    (should (equal (superchat-test-tools--ok "ls" :path "c") "(empty directory)"))
-    (should (equal (superchat-test-tools--ok "ls" :limit 2)
-                   ".hidden\nA.txt\n\n[2 entries limit reached. Use limit=4 for more]"))
-    (should (string-match-p "Not a directory" (superchat-test-tools--err "ls" :path "b.txt")))))
+    (should (equal (superchat-test-tools--ok "read" :path ".") ".hidden\nA.txt\nb.txt\nc/"))
+    (should (equal (superchat-test-tools--ok "read" :path "c") "(empty directory)"))
+    (should (equal (superchat-test-tools--ok "read" :path "." :limit 2)
+                   ".hidden\nA.txt\n\n[2 entries limit reached. Use limit=4 for more]"))))
 
-;;; edit, write and save_buffer
+;;; edit and write
 
 (ert-deftest superchat-tools-edit-a-buffer ()
   (superchat-test-tools--in-scope
@@ -928,7 +930,7 @@ DIR is no project: the .git is in a subdirectory."
                                                "edit" :buffer "sc-edit" :old "qux" :new "x")))
             (should (equal (with-current-buffer b (buffer-string)) "foo bar baz\nbar\n"))
             (should (equal (superchat-test-tools--ok "edit" :buffer "sc-edit" :old "baz" :new "qux")
-                           "Replaced 1 block in sc-edit (not saved; save_buffer writes it)."))
+                           "Replaced 1 block in sc-edit."))
             (should (equal (with-current-buffer b (buffer-string)) "foo bar qux\nbar\n"))
             (with-current-buffer b
               (setq last-command nil)
@@ -954,19 +956,20 @@ DIR is no project: the .git is in a subdirectory."
             (should (equal (with-current-buffer b (buffer-string)) "Bar and foo aaa")))
         (kill-buffer b)))))
 
-(ert-deftest superchat-tools-edit-a-file-in-its-buffer-without-saving ()
+(ert-deftest superchat-tools-edit-saves-the-file ()
   (superchat-test-tools--in-scope
     (let ((file (superchat-test-tools--write dir "f.txt" "hello\n")))
       (should (equal (superchat-test-tools--ok "edit" :path "f.txt" :old "hello" :new "bye")
-                     "Replaced 1 block in f.txt (not saved; save_buffer writes it)."))
+                     "Replaced 1 block in f.txt."))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "bye\n"))
+      ;; The buffer stays, saved, so the person can undo the edit there.
       (with-current-buffer (find-buffer-visiting file)
-        (should (buffer-modified-p))
-        (should (equal (buffer-string) "bye\n")))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "hello\n"))
-      ;; A read sees the edit; save_buffer writes it.
-      (should (equal (superchat-test-tools--ok "read" :path "f.txt") "bye"))
-      (should (equal (superchat-test-tools--ok "save_buffer" :path "f.txt") (format "Saved %s." file)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "bye\n")))
+        (should-not (buffer-modified-p))
+        (setq last-command nil)
+        (undo)
+        (should (equal (buffer-string) "hello\n"))
+        (set-buffer-modified-p nil)
+        (revert-buffer t t)))
     ;; A buffer visited for an edit that fails is not left open.
     (let ((file (superchat-test-tools--write dir "g.txt" "same same\n")))
       (superchat-test-tools--err "edit" :path "g.txt" :old "same" :new "x")
@@ -974,49 +977,49 @@ DIR is no project: the .git is in a subdirectory."
     (should (string-match-p "No such file: none.txt"
                             (superchat-test-tools--err "edit" :path "none.txt" :old "a" :new "b")))))
 
-(ert-deftest superchat-tools-write-fills-the-buffer-and-save-buffer-writes-it ()
+(ert-deftest superchat-tools-edit-leaves-the-persons-unsaved-changes-unsaved ()
+  (superchat-test-tools--in-scope
+    (let ((file (superchat-test-tools--write dir "u.txt" "one two\n")))
+      (with-current-buffer (find-file-noselect file) (goto-char (point-max)) (insert "mine\n"))
+      (should (equal (superchat-test-tools--ok "edit" :path "u.txt" :old "two" :new "2")
+                     (concat "Replaced 1 block in u.txt.\n\n[Not saved: the buffer held unsaved"
+                             " changes of the person's; they save it]")))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "one two\n"))
+      (with-current-buffer (find-buffer-visiting file)
+        (should (equal (buffer-string) "one 2\nmine\n"))
+        (set-buffer-modified-p nil)))))
+
+(ert-deftest superchat-tools-a-save-that-changes-the-text-says-so ()
+  (superchat-test-tools--in-scope
+    (let ((file (superchat-test-tools--write dir "h.txt" "a  \n"))
+          (before-save-hook (list (lambda () (when (equal (file-name-nondirectory buffer-file-name) "h.txt")
+                                               (delete-trailing-whitespace))))))
+      (should (string-match-p "Saving changed the text"
+                              (superchat-test-tools--ok "edit" :path "h.txt" :old "a" :new "b")))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "b\n"))
+      (should-not (string-match-p "Saving changed"
+                                  (superchat-test-tools--ok "edit" :path "h.txt" :old "b" :new "c"))))))
+
+(ert-deftest superchat-tools-write-saves-the-file ()
   (superchat-test-tools--in-scope
     (let ((file (expand-file-name "new/dir/w.txt" dir)))
       (should (equal (superchat-test-tools--ok "write" :path "new/dir/w.txt" :content "first")
-                     "The buffer of new/dir/w.txt holds 5 characters (not saved; save_buffer writes it)."))
-      (should-not (file-exists-p file))
-      (superchat-test-tools--ok "save_buffer" :path "new/dir/w.txt")
+                     "Wrote 5 characters to new/dir/w.txt."))
       (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "first"))
       (superchat-test-tools--ok "write" :path "new/dir/w.txt" :content "second")
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "first"))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "second"))
       (with-current-buffer (find-buffer-visiting file)
-        (should (equal (buffer-string) "second"))
         (setq last-command nil)
         (undo)
-        (should (equal (buffer-string) "first"))))
-    ;; An empty new file is written too.
-    (superchat-test-tools--ok "write" :path "e.txt" :content "")
-    (superchat-test-tools--ok "save_buffer" :path "e.txt")
-    (should (file-exists-p (expand-file-name "e.txt" dir)))))
-
-(ert-deftest superchat-tools-save-buffer ()
-  (superchat-test-tools--in-scope
-    (let ((file (superchat-test-tools--write dir "s.txt" "a\n")))
-      (with-current-buffer (find-file-noselect file)
-        (insert "b")
-        (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name))))
-        (should-not (buffer-modified-p)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "ba\n"))
-      ;; A save leaves no backup file, whatever the person's Emacs says; a
-      ;; backup in the project shows up in `ls` and `find`.
-      (let ((make-backup-files t) (backup-enable-predicate (lambda (_) t)))
-        (with-current-buffer (find-file-noselect file)
-          (insert "c")
-          (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name)))))
-        (should (equal (directory-files dir) '("." ".." "s.txt")))))
-    (should (string-match-p "No buffer visits other.txt"
-                            (superchat-test-tools--err "save_buffer" :path "other.txt")))
-    (should (string-match-p "exactly one" (superchat-test-tools--err "save_buffer")))
-    (let ((b (generate-new-buffer "sc-nofile")))
-      (unwind-protect
-          (should (string-match-p "visits no file"
-                                  (superchat-test-tools--err "save_buffer" :buffer "sc-nofile")))
-        (kill-buffer b)))))
+        (should (equal (buffer-string) "first"))
+        (set-buffer-modified-p nil)))
+    ;; An empty new file is written too, and a save leaves no backup file,
+    ;; whatever the person's Emacs says.
+    (let ((make-backup-files t) (backup-enable-predicate (lambda (_) t)))
+      (superchat-test-tools--ok "write" :path "e.txt" :content "")
+      (superchat-test-tools--ok "write" :path "e.txt" :content "x"))
+    (should (file-exists-p (expand-file-name "e.txt" dir)))
+    (should-not (file-exists-p (expand-file-name "e.txt~" dir)))))
 
 ;;; shell
 

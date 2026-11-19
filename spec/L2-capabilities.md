@@ -183,7 +183,9 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   ON-RESULT gets the `event` `(:type "question" :call-id ID :tool NAME
   :summary S)` instead of a `tool` entry. For an `ask`
   or `deny` decision it appends a `permission` event once the decision is
-  known, before the result; it says whether the call was allowed. A quit
+  known, before the result, when the user was asked now or the call is
+  denied; it says whether the call was allowed. A call that an earlier
+  `always` or an answer on the Tape allows leaves no event. A quit
   while the user is asked leaves no `permission` event, only the result. When the returned function is called before the
   result came, the tool is stopped, nothing is appended and ON-RESULT is
   never called; a result that comes after that is dropped. A denied call, an unknown tool, a missing
@@ -216,30 +218,25 @@ Built-in tools, and no others:
 
 | name | class | arguments | does |
 |---|---|---|---|
-| `read` | read | `path`, `offset` opt, `limit` opt | lines of a file, as Reading says |
-| `read_buffer` | read | `buffer`, `offset` opt, `limit` opt | the same for a buffer |
-| `list_buffers` | read | none | name, mode, file and size of the user's buffers (no names starting with a space) |
+| `read` | read | `path` or `buffer`, `offset` opt, `limit` opt | lines of a file or a buffer, or the entries of a directory, as Reading says |
 | `grep` | read | `pattern`, `path` opt, `glob` opt, `ignore_case` opt, `literal` opt, `context` opt, `limit` opt | matching lines of files, as Searching says; asynchronous |
 | `find` | read | `pattern`, `path` opt, `limit` opt | files whose path matches the glob PATTERN, as Searching says |
-| `ls` | read | `path` opt, `limit` opt | the entries of a directory |
-| `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW in a buffer, as Changing says; does not save |
-| `write` | write | `path`, `content` | CONTENT becomes the whole text of the buffer visiting PATH; does not save |
-| `save_buffer` | write | `buffer` or `path` | save the buffer, or the buffer visiting PATH; the one tool that writes a file |
+| `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW and save, as Changing says |
+| `write` | write | `path`, `content` | CONTENT becomes the whole text of the file PATH, saved |
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return what was printed to `*Messages*` meanwhile, then the value of each form printed, one line each in order, a newline inside a value written `\n`; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
 | `shell` | exec | `command`, `timeout` opt | run through `shell-file-name` with no input, at most TIMEOUT seconds (default `superchat-shell-seconds`), return the end of the output and the exit status, as Running says; asynchronous |
 
 The descriptions of the tools state the division: files through `read`,
-`grep`, `find`, `ls`, `edit`, `write` and `save_buffer`; outside programs
-through `shell`; the running Emacs through `eval_elisp`. The description of
-`save_buffer` says to save before a command, the tests or git run on a
-changed file. The description of `shell` says never to read, list or
+`grep`, `find`, `edit` and `write`, and that `edit` and `write` save the
+file; outside programs through `shell`; the running Emacs through
+`eval_elisp`. The description of `shell` says never to read, list or
 search files with it (`cat`, `head`, `tail`, `sed -n`, `ls`, `find`,
 `grep`) and names the tool for each. The description of `grep` says its
 PATTERN is POSIX extended syntax, with no inline flags such as `(?i)`
 (IGNORE_CASE is the way), and that CONTEXT shows the lines around a match
 without another `read`; that of `find` says a name pattern such as
-`*diary*` finds a file at any depth, so no directory needs walking with
-`ls`; that of `read` says a read with LIMIT 1 gives a file's line count
+`*diary*` finds a file at any depth, so no directory needs walking; that
+of `read` says a read with LIMIT 1 gives a file's line count
 in its notice. A boolean argument is false when it is
 nil (a JSON false).
 
@@ -260,9 +257,9 @@ the call was outside the project.
 
 - Files are read and changed through Emacs buffers. `read` reads the buffer
   visiting the file when there is one, so unsaved edits are seen, else the
-  file in a temporary buffer: a read leaves no buffer open. A directory is
-  an error that names `ls`.
-- `read` and `read_buffer` return the lines from OFFSET (1-indexed, default
+  file in a temporary buffer: a read leaves no buffer open. `read` takes
+  exactly one of PATH and BUFFER.
+- `read` returns the lines from OFFSET (1-indexed, default
   1), with no line numbers, at most LIMIT lines, 2000 lines and the room of
   a result, whichever comes first. A line is never cut, except a single
   line longer than the room, of which the room's worth is shown with a
@@ -272,14 +269,14 @@ the call was outside the project.
   `[Showing lines X-Y of Z. Use offset=N to continue.]` when 2000 lines
   stopped it; `[Showing lines X-Y of Z (N characters limit). Use offset=N to continue.]`
   when the room did; `[K more lines in file. Use offset=N to continue.]`
-  (`in buffer` for `read_buffer`) when LIMIT did.
+  (`in buffer` for a buffer) when LIMIT did.
 - An OFFSET past the last line is an error,
   `Offset N is beyond end of file (Z lines total)` (`of buffer`); offset 1
   of an empty text is the empty result.
 
 ### Searching
 
-- `grep`, `find` and `ls` take PATH, default the project. The files
+- `grep` and `find` take PATH, default the project. The files
   `grep` and `find` look at are the project's files as `project-files`
   gives them (so `.gitignore` counts) when PATH is the project or inside
   it, else every file under PATH by `directory-files-recursively`; nothing
@@ -309,7 +306,7 @@ the call was outside the project.
   `[N results limit reached. Use limit=2N for more, or refine pattern]`;
   none is `No files found matching pattern`. Its listing stops after 10
   seconds too, with the same notice.
-- `ls` lists the entries of the directory PATH, dotfiles included, sorted
+- `read` of a directory lists its entries, dotfiles included, sorted
   alphabetically ignoring case, `/` after a directory, at most LIMIT
   (default 500): `[N entries limit reached. Use limit=2N for more]`; an empty
   one is `(empty directory)`.
@@ -319,20 +316,23 @@ the call was outside the project.
 ### Changing
 
 - `edit` and `write` change the buffer visiting the file, visiting it when
-  none does, and do not save, so the user can undo them and only
-  `save_buffer` writes to disk. `edit` takes exactly one of PATH and BUFFER;
-  OLD must occur exactly once, case and overlapping occurrences counted; a
-  PATH that names no file and no buffer is an error, and a buffer visited
-  for an edit that fails is killed again. Its result is
-  `Replaced 1 block in PATH (not saved; save_buffer writes it).`, BUFFER in
-  place of PATH for a buffer. `write` creates the buffer of a file that
-  does not exist; its result says how many characters the buffer now holds
-  and that it is not saved.
-- `save_buffer` takes exactly one of BUFFER and PATH; a PATH no buffer
-  visits is an error. It makes the file's directory when needed, writes a
-  buffer whose file does not exist even when it is unchanged, adds no
-  final newline, and leaves no backup file, whatever the person's Emacs
-  says.
+  none does, then save it, so one call changes the file and the person can
+  undo the change in that buffer. `edit` takes exactly one of PATH and
+  BUFFER; OLD must occur exactly once, case and overlapping occurrences
+  counted; a PATH that names no file and no buffer is an error, and a buffer
+  visited for an edit that fails is killed again. Its result is
+  `Replaced 1 block in PATH.`, BUFFER in place of PATH for a buffer.
+  `write` creates a file that does not exist; its result is
+  `Wrote N characters to PATH.`.
+- The save makes the file's directory when needed, writes a file that does
+  not exist even when the buffer is empty, adds no final newline, and leaves
+  no backup file, whatever the person's Emacs says. A buffer that visits no
+  file is not saved. A buffer that held unsaved changes before the call is
+  changed and not saved, with the notice
+  `Not saved: the buffer held unsaved changes of the person's; they save it`.
+  When the save changes the buffer's text (a hook such as a formatter), the
+  notice `Saving changed the text (a hook of the person's, such as a
+  formatter); read it before the next edit` follows the result.
 
 ### Running
 
