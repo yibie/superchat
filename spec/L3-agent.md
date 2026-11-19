@@ -11,19 +11,22 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - `(superchat-context-system TAPE &optional EXTRA)` → the system prompt, built
   fresh for each request, in this order:
   1. the base instructions, a constant of at most 40 lines;
-  2. the rules file of the scope: `AGENTS.md` at the project root, or
+  2. the working directory: the scope, or the home directory for
+     `"home"`, with the line that a tool's relative path is against it and
+     that `shell` runs there;
+  3. the rules file of the scope: `AGENTS.md` at the project root, or
      `AGENTS.md` in `superchat-directory` for `"home"`, when it exists;
-  3. the skills catalog: for each `NAME/SKILL.md` under
+  4. the skills catalog: for each `NAME/SKILL.md` under
      `superchat-directory`/`skills/`, its name and the `description:` line of
      its frontmatter, with the path, so the model reads the file with
      `read` when it wants it. A file whose first `---` line is never
      closed has no frontmatter;
-  4. the `notes` view of the scope, newest first, rendered, at most 2000
+  5. the `notes` view of the scope, newest first, rendered, at most 2000
      characters;
-  5. the origin of the latest `user` entry, when it has one;
-  6. EXTRA, a string, when given.
-- A timeline with no entry has no scope: its prompt has no rules file and no
-  notes section.
+  6. the origin of the latest `user` entry, when it has one;
+  7. EXTRA, a string, when given.
+- A timeline with no entry has no scope: its prompt has no working
+  directory line, no rules file and no notes section.
 - Frontmatter is only at the very start of a file and ends at the first line
   that is exactly `---`.
 
