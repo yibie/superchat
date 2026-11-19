@@ -46,6 +46,11 @@ requires `llm.el`.
     with its error message; `aborted` calls neither; every other stop reason
     goes to ON-DONE, but a response with neither text nor calls, which goes
     to ON-ERROR with kind `empty`.
+  - A provider that wants a tool it cannot call may write its own call
+    markup as text, `<｜｜DSML｜｜ invoke ...>` for DeepSeek. No answer carries
+    it: the text is cut where the markup starts, and a response left with
+    nothing goes to ON-ERROR, kind `other`, its message saying the model
+    wrote a call as text.
   - A signal raised while the request is started is delivered through
     ON-ERROR, kind `other`; `superchat-llm-request` itself signals a `user-error` only when
     `superchat-llm-provider` or the model is not set or not known, when

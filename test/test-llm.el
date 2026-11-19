@@ -738,6 +738,22 @@ STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
   (test-llm-with (list '(:calls (("c1" "t" nil))))
     (should (plist-get (test-llm--ask (list (test-llm--user "hi"))) :done))))
 
+;; Given no tool to call, DeepSeek wrote its own call markup into the text.
+
+(ert-deftest superchat-llm-a-call-written-as-text-ends-the-answer ()
+  (test-llm-with (list '(:text "Looking at it.\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"read\">\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should (equal (plist-get (car (plist-get r :done)) :text) "Looking at it."))
+      (should-not (plist-get r :errors)))))
+
+(ert-deftest superchat-llm-a-call-written-as-text-alone-is-a-failure ()
+  (test-llm-with (list '(:text "\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"read\">\n</｜｜DSML｜｜ invoke>"))
+    (let ((r (test-llm--ask (list (test-llm--user "hi")))))
+      (should-not (plist-get r :done))
+      (let ((failure (car (plist-get r :errors))))
+        (should (eq (plist-get failure :kind) 'other))
+        (should (string-match-p "call as text" (plist-get failure :message)))))))
+
 (ert-deftest superchat-llm-a-provider-entry-that-signals-is-named-and-isolated ()
   (test-llm-with (list '(:text "ok"))
     (setq superchat-llm-providers

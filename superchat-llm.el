@@ -227,10 +227,27 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
                           (_ (error "Unknown message role %S" role)))
             when built collect built)))
 
+(defconst superchat-llm--markup "<｜｜"
+  "Where a provider's own call markup written as text starts: DeepSeek, with
+no tool to call, writes `<｜｜DSML｜｜ invoke name=\"read\">'.  No answer
+carries it.")
+
+(defun superchat-llm--markup-in (message)
+  "The place in MESSAGE where the provider wrote its call markup as text."
+  (string-match-p (regexp-quote superchat-llm--markup)
+                  (mapconcat #'superchat-bridge-text-content-text
+                             (cl-remove-if-not #'superchat-bridge-text-content-p
+                                               (superchat-bridge-message-content message))
+                             "")))
+
 (defun superchat-llm--result (message messages)
   "The ON-DONE plist for the final assistant MESSAGE, the answer to MESSAGES;
 keeps it if it made calls."
   (let* ((blocks (superchat-bridge-message-content message))
+         (text (mapconcat #'superchat-bridge-text-content-text
+                          (cl-remove-if-not #'superchat-bridge-text-content-p blocks) ""))
+         ;; A provider's call markup is not a sentence: the answer ends there.
+         (markup (string-match (regexp-quote superchat-llm--markup) text))
          ;; A provider may leave the id out, or count from call_0 again in
          ;; each response or even within one; a result needs an id, and a
          ;; kept message one that no message it could be replayed for has.
@@ -255,8 +272,7 @@ keeps it if it made calls."
       (setq superchat-llm--kept
             (ntake 64 (cons (cons (superchat-llm--call-key calls) message)
                             superchat-llm--kept))))
-    (list :text (mapconcat #'superchat-bridge-text-content-text
-                           (cl-remove-if-not #'superchat-bridge-text-content-p blocks) "")
+    (list :text (if markup (string-trim-right (substring text 0 markup)) text)
           :calls calls
           :model (superchat-bridge-assistant-message-model message))))
 
@@ -346,11 +362,15 @@ the bridge's own classifier tells a passing failure from a quota or a refusal."
                     (funcall on-error (list :message "The model gave no response" :kind 'network)))
                    ((equal reason "error") (funcall on-error (superchat-llm--failure message)))
                    (t (let ((result (superchat-llm--result message messages)))
-                        (if (or (plist-get result :calls)
-                                (not (string-empty-p (plist-get result :text))))
-                            (funcall on-done result)
-                          (funcall on-error (list :message "The model gave an empty response"
-                                                  :kind 'empty)))))))))))
+                        (cond
+                         ((or (plist-get result :calls)
+                              (not (string-empty-p (plist-get result :text))))
+                          (funcall on-done result))
+                         ((superchat-llm--markup-in message)
+                          (funcall on-error (list :message "The model wrote a tool call as text instead of calling one"
+                                                  :kind 'other)))
+                         (t (funcall on-error (list :message "The model gave an empty response"
+                                                    :kind 'empty))))))))))))
     handle))
 
 (cl-defun superchat-llm-request (messages &key system tools model
