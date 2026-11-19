@@ -111,9 +111,9 @@ prompt tells it which.
 
 | tool | class |
 |---|---|
-| `read_buffer`, `read_file`, `list_buffers`, `search_files` | read |
+| `read` (a file, a buffer or a directory), `grep`, `find` | read |
 | `recall`, `tape_query`, `note` | read |
-| `edit_buffer`, `write_file`, `save_buffer` | write |
+| `edit`, `write` (each saves the file) | write |
 | `eval_elisp`, `shell` | exec |
 
 The permission level decides what happens when the model calls a tool:
@@ -127,7 +127,7 @@ The permission level decides what happens when the model calls a tool:
 When it asks, `y` allows once, `n` refuses, `a` allows that tool for the rest
 of the conversation in this Emacs session.
 
-`shell` and `search_files` run in the background, so Emacs stays usable.
+`shell` and `grep` run in the background, so Emacs stays usable.
 `eval_elisp` runs Lisp inside Emacs and can hold it; `C-g` stops it.
 
 ### Memory
