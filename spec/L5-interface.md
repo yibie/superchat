@@ -1,7 +1,8 @@
 # L5 interface: the chat buffer, inline commands, plugins
 
 Part of the [specification](../SPEC.md). Modules: `superchat-chat.el`,
-`superchat-inline.el`, `superchat-plugin.el`, `superchat-messages.el`. This
+`superchat-turn.el`, `superchat-inline.el`, `superchat-plugin.el`,
+`superchat-messages.el`. This
 layer is what the person uses; every effect it has goes through
 `superchat-run` and the public functions of the layers below.
 
@@ -12,91 +13,13 @@ One buffer per timeline, named `*superchat: TITLE*`, TITLE being the first
 not count), or `new` until it has one. Major mode `superchat-chat-mode`,
 derived from `org-mode`.
 
-- The buffer is rendered from the `conversation` view, one turn at a time:
-  a turn is a `user` entry and the entries after it up to the next one
+- The buffer is rendered from the `conversation` view, one turn at a time: a
+  turn is a `user` entry and the entries after it up to the next one
   (the entries before the first `user` entry are a turn too). As an entry
   comes, its turn is drawn again from that turn's entries, so rendering the
   whole view again gives the same text and the same folding. Text above the
-  input area is read-only. A turn shows, in this order:
-  - its `user` entry: `* You`, then its text, a line of it that starts with
-    `*` shown with one space before it, so that it is never a heading;
-  - once the turn has an `assistant` entry or streamed text, one `* Assistant`
-    heading;
-  - under it, Progress, when the turn has a call or an intermediate text
-    (the text of an `assistant` entry other than the final answer): one
-    heading `** Progress  STRIP  N calls, K failed` (`1 call`; `, K failed`
-    only when K > 0; `** Progress` when it holds no call), N the calls in
-    it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
-    while a call of it has no result. Under it, in order, the intermediate texts, each followed
-    by its calls, each call a level 3 heading. A `permission` event of the
-    turn belongs to the call it was asked for, the first call of the turn
-    without a `tool` entry when the event came: it is a dimmed line just
-    before that call's heading. An intermediate text is a
-    level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
-    text cut to 60 characters and `…`, with the whole converted text as its
-    body, open unless the person folds it; a text of one line has no body.
-    Progress is
-    open while the turn runs and folded once the turn has its final answer
-    or the timeline is no longer busy with it, unless a call of it has an
-    error: then it stays open, so that the error is seen;
-  - then, when the turn has a final answer or streamed text, `** Answer`,
-    then the final answer: the text of the turn's last `assistant` entry
-    when that entry has no calls and some text, converted from Markdown to
-    Org (the Tape keeps the Markdown). Answer is never folded but by the
-    person;
-  - the turn's other entries (permission events but those tied to no
-    call, cancelled, error, level, retry and interrupted events, notes,
-    anchors), each as its
-    own lines, in order.
-  The strip of a turn is one cell for each of its calls and intermediate
-  texts, in order: `•` in `shadow` for an intermediate text, `▮` for a
-  call, in `shadow` once it has a `tool` entry, in `error` when that entry
-  has `:error`, in `default` while it has none. Over 60 cells it is `…`
-  and the last 59. Its colours show in the heading too, over Org's face for
-  the heading.
-  A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
-  body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
-  `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
-  printed with `%S` without its outer parentheses, newlines escaped, cut to
-  60 characters and `…` (left out with its spaces when empty); DURATION is
-  `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, and
-  is left out while there is none. The body is the arguments, one key and
-  value per line, then the result, each in a `#+begin_example` block escaped
-  with `org-escape-code-in-string`; an empty part has no block. The other
-  entries look like:
-  - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
-    empty, `What comes next: NEXT`; an anchor with empty text (a fork)
-    shows only its line;
-  - `note`: a dimmed heading `** note: TITLE`, its text the body, folded
-    by default (a note often repeats the answer);
-  - `event`: its text as one dimmed line, an `error` event in the `error`
-    face.
-  Faces are `font-lock-face`, so Org's fontification keeps them.
-- The Markdown of an answer becomes Org by these rules, and no others. A
-  fenced block (```` ``` ```` or `~~~` at the start of a line, closed by a
-  line of the same delimiter, or by the end of the text) and a native
-  `#+begin_src` block (closed by `#+end_src`) become a `#+begin_src LANG`
-  block, LANG the first word of the info string; the body is kept as it is,
-  escaped with `org-escape-code-in-string`, without the newline before the
-  closing line; nothing else applies inside it. Inline code `` `x` `` becomes
-  `=x=`, or `~x~` when x has a `=`, and nothing else applies inside it. An
-  image `![alt](https://u)` becomes `[[https://u]]`; a link
-  `[text](https://u)` becomes `[[https://u][text]]`, the text may hold one
-  level of brackets and the url one level of parentheses, the url escaped
-  with `org-link-escape`. A line of
-  three or more `-`, `*` or `_` (spaces between allowed) becomes `-----`.
-  `# ` to `###### ` at the start of a line become headings, demoted so that
-  the shallowest heading of the final answer is level 3, under Answer, the
-  others keeping their depth below it, and a heading of an intermediate
-  text becomes a line of bold text, `*TITLE*`, never a heading; any other
-  line starting with `#` stays text. A list item `*`, `+` or
-  `-` becomes `-`. Consecutive lines starting with `>` become a
-  `#+begin_quote` block without the `>`. A table (consecutive lines starting
-  with `|`) loses its alignment row (cells of `-` and `:` only) for an Org
-  rule `|-` and is aligned with `org-table-align`. `**x**` and `__x__`
-  become `*x*`, `*x*` and `_x_` become `/x/`, `~~x~~` becomes `+x+`; x is
-  one or more characters that do not start or end with a space, and `_` does
-  not open or close inside a word.
+  input area is read-only. What a turn says is `superchat-turn-text` of its
+  entries.
 - The answer's text streams in as it comes, raw, in the `shadow` face,
   where the final answer goes: under `** Answer`, after Progress; the
   `assistant` entry replaces it when it comes.
@@ -257,6 +180,98 @@ they were typed in, in place of this one, whatever `display-buffer-alist`
 says of chat buffers; no other window or tab is made. The window keeps its
 history of buffers, so `previous-buffer` and a window tab line go back to
 the conversations it showed.
+
+## superchat-turn.el
+
+The text of a turn, from its entries, and the answers' Markdown as Org.
+`superchat-turn-answers` is a buffer's conversions.  The chat buffer calls
+`superchat-turn-seal`, `superchat-turn-dim`, `superchat-turn-cut`,
+`superchat-turn-strip` and the font-lock matcher `superchat-turn-cells`.
+
+- `(superchat-turn-text ENTRIES STREAMING OVER)` → `(HEAD . TAIL)`: the
+  text of one turn.  HEAD is the `user` entry and the headings down to
+  Answer, with the streamed text between them; TAIL the final answer and
+  the other entries.  OVER says the timeline is free, which folds
+  Progress.  A turn shows, in this order:
+  - its `user` entry: `* You`, then its text, a line of it that starts with
+    `*` shown with one space before it, so that it is never a heading;
+  - once the turn has an `assistant` entry or streamed text, one `* Assistant`
+    heading;
+  - under it, Progress, when the turn has a call or an intermediate text
+    (the text of an `assistant` entry other than the final answer): one
+    heading `** Progress  STRIP  N calls, K failed` (`1 call`; `, K failed`
+    only when K > 0; `** Progress` when it holds no call), N the calls in
+    it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
+    while a call of it has no result. Under it, in order, the intermediate texts, each followed
+    by its calls, each call a level 3 heading. A `permission` event of the
+    turn belongs to the call it was asked for, the first call of the turn
+    without a `tool` entry when the event came: it is a dimmed line just
+    before that call's heading. An intermediate text is a
+    level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
+    text cut to 60 characters and `…`, with the whole converted text as its
+    body, open unless the person folds it; a text of one line has no body.
+    Progress is
+    open while the turn runs and folded once the turn has its final answer
+    or the timeline is no longer busy with it, unless a call of it has an
+    error: then it stays open, so that the error is seen;
+  - then, when the turn has a final answer or streamed text, `** Answer`,
+    then the final answer: the text of the turn's last `assistant` entry
+    when that entry has no calls and some text, converted from Markdown to
+    Org (the Tape keeps the Markdown). Answer is never folded but by the
+    person;
+  - the turn's other entries (permission events but those tied to no
+    call, cancelled, error, level, retry and interrupted events, notes,
+    anchors), each as its
+    own lines, in order.
+  The strip of a turn is one cell for each of its calls and intermediate
+  texts, in order: `•` in `shadow` for an intermediate text, `▮` for a
+  call, in `shadow` once it has a `tool` entry, in `error` when that entry
+  has `:error`, in `default` while it has none. Over 60 cells it is `…`
+  and the last 59. Its colours show in the heading too, over Org's face for
+  the heading.
+  A call's heading is `MARK NAME  ARGS  (DURATION)` after its stars, its
+  body folded: MARK is `⏳` while the call has no `tool` entry in its turn,
+  `✗` when that entry has `:error`, else `✓`; ARGS is the arguments plist
+  printed with `%S` without its outer parentheses, newlines escaped, cut to
+  60 characters and `…` (left out with its spaces when empty); DURATION is
+  `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, and
+  is left out while there is none. The body is the arguments, one key and
+  value per line, then the result, each in a `#+begin_example` block escaped
+  with `org-escape-code-in-string`; an empty part has no block. The other
+  entries look like:
+  - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
+    empty, `What comes next: NEXT`; an anchor with empty text (a fork)
+    shows only its line;
+  - `note`: a dimmed heading `** note: TITLE`, its text the body, folded
+    by default (a note often repeats the answer);
+  - `event`: its text as one dimmed line, an `error` event in the `error`
+    face.
+  Faces are `font-lock-face`, so Org's fontification keeps them.
+- The Markdown of an answer becomes Org by these rules, and no others. A
+  fenced block (```` ``` ```` or `~~~` at the start of a line, closed by a
+  line of the same delimiter, or by the end of the text) and a native
+  `#+begin_src` block (closed by `#+end_src`) become a `#+begin_src LANG`
+  block, LANG the first word of the info string; the body is kept as it is,
+  escaped with `org-escape-code-in-string`, without the newline before the
+  closing line; nothing else applies inside it. Inline code `` `x` `` becomes
+  `=x=`, or `~x~` when x has a `=`, and nothing else applies inside it. An
+  image `![alt](https://u)` becomes `[[https://u]]`; a link
+  `[text](https://u)` becomes `[[https://u][text]]`, the text may hold one
+  level of brackets and the url one level of parentheses, the url escaped
+  with `org-link-escape`. A line of
+  three or more `-`, `*` or `_` (spaces between allowed) becomes `-----`.
+  `# ` to `###### ` at the start of a line become headings, demoted so that
+  the shallowest heading of the final answer is level 3, under Answer, the
+  others keeping their depth below it, and a heading of an intermediate
+  text becomes a line of bold text, `*TITLE*`, never a heading; any other
+  line starting with `#` stays text. A list item `*`, `+` or
+  `-` becomes `-`. Consecutive lines starting with `>` become a
+  `#+begin_quote` block without the `>`. A table (consecutive lines starting
+  with `|`) loses its alignment row (cells of `-` and `:` only) for an Org
+  rule `|-` and is aligned with `org-table-align`. `**x**` and `__x__`
+  become `*x*`, `*x*` and `_x_` become `/x/`, `~~x~~` becomes `+x+`; x is
+  one or more characters that do not start or end with a space, and `_` does
+  not open or close inside a word.
 
 ## superchat-inline.el
 

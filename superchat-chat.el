@@ -4,7 +4,8 @@
 ;; The buffer is an Org rendering of the `conversation' view of one timeline,
 ;; then a prompt and an input area.  The view is shown turn by turn, and the
 ;; current turn is drawn again from its entries as each comes, so rendering
-;; the whole view again gives the same text.
+;; the whole view again gives the same text.  What a turn says is made in
+;; `superchat-turn', from its entries.
 
 ;;; Code:
 
@@ -19,6 +20,7 @@
 (require 'superchat-recall)
 (require 'superchat-inbox)
 (require 'superchat-plugin)
+(require 'superchat-turn)
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
 (defvar-local superchat-chat--model nil "Model for this buffer, or nil for the default.")
@@ -31,7 +33,6 @@
 (defvar-local superchat-chat--stream-end nil "Marker: where streamed text ends and the rest of the turn starts.")
 (defvar-local superchat-chat--block nil "Marker: where the separator and the prompt start.")
 (defvar-local superchat-chat--input nil "Marker: where the input area starts.")
-(defvar-local superchat-chat--answers nil "Hash table: an assistant entry's id to its text as Org.")
 (defvar-local superchat-chat--waiting nil "Overlay of the waiting line, above the separator.")
 (defvar-local superchat-chat--timer nil "Timer that keeps the waiting line and the mode line current.")
 (defvar-local superchat-chat--began nil "When the timeline became busy.")
@@ -67,351 +68,12 @@ was opened with; any other buffer that of `default-directory'."
           (and buffer-file-name (list :file buffer-file-name))
           (list :mode (symbol-name major-mode) :line (line-number-at-pos))))
 
-;;; Markdown as Org
-
-(defun superchat-chat--org (markdown level)
-  "MARKDOWN as Org, by the rules of the specification and no others.
-Headings are demoted so that the shallowest is at LEVEL, under the heading
-the text sits in; with no LEVEL each is a line of bold text.  What no rule
-may touch (blocks, inline code, links) is kept out behind placeholders of
-private-use characters, which no rule matches."
-  (with-temp-buffer
-    (insert markdown)
-    (let ((kept nil) blocks (top 6))
-      (cl-flet* ((keep (string)
-                   (push string kept)
-                   (format "\uE000%d\uE001" (1- (length kept))))
-                 (each (regexp function)
-                   (goto-char (point-min))
-                   (while (re-search-forward regexp nil t) (funcall function)))
-                 (emphasis (mark to inner bound)
-                   ;; MARK x MARK becomes TO x TO; x holds none of INNER and
-                   ;; neither starts nor ends with a space.  A BOUND mark does
-                   ;; not open or close inside a word.
-                   (let ((edge (concat "[^ \t\n" inner "]")) (mark (regexp-quote mark)))
-                     (each (concat (and bound "\\(?:^\\|[^[:alnum:]]\\)")
-                                   "\\(" mark "\\(" edge "\\(?:[^\n" inner "]*?" edge "\\)?\\)"
-                                   mark "\\)" (and bound "\\(?:[^[:alnum:]]\\|$\\)"))
-                           (lambda ()
-                             (let ((text (concat to (match-string 2) to)) (at (match-beginning 1)))
-                               (replace-match text t t nil 1)
-                               (goto-char (+ at (length text)))))))))
-        (let ((case-fold-search t))
-          (each "^[ \t]*\\(```+\\|~~~+\\|#\\+begin_src\\_>\\)\\(.*\\)$"
-                (lambda ()
-                  (let* ((start (match-beginning 0))
-                         (from (min (1+ (match-end 0)) (point-max)))
-                         (delimiter (match-string 1))
-                         (native (string-prefix-p "#" delimiter))
-                         (open (if native (string-trim (match-string 0))
-                                 (string-trim-right
-                                  (concat "#+begin_src " (car (split-string (match-string 2)))))))
-                         (found (progn (goto-char from)
-                                       (re-search-forward
-                                        (if native "^[ \t]*#\\+end_src\\_>.*$"
-                                          (concat "^[ \t]*" (regexp-quote delimiter) "[ \t]*$"))
-                                        nil t)))
-                         (body (string-remove-suffix
-                                "\n" (buffer-substring from (if found (match-beginning 0) (point-max))))))
-                    (delete-region start (if found (match-end 0) (point-max)))
-                    (goto-char start)
-                    (insert (keep (concat open "\n"
-                                          (if (string-empty-p body) ""
-                                            (concat (org-escape-code-in-string body) "\n"))
-                                          "#+end_src")))))))
-        (setq blocks (length kept))
-        (each "`\\([^`\n]+\\)`"
-              (lambda ()
-                ;; `string-trim' matches a regexp: the match data must outlive it.
-                (let ((code (save-match-data (string-trim (match-string 1)))))
-                  (replace-match (keep (if (string-search "=" code) (concat "~" code "~")
-                                         (concat "=" code "=")))
-                                 t t))))
-        (let ((url "(\\(\\(?:[^ \t\n()]\\|([^ \t\n()]*)\\)+\\))"))
-          (each (concat "!\\[[^]\n]*\\]" url)
-                (lambda () (replace-match (keep (format "[[%s]]" (org-link-escape (match-string 1))))
-                                          t t)))
-          (each (concat "\\[\\(\\(?:[^][\n]\\|\\[[^][\n]*\\]\\)+\\)\\]" url)
-                (lambda () (replace-match (keep (format "[[%s][%s]]" (org-link-escape (match-string 2))
-                                                        (match-string 1)))
-                                          t t))))
-        (each "^[ \t]*\\([-*_]\\)\\(?:[ \t]*\\1\\)\\{2,\\}[ \t]*$" (lambda () (replace-match "-----" t t)))
-        ;; Before the lists: a quoted list item is a list item.
-        (each "^>.*\\(?:\n>.*\\)*"
-              (lambda () (replace-match (concat "#+begin_quote\n"
-                                                (replace-regexp-in-string "^> ?" "" (match-string 0))
-                                                "\n#+end_quote")
-                                        t t)))
-        (each "^\\([ \t]*\\)[-*+] " (lambda () (replace-match "\\1- " t)))
-        ;; Heading stars are private-use characters until the emphasis is done.
-        (each "^\\(#\\{1,6\\}\\) " (lambda () (setq top (min top (length (match-string 1))))))
-        (each "^\\(#\\{1,6\\}\\) \\(.*\\)$"
-              (lambda () (replace-match
-                          (if level
-                              (concat (make-string (- (+ (length (match-string 1)) level) top) ?\uE003)
-                                      " " (match-string 2))
-                            (concat "\uE003" (save-match-data (string-trim (match-string 2))) "\uE003"))
-                          t t)))
-        (each "^[ \t]*|\\(?:[ \t]*:?-+:?[ \t]*|\\)+[ \t]*$" (lambda () (replace-match "|-" t t)))
-        (emphasis "**" "\uE003" "" nil)
-        (emphasis "__" "\uE003" "" t)
-        (emphasis "~~" "+" "~" nil)
-        (emphasis "*" "/" "*" nil)
-        (emphasis "_" "/" "_" t)
-        (each "\uE003" (lambda () (replace-match "*" t t)))
-        ;; The newest first: a link may hold inline code kept before it.
-        (cl-flet ((restore (from)
-                    (cl-loop for i from (1- (length kept)) downto from
-                             do (goto-char (point-min))
-                             (search-forward (format "\uE000%d\uE001" i))
-                             (replace-match (nth (- (length kept) 1 i) kept) t t))))
-          (restore blocks)
-          ;; Before the blocks come back: a line of code starting with | is no table.
-          (goto-char (point-min))
-          (when (re-search-forward "^[ \t]*|" nil t)
-            (let ((org-inhibit-startup t)) (delay-mode-hooks (org-mode)))
-            (org-table-map-tables #'org-table-align t))
-          (setq kept (last kept blocks))
-          (restore 0))
-        (buffer-string)))))
-
-;;; Rendering
-
-(defun superchat-chat--seal (string &optional id)
-  "Make STRING read-only, carrying ID.  Text typed right after it is free and
-plain: its last character passes on no property, neither a face nor the id."
-  (unless (string-empty-p string)
-    (add-text-properties 0 (length string)
-                         (list 'read-only t 'front-sticky '(read-only) 'superchat-chat-id id)
-                         string)
-    (add-text-properties (1- (length string)) (length string) '(rear-nonsticky t) string))
-  string)
-
-(defun superchat-chat--dim (string &optional face)
-  "STRING in FACE, `shadow' by default, as a face Org's fontification keeps."
-  (propertize string 'font-lock-face (or face 'shadow)))
-
-(defun superchat-chat--loose (string)
-  "STRING with `superchat-chat-loose' 1, a line that stops every body, wherever
-it has none."
-  (let ((at 0))
-    (while (< at (length string))
-      (let ((next (next-single-property-change at 'superchat-chat-loose string (length string))))
-        (unless (get-text-property at 'superchat-chat-loose string)
-          (put-text-property at next 'superchat-chat-loose 1 string))
-        (setq at next)))
-    string))
-
-(defun superchat-chat--cut (line width)
-  "LINE cut to WIDTH characters and `…' when longer."
-  (if (> (length line) width) (concat (substring line 0 width) "…") line))
-
-(defun superchat-chat--args (args)
-  "ARGS on one line, cut to 60 characters."
-  (superchat-chat--cut (if args (let ((print-escape-newlines t))
-                                  (string-trim (format "%S" args) "(" ")"))
-                         "")
-                       60))
-
-(defun superchat-chat--heading (head body key id folded)
-  "HEAD, a heading line, and BODY under it, read-only, with ID.  KEY names the
-heading when its turn is drawn again; FOLDED is how it is shown by default."
-  (let ((head (copy-sequence head)))
-    (put-text-property 0 1 'superchat-chat-fold (list key folded) head)
-    (superchat-chat--seal (concat head body "\n") id)))
-
-(defun superchat-chat--call (call level)
-  "The heading at LEVEL of CALL, (:call :result :seconds :id :asked), and its
-body, after the lines of the permission events ASKED for it; it carries the id
-of its tool entry, or of its assistant entry before."
-  (let* ((result (plist-get call :result))
-         (args (plist-get (plist-get call :call) :args))
-         (short (superchat-chat--args args)))
-    (concat
-     ;; A line no call's body takes in: it ends the body of the call before.
-     (propertize (mapconcat #'superchat-chat--format (plist-get call :asked) "")
-                 'superchat-chat-loose level)
-     (superchat-chat--heading
-     (string-join (delq nil (list (concat (make-string level ?*) " "
-                                          (cond ((not result) "⏳")
-                                                ((plist-get (plist-get result :data) :error) "✗")
-                                                (t "✓"))
-                                          " " (plist-get (plist-get call :call) :name))
-                                  (and (not (string-empty-p short)) short)
-                                  (and result (format "(%.1fs)" (plist-get call :seconds)))))
-                  "  ")
-     (mapconcat (lambda (part) (format "\n#+begin_example\n%s\n#+end_example"
-                                       (org-escape-code-in-string part)))
-                (seq-remove #'string-empty-p
-                            (list (string-trim-right
-                                   (cl-loop for (key value) on args by #'cddr
-                                            concat (format "%s %S\n" key value)))
-                                  (string-trim-right (or (plist-get result :text) ""))))
-                "")
-     ;; The assistant entry's id too: a provider may give each response the
-     ;; same call ids.
-     (format "call %s %s" (plist-get call :id) (plist-get (plist-get call :call) :id))
-     (plist-get (or result call) :id)
-     t))))
-
-(defun superchat-chat--answer (entry level)
-  "The text of assistant ENTRY as Org, its headings from LEVEL or, with no
-LEVEL, bold lines; converted once per buffer."
-  (with-memoization (gethash (cons (plist-get entry :id) level) superchat-chat--answers)
-    (superchat-chat--org (string-trim (plist-get entry :text)) level)))
-
-(defun superchat-chat--format (entry)
-  "The text of ENTRY, a `user', `anchor', `note' or `event' entry, read-only
-and carrying its id."
-  (let* ((text (string-trim-right (plist-get entry :text)))
-         (data (plist-get entry :data))
-         (string
-          (pcase (plist-get entry :kind)
-            ;; A line of the user's that starts with stars would be a heading of
-            ;; the buffer: one space keeps it the user's text.
-            ('user (concat "* You\n" (replace-regexp-in-string "^\\*" " *" text) "\n\n"))
-            ('anchor (concat (superchat-chat--dim (format "── summary: %s ──" (plist-get data :name)))
-                             (if (string-empty-p text) "\n\n" (concat "\n" text "\n\n"))
-                             (let ((next (string-trim (or (plist-get data :next) ""))))
-                               (unless (string-empty-p next)
-                                 (concat "What comes next: " next "\n\n")))))
-            ;; A heading folded by default: a note often repeats the answer.
-            ;; Its text is no line that stops a body, so the heading folds it.
-            ('note (superchat-chat--heading
-                    (superchat-chat--dim (format "** note: %s" (plist-get data :title)))
-                    (propertize (concat "\n" (replace-regexp-in-string "^\\*" " *" text) "\n")
-                                'superchat-chat-loose most-positive-fixnum)
-                    (format "note %s" (plist-get entry :id)) (plist-get entry :id) t))
-            (_ (superchat-chat--dim (concat text "\n")
-                                    (if (equal (plist-get data :type) "error") 'error 'shadow))))))
-    (superchat-chat--seal string (plist-get entry :id))))
-
-(defun superchat-chat--strip (entries &optional asking)
-  "One cell for each call and intermediate text of the turn ENTRIES, coloured
-by how it went; with ASKING, the first call with no result waits for the
-person.  Each cell carries its face twice: Org's heading face would hide it."
-  (let ((results (make-hash-table :test #'equal)) cells open)
-    (dolist (entry entries)
-      (when (eq (plist-get entry :kind) 'tool)
-        (puthash (plist-get (plist-get entry :data) :call-id) entry results)))
-    (cl-flet ((cell (char face) (push (propertize char 'face face 'superchat-chat-cell face) cells)))
-      (dolist (entry entries)
-        ;; An entry with calls is never the final answer.
-        (when-let* ((calls (and (eq (plist-get entry :kind) 'assistant)
-                                (plist-get (plist-get entry :data) :calls))))
-          (unless (string-empty-p (string-trim (plist-get entry :text))) (cell "•" 'shadow))
-          (dolist (call calls)
-            (let ((result (gethash (plist-get call :id) results)))
-              (cond ((plist-get (plist-get result :data) :error) (cell "▮" 'error))
-                    (result (cell "▮" 'shadow))
-                    ((and asking (not open)) (cell "⏸" 'warning))
-                    (t (cell "▮" 'default)))
-              (unless result (setq open t)))))))
-    (setq cells (nreverse cells))
-    (apply #'concat (if (> (length cells) 60) (cons "…" (last cells 59)) cells))))
-
-(defun superchat-chat--cells (limit)
-  "Font-lock matcher: the next run of strip cells of one face before LIMIT."
-  (when-let* ((at (text-property-not-all (point) limit 'superchat-chat-cell nil)))
-    (goto-char (next-single-property-change at 'superchat-chat-cell nil limit))
-    (set-match-data (list at (point)))
-    t))
-
-(defun superchat-chat--process (answers results asked done strip)
-  "The Progress heading of the turn whose `assistant' entries other than the
-final answer are ANSWERS, and what it holds: their texts and calls.  RESULTS
-maps a call id to (TOOL ENTRY . SECONDS), ASKED to the permission events asked
-for it; STRIP is the turn's strip.  It is folded once the turn is DONE,
-unless a call failed."
-  (let ((calls 0) (failed 0) inside waiting)
-    (dolist (entry answers)
-      (unless (string-empty-p (string-trim (plist-get entry :text)))
-        ;; A heading of its own: after a call, it is not taken into the call's subtree.
-        (let ((text (superchat-chat--answer entry nil)))
-          (push (superchat-chat--heading
-                 (concat "*** 💬 " (superchat-chat--cut (car (split-string text "\n")) 60))
-                 (if (string-search "\n" text) (concat "\n" text) "")
-                 (format "said %s" (plist-get entry :id)) (plist-get entry :id) nil)
-                inside)))
-      (dolist (call (plist-get (plist-get entry :data) :calls))
-        (let ((result (gethash (plist-get call :id) results)))
-          (cl-incf calls)
-          (unless result (setq waiting t))
-          (when (plist-get (plist-get (car result) :data) :error) (cl-incf failed))
-          (push (superchat-chat--call (list :call call :result (car result) :seconds (cdr result)
-                                            :id (plist-get entry :id)
-                                            :asked (gethash (plist-get call :id) asked))
-                                      3)
-                inside))))
-    (when inside
-      (superchat-chat--heading
-       (concat "** " (and waiting "⏳ ") "Progress"
-               (when (> calls 0)
-                 (format "  %s  %d call%s%s" strip calls (if (= calls 1) "" "s")
-                         (if (> failed 0) (format ", %d failed" failed) ""))))
-       (concat "\n" (string-remove-suffix "\n" (apply #'concat (nreverse inside))))
-       (format "progress %s" (plist-get (car answers) :id))
-       (plist-get (car answers) :id)
-       (and done (= failed 0))))))
-
-(defun superchat-chat--turn-text (entries streaming over)
-  "The text of ENTRIES, one turn, as (HEAD . TAIL); streamed text goes between.
-HEAD is the user's request and, once the model answers or is STREAMING, the
-Assistant heading, Progress and, with a final answer or STREAMING, the Answer
-heading; TAIL is the final answer and the other entries.  Progress is folded
-once the final answer is there or the turn is OVER."
-  (let* ((results (make-hash-table :test #'equal))
-         (asked (make-hash-table :test #'equal))
-         (waiting nil)
-         (answers (seq-filter (lambda (e) (eq (plist-get e :kind) 'assistant)) entries))
-         (final (car (last answers)))
-         (final (and final (not (plist-get (plist-get final :data) :calls))
-                     (not (string-empty-p (string-trim (plist-get final :text))))
-                     final))
-         (before nil))
-    (dolist (entry entries)
-      (pcase (plist-get entry :kind)
-        ('assistant (setq waiting (append waiting (mapcar (lambda (c) (plist-get c :id))
-                                                          (plist-get (plist-get entry :data) :calls)))))
-        ('tool (let ((id (plist-get (plist-get entry :data) :call-id)))
-                 (setq waiting (remove id waiting))
-                 (puthash id (cons entry (if before (- (plist-get entry :at) (plist-get before :at)) 0))
-                          results)))
-        ;; Asked for the next call to run: the first that has no result yet.
-        ('event (when (and waiting (equal (plist-get (plist-get entry :data) :type) "permission"))
-                  (puthash (car waiting) (append (gethash (car waiting) asked) (list entry)) asked)
-                  (setq entries (remq entry entries)))))
-      (setq before entry))
-    (cl-flet ((others (user) (mapconcat #'superchat-chat--format
-                                        (seq-filter (lambda (e) (eq (eq (plist-get e :kind) 'user) user))
-                                                    (seq-remove (lambda (e) (memq (plist-get e :kind)
-                                                                                  '(assistant tool)))
-                                                                entries))
-                                        "")))
-      (cons (concat (others t)
-                    (when (or answers streaming)
-                      (concat (superchat-chat--seal "* Assistant\n" (plist-get (car answers) :id))
-                              (superchat-chat--process
-                               (seq-remove (lambda (e) (eq e final)) answers) results asked
-                               (or final over) (superchat-chat--strip entries))
-                              (when (or final streaming)
-                                (superchat-chat--seal "** Answer\n" (plist-get final :id))))))
-            (let ((tail (concat (when final
-                                  (superchat-chat--seal (concat (superchat-chat--answer final 3) "\n\n")
-                                                        (plist-get final :id)))
-                                ;; A line no heading's body takes in.
-                                (superchat-chat--loose (others nil)))))
-              ;; Streamed text has no end of line of its own.
-              (if (and streaming (not (string-empty-p tail)))
-                  (concat (superchat-chat--seal "\n\n") tail)
-                tail))))))
-
 (defun superchat-chat--folds (from to)
   "The (POSITION KEY FOLDED) of each heading between FROM and TO, FOLDED being
 how it is shown by default."
   (let ((at from) folds)
-    (while (setq at (text-property-not-all at to 'superchat-chat-fold nil))
-      (push (cons at (get-text-property at 'superchat-chat-fold)) folds)
+    (while (setq at (text-property-not-all at to 'superchat-turn-fold nil))
+      (push (cons at (get-text-property at 'superchat-turn-fold)) folds)
       (setq at (1+ at)))
     folds))
 
@@ -426,9 +88,9 @@ nil when it has none."
            (stop start))
       ;; The separator and the input are no heading's body either.
       (while (and (< stop (min (point-max) superchat-chat--block))
-                  (not (let ((loose (get-text-property stop 'superchat-chat-loose)))
+                  (not (let ((loose (get-text-property stop 'superchat-turn-loose)))
                          (and loose (<= loose level)))))
-        (setq stop (next-single-property-change stop 'superchat-chat-loose nil
+        (setq stop (next-single-property-change stop 'superchat-turn-loose nil
                                                 (min (point-max) superchat-chat--block))))
       (save-restriction
         (narrow-to-region (point-min) stop)
@@ -497,8 +159,8 @@ their position above it."
 heading the person folded or opened stays so, as do those of CHOICES."
   (let* ((choices (append choices (superchat-chat--choices superchat-chat--turn superchat-chat--block)))
          (streamed (buffer-substring superchat-chat--stream superchat-chat--stream-end))
-         (text (superchat-chat--turn-text superchat-chat--entries (not (string-empty-p streamed))
-                                          (not (superchat-run-active superchat-chat--tape)))))
+         (text (superchat-turn-text superchat-chat--entries (not (string-empty-p streamed))
+                                    (not (superchat-run-active superchat-chat--tape)))))
     (delete-region superchat-chat--turn superchat-chat--block)
     (superchat-chat--put superchat-chat--turn (car text) superchat-chat--turn)
     (superchat-chat--put superchat-chat--stream-end streamed
@@ -508,8 +170,8 @@ heading the person folded or opened stays so, as do those of CHOICES."
     (superchat-chat--fold superchat-chat--turn superchat-chat--block choices)))
 
 (defconst superchat-chat--prompt
-  (superchat-chat--seal (concat (superchat-chat--dim (make-string 40 ?─)) "\n"
-                                (superchat-chat--dim "❯ " 'bold)))
+  (superchat-turn-seal (concat (superchat-turn-dim (make-string 40 ?─)) "\n"
+                               (superchat-turn-dim "❯ " 'bold)))
   "The separator line and the prompt, between the entries and the input.")
 
 (defun superchat-chat--render ()
@@ -529,7 +191,7 @@ heading the person folded or opened stays so, as do those of CHOICES."
              superchat-chat--entries (car (last turns)))
        (erase-buffer)
        (dolist (turn (butlast turns))
-         (let ((text (superchat-chat--turn-text turn nil t))) (insert (car text) (cdr text))))
+         (let ((text (superchat-turn-text turn nil t))) (insert (car text) (cdr text))))
        (dolist (marker (list superchat-chat--turn superchat-chat--stream
                              superchat-chat--stream-end superchat-chat--block))
          (set-marker marker (point)))
@@ -554,7 +216,7 @@ heading the person folded or opened stays so, as do those of CHOICES."
 A question to the person looks like a slow tool unless it says so."
   (let* ((asking (and (equal (plist-get superchat-permission-asking :tape) superchat-chat--tape)
                       superchat-permission-asking))
-         (strip (superchat-chat--strip superchat-chat--entries asking))
+         (strip (superchat-turn-strip superchat-chat--entries asking))
          (answered (delq nil (mapcar (lambda (e) (and (eq (plist-get e :kind) 'tool)
                                                       (plist-get (plist-get e :data) :call-id)))
                                      superchat-chat--entries)))
@@ -569,7 +231,7 @@ A question to the person looks like a slow tool unless it says so."
      (if asking
          (propertize (format "⏸ waiting for your answer (minibuffer): %s %s — y/n/a\n"
                              (plist-get asking :tool)
-                             (superchat-chat--cut (plist-get asking :summary) 60))
+                             (superchat-turn-cut (plist-get asking :summary) 60))
                      'face 'warning)
        (if retry
            (propertize (format "⟳ trying again in %ds (%d/%d)\n"
@@ -591,7 +253,7 @@ A question to the person looks like a slow tool unless it says so."
                             "")
                           (if (string-search "\n" first)
                               (concat (substring line 0 (min 60 (length line))) "…")
-                            (superchat-chat--cut line 60)))
+                            (superchat-turn-cut line 60)))
                   'face 'shadow))))
 
 (defun superchat-chat--stop ()
@@ -674,7 +336,7 @@ appended among them: one that reached the Tape another way is shown too."
    (lambda ()
      (let ((first (= superchat-chat--stream superchat-chat--stream-end)))
        (superchat-chat--put superchat-chat--stream-end
-                            (superchat-chat--seal (superchat-chat--dim (copy-sequence text)))
+                            (superchat-turn-seal (superchat-turn-dim (copy-sequence text)))
                             superchat-chat--turn superchat-chat--stream)
        ;; The first text may bring the turn its Assistant heading.
        (when first (superchat-chat--draw))))))
@@ -849,10 +511,11 @@ separator, so the prompt and the input never fold."
         superchat-chat--stream-end (point-min-marker)
         superchat-chat--block (point-min-marker)
         superchat-chat--input (point-min-marker)
-        superchat-chat--answers (make-hash-table :test #'equal)
         superchat-chat--waiting (make-overlay (point-min) (point-min)))
+  ;; Each buffer keeps its own converted answers.
+  (setq-local superchat-turn-answers (make-hash-table :test #'equal))
   (font-lock-add-keywords
-   nil '((superchat-chat--cells (0 (get-text-property (match-beginning 0) 'superchat-chat-cell) t)))
+   nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
    'append)
   (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t))
 
@@ -1003,7 +666,7 @@ it showed."
   "Fork at the entry at point and open the new timeline."
   (let ((id (if (>= (point) superchat-chat--input)
                 (and (> superchat-chat--shown 0) superchat-chat--shown)
-              (get-text-property (point) 'superchat-chat-id))))
+              (get-text-property (point) 'superchat-turn-id))))
     (unless id (user-error "No entry at point"))
     (superchat-chat--switch (superchat-chat-open (superchat-fork superchat-chat--tape id)))))
 

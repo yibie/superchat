@@ -55,7 +55,8 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
 | L4 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
-| L5 | `superchat-chat.el` | 1100 | the chat buffer and slash commands |
+| L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
+| L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
 | L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
@@ -65,7 +66,7 @@ Dependencies go one way only:
 ```
 inline → chat
 messages → chat
-chat → agent, plugin, recall, inbox
+chat → agent, plugin, recall, inbox, turn
 inbox → agent
 agent → llm, tools, recall, view, context, request
 request → llm

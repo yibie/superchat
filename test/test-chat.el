@@ -731,7 +731,7 @@ tool `echo', and no chat buffers left behind."
         (goto-char (point-max))
         (insert-and-inherit "typed")
         (should-not (get-text-property (1- (point-max)) 'face))
-        (should-not (get-text-property (1- (point-max)) 'superchat-chat-id))))))
+        (should-not (get-text-property (1- (point-max)) 'superchat-turn-id))))))
 
 (ert-deftest superchat-chat-fork-from-typed-input-forks-at-the-latest-entry-now ()
   (superchat-test-chat--with
