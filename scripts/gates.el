@@ -187,7 +187,7 @@ against CEILINGS: over a ceiling, a tenth under one, a file with none."
 
 (defun gates-note (file text)
   "Problems of the decision note TEXT at FILE, a path under the root."
-  (if (not (string-match (concat "\\`decisions/\\(proposed\\|implemented\\|rejected\\)/L[0-4]/"
+  (if (not (string-match (concat "\\`decisions/\\(proposed\\|implemented\\|rejected\\)/L[0-5]/"
                                  "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}-[a-z0-9-]+\\.md\\'")
                          file))
       (list (format "NOTE %s: not decisions/STATE/LAYER/YYYY-MM-DD-topic.md" file))
