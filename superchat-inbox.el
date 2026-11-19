@@ -75,19 +75,29 @@ after a run it started ends, and when Emacs starts, for what was left."
   (unless superchat-inbox--timer
     (setq superchat-inbox--timer (run-at-time 0 nil #'superchat-inbox--work))))
 
+(defun superchat-inbox--text (items)
+  "The text of a run for ITEMS, oldest first: one item's own text, or each
+marked with its place, so the model can tell how many messages came."
+  (if (cdr items)
+      (let ((n (length items)) (i 0))
+        (mapconcat (lambda (e) (format "[%d/%d] %s" (cl-incf i) n (plist-get e :text)))
+                   items "\n\n"))
+    (plist-get (car items) :text)))
+
 (defun superchat-inbox--work ()
   "Start one run for each timeline with pending items that is free: no run,
-no handoff, no question waiting.  Its text is the items' texts, oldest first."
+no handoff, no question waiting.  Its text is the items', oldest first, marked
+with each one's place when there is more than one."
   (setq superchat-inbox--timer nil)
   (pcase-dolist (`(,tape . ,items) (seq-group-by (lambda (e) (plist-get e :tape))
-                                                (superchat-inbox-pending)))
+                                                 (superchat-inbox-pending)))
     (unless (or (superchat-run-active tape) (superchat-question tape))
       ;; One timeline that cannot start must not keep the others waiting;
       ;; its items stay pending and the person is told.
       (condition-case err
           (let ((unattended (seq-some (lambda (e) (plist-get (plist-get e :data) :unattended))
                                       items)))
-            (superchat-run tape (mapconcat (lambda (e) (plist-get e :text)) items "\n\n")
+            (superchat-run tape (superchat-inbox--text items)
                            :refs (mapcar (lambda (e) (plist-get e :id)) items)
                            :unattended unattended
                            :system (and unattended superchat-inbox--quiet)

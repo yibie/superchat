@@ -34,9 +34,18 @@ timelines the tests use."
         (superchat-test-inbox--idle)
         (should (= 1 (length superchat-test-requests)))
         (let ((user (car (superchat-tape-entries :tape "t" :kinds '(user)))))
-          (should (equal (plist-get user :text) "one\n\ntwo\n\nthree"))
+          (should (equal (plist-get user :text)
+                         "[1/3] one\n\n[2/3] two\n\n[3/3] three"))
           (should (equal (plist-get user :refs) (mapcar (lambda (e) (plist-get e :id)) items))))
         (should-not (superchat-inbox-pending))))))
+
+(ert-deftest superchat-inbox-an-item-alone-is-answered-as-it-was-said ()
+  (superchat-test-inbox--with
+    (superchat-test-script (list '(:text "ok"))
+      (superchat-inbox-put "t" "just one")
+      (superchat-test-inbox--idle)
+      (should (equal (plist-get (car (superchat-tape-entries :tape "t" :kinds '(user))) :text)
+                     "just one")))))
 
 (ert-deftest superchat-inbox-an-item-waits-for-the-run-that-goes ()
   (superchat-test-inbox--with

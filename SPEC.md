@@ -54,7 +54,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
-| L4 | `superchat-inbox.el` | 250 | the inbox, its worker, the timers |
+| L4 | `superchat-inbox.el` | 265 | the inbox, its worker, the timers |
 | L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
