@@ -224,6 +224,40 @@ A plugin adds tools, views and chat commands:
 A tool that waits for a process is defined with `:async t`; see `SPEC.md`.
 Plugins live in their own repository; this one ships none.
 
+## How well it codes
+
+Measured on 2026-11-18 with Aider's polyglot benchmark: 225 Exercism
+exercises in C++, Go, Java, JavaScript, Python and Rust. Both harnesses
+ran the same model, `deepseek-flash` on DeepSeek's API with reasoning
+`high`, under the protocol of Aider's own benchmark: the instructions and
+the stub files go in, the tests stay hidden, and a failure gets a second
+attempt with the first 50 lines of the test output.
+
+| Language | Superchat | Aider 0.86.2 |
+| --- | --- | --- |
+| C++ | 23/26 | 23/26 |
+| Go | 35/39 | 32/39 |
+| Java | 33/47 | 28/47 |
+| JavaScript | 43/49 | 40/49 |
+| Python | 31/34 | 28/34 |
+| Rust | 28/30 | 29/30 |
+| **All** | **193/225 (85.8%)** | **180/225 (80.0%)** |
+
+On the first attempt the two are even (119 and 117 passed); Superchat gains
+on the second, because it runs and inspects code with its own tools, which
+Aider's benchmark mode does not.
+
+Superchat's score is strict. With a shell, the model went looking for the
+hidden tests: in 15 exercises it tried to fetch them from Exercism's GitHub
+or found a copy of the benchmark on the disk. The shell ran without network,
+but some attempts got through. Each of those 15 counts as failed, so 11
+passes were taken away; without that rule Superchat scored 204/225 (90.7%).
+Keep that in mind when Superchat works where answers it must not see are
+within reach.
+
+One run of each; with 225 exercises a single exercise moves the score by
+half a point. The runner is not part of this repository.
+
 ## Development
 
 ```sh
