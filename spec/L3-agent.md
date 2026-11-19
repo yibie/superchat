@@ -53,8 +53,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   - ON-ENTRY: gets each entry of the run as it is appended.
   - ON-DONE: gets the run once, with `:status` `done`, `cancelled`,
     `waiting` or `error`, `:text` the text of the last `assistant` entry of this run (nil
-    when it made none) and, for `error`, `:error` the text of the error
-    event.
+    when it made none), for `error`, `:error` the error event's text,
+    `:paused` t at a round-limit pause.
 - First, if the timeline's last run never ended (Emacs stopped during it),
   the run appends, for each of its calls with no result, a `tool` entry with
   `:error t` and the text

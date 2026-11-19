@@ -302,10 +302,12 @@
 
 (ert-deftest superchat-agent-no-round-limit-when-nil ()
   (superchat-test-agent--with
-    (let ((superchat-max-rounds nil) status
+    (let ((superchat-max-rounds nil) status (paused 'unset)
           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
       (superchat-test-script (list call call call '(:text "Done."))
-        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status)
+                                                          paused (plist-get r :paused))))
+        (should-not paused)
         (should (= (length superchat-test-requests) 4)))
       (should (eq status 'done)))))
 
@@ -370,10 +372,13 @@
 
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
-    (let ((superchat-max-rounds 2) status
+    (let ((superchat-max-rounds 2) status paused
           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
       (superchat-test-script (list call call '(:text "Here is what I have."))
-        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status)
+                                                          paused (plist-get r :paused))))
+        ;; A caller tells a pause at the limit from an answer.
+        (should paused)
         ;; Two responses, then the one the limit asks for, with no tools.
         (should (= (length superchat-test-requests) 3))
         (let ((ended (car superchat-test-requests)))

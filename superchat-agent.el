@@ -173,7 +173,8 @@ limit, record the answer and end RUN as stopped."
                   (< (plist-get run :continues) superchat-agent-continues))
              (superchat-agent--go-on run (car status)))
             ;; Not a failure: the look-back is its answer, and the person goes on.
-            (last (superchat-agent--end run 'done (superchat-agent--stopped run) "paused"))
+            (last (setf (plist-get run :paused) t)
+                  (superchat-agent--end run 'done (superchat-agent--stopped run) "paused"))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
 
@@ -415,7 +416,7 @@ ended the run on that entry."
 missing one would make a new list."
   (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                      :stop nil :done nil :text nil :error nil :tries 0 :timer nil
-                     :continues 0 :resumed nil)))
+                     :continues 0 :resumed nil :paused nil)))
 
 (defun superchat-question (tape)
   "The `question' event of timeline TAPE that waits for its answer, or nil."
