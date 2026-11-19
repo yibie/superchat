@@ -75,20 +75,20 @@ as an error event, so that no step can keep the others from happening."
              append (cl-remove-if (lambda (call) (member (plist-get call :id) answered))
                                   (plist-get (plist-get e :data) :calls)))))
 
-(defun superchat-agent--end (run status &optional why)
+(defun superchat-agent--end (run status &optional why type)
   "End RUN with STATUS (done, cancelled, error, waiting): the one way a run ends.
 A run that waits for an answer leaves its calls without results.
-WHY is the text of the error event.  In order, each step guarded by
-`superchat-agent--try': stop a tool still running; append `Cancelled.' for
-each call of this run without a result; append the user entry if it was never
-sent; append the event; give ON-ENTRY the new entries; free the timeline;
-call ON-DONE.  Afterwards ON-ENTRY gets nothing."
+WHY is the text of the event, of TYPE, by default \"error\".  In order,
+each step guarded by `superchat-agent--try': stop a tool still running;
+append `Cancelled.' for each call of this run without a result; append the
+user entry if it was never sent; append the event; give ON-ENTRY the new
+entries; free the timeline; call ON-DONE.  Afterwards ON-ENTRY gets nothing."
   (unless (plist-get run :done)
     (let ((tape (plist-get run :tape)) (failed nil)
           (event (cond ((eq status 'cancelled) '("cancelled" . "Cancelled by the user."))
-                       (why (cons "error" why)))))
+                       (why (cons (or type "error") why)))))
       (setf (plist-get run :done) t (plist-get run :status) status
-            (plist-get run :error) why)
+            (plist-get run :error) (and (eq status 'error) why))
       (cl-flet ((user ()
                   (superchat-agent--try tape (lambda () (superchat-agent--add-user run)))))
         (unwind-protect
@@ -172,7 +172,8 @@ limit, record the answer and end RUN as stopped."
                   (eq (superchat-permission-level (plist-get run :tape)) 'auto)
                   (< (plist-get run :continues) superchat-agent-continues))
              (superchat-agent--go-on run (car status)))
-            (last (superchat-agent--end run 'error (superchat-agent--stopped run)))
+            ;; Not a failure: the look-back is its answer, and the person goes on.
+            (last (superchat-agent--end run 'done (superchat-agent--stopped run) "paused"))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
 
@@ -263,13 +264,13 @@ the first line names none."
     (cons nil text)))
 
 (defun superchat-agent--stopped (run)
-  "The `error' event of a run RUN the round limit stopped: what it did, asked
+  "The `paused' event of a run RUN the round limit stopped: what it did, asked
 of the Tape, since the model's own account may be empty."
   (let* ((entries (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id)))
                               (superchat-view 'conversation :tape (plist-get run :tape))))
          (calls (cl-loop for e in entries when (eq (plist-get e :kind) 'assistant)
                          sum (length (plist-get (plist-get e :data) :calls)))))
-    (format "Stopped: %d model responses without an answer; above is what it did: %d tool call%s."
+    (format "Paused at the round limit: %d model responses, %d tool call%s. Send a message to go on."
             superchat-max-rounds calls (if (= calls 1) "" "s"))))
 
 (defun superchat-agent--step (run)

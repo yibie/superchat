@@ -332,10 +332,10 @@
                                                   (superchat-tape-entries :tape "t" :kinds '(event)))
                                         :text)))
       ;; It went on once, then stopped as at any level.
-      (should (eq status 'error))
-      (should (equal (seq-filter (lambda (ty) (memq ty '(continued error)))
+      (should (eq status 'done))
+      (should (equal (seq-filter (lambda (ty) (memq ty '(continued paused)))
                                  (superchat-test-agent--types "t"))
-                     '(continued error))))))
+                     '(continued paused))))))
 
 (ert-deftest superchat-agent-a-look-back-that-says-finished-ends-the-run ()
   (superchat-test-agent--with
@@ -365,7 +365,7 @@
       (superchat-test-script (list call '(:text "Status: blocked\nI need the key."))
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
         (should (= (length superchat-test-requests) 2)))
-      (should (eq status 'error))
+      (should (eq status 'done))
       (should-not (memq 'continued (superchat-test-agent--types "t"))))))
 
 (ert-deftest superchat-agent-max-rounds ()
@@ -381,19 +381,19 @@
           ;; as text; the system line says to call none.
           (should (plist-get ended :tools))
           (should (string-search superchat-agent--limit-note (plist-get ended :system)))))
-      (should (eq status 'error))
+      (should (eq status 'done))
       ;; The calls of the last response ran: every call has its result.
       (should (equal (superchat-test-agent--types "t")
-                     '(user assistant tool assistant tool assistant error)))
+                     '(user assistant tool assistant tool assistant paused)))
       ;; The answer the limit asked for is on the Tape, and claims no call.
       (let ((answer (car (last (superchat-tape-entries :tape "t" :kinds '(assistant))))))
         (should (equal (plist-get answer :text) "Here is what I have."))
         (should-not (plist-get (plist-get answer :data) :calls)))
-      (should (string-match-p "Stopped: 2 model responses"
+      (should (string-match-p "Paused at the round limit: 2 model responses"
                               (plist-get (car (last (superchat-tape-entries :tape "t"))) :text)))
       ;; The event says what the run did, from the Tape: the last response
       ;; claims a call it never ran, so two calls were made, not three.
-      (should (string-match-p "; above is what it did: 2 tool calls\\."
+      (should (string-match-p ": 2 model responses, 2 tool calls\\."
                               (plist-get (car (last (superchat-tape-entries :tape "t"))) :text))))))
 
 (ert-deftest superchat-agent-one-run-per-timeline ()

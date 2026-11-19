@@ -91,8 +91,9 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   level, not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2)
   times a run, the run goes on: an `event` `(:type "continued" :count N :status S)`,
   the count starts again, and the next request's system prompt
-  says to follow the plan, with the facts. Otherwise it ends `error`, the event counting the calls the run made
-  on the Tape, so the account is there even when the model says nothing. The
+  says to follow the plan, with the facts. Otherwise it ends `done`, the
+  look-back its text, with a `paused` event, not `error`, counting the
+  responses and the calls on the Tape. The
   calls of the last response run first.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
