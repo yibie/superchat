@@ -699,7 +699,7 @@ Case and overlapping occurrences count."
                  (unless buffer-file-name (error "Buffer %s visits no file" (buffer-name)))
                  (make-directory (file-name-directory buffer-file-name) t)
                  (unless (file-exists-p buffer-file-name) (set-buffer-modified-p t))
-                 (let ((require-final-newline nil)) (save-buffer))
+                 (let ((require-final-newline nil) (make-backup-files nil)) (save-buffer))
                  (format "Saved %s." buffer-file-name)))))
 
 ;;; Executing

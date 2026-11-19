@@ -1001,7 +1001,14 @@ DIR is no project: the .git is in a subdirectory."
         (insert "b")
         (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name))))
         (should-not (buffer-modified-p)))
-      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "ba\n")))
+      (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "ba\n"))
+      ;; A save leaves no backup file, whatever the person's Emacs says; a
+      ;; backup in the project shows up in `ls` and `find`.
+      (let ((make-backup-files t) (backup-enable-predicate (lambda (_) t)))
+        (with-current-buffer (find-file-noselect file)
+          (insert "c")
+          (should (string-match-p "Saved" (superchat-test-tools--ok "save_buffer" :buffer (buffer-name)))))
+        (should (equal (directory-files dir) '("." ".." "s.txt")))))
     (should (string-match-p "No buffer visits other.txt"
                             (superchat-test-tools--err "save_buffer" :path "other.txt")))
     (should (string-match-p "exactly one" (superchat-test-tools--err "save_buffer")))

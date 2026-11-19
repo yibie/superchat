@@ -325,8 +325,9 @@ the call was outside the project.
   and that it is not saved.
 - `save_buffer` takes exactly one of BUFFER and PATH; a PATH no buffer
   visits is an error. It makes the file's directory when needed, writes a
-  buffer whose file does not exist even when it is unchanged, and adds no
-  final newline.
+  buffer whose file does not exist even when it is unchanged, adds no
+  final newline, and leaves no backup file, whatever the person's Emacs
+  says.
 
 ### Running
 
