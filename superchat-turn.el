@@ -235,7 +235,12 @@ and carrying its id."
                     (format "note %s" (plist-get entry :id)) (plist-get entry :id) t))
             (_ (superchat-turn-dim (concat text "\n")
                                    (if (equal (plist-get data :type) "error") 'error 'shadow))))))
-    (superchat-turn-seal string (plist-get entry :id))))
+    (if (member (plist-get data :type) '("question" "answer"))
+        ;; The call waited here, so the question shows here, and it folds.
+        (superchat-turn--heading (superchat-turn-dim string 'warning) ""
+                                 (format "asked %s" (plist-get entry :id))
+                                 (plist-get entry :id) t)
+      (superchat-turn-seal string (plist-get entry :id)))))
 
 (defun superchat-turn-strip (entries &optional asking)
   "One cell for each call and intermediate text of the turn ENTRIES, coloured
@@ -329,7 +334,8 @@ once the final answer is there or the turn is OVER."
                  (puthash id (cons entry (if before (- (plist-get entry :at) (plist-get before :at)) 0))
                           results)))
         ;; Asked for the next call to run: the first that has no result yet.
-        ('event (when (and waiting (equal (plist-get (plist-get entry :data) :type) "permission"))
+        ('event (when (and waiting (member (plist-get (plist-get entry :data) :type)
+                                           '("permission" "question" "answer")))
                   (puthash (car waiting) (append (gethash (car waiting) asked) (list entry)) asked)
                   (setq entries (remq entry entries)))))
       (setq before entry))

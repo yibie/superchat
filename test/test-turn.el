@@ -82,5 +82,36 @@
     (should (string-match-p "\\*\\*\\* ✗ read  :path \"a.el\"\n" (funcall heading cut)))
     (should-not (string-match-p "([0-9.]+s)" (funcall heading cut)))))
 
+(ert-deftest superchat-turn-a-question-shows-at-the-call-it-waited-for ()
+  (let* ((user (superchat-test-turn--entry 1 'user "hi" nil))
+         (assistant (superchat-test-turn--entry
+                     2 'assistant ""
+                     '(:calls ((:id "c1" :name "write" :args (:path "a.el"))))))
+         (asked (superchat-test-turn--entry 3 'event "write a.el: write a.el?"
+                                            '(:type "permission" :tool "write" :decision "ask")))
+         (question (superchat-test-turn--entry 4 'event "Allow it?" '(:type "question" :call-id "c1")))
+         (answer (superchat-test-turn--entry 5 'event "Allowed." '(:type "answer" :call-id "c1")))
+         (tool (superchat-test-turn--entry 6 'tool "written" '(:call-id "c1" :name "write")))
+         (text (superchat-turn-text (list user assistant asked question answer tool) nil nil))
+         (head (car text)))
+    ;; The question and its answer are in the call's Progress, at the call it
+    ;; waited for, not among the entries after Answer.
+    (should (string-search "Allow it?" head))
+    (should (string-search "Allowed." head))
+    (should (< (string-search "Allow it?" head) (string-search "write  :path" head)))
+    (should-not (string-search "Allow" (cdr text)))))
+
+(ert-deftest superchat-turn-a-question-heading-folds ()
+  (let* ((user (superchat-test-turn--entry 1 'user "hi" nil))
+         (assistant (superchat-test-turn--entry
+                     2 'assistant ""
+                     '(:calls ((:id "c1" :name "write" :args nil)))))
+         (question (superchat-test-turn--entry 3 'event "Allow it?" '(:type "question" :call-id "c1")))
+         (head (car (superchat-turn-text (list user assistant question) nil nil)))
+         (at (string-search "Allow it?" head)))
+    (should at)
+    ;; A heading, so TAB folds it by default: the fold property sits on it.
+    (should (eq (cadr (get-text-property at 'superchat-turn-fold head)) t))))
+
 (provide 'test-turn)
 ;;; test-turn.el ends here

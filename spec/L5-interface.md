@@ -207,9 +207,11 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
     it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
     only while the turn still runs. Under it, in order, the intermediate
     texts, each followed by its calls, each call a level 3 heading. A
-    `permission` event of the turn belongs to the call it was asked for, the
-    first call of the turn without a `tool` entry when the event came: a
-    dimmed line just before that call's heading. An intermediate text is a
+    `permission`, `question` or `answer` event of the turn belongs to the
+    call it was asked for, the first call of the turn without a `tool` entry
+    when the event came: a dimmed line just before that call's heading, or,
+    for a `question` and its `answer`, a dimmed heading there that folds. An
+    intermediate text is a
     level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
     text cut to 60 characters and `…`, with the whole converted text as its
     body, open unless the person folds it; a text of one line has no body.
