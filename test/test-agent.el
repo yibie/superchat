@@ -304,13 +304,23 @@
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status
           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
-      (superchat-test-script (list call call call)
+      (superchat-test-script (list call call '(:text "Here is what I have."))
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
-        (should (= (length superchat-test-requests) 2)))
+        ;; Two responses, then the one the limit asks for, with no tools.
+        (should (= (length superchat-test-requests) 3))
+        (let ((ended (car superchat-test-requests)))
+          (should-not (plist-get ended :tools))
+          (should (string-search superchat-agent--limit-note (plist-get ended :system)))))
       (should (eq status 'error))
       ;; The calls of the last response ran: every call has its result.
       (should (equal (superchat-test-agent--types "t")
-                     '(user assistant tool assistant tool error))))))
+                     '(user assistant tool assistant tool assistant error)))
+      ;; The answer the limit asked for is on the Tape, and claims no call.
+      (let ((answer (car (last (superchat-tape-entries :tape "t" :kinds '(assistant))))))
+        (should (equal (plist-get answer :text) "Here is what I have."))
+        (should-not (plist-get (plist-get answer :data) :calls)))
+      (should (string-match-p "Stopped: 2 model responses"
+                              (plist-get (car (last (superchat-tape-entries :tape "t"))) :text))))))
 
 (ert-deftest superchat-agent-one-run-per-timeline ()
   (superchat-test-agent--with

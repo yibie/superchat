@@ -147,15 +147,22 @@ not cancel it, and `superchat-agent--track' must not keep it."
   (setf (plist-get run :handle) nil))
 
 (defun superchat-agent--respond (run response)
-  "Record RESPONSE, run its calls in order, make the next request."
-  (let ((calls (plist-get response :calls)))
+  "Record RESPONSE, run its calls in order, make the next request; at the round
+limit, record the answer and end RUN as stopped."
+  (let ((calls (plist-get response :calls))
+        (last (plist-get run :last)))
     (cl-incf (plist-get run :rounds))
     (setf (plist-get run :text) (plist-get response :text))
+    ;; A call of the last response is not run and not recorded: no tool was
+    ;; called, and the person's answer must not claim otherwise.
     (superchat-tape-append (plist-get run :tape) 'assistant (plist-get response :text)
-                           :data (list :model (plist-get response :model) :calls calls))
+                           :data (list :model (plist-get response :model)
+                                       :calls (unless last calls)))
     (superchat-agent--emit run)
     (when (superchat-agent--live run)
-      (if calls (superchat-agent--calls run calls) (superchat-agent--end run 'done)))))
+      (cond (last (superchat-agent--end run 'error (superchat-agent--stopped)))
+            (calls (superchat-agent--calls run calls))
+            (t (superchat-agent--end run 'done))))))
 
 (defun superchat-agent--calls (run calls)
   "Run CALLS one after the other, then make the next request.  A loop, so that
@@ -202,19 +209,27 @@ tool that has not answered yet."
     (when (and (not waiting) (superchat-agent--live run))
       (superchat-agent--step run))))
 
+(defconst superchat-agent--limit-note
+  "The limit of model responses in one run is reached. No tool can be called now: answer with what you have, saying what you did, what is left, and what the person should check."
+  "What the system prompt says of a run's last request, the round limit reached.")
+
+(defun superchat-agent--stopped ()
+  "The text of the `error' event of a run the round limit stopped."
+  (format "Stopped: %d model responses without an answer." superchat-max-rounds))
+
 (defun superchat-agent--step (run)
-  "Make the next request of RUN."
+  "Make the next request of RUN; the model's last, with no tools, at the round
+limit."
   (let* ((tape (plist-get run :tape))
          (budget (superchat-request-budget (plist-get run :model)))
          (entries (superchat-view 'conversation :tape tape))
          (messages (superchat-request-fit entries (plist-get run :user-id) budget))
          (size (superchat-request-kept-size entries (plist-get run :user-id)))
          (model (or (plist-get run :model) superchat-llm-model))
-         (tools (plist-get run :tools)))
+         (tools (plist-get run :tools))
+         (last (>= (plist-get run :rounds) superchat-max-rounds)))
+    (setf (plist-get run :last) last)
     (cond
-     ((>= (plist-get run :rounds) superchat-max-rounds)
-      (superchat-agent--end
-       run 'error (format "Stopped: %d model responses without an answer." superchat-max-rounds)))
      ((> size (* 2 budget))
       (superchat-agent--end
        run 'error
@@ -230,8 +245,9 @@ tool that has not answered yet."
               run (lambda ()
                     (superchat-llm-request
                      messages
-                     :system (superchat-context-system tape (plist-get run :system))
-                     :tools (unless (eq tools 'none) (superchat-tool-specs tools))
+                     :system (concat (superchat-context-system tape (plist-get run :system))
+                                     (and last (concat "\n\n" superchat-agent--limit-note)))
+                     :tools (unless (or last (eq tools 'none)) (superchat-tool-specs tools))
                      :model (plist-get run :model)
                      :on-text (lambda (text)
                                 (when-let* (((superchat-agent--live run))
