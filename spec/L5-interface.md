@@ -23,6 +23,10 @@ derived from `org-mode`.
 - The answer's text streams in as it comes, raw, in the `shadow` face,
   where the final answer goes: under `** Answer`, after Progress; the
   `assistant` entry replaces it when it comes.
+- Entries that came while the buffer sat still are shown too, also from a
+  run it did not start: the mode line, drawn again whenever the buffer is
+  displayed, looks for them at most once a second, and starts the timer when
+  the timeline is busy.
 - `TAB` on a heading of the entries toggles it by Org's own cycling, the
   read-only text notwithstanding; the subtree of the last heading ends where
   the input area's lines begin, which never fold. A heading the person
@@ -64,7 +68,7 @@ derived from `org-mode`.
   the same overlay. The queue is the buffer's only, not on the Tape:
   killing the buffer drops it. When the run ends `done`, or the handoff
   makes its anchor, the queued texts, joined by a blank line, are sent at
-  once as one request, as a send from the input area would send them. When
+  once as one request, as a send from the input area would. When
   it ends otherwise (cancelled, error, a failed or cancelled handoff), the
   queue is not sent: its text goes back to the start of the input area,
   before what is typed there and apart from it by a blank line, and the
@@ -95,7 +99,7 @@ derived from `org-mode`.
   cut to 60 characters and `…`. It is an overlay, not
   text of the buffer and not an entry; a timer of the buffer updates it and
   the mode line, and is cancelled when the run ends or the buffer is
-  killed; the line is gone when the run ends.
+  killed.
 - While no run is active and a call of the timeline waits for an answer
   (`superchat-question`), the line above the separator is, in `warning`,
   `⏸ waiting for your answer: NAME SUMMARY — send y, n or a`, the keys
@@ -104,12 +108,12 @@ derived from `org-mode`.
   `n` or `a` then answers it with `superchat-answer` (`allow`, `deny`,
   `always`), shown as a run of this buffer; other text is refused with a
   message and stays in the input; a command is not refused.
-- While a run is active the input stays editable. Streamed text that never became an entry is removed when
-  the run ends (cancelled or error). A run that ends with `error` says so
-  in the echo area with the error's text. An entry is shown once, however
-  it reached the buffer. The callbacks of a run find the chat buffer of
-  their timeline when they fire, so a buffer killed and opened again during
-  a run shows the rest of it.
+- While a run is active the input stays editable. Streamed text that never
+  became an entry is removed when the run ends (cancelled or error). A run
+  that ends with `error` says so in the echo area with the error's text. An
+  entry is shown once, however it reached the buffer. The callbacks of a run
+  find the chat buffer of their timeline when they fire, so a buffer killed
+  and opened again during a run shows the rest of it.
 - After a handoff the buffer shows the conversation from its anchor: the
   anchor line, its summary and what comes next. The earlier entries stay on
   the Tape; `/topic` and `/recall` find them.
@@ -123,8 +127,8 @@ derived from `org-mode`.
   sent nothing yet; else the most recently active timeline of the scope, not
   ephemeral, that has a `user` entry whose origin `:file` is this buffer's
   file (or, for a buffer visiting no file, whose origin has no `:file` and
-  this buffer's name as `:buffer`). It enables the plugins of `superchat-plugins`
-  that are not enabled yet.
+  this buffer's name as `:buffer`). It enables the plugins of
+  `superchat-plugins` not enabled yet.
 - `(superchat-chat-open TAPE &optional SCOPE)` → the chat buffer of timeline
   TAPE, made and rendered when there is none. It does not display it. SCOPE
   is for a timeline with no entry yet: the buffer keeps it and gives it to
@@ -132,8 +136,7 @@ derived from `org-mode`.
   of `default-directory` when the buffer is made. A chat buffer's scope is its
   timeline's scope, never whatever `default-directory` happens to be; every
   command that needs a scope (`/new`, `/resume`, `/topic`, `/recall`,
-  `/notes`, and `superchat`, `superchat-note`, `superchat-recall`,
-  `superchat-ask` called from that buffer) uses that.
+  `/notes`, and the commands of `superchat.el` called from it) uses that.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
@@ -146,16 +149,16 @@ derived from `org-mode`.
   buffer's scope, or to a new timeline of that scope when there is none.
   The person writes memory the same way the model does.
 - `superchat-recall` (an autoloaded command, any buffer): read a query and
-  open the `search` view of the current buffer's scope in a read-only
-  buffer. With an empty query, the `notes` view.
+  open the `search` view of the buffer's scope in a read-only buffer. With an
+  empty query, the `notes` view.
 - `superchat-chat-send` runs a line that starts with `/` as a command.
 - A line starting with `/` is a command. `(superchat-command-define NAME
   FUNCTION DOC)` and `(superchat-command-remove NAME)`: NAME is written
   without the slash; FUNCTION is called with the rest of the line, in the
-  chat buffer. DOC begins with the synopsis of the argument when the command
-  takes one (`[name]`, `query.`); `/help` shows each command as `/NAME DOC`.
-  A name that is no command is not sent: the message says `Unknown command
-  /NAME; /help lists them` and the input stays.
+  chat buffer. DOC begins with the synopsis of the argument when there is
+  one (`[name]`, `query.`); `/help` shows each as `/NAME DOC`. A name that is
+  no command is not sent: the message says `Unknown command /NAME; /help
+  lists them` and the input stays.
 
 Built-in commands, and no others:
 
@@ -178,8 +181,8 @@ Built-in commands, and no others:
 `/new`, `/resume` and `/fork` show the conversation they open in the window
 they were typed in, in place of this one, whatever `display-buffer-alist`
 says of chat buffers; no other window or tab is made. The window keeps its
-history of buffers, so `previous-buffer` and a window tab line go back to
-the conversations it showed.
+buffer history, so `previous-buffer` and a tab line go back to the
+conversations it showed.
 
 ## superchat-turn.el
 
@@ -202,18 +205,17 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
     heading `** Progress  STRIP  N calls, K failed` (`1 call`; `, K failed`
     only when K > 0; `** Progress` when it holds no call), N the calls in
     it, K those whose `tool` entry has `:error`, `⏳ ` before `Progress`
-    only while the turn still runs. Under it, in order, the intermediate texts, each followed
-    by its calls, each call a level 3 heading. A `permission` event of the
-    turn belongs to the call it was asked for, the first call of the turn
-    without a `tool` entry when the event came: it is a dimmed line just
-    before that call's heading. An intermediate text is a
+    only while the turn still runs. Under it, in order, the intermediate
+    texts, each followed by its calls, each call a level 3 heading. A
+    `permission` event of the turn belongs to the call it was asked for, the
+    first call of the turn without a `tool` entry when the event came: a
+    dimmed line just before that call's heading. An intermediate text is a
     level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
     text cut to 60 characters and `…`, with the whole converted text as its
     body, open unless the person folds it; a text of one line has no body.
-    Progress is
-    open while the turn runs and folded once the turn has its final answer
-    or the timeline is no longer busy with it, unless a call of it has an
-    error: then it stays open, so that the error is seen;
+    Progress is open while the turn runs and folded once the turn has its
+    final answer or the timeline is no longer busy with it, unless a call of
+    it has an error: then it stays open, so that the error is seen;
   - then, when the turn has a final answer or streamed text, `** Answer`,
     then the final answer: the text of the turn's last `assistant` entry
     when that entry has no calls and some text, converted from Markdown to
@@ -236,10 +238,9 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
   60 characters and `…` (left out with its spaces when empty); DURATION is
   `N.Ns`, the `:at` of the `tool` entry less that of the entry before it, left
   out while there is none or when that entry's text begins `Interrupted:`.
-  The body is the arguments, one key and
-  value per line, then the result, each in a `#+begin_example` block escaped
-  with `org-escape-code-in-string`; an empty part has no block. The other
-  entries look like:
+  The body is the arguments, one key and value per line, then the result,
+  each in a `#+begin_example` block escaped with `org-escape-code-in-string`;
+  an empty part has no block. The other entries look like:
   - `anchor`: `── summary: NAME ──`, then its text and, when `:next` is not
     empty, `What comes next: NEXT`; an anchor with empty text (a fork)
     shows only its line;
@@ -277,20 +278,19 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
 ## superchat-inline.el
 
 - `superchat-rewrite` (a command): with a region, read an instruction, run on
-  a new ephemeral timeline with tools `none`, and show the model's replacement in an overlay as
-  it streams: the region stays in sight, dimmed and struck through, the
-  replacement follows it highlighted, and a last part names the keys
-  (`C-c C-k` while it streams; `C-c C-c` and `C-c C-k` once it is complete,
-  said in the echo area too), and both the last part and the echo area say
-  that the keys act with point on the struck-through text. Point goes to the
-  region, where the keys act: the overlay's keymap `superchat-inline-map`
-  binds `C-c C-c` to `superchat-inline-accept` and `C-c C-k` to
-  `superchat-inline-discard`. The overlay has no other help text. Each rewrite has its own timeline, so one does not resend the
-  others. The replacement is the text of the run's `assistant` entry; the
-  streamed text is only shown while it comes. `C-c C-c` on the overlay
-  replaces the region (one undo step) once the run is over, `C-c C-k`
-  cancels the run when it is active and discards the overlay. The
-  request tells the model to answer with the replacement text only; a
+  a new ephemeral timeline with tools `none`, and show the replacement in an
+  overlay as it streams: the region stays in sight, dimmed and struck
+  through, the replacement follows it highlighted. Point goes to the region,
+  where the keys act: the overlay's keymap `superchat-inline-map` binds
+  `C-c C-c` to `superchat-inline-accept` and `C-c C-k` to
+  `superchat-inline-discard`; a last part of the overlay, and the echo area,
+  name them (`C-c C-k` while it streams, both once it is complete) and say
+  they act with point on the struck-through text. It has no other help text.
+  Each rewrite has its own timeline, so one does not resend the others. The
+  replacement is the text of the run's `assistant` entry; streamed text is
+  only shown while it comes. `C-c C-c` replaces the region (one undo step)
+  once the run is over; `C-c C-k` cancels the run when it is active and
+  discards the overlay. The request asks for the replacement text only; a
   fenced code block around the whole answer is unwrapped.
 - `superchat-ask` (a command): read a question; the origin is the current
   buffer, and the region when active is quoted in the request. It opens the
@@ -322,8 +322,9 @@ Plugins live in another repository. This one ships none.
   `superchat-messages-mode` (from `special-mode`), one line for each
   `event` of type `sent` on the Tape and each `question` that waits
   (`superchat-question`), oldest first: `YYYY-MM-DD HH:MM  TIMELINE
-  FIRST-LINE`, a question's ending `  ? waits for y, n or a`, the keys in bold; `Nothing was sent.` when there is none. Point goes to the
-  newest. `g` draws it again; `RET` (`superchat-messages-open`) opens the
-  chat buffer of the line's timeline. On a question's line, `y`, `n` or `a`
+  FIRST-LINE`, a question's ending `  ? waits for y, n or a`, the keys in
+  bold; `Nothing was sent.` when there is none. Point goes to the newest.
+  `g` draws it again; `RET` (`superchat-messages-open`) opens the chat
+  buffer of the line's timeline. On a question's line, `y`, `n` or `a`
   (`superchat-messages-answer`) sends that key from its chat buffer, draws
   the buffer again and shows the chat buffer.

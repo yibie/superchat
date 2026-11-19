@@ -262,6 +262,24 @@ A question to the person looks like a slow tool unless it says so."
     (cancel-timer superchat-chat--timer)
     (setq superchat-chat--timer nil)))
 
+(defun superchat-chat--tick ()
+  "Keep the buffer current while its timeline is busy: the entries as they
+come, whichever run made them, and the state of the run in the lines."
+  (superchat-chat--add nil))
+
+(defvar-local superchat-chat--looked nil
+  "When this buffer last looked for entries made while it sat still.")
+
+(defun superchat-chat--watch ()
+  "Look for entries of the timeline that came while this buffer sat still, at
+most once a second; that starts the timer when the timeline is busy, so a run
+this buffer did not start is followed too.  Nil, for the mode line."
+  (when (and superchat-chat--tape (not superchat-chat--timer)
+             (< (or superchat-chat--looked 0) (- (float-time) 1)))
+    (setq superchat-chat--looked (float-time))
+    (superchat-chat--tick))
+  nil)
+
 (defun superchat-chat--status ()
   "Show the state of the timeline in the header line, the mode line and the
 waiting line; a timer keeps them current while the timeline is busy."
@@ -275,7 +293,7 @@ waiting line; a timer keeps them current while the timeline is busy."
                 superchat-chat--timer
                 (run-at-time 0.2 0.2 (lambda () (when (buffer-live-p buffer)
                                                   (with-current-buffer buffer
-                                                    (superchat-chat--status)))))))))
+                                                    (superchat-chat--tick)))))))))
     (setq header-line-format
           (string-replace "%" "%%"
                           (concat (or superchat-chat--model superchat-llm-model "not set")
@@ -517,7 +535,10 @@ separator, so the prompt and the input never fold."
   (font-lock-add-keywords
    nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
    'append)
-  (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t))
+  (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t)
+  ;; A redisplay of the buffer is the one moment that costs nothing, and it is
+  ;; when a timeline another run made busy is noticed.
+  (setq mode-line-format (append mode-line-format '((:eval (superchat-chat--watch))))))
 
 ;;; Opening
 

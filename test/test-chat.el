@@ -1082,6 +1082,26 @@ tool `echo', and no chat buffers left behind."
         (should (string-match-p "✗ echo" text))
         (should (string-match-p "The last run was cut off: Emacs stopped before it ended." text))))))
 
+(ert-deftest superchat-chat-follows-a-run-it-did-not-start ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")))
+      ;; A run of the timeline that this buffer neither started nor heard of.
+      (let ((superchat-llm-request-function
+             (lambda (_messages &rest keys)
+               (funcall (plist-get keys :on-done) '(:text "Made elsewhere." :calls nil))
+               (list :cancelled nil :finished nil :request nil))))
+        (superchat-run "t1" "from the worker"))
+      (should-not (string-match-p "Made elsewhere" (superchat-test-chat--text buffer)))
+      ;; A redisplay of the buffer is what looks; it then shows what came.
+      ;; Batch Emacs has no redisplay, so the mode line is asked directly for
+      ;; the form it runs, and that form is called.
+      (with-current-buffer buffer
+        (should (equal (seq-find (lambda (e) (equal e '(:eval (superchat-chat--watch))))
+                                 mode-line-format)
+                       '(:eval (superchat-chat--watch))))
+        (superchat-chat--watch))
+      (should (string-match-p "Made elsewhere" (superchat-test-chat--text buffer))))))
+
 (ert-deftest superchat-chat-answers-a-question-that-waits ()
   (superchat-test-chat--with
     (superchat-tool-define "poke" :class 'write :description "Poke" :function (lambda (_) "poked"))
