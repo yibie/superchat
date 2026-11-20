@@ -37,6 +37,7 @@
 (defvar-local superchat-chat--timer nil "Timer that keeps the waiting line and the mode line current.")
 (defvar-local superchat-chat--began nil "When the timeline became busy.")
 (defvar-local superchat-chat--queue nil "Texts sent while the timeline was busy, the newest first.")
+(defvar-local superchat-chat--run nil "The run this buffer started last: only it takes steered text.")
 (defvar-local superchat-chat--steered nil "Texts given to the run that it has not taken yet, oldest first.")
 (defvar-local superchat-chat--force nil "Non-nil: the queue goes when the run ends, however it ends.")
 (defvar-local superchat-chat--shown 0 "Id of the latest entry shown; nothing at or below it is shown again.")
@@ -406,8 +407,9 @@ A line starting with / is a command.  Return nil when nothing was sent."
    ((superchat-question superchat-chat--tape)
     (if-let* ((answer (cdr (assoc text '(("y" . allow) ("n" . deny) ("a" . always))))))
         (unwind-protect
-            (progn (apply #'superchat-answer superchat-chat--tape answer
-                          (superchat-chat--callbacks superchat-chat--tape))
+            (progn (setq superchat-chat--run
+                         (apply #'superchat-answer superchat-chat--tape answer
+                                (superchat-chat--callbacks superchat-chat--tape)))
                    t)
           (superchat-chat--status))
       (message "A call waits for your answer: send y, n or a")
@@ -417,7 +419,8 @@ A line starting with / is a command.  Return nil when nothing was sent."
           (origin (or origin superchat-chat--origin)))
       (setq superchat-chat--origin nil)
       (unwind-protect
-          (apply #'superchat-run superchat-chat--tape text
+          (setq superchat-chat--run
+                (apply #'superchat-run superchat-chat--tape text
                  :origin origin :model superchat-chat--model
                  ;; The person reads the answer here: `send' is for runs
                  ;; nobody watches.
@@ -427,7 +430,7 @@ A line starting with / is a command.  Return nil when nothing was sent."
                          ;; The first request of a timeline fixes its scope.
                          (and superchat-chat--pending-scope
                               (not (superchat-tape-entries :tape tape :limit 1))
-                              (list :scope superchat-chat--pending-scope))))
+                              (list :scope superchat-chat--pending-scope)))))
         (superchat-chat--status))
       t))))
 
@@ -488,8 +491,10 @@ the run and send the queue and the input."
       (setq superchat-chat--force t)
       (superchat-chat--cancel))
      ((string-empty-p text) nil)
-     ;; A run going takes it before its next request; a handoff queues it.
-     ((and busy (eq (plist-get busy :status) 'running) (not (string-prefix-p "/" text)))
+     ;; A run this buffer started takes it before its next request: only its
+     ;; ON-DONE gives back what it never took.  Else the text is queued.
+     ((and busy (eq busy superchat-chat--run) (eq (plist-get busy :status) 'running)
+           (not (string-prefix-p "/" text)))
       (superchat-steer superchat-chat--tape text)
       (setq superchat-chat--steered (append superchat-chat--steered (list text)))
       (funcall clear)

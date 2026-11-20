@@ -1580,3 +1580,19 @@ heading."
       (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string))
                      (format "%d  t1  :every 60 :from 0%s  tick\n" id
                              (format-time-string "  until %F %R" until)))))))
+
+(ert-deftest superchat-chat-text-for-a-run-it-did-not-start-is-queued ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1"))
+          (superchat-llm-request-function #'superchat-test-chat--silent))
+      ;; A run the inbox started: its ON-DONE is not the chat's.
+      (superchat-inbox-put "t1" "from the inbox")
+      (superchat-test-wait (lambda () (superchat-run-active "t1")))
+      (superchat-test-chat--type buffer "mine")
+      (superchat-test-chat--press buffer "C-c C-c")
+      (should (string-match-p "^⏸ queued: mine$" (superchat-test-chat--waiting buffer)))
+      (superchat-cancel "t1")
+      (superchat-test-wait (lambda () (not (superchat-run-active "t1"))))
+      ;; Nothing took it: it is still the buffer's, not lost.
+      (should-not (member "mine" (mapcar (lambda (e) (plist-get e :text))
+                                         (superchat-tape-entries :tape "t1" :kinds '(user))))))))

@@ -63,13 +63,14 @@ derived from `org-mode`.
   the bottom.
 - A run sent from the input area is given every tool but `send`: the person
   reads its answer in the buffer, and `send` is for runs nobody watches.
-- Sending from the input area while a run goes, when the input is not
-  empty and not a command, gives it to that run (`superchat-steer`): the
+- Sending from the input area while a run this buffer started goes, when
+  the input is not empty and not a command, gives it to that run
+  (`superchat-steer`): the
   input is cleared, and a dimmed line `↪ for its next step: FIRST-LINE`
-  (`↪ N for its next step: …`) shows, as the queue's line below does, until
-  the run takes it. Text the run never took (its `:steers`) joins the queue
-  before what was queued since, and goes as the queue does.
-- Sending so while a handoff is pending queues the input instead: the
+  (`↪ N for its next step: …`) shows, as the queue's line does, until the
+  run takes it. Text it never took (its `:steers`) joins the queue, ahead
+  of what was queued since.
+- Sending so while a handoff or another run goes queues it: the
   input is cleared, and a dimmed line `⏸ queued: FIRST-LINE`
   (`⏸ N queued: FIRST-LINE` when N > 1), FIRST-LINE the first line of the
   first queued text cut to 60 characters and `…` when anything is left

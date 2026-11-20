@@ -77,7 +77,8 @@ prompt tells it which.
 
 | key | does |
 |---|---|
-| `RET` or `C-c C-c` in the input area | send |
+| `RET` or `C-c C-c` in the input area | send; while the answer runs, the text goes into it before its next step |
+| `C-u C-c C-c` | cancel what is running and send |
 | `C-c C-k` | cancel what is running |
 | `C-g` | interrupt a tool that keeps Emacs busy |
 
@@ -185,7 +186,7 @@ sends nothing. It is off until you ask for it.
 | `superchat-llm-reasoning` | nil | nil for none, or `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `superchat-default-level` | `ask` | permission level of a new conversation |
 | `superchat-context-chars` | nil | how much conversation one request may carry; nil follows the model's context window, or give a number of characters |
-| `superchat-max-rounds` | 80 | model responses in one run before it looks back; at the `auto` level it then goes on, twice at most; nil sets no limit |
+| `superchat-max-rounds` | 80 | model responses in one run before it looks back; at the `auto` level a separate judge request then decides whether it goes on, twice at most; nil sets no limit |
 | `superchat-tool-max-chars` | 20000 | longest tool result kept |
 | `superchat-shell-seconds` | 60 | longest a `shell` command may run |
 | `superchat-plugins` | nil | plugins to enable |
