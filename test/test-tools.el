@@ -1000,6 +1000,17 @@ DIR is no project: the .git is in a subdirectory."
       (should-not (string-match-p "Saving changed"
                                   (superchat-test-tools--ok "edit" :path "h.txt" :old "b" :new "c"))))))
 
+(ert-deftest superchat-tools-a-save-shows-no-message ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "q.txt" "a\n")
+    ;; The "Wrote" message comes from C and is not seen in batch: the save
+    ;; is checked to be silent where it writes.
+    (let* ((write (symbol-function 'write-region)) (silent 'unset))
+      (cl-letf (((symbol-function 'write-region)
+                 (lambda (&rest args) (setq silent save-silently) (apply write args))))
+        (superchat-test-tools--ok "edit" :path "q.txt" :old "a" :new "b"))
+      (should (eq silent t)))))
+
 (ert-deftest superchat-tools-write-saves-the-file ()
   (superchat-test-tools--in-scope
     (let ((file (expand-file-name "new/dir/w.txt" dir)))

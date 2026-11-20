@@ -628,7 +628,9 @@ save.  Return the notice to add to the result, or nil."
    (t (let ((before (buffer-substring-no-properties (point-min) (point-max))))
         (make-directory (file-name-directory buffer-file-name) t)
         (unless (file-exists-p buffer-file-name) (set-buffer-modified-p t))
-        (let ((require-final-newline nil) (make-backup-files nil)) (save-buffer))
+        ;; Quiet: a save message in the echo area for each change is noise.
+        (let ((require-final-newline nil) (make-backup-files nil) (save-silently t))
+          (save-buffer))
         (unless (string= before (buffer-substring-no-properties (point-min) (point-max)))
           "Saving changed the text (a hook of the person's, such as a formatter); read it before the next edit")))))
 

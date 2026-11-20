@@ -326,8 +326,8 @@ the call was outside the project.
   `write` creates a file that does not exist; its result is
   `Wrote N characters to PATH.`.
 - The save makes the file's directory when needed, writes a file that does
-  not exist even when the buffer is empty, adds no final newline, and leaves
-  no backup file, whatever the person's Emacs says. A buffer that visits no
+  not exist even when the buffer is empty, adds no final newline, leaves
+  no backup file, whatever the person's Emacs says, and shows no message. A buffer that visits no
   file is not saved. A buffer that held unsaved changes before the call is
   changed and not saved, with the notice
   `Not saved: the buffer held unsaved changes of the person's; they save it`.
