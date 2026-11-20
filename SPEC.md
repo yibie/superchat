@@ -109,7 +109,7 @@ points to require. A file requires nothing else, and
 | file | ceiling |
 |---|---|
 | `AGENTS.md` | 460 words |
-| `SPEC.md` | 2550 words |
+| `SPEC.md` | 2690 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 4200 words |
 | `spec/L3-agent.md` | 3370 words |
@@ -176,7 +176,7 @@ There is no "session" object and no "memory" store. A session is the
 
 | kind | `:text` | `:data` |
 |---|---|---|
-| `user` | what the user said | `(:origin PLIST :ephemeral BOOL :steer BOOL)`, all optional; STEER t for text given to a run going: ORIGIN `(:buffer NAME :file PATH :mode NAME :line N)`, the mode's name a string; EPHEMERAL t for one question another package asked, not a conversation |
+| `user` | what the user said | `(:origin PLIST :ephemeral BOOL :steer BOOL :directory PATH)`, all optional; STEER t for text steered to a run; DIRECTORY, on a first `user` entry outside a project, the working directory: ORIGIN `(:buffer NAME :file PATH :mode NAME :line N)`, the mode's name a string; EPHEMERAL t for one question another package asked, not a conversation |
 | `assistant` | the model's text, may be empty | `(:model STRING :calls LIST)`, each call `(:id STRING :name STRING :args PLIST)` |
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
