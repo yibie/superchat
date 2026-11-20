@@ -253,7 +253,8 @@ not called.  Whatever the tool or the user does, the result is an entry."
                 (fail (text)
                   (setq finished t pending (cons text t))))
       (let ((name (plist-get call :name)))
-        (if (and offered (not (member name offered)))
+        ;; An unknown tool is answered as unknown, below.
+        (if (and offered (gethash name superchat-tools--registry) (not (member name offered)))
             (fail (if (plist-get (gethash name superchat-tools--registry) :deferred)
                       (format "Error: %s is not loaded: call load_tools with its name first" name)
                     (format "Error: %s is not offered in this conversation" name)))

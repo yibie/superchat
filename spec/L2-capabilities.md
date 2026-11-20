@@ -181,7 +181,7 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   the list `superchat-llm-request` takes.
 - `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED OFFERED)` →
   nil, or a function of no arguments that stops a tool still running. With
-  OFFERED, the names the request offered, a call of another tool is an
+  OFFERED, the names the request offered, a call of another known tool is an
   error result: `NAME is not loaded: call load_tools with its name first`
   for a deferred tool, else `NAME is not offered in this conversation`.
   CANCELLED is
