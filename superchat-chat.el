@@ -21,6 +21,7 @@
 (require 'superchat-timer)
 (require 'superchat-plugin)
 (require 'superchat-turn)
+(require 'superchat-views)
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
 (defvar-local superchat-chat--model nil "Model for this buffer, or nil for the default.")
@@ -656,6 +657,9 @@ none.  With a prefix argument NEW, always a new one."
 
 ;;; Commands
 
+(setq superchat-views-open-function
+      (lambda (tape) (pop-to-buffer (superchat-chat-open tape))))
+
 (defun superchat-chat--show (title text)
   "Show TEXT in a read-only buffer named after TITLE."
   (with-current-buffer (get-buffer-create (format "*superchat-view: %s*" title))
@@ -665,10 +669,6 @@ none.  With a prefix argument NEW, always a new one."
       (insert text)
       (goto-char (point-min)))
     (pop-to-buffer (current-buffer))))
-
-(defun superchat-chat--show-entries (title entries)
-  "Show ENTRIES, rendered, in a read-only buffer named after TITLE."
-  (superchat-chat--show title (if entries (superchat-view-render entries) "No entries.")))
 
 (defun superchat-chat--title (text)
   "The title of a note TEXT: its first 60 characters."
@@ -692,9 +692,10 @@ With no QUERY, show the notes."
   (interactive (list (read-string "Recall (empty for notes): ")))
   (let ((scope (superchat-chat--scope)))
     (if (string-empty-p query)
-        (superchat-chat--show-entries "notes" (superchat-view 'notes :scope scope))
-      (superchat-chat--show-entries
-       (format "recall %s" query) (superchat-view 'search :query query :scope scope)))))
+        (superchat-entries "notes" (lambda () (superchat-view 'notes :scope scope)))
+      (superchat-entries
+       (format "recall %s" query)
+       (lambda () (superchat-view 'search :query query :scope scope))))))
 
 (defun superchat-chat--note (text)
   "Append TEXT as a note to this timeline and show it."
@@ -790,65 +791,18 @@ this scope's `timelines' view with `completing-read'."
 (superchat-command-define
  "topic" (lambda (name)
            (when (string-empty-p name) (user-error "/topic needs a name"))
-           (superchat-chat--show-entries
-            (concat "topic " name)
-            (superchat-view 'topic :name name :scope (superchat-chat--scope))))
+           (let ((scope (superchat-chat--scope)))
+             (superchat-entries
+              (concat "topic " name)
+              (lambda () (superchat-view 'topic :name name :scope scope)))))
  "name. Show the entries of the topic.")
 (superchat-command-define "recall" #'superchat-recall
                           "[query] Search the Tape of this scope; with none, show the notes.")
 (superchat-command-define
- "notes" (lambda (_) (superchat-chat--show-entries
-                      "notes" (superchat-view 'notes :scope (superchat-chat--scope))))
+ "notes" (lambda (_) (let ((scope (superchat-chat--scope)))
+                      (superchat-entries
+                       "notes" (lambda () (superchat-view 'notes :scope scope)))))
  "Show the notes of this scope.")
-(defvar-keymap superchat-timers-mode-map
-  :parent special-mode-map
-  "c" #'superchat-timers-cancel
-  "RET" #'superchat-timers-open
-  "g" #'superchat-timers)
-
-(define-derived-mode superchat-timers-mode special-mode "Superchat-Timers"
-  "The timers that may still fire.  c cancels one, RET opens its
-conversation, g shows them anew.")
-
-(defun superchat-timers ()
-  "Show the timers that may still fire, one a line."
-  (interactive)
-  (with-current-buffer (get-buffer-create "*superchat: timers*")
-    (let ((inhibit-read-only t) (line (line-number-at-pos)))
-      (superchat-timers-mode)
-      (erase-buffer)
-      (dolist (e (superchat-timer-list))
-        (let ((data (plist-get e :data)))
-          (insert (propertize
-                   (format "%d  %s  %s%s  %s\n" (plist-get e :id) (plist-get e :tape)
-                           (string-trim (format "%S" (cl-loop for (k v) on data by #'cddr
-                                                              unless (eq k :until)
-                                                              append (list k v)))
-                                        "(" ")")
-                           (if-let* ((until (plist-get data :until)))
-                               (format-time-string "  until %F %R" until)
-                             "")
-                           (car (split-string (plist-get e :text) "\n")))
-                   'superchat-timers-timer e))))
-      (if (= (buffer-size) 0) (insert "No timers.\n") (goto-char (point-min)) (forward-line (1- line))))
-    (pop-to-buffer (current-buffer))))
-
-(defun superchat-timers--at-point ()
-  "The timer on this line."
-  (or (get-text-property (line-beginning-position) 'superchat-timers-timer)
-      (user-error "No timer on this line")))
-
-(defun superchat-timers-cancel ()
-  "Cancel the timer on this line."
-  (interactive)
-  (message "%s" (superchat-timer-cancel (plist-get (superchat-timers--at-point) :id)))
-  (superchat-timers))
-
-(defun superchat-timers-open ()
-  "Open the conversation of the timer on this line."
-  (interactive)
-  (pop-to-buffer (superchat-chat-open (plist-get (superchat-timers--at-point) :tape))))
-
 (superchat-command-define
  "timers" (lambda (arg)
             (if (string-match "\\`cancel +\\([0-9]+\\)\\'" arg)

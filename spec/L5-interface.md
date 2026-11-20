@@ -2,7 +2,7 @@
 
 Part of the [specification](../SPEC.md). Modules: `superchat-chat.el`,
 `superchat-turn.el`, `superchat-inline.el`, `superchat-plugin.el`,
-`superchat-messages.el`. This
+`superchat-messages.el`, `superchat-views.el`. This
 layer is what the person uses; every effect it has goes through
 `superchat-run` and the public functions of the layers below.
 
@@ -183,11 +183,11 @@ Built-in commands, and no others:
 | `/resume [name]` | choose a timeline from the `timelines` view with `completing-read` and open it; with NAME, open the timeline of that name, of any scope, and a NAME with no entry is a `user-error` |
 | `/fork` | fork at the entry at point, or at the latest entry when point is in the input area; open the new timeline |
 | `/handoff [name]` | `superchat-handoff`; refused while the timeline is busy; the mode line shows `[running Ns]` until it is over, and `C-c C-k` cancels it |
-| `/topic name` | open the `topic` view of that name in a read-only buffer; no name is a `user-error` |
+| `/topic name` | `superchat-entries` of the `topic` view of that name; no name is a `user-error` |
 | `/recall [query]` | `superchat-recall` with QUERY: the `search` view, or the `notes` view when it is empty |
-| `/notes` | open the `notes` view in a read-only buffer |
+| `/notes` | `superchat-entries` of the `notes` view |
 | `/dream` | `superchat-timer-dream` for this buffer's scope, and says so; `/dream off` turns it off |
-| `/timers` | `superchat-timers`, also a command: the buffer `*superchat: timers*` lists `superchat-timer-list`, one line each: id, timeline, data but `:until`, `until DATE`, the text's first line, or `No timers.`; on a line `c` cancels that timer, `RET` opens its conversation, `g` lists anew. `/timers cancel ID` cancels one |
+| `/timers` | `superchat-timers`; `/timers cancel ID` cancels one |
 | `/note text` | append TEXT as a `note` entry to this timeline, as `superchat-note` does |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
@@ -349,3 +349,23 @@ Plugins live in another repository. This one ships none.
   buffer of the line's timeline. On a question's line, `y`, `n` or `a`
   (`superchat-messages-answer`) sends that key from its chat buffer, draws
   the buffer again and shows the chat buffer.
+
+## superchat-views.el
+
+Read-only buffers that browse the Tape, each with keys that act on the line
+at point. A view opens a conversation by calling
+`superchat-views-open-function` (a `defvar`) with its timeline's name; the
+chat sets it to show that timeline's chat buffer, so this file does not
+need the chat.
+
+- `(superchat-entries TITLE VIEW)`: calls VIEW with no argument for a list
+  of entries and shows them in `*superchat-view: TITLE*`, in
+  `superchat-entries-mode`: each entry rendered alone by
+  `superchat-view-render`, blocks apart by an empty line, or `No entries.`.
+  `RET` opens the conversation of the entry at point, `n` and `p` go to the
+  next and previous entry, `g` calls VIEW again.
+- `superchat-timers`, a command: the buffer `*superchat: timers*`, in
+  `superchat-timers-mode`, lists `superchat-timer-list`, one line each: id,
+  timeline, data but `:until`, `until DATE`, the text's first line, or
+  `No timers.`. On a line `c` cancels that timer and lists anew, `RET`
+  opens its conversation, `g` lists anew; the keys follow `list-timers`.
