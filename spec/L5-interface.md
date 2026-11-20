@@ -187,7 +187,7 @@ Built-in commands, and no others:
 | `/recall [query]` | `superchat-recall` with QUERY: the `search` view, or the `notes` view when it is empty |
 | `/notes` | open the `notes` view in a read-only buffer |
 | `/dream` | `superchat-timer-dream` for this buffer's scope, and says so; `/dream off` turns it off |
-| `/timers` | list `superchat-timer-list`, one line each: id, timeline, data but `:until`, `until DATE`, text, or `No timers.`; `/timers cancel ID` cancels one |
+| `/timers` | `superchat-timers`, also a command: the buffer `*superchat: timers*` lists `superchat-timer-list`, one line each: id, timeline, data but `:until`, `until DATE`, the text's first line, or `No timers.`; on a line `c` cancels that timer, `RET` opens its conversation, `g` lists anew. `/timers cancel ID` cancels one |
 | `/note text` | append TEXT as a `note` entry to this timeline, as `superchat-note` does |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |

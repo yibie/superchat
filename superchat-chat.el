@@ -800,27 +800,61 @@ this scope's `timelines' view with `completing-read'."
  "notes" (lambda (_) (superchat-chat--show-entries
                       "notes" (superchat-view 'notes :scope (superchat-chat--scope))))
  "Show the notes of this scope.")
+(defvar-keymap superchat-timers-mode-map
+  :parent special-mode-map
+  "c" #'superchat-timers-cancel
+  "RET" #'superchat-timers-open
+  "g" #'superchat-timers)
+
+(define-derived-mode superchat-timers-mode special-mode "Superchat-Timers"
+  "The timers that may still fire.  c cancels one, RET opens its
+conversation, g shows them anew.")
+
+(defun superchat-timers ()
+  "Show the timers that may still fire, one a line."
+  (interactive)
+  (with-current-buffer (get-buffer-create "*superchat: timers*")
+    (let ((inhibit-read-only t) (line (line-number-at-pos)))
+      (superchat-timers-mode)
+      (erase-buffer)
+      (dolist (e (superchat-timer-list))
+        (let ((data (plist-get e :data)))
+          (insert (propertize
+                   (format "%d  %s  %s%s  %s\n" (plist-get e :id) (plist-get e :tape)
+                           (string-trim (format "%S" (cl-loop for (k v) on data by #'cddr
+                                                              unless (eq k :until)
+                                                              append (list k v)))
+                                        "(" ")")
+                           (if-let* ((until (plist-get data :until)))
+                               (format-time-string "  until %F %R" until)
+                             "")
+                           (car (split-string (plist-get e :text) "\n")))
+                   'superchat-timers-timer e))))
+      (if (= (buffer-size) 0) (insert "No timers.\n") (goto-char (point-min)) (forward-line (1- line))))
+    (pop-to-buffer (current-buffer))))
+
+(defun superchat-timers--at-point ()
+  "The timer on this line."
+  (or (get-text-property (line-beginning-position) 'superchat-timers-timer)
+      (user-error "No timer on this line")))
+
+(defun superchat-timers-cancel ()
+  "Cancel the timer on this line."
+  (interactive)
+  (message "%s" (superchat-timer-cancel (plist-get (superchat-timers--at-point) :id)))
+  (superchat-timers))
+
+(defun superchat-timers-open ()
+  "Open the conversation of the timer on this line."
+  (interactive)
+  (pop-to-buffer (superchat-chat-open (plist-get (superchat-timers--at-point) :tape))))
+
 (superchat-command-define
  "timers" (lambda (arg)
             (if (string-match "\\`cancel +\\([0-9]+\\)\\'" arg)
                 (message "%s" (superchat-timer-cancel (string-to-number (match-string 1 arg))))
-              (superchat-chat--show
-               "timers"
-               (if-let* ((timers (superchat-timer-list)))
-                   (mapconcat (lambda (e)
-                                (let ((data (plist-get e :data)))
-                                  (format "%d  %s  %s%s  %s\n" (plist-get e :id) (plist-get e :tape)
-                                          (string-trim (format "%S" (cl-loop for (k v) on data by #'cddr
-                                                                         unless (eq k :until)
-                                                                         append (list k v)))
-                                                       "(" ")")
-                                          (if-let* ((until (plist-get data :until)))
-                                              (format-time-string "  until %F %R" until)
-                                            "")
-                                          (plist-get e :text))))
-                              timers "")
-                 "No timers."))))
- "[cancel ID] Show the timers that may still fire, or cancel one.")
+              (superchat-timers)))
+ "[cancel ID] Show the timers that may still fire (c cancels, RET opens), or cancel one.")
 (superchat-command-define
  "dream" (lambda (arg)
            (let ((scope (superchat-chat--scope)))

@@ -1156,15 +1156,33 @@ tool `echo', and no chat buffers left behind."
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))
       (with-current-buffer buffer (superchat-chat-send "/timers"))
-      (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string)) "No timers."))
+      (should (equal (with-current-buffer "*superchat: timers*" (buffer-string)) "No timers.\n"))
       (let ((id (plist-get (superchat-tape-append "t1" 'timer "brief" :data '(:daily "09:00")
                                                   :scope (superchat-test-chat--scope))
                            :id)))
         (with-current-buffer buffer (superchat-chat-send "/timers"))
-        (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string))
+        (should (equal (with-current-buffer "*superchat: timers*" (buffer-string))
                        (format "%d  t1  :daily \"09:00\"  brief\n" id)))
         (with-current-buffer buffer (superchat-chat-send (format "/timers cancel %d" id)))
         (should-not (superchat-timer-list))))))
+
+(ert-deftest superchat-chat-timers-buffer-cancels-and-opens-by-key ()
+  (superchat-test-chat--with
+    (let ((id (plist-get (superchat-tape-append "t1" 'timer "brief" :data '(:daily "09:00")
+                                                :scope (superchat-test-chat--scope))
+                         :id)))
+      (superchat-timers)
+      (with-current-buffer "*superchat: timers*"
+        (should (eq (keymap-lookup superchat-timers-mode-map "c") #'superchat-timers-cancel))
+        (goto-char (point-min))
+        (superchat-timers-open)
+        (should (equal (buffer-name (window-buffer)) (buffer-name (superchat-chat-open "t1")))))
+      (with-current-buffer "*superchat: timers*"
+        (goto-char (point-min))
+        (superchat-timers-cancel)
+        (should-not (superchat-timer-list))
+        (should (equal (buffer-string) "No timers.\n"))
+        (should (string-search (number-to-string id) (format "%S" (superchat-tape-entries :tape "t1" :kinds '(timer)))))))))
 
 (ert-deftest superchat-chat-dream-turns-dreaming-on-and-off ()
   (superchat-test-chat--with
@@ -1583,7 +1601,7 @@ heading."
                                                  :scope (superchat-test-chat--scope))
                           :id)))
       (with-current-buffer buffer (superchat-chat-send "/timers"))
-      (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string))
+      (should (equal (with-current-buffer "*superchat: timers*" (buffer-string))
                      (format "%d  t1  :every 60 :from 0%s  tick\n" id
                              (format-time-string "  until %F %R" until)))))))
 
