@@ -13,16 +13,21 @@
 (defmacro superchat-test-with-tape (&rest body)
   "Run BODY with a fresh Tape in a temporary directory of its own.
 The directory deleted afterwards is the one made here, whatever BODY
-binds `superchat-directory' to."
+binds `superchat-directory' to, and a `temporary-file-directory' of its own."
   (declare (indent 0) (debug t))
   `(let* ((superchat-test--made
            (file-name-as-directory (make-temp-file "superchat-test-" t)))
           (superchat-directory superchat-test--made)
+          ;; A conversation with no working directory makes its scratch
+          ;; directory under a temporary directory of its own, deleted too.
+          (superchat-test--tmp (file-name-as-directory (make-temp-file "superchat-tmp-" t)))
+          (temporary-file-directory superchat-test--tmp)
           (superchat-tape-file nil))
      (unwind-protect
          (progn (superchat-tape-open) ,@body)
        (superchat-tape-close)
-       (delete-directory superchat-test--made t))))
+       (delete-directory superchat-test--made t)
+       (delete-directory superchat-test--tmp t))))
 
 (defvar superchat-test-requests nil
   "What the scripted model was asked, newest first: plists

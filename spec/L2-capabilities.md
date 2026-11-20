@@ -176,9 +176,10 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   permission, asks when needed, runs the function with `default-directory`
   set to `(superchat-tape-directory TAPE)`, or, when that is nil,
   `(superchat-tools-scratch TAPE)`: a directory named after TAPE under
-  `temporary-file-directory`, which a process made there makes first. With
-  no working directory a relative path is an error: `This conversation has
-  no working directory: give an absolute path`. It appends the result as a `tool` entry and calls ON-RESULT with that entry,
+  `temporary-file-directory`, made when missing. With no working directory
+  a relative path, or no path where one defaults to `.`, is an error: `This
+  conversation has no working directory: give an absolute path`; a call that
+  names a buffer and no path reads no default path. It appends the result as a `tool` entry and calls ON-RESULT with that entry,
   exactly once: before it returns for a synchronous tool, later for an
   asynchronous one. A call that names no known tool or lacks a required
   argument is answered first, with no question and no event. An `ask`
@@ -278,7 +279,47 @@ the call was outside the project.
   `Offset N is beyond end of file (Z lines total)` (`of buffer`); offset 1
   of an empty text is the empty result.
 
-### Searching
+### Changing
+
+- `edit` and `write` change the buffer visiting the file, visiting it when
+  none does, then save it, so one call changes the file and the person can
+  undo the change in that buffer. `edit` takes exactly one of PATH and
+  BUFFER; OLD must occur exactly once, case and overlapping occurrences
+  counted; a PATH that names no file and no buffer is an error, and a buffer
+  visited for an edit that fails is killed again. Its result is
+  `Replaced 1 block in PATH.`, BUFFER in place of PATH for a buffer.
+  `write` creates a file that does not exist; its result is
+  `Wrote N characters to PATH.`. A file a tool visits gets only the local
+  variables the person already trusts (`enable-local-variables` `:safe`):
+  a question there would hold Emacs.
+- The save makes the file's directory when needed, writes a file that does
+  not exist even when the buffer is empty, adds no final newline, leaves
+  no backup file, whatever the person's Emacs says, and shows no message. A buffer that visits no
+  file is not saved. A buffer that held unsaved changes before the call is
+  changed and not saved, with the notice
+  `Not saved: the buffer held unsaved changes of the person's; they save it`.
+  When the save changes the buffer's text (a hook such as a formatter), the
+  notice `Saving changed the text (a hook of the person's, such as a
+  formatter); read it before the next edit` follows the result.
+
+### Running
+
+- `shell` keeps the end of the output, where the errors are: at most 2000
+  lines or the room of a result, whole lines but for a single line longer
+  than the room, of which the end is kept. When it cuts, the whole output
+  is in a file made by `make-temp-file "superchat-shell-"`, and the notice
+  is `[Showing lines X-Y of Z. Full output: FILE]`. Once the output held
+  passes four times `superchat-tool-max-chars`, what lies before its last
+  `superchat-tool-max-chars` characters is appended to that file as it
+  comes. When that file passes 200 times `superchat-tool-max-chars`, the
+  command is stopped. The last notice is `[exit status N]`,
+  `[timed out after N seconds and killed]`, or
+  `[output passed N characters; the command was stopped]`.
+
+## superchat-search.el
+
+The tools `grep` and `find`, in the registry of `superchat-tools.el` and run
+as its tools run.
 
 - `grep` and `find` take PATH, default the project. The files
   `grep` and `find` look at are the project's files as `project-files`
@@ -316,43 +357,6 @@ the call was outside the project.
   one is `(empty directory)`.
 - A list that passes the room of a result keeps whole lines, with
   `[N characters limit reached]`.
-
-### Changing
-
-- `edit` and `write` change the buffer visiting the file, visiting it when
-  none does, then save it, so one call changes the file and the person can
-  undo the change in that buffer. `edit` takes exactly one of PATH and
-  BUFFER; OLD must occur exactly once, case and overlapping occurrences
-  counted; a PATH that names no file and no buffer is an error, and a buffer
-  visited for an edit that fails is killed again. Its result is
-  `Replaced 1 block in PATH.`, BUFFER in place of PATH for a buffer.
-  `write` creates a file that does not exist; its result is
-  `Wrote N characters to PATH.`. A file a tool visits gets only the local
-  variables the person already trusts (`enable-local-variables` `:safe`):
-  a question there would hold Emacs.
-- The save makes the file's directory when needed, writes a file that does
-  not exist even when the buffer is empty, adds no final newline, leaves
-  no backup file, whatever the person's Emacs says, and shows no message. A buffer that visits no
-  file is not saved. A buffer that held unsaved changes before the call is
-  changed and not saved, with the notice
-  `Not saved: the buffer held unsaved changes of the person's; they save it`.
-  When the save changes the buffer's text (a hook such as a formatter), the
-  notice `Saving changed the text (a hook of the person's, such as a
-  formatter); read it before the next edit` follows the result.
-
-### Running
-
-- `shell` keeps the end of the output, where the errors are: at most 2000
-  lines or the room of a result, whole lines but for a single line longer
-  than the room, of which the end is kept. When it cuts, the whole output
-  is in a file made by `make-temp-file "superchat-shell-"`, and the notice
-  is `[Showing lines X-Y of Z. Full output: FILE]`. Once the output held
-  passes four times `superchat-tool-max-chars`, what lies before its last
-  `superchat-tool-max-chars` characters is appended to that file as it
-  comes. When that file passes 200 times `superchat-tool-max-chars`, the
-  command is stopped. The last notice is `[exit status N]`,
-  `[timed out after N seconds and killed]`, or
-  `[output passed N characters; the command was stopped]`.
 
 ## superchat-lint.el
 

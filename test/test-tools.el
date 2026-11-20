@@ -6,6 +6,7 @@
 (require 'superchat-tape)
 (require 'superchat-permission)
 (require 'superchat-tools)
+(require 'superchat-search)
 
 (defmacro superchat-test-tools--in-scope (&rest body)
   "Run BODY with timeline \"t\" at level auto, scoped to a temporary directory DIR."
@@ -1138,9 +1139,9 @@ DIR is no project: the .git is in a subdirectory."
           (progn
             (superchat-tape-append "n" 'user "go" :scope "home")
             (superchat-permission-set "n" 'auto)
-            ;; Not made by a call that runs no process.
+            ;; Made by any call: a process may start from any tool.
             (superchat-test-tools--await "n" '(:id "a" :name "eval_elisp" :args (:code "1")))
-            (should-not (file-exists-p scratch))
+            (should (file-directory-p scratch))
             ;; Whatever buffer is current, a file's or not, it is the scratch.
             (with-temp-buffer
               (setq default-directory (expand-file-name "~/"))
@@ -1149,4 +1150,35 @@ DIR is no project: the .git is in a subdirectory."
                                                                         :text)
                                                              "\n")))
                              (directory-file-name scratch)))))
+        (delete-directory temporary-file-directory t)))))
+
+(ert-deftest superchat-tools-with-no-working-directory-buffers-and-processes-work ()
+  (superchat-test-with-tape
+    (let ((temporary-file-directory (file-name-as-directory (make-temp-file "sc-scratch-" t))))
+      (unwind-protect
+          (with-temp-buffer
+            (rename-buffer "*sc-demo*" t)
+            (insert "hello demo")
+            (let ((name (buffer-name)))
+              (superchat-tape-append "n" 'user "go" :scope "home")
+              (superchat-permission-set "n" 'auto)
+              ;; The tools the system prompt points to: a buffer, by name.
+              (should (string-search "hello demo"
+                                     (plist-get (superchat-test-tools--await
+                                                 "n" `(:id "a" :name "read" :args (:buffer ,name)))
+                                                :text)))
+              (should (string-search "Replaced 1 block"
+                                     (plist-get (superchat-test-tools--await
+                                                 "n" `(:id "b" :name "edit" :args (:buffer ,name :old "hello" :new "bye")))
+                                                :text)))
+              ;; No path and no buffer is still refused.
+              (should (plist-get (plist-get (superchat-test-tools--await "n" '(:id "c" :name "read" :args nil))
+                                            :data)
+                                 :error))
+              ;; A process started before any shell call has a directory to run in.
+              (should (equal (plist-get (superchat-test-tools--await
+                                         "n" '(:id "d" :name "eval_elisp"
+                                                   :args (:code "(string-trim (shell-command-to-string \"echo hi\"))")))
+                                        :text)
+                             "\"hi\""))))
         (delete-directory temporary-file-directory t)))))
