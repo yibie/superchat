@@ -1568,3 +1568,15 @@ heading."
       (should-not (superchat-test-chat--waiting buffer))
       (with-current-buffer buffer
         (should (string-match-p "not that file" (buffer-string)))))))
+
+(ert-deftest superchat-chat-timers-shows-when-a-schedule-lapses ()
+  (superchat-test-chat--with
+    (let* ((buffer (superchat-chat-open "t1"))
+           (until (+ (float-time) 86400))
+           (id (plist-get (superchat-tape-append "t1" 'timer "tick" :data `(:every 60 :from 0 :until ,until)
+                                                 :scope (superchat-test-chat--scope))
+                          :id)))
+      (with-current-buffer buffer (superchat-chat-send "/timers"))
+      (should (equal (with-current-buffer "*superchat-view: timers*" (buffer-string))
+                     (format "%d  t1  :every 60 :from 0%s  tick\n" id
+                             (format-time-string "  until %F %R" until)))))))

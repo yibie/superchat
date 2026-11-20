@@ -789,9 +789,17 @@ this scope's `timelines' view with `completing-read'."
               (superchat-chat--show
                "timers"
                (if-let* ((timers (superchat-timer-list)))
-                   (mapconcat (lambda (e) (format "%d  %s  %s  %s\n" (plist-get e :id) (plist-get e :tape)
-                                                  (string-trim (format "%S" (plist-get e :data)) "(" ")")
-                                                  (plist-get e :text)))
+                   (mapconcat (lambda (e)
+                                (let ((data (plist-get e :data)))
+                                  (format "%d  %s  %s%s  %s\n" (plist-get e :id) (plist-get e :tape)
+                                          (string-trim (format "%S" (cl-loop for (k v) on data by #'cddr
+                                                                         unless (eq k :until)
+                                                                         append (list k v)))
+                                                       "(" ")")
+                                          (if-let* ((until (plist-get data :until)))
+                                              (format-time-string "  until %F %R" until)
+                                            "")
+                                          (plist-get e :text))))
                               timers "")
                  "No timers."))))
  "[cancel ID] Show the timers that may still fire, or cancel one.")

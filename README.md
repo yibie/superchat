@@ -163,7 +163,7 @@ answered by a run of its own; the items of one batch are answered together.
 |---|---|
 | `follow_up` (seconds), `schedule` (every, or daily `"HH:MM"`) | the model asks to be woken with a task later, or again and again; `cancel_timer` drops one |
 | `send` | a run you are not watching shows you a line now |
-| `M-x superchat-inbox-start` | starts the clock when Emacs starts |
+| `M-x superchat-timer-start` | starts the clock when Emacs starts |
 | `superchat-inbox-notify-functions` | each `send` and each waiting question, for a notification hook of your own |
 
 An unattended run asks nobody: a call that needs permission comes back as a
