@@ -112,10 +112,17 @@ prompt tells it which.
 
 | tool | class |
 |---|---|
-| `read` (a file, a buffer or a directory), `grep`, `find` | read |
-| `recall`, `tape_query`, `note` | read |
+| `read` (a file, a buffer or a directory), `grep`, `find`, `load_tools` | read |
+| `recall`, `tape_query`, `note` (loaded on first use) | read |
 | `edit`, `write` (each saves the file) | write |
 | `eval_elisp`, `shell` | exec |
+
+Every request offers the core tools above. The memory tools, the timer tools
+and a plugin's tools are listed in the system prompt by name and first
+sentence, and the model loads the ones it needs with `load_tools`; once
+loaded, they stay offered for the rest of that conversation. Skills are
+found the same way: the catalog lists each one in `skills/` and a project's
+`.superchat/skills/`, and the model reads a skill's file only when it fits.
 
 The permission level decides what happens when the model calls a tool:
 

@@ -72,3 +72,10 @@ exists, then loads its detail when it needs it.
   per timeline.
 - A plugin whose tools must be offered at once defines them `:deferred
   nil`.
+- The dreaming task's text changed, and `superchat-timer-dream` knows a
+  scope's dreaming timer by that text. A timer set before (on the person's
+  Tape, #3749) is no longer found: `/dream` would set a second one and
+  `/dream off` would not stop the old. The person cancels it with
+  `/timers cancel` and turns dreaming on again; there is no migration.
+  Knowing the timer by a data key instead of its text would end this, and
+  is a rule change of its own.
