@@ -2204,3 +2204,58 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
 
 (provide 'test-agent)
 ;;; test-agent.el ends here
+
+(ert-deftest superchat-agent-steered-text-goes-in-after-the-calls ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow nil
+      (let (status steers)
+        (superchat-test-script
+            (list `(:calls (,(superchat-test-agent--call "c1" "slow")
+                            ,(superchat-test-agent--call "c2" "echo" :x "b")))
+                  '(:text "ok, not that file"))
+          (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status)
+                                                             steers (plist-get r :steers))))
+          ;; Steered while a call is out: nothing goes in between a call and its result.
+          (superchat-steer "t" "not that file")
+          (should-not (superchat-tape-entries :tape "t" :kinds '(tool)))
+          (funcall superchat-test-agent--done "slow")
+          (superchat-test-wait (lambda () status))
+          ;; The request after it carries both results, then the steered text.
+          (should (equal (mapcar (lambda (m) (plist-get m :role))
+                                 (plist-get (car superchat-test-requests) :messages))
+                         '(user assistant tool tool user))))
+        (should (eq status 'done))
+        (should-not steers)
+        (should (equal (superchat-test-agent--entries "t")
+                       '((user . "go") (assistant . "") (tool . "slow") (tool . "echo:b")
+                         (user . "not that file") (assistant . "ok, not that file"))))
+        (should (plist-get (plist-get (nth 4 (superchat-tape-entries :tape "t")) :data) :steer))))))
+
+(ert-deftest superchat-agent-steered-text-a-run-never-took-comes-back ()
+  (superchat-test-agent--with
+    (superchat-test-agent--with-slow nil
+      (let (done)
+        (superchat-test-script (list `(:calls (,(superchat-test-agent--call "c1" "slow"))))
+          (superchat-run "t" "go" :on-done (lambda (r) (setq done r)))
+          (superchat-steer "t" "one")
+          (superchat-steer "t" "two")
+          (superchat-cancel "t"))
+        (should (eq (plist-get done :status) 'cancelled))
+        (should (equal (plist-get done :steers) '("one" "two")))
+        (should-not (member "one" (mapcar #'cdr (superchat-test-agent--entries "t"))))
+        (should-error (superchat-steer "t" "late"))))))
+
+(ert-deftest superchat-agent-at-the-limit-waiting-input-pauses-the-run ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'user "earlier" :scope "home")
+    (superchat-permission-set "t" 'auto)
+    (let* ((superchat-max-rounds 1) done
+           (superchat-agent-pending-functions (list (lambda (tape) (equal tape "t"))))
+           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+      (superchat-test-script (list call '(:text "never asked"))
+        (superchat-run "t" "go" :on-done (lambda (r) (setq done r)))
+        ;; No look-back, no going on: the waiting input drives the next run.
+        (should (= (length superchat-test-requests) 1)))
+      (should (eq (plist-get done :status) 'done))
+      (should (plist-get done :paused))
+      (should-not (member 'continued (superchat-test-agent--types "t"))))))

@@ -26,6 +26,10 @@
 (defvar superchat-agent--runs (make-hash-table :test #'equal)
   "Timeline name to its run, while it has one.")
 
+(defvar superchat-agent-pending-functions nil
+  "Functions called with a timeline's name: non-nil when input waits for it
+outside the run, so that the run, at the round limit, pauses for it.")
+
 (defvar superchat-agent-continues 2
   "At the `auto' level, how many times a run that reached the round limit goes
 on after its look-back, its count of responses starting again.")
@@ -172,11 +176,11 @@ limit, record the answer and end RUN as stopped."
       (cond ((and last (eq (car status) 'finished)) (superchat-agent--end run 'done))
             ((and last (not (eq (car status) 'blocked))
                   (eq (superchat-permission-level (plist-get run :tape)) 'auto)
-                  (< (plist-get run :continues) superchat-agent-continues))
+                  (< (plist-get run :continues) superchat-agent-continues)
+                  (not (superchat-agent--pending-p run)))
              (superchat-agent--go-on run (car status)))
             ;; Not a failure: the look-back is its answer, and the person goes on.
-            (last (setf (plist-get run :paused) t)
-                  (superchat-agent--end run 'done (superchat-limit-paused (superchat-agent--since run)) "paused"))
+            (last (superchat-agent--pause run))
             (calls (superchat-agent--calls run calls))
             (t (superchat-agent--end run 'done))))))
 
@@ -245,9 +249,33 @@ tool that has not answered yet."
   (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id)))
               (or entries (superchat-view 'conversation :tape (plist-get run :tape)))))
 
+(defun superchat-agent--pending-p (run)
+  "Non-nil when input waits for RUN's timeline: steered text, or what
+`superchat-agent-pending-functions' report."
+  (or (plist-get run :steers)
+      (run-hook-with-args-until-success 'superchat-agent-pending-functions
+                                        (plist-get run :tape))))
+
+(defun superchat-agent--pause (run)
+  "End RUN, at the round limit, `done' and paused: the person goes on."
+  (setf (plist-get run :paused) t)
+  (superchat-agent--end run 'done (superchat-limit-paused (superchat-agent--since run)) "paused"))
+
 (defun superchat-agent--step (run)
   "Make the next request of RUN; at the round limit, the last one, which asks
-for an answer."
+for an answer.  First the steered texts go in as `user' entries; at the limit
+with input waiting, the run pauses instead, so that the input drives the next."
+  (if (not (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds)))
+      (when-let* ((steers (plist-get run :steers)))
+        (setf (plist-get run :steers) nil)
+        (dolist (text steers)
+          (superchat-tape-append (plist-get run :tape) 'user text :data (list :steer t)))
+        (superchat-agent--emit run))
+    (when (superchat-agent--pending-p run) (superchat-agent--pause run)))
+  (when (superchat-agent--live run) (superchat-agent--request run)))
+
+(defun superchat-agent--request (run)
+  "Make the next request of RUN, the steered texts in."
   (let* ((tape (plist-get run :tape))
          (budget (superchat-request-budget (plist-get run :model)))
          (entries (superchat-view 'conversation :tape tape))
@@ -398,7 +426,7 @@ ended the run on that entry."
 missing one would make a new list."
   (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                      :stop nil :done nil :text nil :error nil :tries 0 :timer nil
-                     :continues 0 :resumed nil :paused nil :redirected nil)))
+                     :continues 0 :resumed nil :paused nil :redirected nil :steers nil)))
 
 (defun superchat-question (tape)
   "The `question' event of timeline TAPE that waits for its answer, or nil."
@@ -490,6 +518,15 @@ its response, then the next request.  Return the run."
 (defun superchat-run-active (tape)
   "The run of timeline TAPE, or nil."
   (gethash tape superchat-agent--runs))
+
+(defun superchat-steer (tape text)
+  "Give the run going on timeline TAPE the person's TEXT: a `user' entry
+before its next request.  Text a run never took is its :steers at the end.
+With no run going, an error."
+  (let ((run (gethash tape superchat-agent--runs)))
+    (unless (and run (eq (plist-get run :status) 'running))
+      (error "Timeline %s has no run going" tape))
+    (setf (plist-get run :steers) (append (plist-get run :steers) (list text)))))
 
 (defun superchat-cancel (tape)
   "Cancel the run or the pending handoff of timeline TAPE, if it has one.

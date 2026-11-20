@@ -54,7 +54,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   - ON-DONE: gets the run once, with `:status` `done`, `cancelled`,
     `waiting` or `error`, `:text` the text of the last `assistant` entry of this run (nil
     when it made none), for `error`, `:error` the error event's text,
-    `:paused` t at a round-limit pause.
+    `:paused` t at a round-limit pause, `:steers` the steered texts it
+    never took, in order.
 - First, if the timeline's last run never ended (Emacs stopped during it),
   the run appends, for each of its calls with no result, a `tool` entry with
   `:error t` and the text
@@ -80,7 +81,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
 - At the round limit the run looks back, then pauses or goes on
-  (`superchat-limit.el`).
+  (`superchat-limit.el`). With steered text or pending input, it pauses at
+  once instead, and does not go on after a look-back: the input drives.
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
   `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a
@@ -102,6 +104,11 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   an error. A handoff occupies its timeline like a run: while it is pending,
   `superchat-run` and a second handoff are errors, and `superchat-handoff`
   on a timeline with a run is an error.
+- `(superchat-steer TAPE TEXT)`: the run going on TAPE takes TEXT before its
+  next request, as a `user` entry with `:steer t`, so never between a call
+  and its result. No run going, or one cancelled: an error.
+- `superchat-agent-pending-functions` (a `defvar`): functions called with
+  TAPE, non-nil when input waits for it outside the run.
 - `(superchat-run-active TAPE)` → nil when the timeline is free; while a
   handoff is pending, a plist whose `:status` is `handoff`; while a run is
   going, the run, whose `:status` is `running` (`cancelled` while a cancelled
