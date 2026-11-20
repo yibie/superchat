@@ -74,7 +74,7 @@ chat → agent, plugin, recall, timer, turn
 timer → inbox
 inbox → agent
 agent → llm, tools, recall, view, context, request, guard, limit
-limit → request
+limit → llm, request
 request → llm
 recall → tools, view
 context → view
@@ -112,7 +112,7 @@ points to require. A file requires nothing else, and
 | `SPEC.md` | 2550 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 4200 words |
-| `spec/L3-agent.md` | 3160 words |
+| `spec/L3-agent.md` | 3370 words |
 | `spec/L4-background.md` | 650 words |
 | `spec/L5-interface.md` | 3780 words |
 
@@ -183,7 +183,7 @@ There is no "session" object and no "memory" store. A session is the
 | `note` | the conclusion | `(:title STRING)` |
 | `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused`, `redirect` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused`, `redirect`, `look-back`, `verdict` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
