@@ -579,11 +579,15 @@ separator, so the prompt and the input never fold."
 (defun superchat-chat-open (tape &optional scope)
   "The chat buffer of timeline TAPE, made and rendered when there is none.
 SCOPE is the scope of a timeline that has no entry yet; the working directory
-outside a project is that of the buffer current now, a file's or a `dired'
-one's, else none."
+outside a project is that of the buffer current now, a file's, a `dired'
+one's or a chat's, else none."
   (or (superchat-chat--buffer tape)
       (let ((directory (cond (buffer-file-name (file-name-directory buffer-file-name))
-                             ((derived-mode-p 'dired-mode) default-directory))))
+                             ((derived-mode-p 'dired-mode) default-directory)
+                             ;; /new and a fork keep the chat's own.
+                             (superchat-chat--tape
+                              (or (superchat-tape-directory superchat-chat--tape)
+                                  superchat-chat--pending-directory)))))
         (with-current-buffer (generate-new-buffer "*superchat: new*")
           (superchat-chat-mode)
           (setq superchat-chat--tape tape

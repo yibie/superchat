@@ -1613,5 +1613,10 @@ heading."
               (with-current-buffer buffer (superchat-chat-send "/level auto"))
               (superchat-test-script (list '(:text "ok"))
                 (with-current-buffer buffer (superchat-chat-send "hi")))
-              (should (equal (superchat-tape-directory "f1") superchat-test-chat--dir)))
+              (should (equal (superchat-tape-directory "f1") superchat-test-chat--dir))
+              ;; A chat opened from that chat, as /new and a fork are, keeps it.
+              (let ((next (with-current-buffer buffer (superchat-chat-open "f2"))))
+                (superchat-test-script (list '(:text "ok"))
+                  (with-current-buffer next (superchat-chat-send "hi")))
+                (should (equal (superchat-tape-directory "f2") superchat-test-chat--dir))))
           (kill-buffer))))))

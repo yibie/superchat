@@ -148,7 +148,8 @@ derived from `org-mode`.
   command that needs a scope (`/new`, `/resume`, `/topic`, `/recall`,
   `/notes`, and the commands of `superchat.el` called from it) uses that.
   It also keeps a working directory from the buffer current when it is
-  made: a file's directory, a `dired` buffer's, else none; every run gives
+  made: a file's directory, a `dired` buffer's, a chat's own, else none;
+  every run gives
   it as DIRECTORY, which only the first `user` entry keeps.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
