@@ -113,11 +113,11 @@ prompt tells it which.
 | tool | class |
 |---|---|
 | `read` (a file, a buffer or a directory), `grep`, `find`, `load_tools` | read |
-| `recall`, `tape_query`, `note` (loaded on first use) | read |
+| `recall`, `note`; `tape_query` (loaded on first use) | read |
 | `edit`, `write` (each saves the file) | write |
 | `eval_elisp`, `shell` | exec |
 
-Every request offers the core tools above. The memory tools, the timer tools
+Every request offers the tools above but `tape_query`. It, the timer tools
 and a plugin's tools are listed in the system prompt by name and first
 sentence, and the model loads the ones it needs with `load_tools`; once
 loaded, they stay offered for the rest of that conversation. Skills are
