@@ -349,6 +349,24 @@ the call was outside the project.
   `[timed out after N seconds and killed]`, or
   `[output passed N characters; the command was stopped]`.
 
+## superchat-lint.el
+
+After `edit` or `write` saves a file, the checks run in its buffer and what
+they find follows the tool's result as notices, `[Lint: …]`, so the model
+fixes it in the same round. A lint never refuses a change.
+
+- `(superchat-lint-check FILE)` → the lines found, each `Lint: …`: built
+  in, an Emacs Lisp buffer whose brackets or strings do not balance
+  (`check-parens`, with the line), and up to three lines holding a control,
+  private-use or replacement character; then each function of
+  `superchat-lint-functions` (a `defvar`), called with FILE, returning nil or
+  lines. A check that signals is reported as a line, not raised.
+- `(superchat-lint-command PATTERN COMMAND)` → such a function: for a file
+  matching the regexp PATTERN, run the shell COMMAND, `%s` in it the quoted
+  file name; an exit other than 0 is a line with the command, its status and
+  the last 10 lines of its output. It is stopped after
+  `superchat-lint-seconds` (a `defvar`, 20).
+
 ## superchat-recall.el
 
 Three tools, defined with `superchat-tool-define`, all of class `read`:

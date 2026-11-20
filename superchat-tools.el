@@ -12,6 +12,7 @@
 (require 'superchat)
 (require 'superchat-tape)
 (require 'superchat-permission)
+(require 'superchat-lint)
 
 (defvar superchat-tools--registry (make-hash-table :test #'equal)
   "Tool name to its plist (:description :args :class :function :async).")
@@ -621,22 +622,24 @@ Case and overlapping occurrences count."
 (defun superchat-tools--save (unsaved)
   "Save the current buffer to its file, unless it visits none or UNSAVED, the
 person's own changes it held before the tool changed it, which are theirs to
-save.  Return the notice to add to the result, or nil."
+save.  Return the notices to add to the result: of the save, then of the
+lint of what was saved."
   (cond
    ((not buffer-file-name) nil)
-   (unsaved "Not saved: the buffer held unsaved changes of the person's; they save it")
+   (unsaved (list "Not saved: the buffer held unsaved changes of the person's; they save it"))
    (t (let ((before (buffer-substring-no-properties (point-min) (point-max))))
         (make-directory (file-name-directory buffer-file-name) t)
         (unless (file-exists-p buffer-file-name) (set-buffer-modified-p t))
         ;; Quiet: a save message in the echo area for each change is noise.
         (let ((require-final-newline nil) (make-backup-files nil) (save-silently t))
           (save-buffer))
-        (unless (string= before (buffer-substring-no-properties (point-min) (point-max)))
-          "Saving changed the text (a hook of the person's, such as a formatter); read it before the next edit")))))
+        (cons (unless (string= before (buffer-substring-no-properties (point-min) (point-max)))
+                "Saving changed the text (a hook of the person's, such as a formatter); read it before the next edit")
+              (superchat-lint-check buffer-file-name))))))
 
 (defun superchat-tools--change (path name function)
   "Call FUNCTION in buffer NAME, or in the buffer visiting PATH (visited when
-none does), then save it; the notice of the save, or nil."
+none does), then save it; the notices of the save and its lint."
   (cl-flet ((change () (let ((unsaved (and buffer-file-name (buffer-modified-p))))
                          (funcall function)
                          (superchat-tools--save unsaved))))
@@ -661,9 +664,9 @@ none does), then save it; the notice of the save, or nil."
                  (error "No such file: %s" path))
                (superchat-tools--noted
                 (format "Replaced 1 block in %s." (or name path))
-                (list (superchat-tools--change
-                       path name (lambda () (superchat-tools--replace (plist-get args :old)
-                                                                      (plist-get args :new)))))))))
+                (superchat-tools--change
+                 path name (lambda () (superchat-tools--replace (plist-get args :old)
+                                                                (plist-get args :new))))))))
 
 (superchat-tool-define
  "write" :class 'write
@@ -676,17 +679,17 @@ none does), then save it; the notice of the save, or nil."
              (let ((content (plist-get args :content)))
                (superchat-tools--noted
                 (format "Wrote %d characters to %s." (length content) (plist-get args :path))
-                (list (superchat-tools--change
-                       (plist-get args :path) nil
-                       (lambda ()
-                         ;; A new file in a new directory is visited read-only.
-                         (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
-                         (save-restriction
-                           (widen)
-                           (undo-boundary)
-                           (erase-buffer)
-                           (insert content)
-                           (undo-boundary)))))))))
+                (superchat-tools--change
+                 (plist-get args :path) nil
+                 (lambda ()
+                   ;; A new file in a new directory is visited read-only.
+                   (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
+                   (save-restriction
+                     (widen)
+                     (undo-boundary)
+                     (erase-buffer)
+                     (insert content)
+                     (undo-boundary))))))))
 
 ;;; Executing
 

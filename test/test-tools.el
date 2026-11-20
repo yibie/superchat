@@ -1011,6 +1011,17 @@ DIR is no project: the .git is in a subdirectory."
         (superchat-test-tools--ok "edit" :path "q.txt" :old "a" :new "b"))
       (should (eq silent t)))))
 
+(ert-deftest superchat-tools-a-saved-file-is-linted-at-once ()
+  (superchat-test-tools--in-scope
+    (superchat-test-tools--write dir "m.el" "(defun f () (list 1))\n")
+    (let ((result (superchat-test-tools--ok "edit" :path "m.el" :old "(list 1))" :new "(list 1)")))
+      ;; The edit is saved, and its result says what is now wrong.
+      (should (string-match-p "\\`Replaced 1 block in m.el\\." result))
+      (should (string-match-p "\\[Lint: Unbalanced parentheses" result)))
+    (let ((superchat-lint-functions (list (lambda (file) (and (string-suffix-p "w.txt" file) "too short")))))
+      (should (string-match-p "\\[Lint: too short\\]"
+                              (superchat-test-tools--ok "write" :path "w.txt" :content "x"))))))
+
 (ert-deftest superchat-tools-write-saves-the-file ()
   (superchat-test-tools--in-scope
     (let ((file (expand-file-name "new/dir/w.txt" dir)))
