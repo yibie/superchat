@@ -370,6 +370,22 @@
       (should (eq status 'done))
       (should-not (memq 'continued (superchat-test-agent--types "t"))))))
 
+(ert-deftest superchat-agent-a-run-going-round-is-redirected-once ()
+  (superchat-test-agent--with
+    (let ((superchat-guard-min-calls 3) (superchat-guard-churn 2)
+          (poke `(:calls (,(superchat-test-agent--call "c" "echo" :x "a"))))
+          (edit `(:calls ((:id "e" :name "edit" :args (:path "x.el" :old "a" :new "b"))))))
+      (superchat-tool-define "edit" :class 'read :description "Edit" :function (lambda (_) "Replaced."))
+      (unwind-protect
+          (superchat-test-script (list poke edit edit poke poke '(:text "Done."))
+            (superchat-run "t" "go")
+            (let ((systems (mapcar (lambda (r) (plist-get r :system)) (reverse superchat-test-requests))))
+              ;; After three calls, two of them to x.el, the next request is redirected, once.
+              (should (equal (mapcar (lambda (s) (and (string-search "Process check" s) t)) systems)
+                             '(nil nil nil t nil nil))))
+            (should (equal (cl-count 'redirect (superchat-test-agent--types "t")) 1)))
+        (load "superchat-tools")))))
+
 (ert-deftest superchat-agent-max-rounds ()
   (superchat-test-agent--with
     (let ((superchat-max-rounds 2) status paused

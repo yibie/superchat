@@ -20,6 +20,7 @@
 (require 'superchat-view)
 (require 'superchat-context)
 (require 'superchat-request)
+(require 'superchat-guard)
 
 (defvar superchat-agent--runs (make-hash-table :test #'equal)
   "Timeline name to its run, while it has one.")
@@ -286,7 +287,12 @@ for an answer."
          (tools (plist-get run :tools))
          (last (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds)))
          ;; The note after a look-back goes with the first request only.
-         (resumed (prog1 (plist-get run :resumed) (setf (plist-get run :resumed) nil))))
+         (resumed (prog1 (plist-get run :resumed) (setf (plist-get run :resumed) nil)))
+         ;; A run going round is redirected once (superchat-guard.el).
+         (signals (unless (or last (plist-get run :redirected))
+                    (superchat-guard-signals
+                     (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id))) entries))))
+         (redirect (and signals (superchat-guard-going-round-p signals))))
     (setf (plist-get run :last) last)
     (cond
      ((> size (* 2 budget))
@@ -298,6 +304,12 @@ for an answer."
                    "Raise `superchat-context-chars' or start a new conversation."
                  "Start a new conversation."))))
      (t
+      (when redirect
+        (setf (plist-get run :redirected) t)
+        (superchat-tape-append tape 'event (format "Going round: %s; told once to change the approach."
+                                                   (superchat-guard-counts signals))
+                               :data (list :type "redirect"))
+        (superchat-agent--emit run))
       (superchat-agent--guard
        run (lambda ()
              (superchat-agent--track
@@ -306,7 +318,8 @@ for an answer."
                      messages
                      :system (concat (superchat-context-system tape (plist-get run :system))
                                      (and last (superchat-agent--facts run superchat-agent--limit-note))
-                                     (and resumed (superchat-agent--facts run superchat-agent--resume-note)))
+                                     (and resumed (superchat-agent--facts run superchat-agent--resume-note))
+                                     (and redirect (concat "\n\n" (superchat-guard-redirect signals))))
                      ;; The tools stay: a provider that has no tool in the
                      ;; request may leak its call syntax as text. A call of
                      ;; this answer is dropped by --respond.
@@ -416,7 +429,7 @@ ended the run on that entry."
 missing one would make a new list."
   (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                      :stop nil :done nil :text nil :error nil :tries 0 :timer nil
-                     :continues 0 :resumed nil :paused nil)))
+                     :continues 0 :resumed nil :paused nil :redirected nil)))
 
 (defun superchat-question (tape)
   "The `question' event of timeline TAPE that waits for its answer, or nil."

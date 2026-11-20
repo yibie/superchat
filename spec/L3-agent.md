@@ -259,3 +259,25 @@ calls: per tool, failed, files changed, repeated calls, last 3 failures.
   the request and the budget, names the model or says that none is set, and
   says to start a new conversation; it advises raising
   `superchat-context-chars` too only when that is a number.
+
+## superchat-guard.el
+
+A run going round, after Microsoft's TokenEconomizer loop guard: pure
+functions over a run's entries, which never stop a run.
+
+- `(superchat-guard-signals ENTRIES)` → `(:calls :errors :repeats :churn
+  :file)`: its `tool` entries; those that failed (`:error`, or an
+  `[exit status N]` other than 0, or a timeout); failures whose signature,
+  the first line naming a failure with numbers and paths taken out, came
+  before; the most changes by `edit` or `write` to one `:path`, and it.
+- `(superchat-guard-going-round-p SIGNALS)`: at least
+  `superchat-guard-min-calls` (18) calls, and a repeat, or at least
+  `superchat-guard-errors` (8) failures, or `superchat-guard-churn` (4)
+  changes to one file; the three are `defvar`s.
+- `(superchat-guard-counts SIGNALS)` → one line of them;
+  `(superchat-guard-redirect SIGNALS)` → the system line: the counts, and to
+  say why the approach fails and try a materially different one, not to stop.
+- Before each request but the last, a run not yet redirected whose entries
+  since its `user` entry are going round appends an `event` of type
+  `redirect`, `Going round: COUNTS; told once to change the approach.`, and
+  that request's system prompt ends with the redirect: once a run.
