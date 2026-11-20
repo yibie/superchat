@@ -296,7 +296,7 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
 
 ## superchat-inline.el
 
-- `superchat-rewrite` (a command): with a region, read an instruction, run on
+- `superchat-rewrite` (an autoloaded command): with a region, read an instruction, run on
   a new ephemeral timeline with tools `none`, and show the replacement in an
   overlay as it streams: the region stays in sight, dimmed and struck
   through, the replacement follows it highlighted. Point goes to the region,
@@ -311,7 +311,7 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
   once the run is over; `C-c C-k` cancels the run when it is active and
   discards the overlay. The request asks for the replacement text only; a
   fenced code block around the whole answer is unwrapped.
-- `superchat-ask` (a command): read a question; the origin is the current
+- `superchat-ask` (an autoloaded command): read a question; the origin is the current
   buffer, and the region when active is quoted in the request. It opens the
   chat buffer of the current buffer's own conversation, as `superchat`
   finds it (a new timeline when there is none), beside the current window and sends the question
@@ -339,7 +339,7 @@ Plugins live in another repository. This one ships none.
 
 ## superchat-messages.el
 
-- `superchat-messages`, a command: the buffer `*superchat: messages*`, in
+- `superchat-messages`, an autoloaded command: the buffer `*superchat: messages*`, in
   `superchat-messages-mode` (from `special-mode`), one line for each
   `event` of type `sent` on the Tape and each `question` that waits
   (`superchat-question`), oldest first: `YYYY-MM-DD HH:MM  TIMELINE
@@ -364,7 +364,7 @@ need the chat.
   `superchat-view-render`, blocks apart by an empty line, or `No entries.`.
   `RET` opens the conversation of the entry at point, `n` and `p` go to the
   next and previous entry, `g` calls VIEW again.
-- `superchat-timers`, a command: the buffer `*superchat: timers*`, in
+- `superchat-timers`, a command autoloaded through `superchat-chat.el`: the buffer `*superchat: timers*`, in
   `superchat-timers-mode`, lists `superchat-timer-list`, one line each: id,
   timeline, data but `:until`, `until DATE`, the text's first line, or
   `No timers.`. On a line `c` cancels that timer and lists anew, `RET`

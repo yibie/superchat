@@ -96,6 +96,7 @@ The region stays as it is."
         (message "Rewrite %s%s" (if (eq status 'error) "failed: " "cancelled")
                  (if (eq status 'error) (plist-get run :error) ""))))))
 
+;;;###autoload
 (defun superchat-rewrite (instruction)
   "Ask the model to rewrite the region by INSTRUCTION.
 The replacement shows after the region, which is struck through;
@@ -127,6 +128,7 @@ The replacement shows after the region, which is struck through;
           (setq started t))
       (unless started (delete-overlay overlay)))))
 
+;;;###autoload
 (defun superchat-ask (question)
   "Ask QUESTION about this buffer, or the region, in the chat buffer."
   (interactive (list (read-string "Ask: ")))

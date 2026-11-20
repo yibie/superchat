@@ -51,7 +51,7 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
   `:daily` names. A due timer puts `Your timer ID is due: TEXT`, unattended, as source
   `"timer"`, id `ID@SECONDS`: once per time, and once for all times missed
   while Emacs was closed.
-- `(superchat-timer-start)`, a command: put what is due and wake the worker
+- `(superchat-timer-start)`, an autoloaded command: put what is due and wake the worker
   now and every `superchat-timer-poll-seconds` (a `defvar`, 60).
   `(superchat-timer-cancel ID)` cancels.
 - Deferred tools, class `write` (they make unwatched work): `follow_up` (`in` ≥ 60

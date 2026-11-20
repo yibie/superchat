@@ -92,6 +92,8 @@ after TITLE, an entry a block that knows its entry."
   "The timers that may still fire.  c cancels one, RET opens its
 conversation, g shows them anew.")
 
+;; Loaded through the chat, which sets `superchat-views-open-function'.
+;;;###autoload (autoload 'superchat-timers "superchat-chat" nil t)
 (defun superchat-timers ()
   "Show the timers that may still fire, one a line."
   (interactive)

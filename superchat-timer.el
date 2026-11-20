@@ -79,6 +79,7 @@ the latest time it is due, however many were missed while Emacs was closed."
                            :source "timer" :id (format "%d@%d" (plist-get timer :id) (floor time))
                            :unattended t))))
 
+;;;###autoload
 (defun superchat-timer-start ()
   "Look at the timers and the inbox now and every `superchat-timer-poll-seconds'."
   (interactive)

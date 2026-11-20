@@ -22,6 +22,7 @@
 (define-derived-mode superchat-messages-mode special-mode "Superchat-Messages"
   "What runs sent to the person, newest last.  RET opens its conversation.")
 
+;;;###autoload
 (defun superchat-messages ()
   "Show what runs sent with the `send' tool and the questions that wait for
 the person, newest last."
