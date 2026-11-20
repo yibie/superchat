@@ -38,13 +38,16 @@ it is written, once, with nothing to confirm or retire it.
   notes. A candidate, seen in fewer than three timelines, is never shown.
 - **L4, a new module `superchat-facts.el`.**
   - A detector, no model, of **form repair**: in a run, a `shell` command
-    that failed with an environmental error (command not found, an unknown
+    whose output shows an environmental error (the exit status is not
+    enough: the model pipes commands, `check.sh | tail`, and the pipe
+    exits 0) (command not found, an unknown
     or invalid option, a missing environment variable, the command's own
     script or program file not found), and a later command of the same
     program, in a **different form**, that succeeded. The program is the
     first word after leading `cd DIR &&` and `VAR=VALUE` parts are taken off.
-    The fact is "`FAILED` fails here; `WORKED` works", keyed by the failing
-    form with numbers and paths taken out. A test or a check that fails and
+    The fact is "`FAILED` fails here; `WORKED` works", keyed by the program
+    and what the error names (the option, the missing file or command), not
+    by the whole command: the same lesson comes in many commands. A test or a check that fails and
     then passes after a code change is no such fact: its error is no
     environmental class and its form does not change. A save that changed
     the text (the notice of L2) makes "saving `*.EXT` reformats it; read
@@ -82,6 +85,26 @@ it is written, once, with nothing to confirm or retire it.
   are for later, when the Tape shows them.
 - Leave learning to the person's `AGENTS.md`. Not taken alone: it is what
   the person writes; facts are what the runs found.
+
+## Replay
+
+On 2026-11-19 the detector was replayed over the person's Tape (this
+project: 10 timelines, 53 runs, 283 `shell` calls; home: 41 runs).
+
+- Keyed by the whole failing command, as first written: 8 candidates in
+  this project, each seen in one run, none active; none in home.
+- 19 failed calls by their output, but 8 by their exit status: pipes hide
+  the rest. The detector now reads the output.
+- Keyed by program and what the error names: one fact reaches three runs,
+  `cat -A` is an illegal option here (macOS); next come two runs of
+  "No such file or directory" and single runs of a missing `-L` for
+  `emacs --batch`.
+- No save that changed the text: the notice is newer than most of the
+  Tape.
+
+So the detector alone finds about one fact in this project's history; the
+model's review of `redirect` and `paused` runs, which cannot be replayed
+without a model, is where most facts would come from.
 
 ## Acceptance criteria
 
