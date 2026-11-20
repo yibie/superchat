@@ -18,7 +18,7 @@
 (require 'superchat-permission)
 (require 'superchat-agent)
 (require 'superchat-recall)
-(require 'superchat-inbox)
+(require 'superchat-timer)
 (require 'superchat-plugin)
 (require 'superchat-turn)
 
@@ -768,10 +768,10 @@ this scope's `timelines' view with `completing-read'."
 (superchat-command-define
  "timers" (lambda (arg)
             (if (string-match "\\`cancel +\\([0-9]+\\)\\'" arg)
-                (message "%s" (superchat-inbox-cancel-timer (string-to-number (match-string 1 arg))))
+                (message "%s" (superchat-timer-cancel (string-to-number (match-string 1 arg))))
               (superchat-chat--show
                "timers"
-               (if-let* ((timers (superchat-inbox-timers)))
+               (if-let* ((timers (superchat-timer-list)))
                    (mapconcat (lambda (e) (format "%d  %s  %s  %s\n" (plist-get e :id) (plist-get e :tape)
                                                   (string-trim (format "%S" (plist-get e :data)) "(" ")")
                                                   (plist-get e :text)))
@@ -782,9 +782,9 @@ this scope's `timelines' view with `completing-read'."
  "dream" (lambda (arg)
            (let ((scope (superchat-chat--scope)))
              (if (equal arg "off")
-                 (progn (superchat-inbox-dream scope t) (message "Dreaming is off for %s" scope))
+                 (progn (superchat-timer-dream scope t) (message "Dreaming is off for %s" scope))
                (message "Dreaming is on for %s: timer %d, each day at 03:00" scope
-                        (plist-get (superchat-inbox-dream scope) :id)))))
+                        (plist-get (superchat-timer-dream scope) :id)))))
  "[off] Review this scope's notes each night while nobody watches, or stop.")
 (superchat-command-define "note" #'superchat-chat--note
                           "text. Keep TEXT as a note, as the note tool does.")
