@@ -19,6 +19,12 @@
 with the file name.  Each returns nil, or one or more lines that say what is
 wrong, which the tool's result shows.  `superchat-lint-command' makes one.")
 
+(defvar superchat-lint-project-command nil
+  "A shell command a project runs after `edit' or `write' saves one of its
+files, or nil.  Set in the project's `.dir-locals.el', run in that file's
+directory; see `superchat-lint-check'.  Not safe as a local variable: it
+runs the project's code, so the person accepts its value once.")
+
 (defvar superchat-lint-seconds 20
   "Seconds a command of `superchat-lint-command' may take before it is stopped.")
 
@@ -51,7 +57,8 @@ lines, each starting with \"Lint: \"; nil when nothing is wrong.  A check that
 signals is reported, not raised."
   (let (found)
     (dolist (check (append (list (lambda (_) (superchat-lint--parens))
-                                 (lambda (_) (superchat-lint--characters)))
+                                 (lambda (_) (superchat-lint--characters))
+                                 #'superchat-lint--project)
                            superchat-lint-functions))
       (let ((text (condition-case err (funcall check file)
                     (error (format "the check %s failed: %s"
@@ -61,6 +68,14 @@ signals is reported, not raised."
           (dolist (line (split-string (string-trim text) "\n" t))
             (push (concat "Lint: " line) found)))))
     (nreverse found)))
+
+(defun superchat-lint--project (file)
+  "Run the current buffer's `superchat-lint-project-command' on FILE, in the
+directory of the `.dir-locals.el' that set it."
+  (when superchat-lint-project-command
+    (let ((default-directory (or (locate-dominating-file file ".dir-locals.el")
+                                 default-directory)))
+      (funcall (superchat-lint-command "" superchat-lint-project-command) file))))
 
 (defun superchat-lint-command (pattern command)
   "A check for `superchat-lint-functions': for a saved file whose name

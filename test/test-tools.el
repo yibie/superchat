@@ -1096,3 +1096,18 @@ DIR is no project: the .git is in a subdirectory."
 
 (provide 'test-tools)
 ;;; test-tools.el ends here
+
+(ert-deftest superchat-tools-a-project-lint-command-runs-only-once-trusted ()
+  (superchat-test-tools--in-scope
+    (let ((value "echo from the project; exit 1"))
+      (with-temp-file (expand-file-name ".dir-locals.el" dir)
+        (prin1 `((nil . ((superchat-lint-project-command . ,value)))) (current-buffer)))
+      ;; Not trusted: no question, which would hold Emacs, and no command.
+      (cl-letf (((symbol-function 'hack-local-variables-confirm)
+                 (lambda (&rest _) (error "Asked about a local variable"))))
+        (should-not (string-match-p "from the project"
+                                    (superchat-test-tools--ok "write" :path "a.txt" :content "x"))))
+      ;; Trusted by the person: the command runs, its output in the result.
+      (let ((safe-local-variable-values (list (cons 'superchat-lint-project-command value))))
+        (should (string-match-p "\\[Lint: echo from the project; exit 1 exited 1:\\]\n\\[Lint: from the project\\]"
+                                (superchat-test-tools--ok "write" :path "b.txt" :content "x")))))))

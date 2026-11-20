@@ -324,7 +324,9 @@ the call was outside the project.
   visited for an edit that fails is killed again. Its result is
   `Replaced 1 block in PATH.`, BUFFER in place of PATH for a buffer.
   `write` creates a file that does not exist; its result is
-  `Wrote N characters to PATH.`.
+  `Wrote N characters to PATH.`. A file a tool visits gets only the local
+  variables the person already trusts (`enable-local-variables` `:safe`):
+  a question there would hold Emacs.
 - The save makes the file's directory when needed, writes a file that does
   not exist even when the buffer is empty, adds no final newline, leaves
   no backup file, whatever the person's Emacs says, and shows no message. A buffer that visits no
@@ -361,6 +363,10 @@ fixes it in the same round. A lint never refuses a change.
   private-use or replacement character; then each function of
   `superchat-lint-functions` (a `defvar`), called with FILE, returning nil or
   lines. A check that signals is reported as a line, not raised.
+- Before those functions, the buffer's `superchat-lint-project-command` (a
+  `defvar`, nil), set by a project's `.dir-locals.el` and not safe as a
+  local variable, runs as `superchat-lint-command` would for every file, in
+  the directory of that `.dir-locals.el`.
 - `(superchat-lint-command PATTERN COMMAND)` → such a function: for a file
   matching the regexp PATTERN, run the shell COMMAND, `%s` in it the quoted
   file name; an exit other than 0 is a line with the command, its status and

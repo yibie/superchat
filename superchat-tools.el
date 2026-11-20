@@ -593,7 +593,9 @@ A buffer visited here is killed again when FUNCTION signals: nothing in it
 is worth keeping."
   (when (file-directory-p file) (error "%s is a directory" file))
   (let* ((old (find-buffer-visiting file))
-         (buffer (or old (find-file-noselect file)))
+         ;; Only local variables already trusted: a question here would
+         ;; hold Emacs, and nobody may be watching.
+         (buffer (or old (let ((enable-local-variables :safe)) (find-file-noselect file))))
          done)
     (unwind-protect
         (prog1 (with-current-buffer buffer (funcall function)) (setq done t))

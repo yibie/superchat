@@ -52,3 +52,21 @@
 
 (provide 'test-lint)
 ;;; test-lint.el ends here
+
+(ert-deftest superchat-lint-runs-the-project-command-where-it-was-set ()
+  (let* ((root (file-name-as-directory (make-temp-file "sc-lint-" t)))
+         (sub (expand-file-name "sub/" root)))
+    (unwind-protect
+        (progn
+          (make-directory sub)
+          (with-temp-file (expand-file-name ".dir-locals.el" root) (insert "()"))
+          (superchat-test-lint--in #'text-mode "x\n"
+            ;; Run in the root of the .dir-locals.el, not the file's directory.
+            (setq-local superchat-lint-project-command "pwd; exit 3")
+            (setq default-directory sub)
+            (should (equal (superchat-lint-check (expand-file-name "f.txt" sub))
+                           (list "Lint: pwd; exit 3 exited 3:"
+                                 (concat "Lint: " (directory-file-name root)))))
+            (setq-local superchat-lint-project-command "true")
+            (should-not (superchat-lint-check (expand-file-name "f.txt" sub)))))
+      (delete-directory root t))))
