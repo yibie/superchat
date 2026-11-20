@@ -801,7 +801,23 @@ none does), then save it; the notices of the save and its lint."
                    (dolist (form (nreverse forms)) (push (eval form t) values)))
                  (concat (with-current-buffer log (buffer-substring-no-properties from (point-max)))
                          (let ((print-escape-newlines t))
-                           (mapconcat #'prin1-to-string (nreverse values) "\n")))))))
+                           (mapconcat (lambda (v) (prin1-to-string (superchat-tools--plain v)))
+                                      (nreverse values) "\n")))))))
+
+(defun superchat-tools--plain (value &optional depth)
+  "VALUE with the text properties of its strings left out, so a buffer's
+text prints as text, not with every property it carries.  Past DEPTH 50
+of nesting VALUE is kept as it is."
+  (let ((depth (or depth 0)))
+    (cond ((> depth 50) value)
+          ((stringp value) (substring-no-properties value))
+          ((proper-list-p value)
+           (mapcar (lambda (v) (superchat-tools--plain v (1+ depth))) value))
+          ((consp value) (cons (superchat-tools--plain (car value) (1+ depth))
+                               (superchat-tools--plain (cdr value) (1+ depth))))
+          ((and (vectorp value) (not (recordp value)))
+           (vconcat (mapcar (lambda (v) (superchat-tools--plain v (1+ depth))) value)))
+          (t value))))
 
 (defun superchat-tools--tail (output file spilled)
   "The end of a command's OUTPUT that fits, whole lines, with the notice of

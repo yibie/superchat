@@ -169,6 +169,15 @@
       (should (equal (plist-get entry :data) '(:call-id "id9" :name "eval_elisp" :error nil)))
       (should (equal (plist-get entry :text) "3")))))
 
+(ert-deftest superchat-tools-eval-prints-text-not-its-properties ()
+  ;; A buffer's text carries properties (a chat client's, megabytes of them);
+  ;; the value printed is the text.
+  (superchat-test-tools--in-scope
+    (let ((entry (superchat-test-tools--await
+                  "t" '(:id "p1" :name "eval_elisp"
+                        :args (:code "(list 43 (propertize \"hi\" 'face 'bold 'big (make-list 9 'x)))")))))
+      (should (equal (plist-get entry :text) "(43 \"hi\")")))))
+
 (ert-deftest superchat-tools-unknown-and-missing-argument ()
   (superchat-test-tools--in-scope
     (should (string-match-p "Unknown tool: frob" (superchat-test-tools--err "frob")))

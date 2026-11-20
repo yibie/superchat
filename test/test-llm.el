@@ -867,6 +867,24 @@ STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
       (should (equal (car ids) "call_0"))
       (should-not (equal (cadr ids) "call_0")))))
 
+(ert-deftest superchat-llm-text-a-request-cannot-carry-becomes-a-replacement ()
+  ;; Text from a buffer of broken bytes holds raw bytes or a lone surrogate,
+  ;; which no JSON can carry: they go as U+FFFD, the rest stays.
+  (let* ((broken (concat "a" (string #x3fffed #x3fffa0) "b" (string #xd83d) "c😀"))
+         (clean "a\ufffd\ufffdb\ufffdc😀")
+         (context (superchat-llm--context
+                   (list (list :role 'user :text broken)
+                         (list :role 'tool :call-id "c1" :name "eval_elisp" :text broken))
+                   broken nil nil))
+         (messages (superchat-bridge-context-messages context)))
+    (should-error (json-serialize (vector broken)))
+    (should (equal (superchat-bridge-context-system-prompt context) clean))
+    (should (equal (superchat-bridge-user-message-content (nth 0 messages)) clean))
+    (should (equal (superchat-bridge-text-content-text
+                    (car (superchat-bridge-tool-result-message-content (nth 1 messages))))
+                   clean))
+    (should (json-serialize (vector clean)))))
+
 (provide 'test-llm)
 ;;; test-llm.el ends here
 

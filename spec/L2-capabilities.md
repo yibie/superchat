@@ -15,7 +15,9 @@ requires `llm.el`.
   → a handle.
   - MESSAGES: a list of `(:role user :text S)`,
     `(:role assistant :text S :calls CALLS)` and
-    `(:role tool :call-id ID :name NAME :text S)`.
+    `(:role tool :call-id ID :name NAME :text S)`. A character no JSON
+    can carry (a raw byte, a lone surrogate) in any text or SYSTEM is sent
+    as U+FFFD.
   - TOOLS: a list of `(:name S :description S :args ARGS)`, each of ARGS
     `(:name S :type string|number|boolean :description S :required BOOL)`.
     They become the bridge tools with a JSON-schema object as parameters.
@@ -243,7 +245,7 @@ Built-in tools, and no others:
 | `find` | read | `pattern`, `path` opt, `limit` opt | files whose path matches the glob PATTERN, as Searching says |
 | `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW and save, as Changing says |
 | `write` | write | `path`, `content` | CONTENT becomes the whole text of the file PATH, saved |
-| `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return what was printed to `*Messages*` meanwhile, then the value of each form printed, one line each in order, a newline inside a value written `\n`; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
+| `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return what was printed to `*Messages*` meanwhile, then the value of each form printed without its strings' text properties, one line each in order, a newline inside a value written `\n`; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
 | `shell` | exec | `command`, `timeout` opt | run through `shell-file-name` with no input, at most TIMEOUT seconds (default `superchat-shell-seconds`), return the end of the output and the exit status, as Running says; asynchronous |
 
 The descriptions of the tools state the division: files through `read`,

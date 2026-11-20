@@ -195,6 +195,17 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
          :stop-reason (if calls "toolUse" "stop")
          :timestamp (superchat-llm--now)))))
 
+(defconst superchat-llm--unsendable
+  (rx (any (#xd800 . #xdfff) (#x3fff80 . #x3fffff)))
+  "A character a request cannot carry as JSON: a lone surrogate, or a raw
+byte that was never decoded (text from a buffer of broken bytes).")
+
+(defun superchat-llm--clean (text)
+  "TEXT with each character a request cannot carry replaced by U+FFFD."
+  (if (and text (string-match-p superchat-llm--unsendable text))
+      (replace-regexp-in-string superchat-llm--unsendable "\ufffd" text t t)
+    text))
+
 (defun superchat-llm--context (messages system tools model)
   "The bridge context that replays MESSAGES for MODEL, with SYSTEM and TOOLS."
   ;; A new user turn: no provider wants the reasoning of this conversation's
@@ -206,11 +217,11 @@ MODEL's own), zero usage, stop reason \"toolUse\" or \"stop\", a timestamp."
               (assoc-delete-all (superchat-llm--call-key calls)
                                 superchat-llm--kept)))))
   (superchat-bridge-make-context
-   :system-prompt system
+   :system-prompt (superchat-llm--clean system)
    :tools (mapcar #'superchat-llm--tool tools)
    :messages
    (cl-loop for message in messages
-            for text = (plist-get message :text)
+            for text = (superchat-llm--clean (plist-get message :text))
             for role = (plist-get message :role)
             for built = (pcase role
                           ('user (superchat-bridge-make-user-message
