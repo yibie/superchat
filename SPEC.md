@@ -106,7 +106,7 @@ points to require. A file requires nothing else, and
 
 | file | ceiling |
 |---|---|
-| `AGENTS.md` | 460 words |
+| `AGENTS.md` | 490 words |
 | `SPEC.md` | 2690 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 4200 words |

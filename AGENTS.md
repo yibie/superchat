@@ -30,9 +30,9 @@ write one line in `NOTES.md`, starting with the layer it concerns, and go on.
   the layer's line cap and this repository's style. Nothing else is read
   there, for any other layer.
 - Each module has a line cap in `SPEC.md`. Under the cap is good; far under is
-  better. Do not pad, and do not compress code to fit. A module is split by
-  what it is, never by its line count: when code does not fit, stop and
-  tell the person, who raises the cap or changes the design.
+  better. Do not pad or compress code to fit. Split a module by what it is,
+  never by its line count: when code does not fit, stop and tell the
+  person, who raises the cap or changes the design.
 - A test deletes only what it made with `make-temp-file`.
 - The shell is macOS's: BSD tools, so GNU-only options such as `cat -A` or
   `grep -P` fail; use `sed -n l` and `grep -E`.
