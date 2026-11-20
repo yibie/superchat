@@ -41,5 +41,17 @@
         (superchat-timers-open)
         (should (equal opened '("t1")))))))
 
+(ert-deftest superchat-views-timers-say-when-and-how-in-words ()
+  (let ((now (float-time)))
+    (should (equal (superchat-timers--repeats '(:daily "03:00" :dream t)) "dream 03:00"))
+    (should (equal (superchat-timers--repeats '(:every 7200)) "every 2h"))
+    (should (equal (superchat-timers--repeats '(:at 1)) "once"))
+    ;; The next time is never in the past, and at most a period away.
+    (let ((next (superchat-timers--next '(:every 60 :from 0) now)))
+      (should (and (>= next now) (<= next (+ now 60)))))
+    (let ((next (superchat-timers--next '(:daily "03:00") now)))
+      (should (and (> next now) (<= next (+ now 86400))))
+      (should (equal (format-time-string "%H:%M" next) "03:00")))))
+
 (provide 'test-views)
 ;;; test-views.el ends here

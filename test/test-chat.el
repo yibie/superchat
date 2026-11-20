@@ -1156,13 +1156,14 @@ tool `echo', and no chat buffers left behind."
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1")))
       (with-current-buffer buffer (superchat-chat-send "/timers"))
-      (should (equal (with-current-buffer "*superchat: timers*" (buffer-string)) "No timers.\n"))
+      (should-not (with-current-buffer "*superchat: timers*" tabulated-list-entries))
       (let ((id (plist-get (superchat-tape-append "t1" 'timer "brief" :data '(:daily "09:00")
                                                   :scope (superchat-test-chat--scope))
                            :id)))
         (with-current-buffer buffer (superchat-chat-send "/timers"))
-        (should (equal (with-current-buffer "*superchat: timers*" (buffer-string))
-                       (format "%d  t1  :daily \"09:00\"  brief\n" id)))
+        (with-current-buffer "*superchat: timers*"
+          (should (equal (plist-get (caar tabulated-list-entries) :id) id))
+          (should (string-match-p "daily 09:00 .*brief" (buffer-string))))
         (with-current-buffer buffer (superchat-chat-send (format "/timers cancel %d" id)))
         (should-not (superchat-timer-list))))))
 
@@ -1181,7 +1182,7 @@ tool `echo', and no chat buffers left behind."
         (goto-char (point-min))
         (superchat-timers-cancel)
         (should-not (superchat-timer-list))
-        (should (equal (buffer-string) "No timers.\n"))
+        (should-not tabulated-list-entries)
         (should (string-search (number-to-string id) (format "%S" (superchat-tape-entries :tape "t1" :kinds '(timer)))))))))
 
 (ert-deftest superchat-chat-dream-turns-dreaming-on-and-off ()
@@ -1601,9 +1602,11 @@ heading."
                                                  :scope (superchat-test-chat--scope))
                           :id)))
       (with-current-buffer buffer (superchat-chat-send "/timers"))
-      (should (equal (with-current-buffer "*superchat: timers*" (buffer-string))
-                     (format "%d  t1  :every 60 :from 0%s  tick\n" id
-                             (format-time-string "  until %F %R" until)))))))
+      (with-current-buffer "*superchat: timers*"
+        (should (equal (plist-get (caar tabulated-list-entries) :id) id))
+        (should (string-search (concat "every 1m" (format-time-string " ~%m-%d" until))
+                               (buffer-string)))
+        (should (string-search "tick" (buffer-string)))))))
 
 (ert-deftest superchat-chat-text-for-a-run-it-did-not-start-is-queued ()
   (superchat-test-chat--with

@@ -83,44 +83,81 @@ after TITLE, an entry a block that knows its entry."
 ;;; Timers
 
 (defvar-keymap superchat-timers-mode-map
-  :parent special-mode-map
+  :parent tabulated-list-mode-map
   "c" #'superchat-timers-cancel
-  "RET" #'superchat-timers-open
-  "g" #'superchat-timers)
+  "RET" #'superchat-timers-open)
 
-(define-derived-mode superchat-timers-mode special-mode "Superchat-Timers"
+(define-derived-mode superchat-timers-mode tabulated-list-mode "Superchat-Timers"
   "The timers that may still fire.  c cancels one, RET opens its
-conversation, g shows them anew.")
+conversation, g shows them anew, S sorts by the column at point."
+  (setq tabulated-list-format [("Next" 16 t) ("Repeats" 20 t) ("Project" 16 t)
+                               ("Task" 0 nil)]
+        tabulated-list-sort-key '("Next")
+        tabulated-list-padding 2)
+  (add-hook 'tabulated-list-revert-hook #'superchat-timers--entries nil t)
+  (tabulated-list-init-header))
+
+(defun superchat-timers--next (data set)
+  "When a timer of DATA, set at SET, fires next, as a time."
+  (let ((now (float-time)))
+    (cond ((plist-get data :at))
+          ((plist-get data :every)
+           (let ((from (or (plist-get data :from) set)) (every (plist-get data :every)))
+             (if (> from now) from (+ from (* every (ceiling (- now from) every))))))
+          ((plist-get data :daily)
+           (pcase-let* ((`(,h ,m) (mapcar #'string-to-number
+                                          (split-string (plist-get data :daily) ":")))
+                        (today (decode-time now)))
+             (let ((at (float-time (encode-time (list 0 m h (nth 3 today) (nth 4 today)
+                                                      (nth 5 today) nil -1 nil)))))
+               (if (> at now) at (+ at 86400))))))))
+
+(defun superchat-timers--repeats (data)
+  "How a timer of DATA repeats, in words."
+  (cond ((plist-get data :dream) (format "dream %s" (plist-get data :daily)))
+        ((plist-get data :daily) (format "daily %s" (plist-get data :daily)))
+        ((plist-get data :every)
+         (let ((s (plist-get data :every)))
+           (cond ((zerop (% s 86400)) (format "every %dd" (/ s 86400)))
+                 ((zerop (% s 3600)) (format "every %dh" (/ s 3600)))
+                 (t (format "every %dm" (/ s 60))))))
+        (t "once")))
+
+(defun superchat-timers--entries ()
+  "Fill `tabulated-list-entries' with the timers that may still fire."
+  (setq tabulated-list-entries
+        (mapcar (lambda (e)
+                  (let* ((data (plist-get e :data))
+                         (next (superchat-timers--next data (plist-get e :at)))
+                         (scope (plist-get e :scope)))
+                    (list e (vector
+                             (propertize (format-time-string "%m-%d %a %H:%M" next)
+                                         'face 'bold)
+                             (concat (superchat-timers--repeats data)
+                                     (if (plist-get data :until)
+                                         (format-time-string " ~%m-%d" (plist-get data :until))
+                                       ""))
+                             (propertize (if (string-prefix-p "/" scope)
+                                             (file-name-nondirectory (directory-file-name scope))
+                                           scope)
+                                         'face 'font-lock-constant-face)
+                             (car (split-string (plist-get e :text) "\n"))))))
+                (superchat-timer-list))))
 
 ;; Loaded through the chat, which sets `superchat-views-open-function'.
 ;;;###autoload (autoload 'superchat-timers "superchat-chat" nil t)
 (defun superchat-timers ()
-  "Show the timers that may still fire, one a line."
+  "Show the timers that may still fire as a table, the soonest first."
   (interactive)
   (with-current-buffer (get-buffer-create "*superchat: timers*")
-    (let ((inhibit-read-only t) (line (line-number-at-pos)))
-      (superchat-timers-mode)
-      (erase-buffer)
-      (dolist (e (superchat-timer-list))
-        (let ((data (plist-get e :data)))
-          (insert (propertize
-                   (format "%d  %s  %s%s  %s\n" (plist-get e :id) (plist-get e :tape)
-                           (string-trim (format "%S" (cl-loop for (k v) on data by #'cddr
-                                                              unless (eq k :until)
-                                                              append (list k v)))
-                                        "(" ")")
-                           (if-let* ((until (plist-get data :until)))
-                               (format-time-string "  until %F %R" until)
-                             "")
-                           (car (split-string (plist-get e :text) "\n")))
-                   'superchat-timers-timer e))))
-      (if (= (buffer-size) 0) (insert "No timers.\n") (goto-char (point-min)) (forward-line (1- line))))
+    (unless (derived-mode-p 'superchat-timers-mode) (superchat-timers-mode))
+    (superchat-timers--entries)
+    (tabulated-list-print t)
     (pop-to-buffer (current-buffer))))
 
 (defun superchat-timers--at-point ()
   "The timer on this line."
-  (or (get-text-property (line-beginning-position) 'superchat-timers-timer)
-      (user-error "No timer on this line")))
+  (or (tabulated-list-get-id) (user-error "No timer on this line")))
 
 (defun superchat-timers-cancel ()
   "Cancel the timer on this line."

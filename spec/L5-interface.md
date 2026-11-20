@@ -364,8 +364,9 @@ need the chat.
   `superchat-view-render`, blocks apart by an empty line, or `No entries.`.
   `RET` opens the conversation of the entry at point, `n` and `p` go to the
   next and previous entry, `g` calls VIEW again.
-- `superchat-timers`, a command autoloaded through `superchat-chat.el`: the buffer `*superchat: timers*`, in
-  `superchat-timers-mode`, lists `superchat-timer-list`, one line each: id,
-  timeline, data but `:until`, `until DATE`, the text's first line, or
-  `No timers.`. On a line `c` cancels that timer and lists anew, `RET`
-  opens its conversation, `g` lists anew; the keys follow `list-timers`.
+- `superchat-timers`, a command autoloaded through `superchat-chat.el`:
+  `*superchat: timers*`, a `tabulated-list-mode` table of `superchat-timer-list`,
+  soonest first: Next (when it fires), Repeats (`once`, `daily HH:MM`, `dream
+  HH:MM`, `every Nm/h/d`, `~MM-DD` when it lapses), Project (the scope's
+  directory name) and Task (the text's first line). `c` cancels the row's
+  timer, `RET` opens its conversation, `g` lists anew, `S` sorts.
