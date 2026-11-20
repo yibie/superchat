@@ -79,22 +79,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - An entry `superchat-tool-call` appended (a permission event, a result) is
   given to ON-ENTRY as soon as that call returns, also when the tool is
   asynchronous and its result comes later.
-- When `superchat-max-rounds` is a number (nil sets no limit), after that
-  many model responses in one run, the run asks the
-  model once more, its tools offered, a system line saying the limit is
-  reached, to call none, to begin with `Status: finished`, `blocked` or
-  `continue`, and to look back over the run's calls: what is done, what
-  failed and why, what is left, the plan for the next step; then the facts
-  `superchat-request-digest` counts over the run's entries. It records the
-  answer, less its status line, as an `assistant` entry with no calls.
-  `finished` ends the run `done`. Else, at the `auto`
-  level, not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2)
-  times a run, the run goes on: an `event` `(:type "continued" :count N :status S)`,
-  the count starts again, and the next request's system prompt
-  says to follow the plan, with the facts. Otherwise it ends `done`, the
-  look-back its text, with a `paused` event, not `error`, counting the
-  responses and the calls on the Tape. The
-  calls of the last response run first.
+- At the round limit the run looks back, then pauses or goes on
+  (`superchat-limit.el`).
 - A failed request of kind `rate-limit`, `server`, `timeout`, `network` or
   `empty` is retried: the run appends an `event` with `:data`
   `(:type "retry" :kind :status :wait :attempt :of)` (KIND a string) and a
@@ -281,3 +267,31 @@ functions over a run's entries, which never stop a run.
   since its `user` entry are going round appends an `event` of type
   `redirect`, `Going round: COUNTS; told once to change the approach.`, and
   that request's system prompt ends with the redirect: once a run.
+
+## superchat-limit.el
+
+What a run says and decides at the round limit: pure functions over a run's
+entries after its `user` entry; the loop stays in `superchat-agent.el`.
+
+- `superchat-limit-note` and `superchat-limit-resume-note`: the system lines
+  of the last request and of the first request after going on.
+- `(superchat-limit-facts ENTRIES NOTE)` → NOTE, then the facts
+  `superchat-request-digest` counts over ENTRIES.
+- `(superchat-limit-status TEXT)` → `(STATUS . REST)`: `finished`, `blocked`
+  or `continue` from a first line `Status: …` (Markdown around it allowed,
+  case ignored), nil when it names none, and TEXT without that line.
+- `(superchat-limit-paused ENTRIES)` → the `paused` event's text: the
+  responses and the calls counted on the Tape.
+- When `superchat-max-rounds` is a number (nil sets no limit), after that
+  many model responses in one run, the calls of the last response run
+  first, then the run asks the model once more, its tools offered, its
+  system prompt ending with `(superchat-limit-facts ENTRIES
+  superchat-limit-note)`. The note says to call no tool, to begin with a
+  status line, and to look back: what is done, what failed and why, what is
+  left, the plan. The answer, less its status line, is an `assistant` entry
+  with no calls. `finished` ends the run `done`. Else, at the `auto` level,
+  not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2) times a
+  run, the run goes on: an `event` `(:type "continued" :count N :status S)`,
+  the count starts again, and the next request's system prompt ends with
+  the facts and `superchat-limit-resume-note`. Otherwise it ends `done`, the
+  look-back its text, with a `paused` event, not `error`.

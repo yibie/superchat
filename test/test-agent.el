@@ -323,11 +323,11 @@
         ;; Two rounds of two responses, each ended by the look-back the limit asks for.
         (should (= (length superchat-test-requests) 6))
         (let ((sent (reverse superchat-test-requests)))
-          (should (string-search superchat-agent--limit-note (plist-get (nth 2 sent) :system)))
+          (should (string-search superchat-limit-note (plist-get (nth 2 sent) :system)))
           ;; The request after the first look-back says to go on, once.
-          (should (string-search superchat-agent--resume-note (plist-get (nth 3 sent) :system)))
-          (should-not (string-search superchat-agent--resume-note (plist-get (nth 4 sent) :system)))
-          (should (string-search superchat-agent--limit-note (plist-get (nth 5 sent) :system)))))
+          (should (string-search superchat-limit-resume-note (plist-get (nth 3 sent) :system)))
+          (should-not (string-search superchat-limit-resume-note (plist-get (nth 4 sent) :system)))
+          (should (string-search superchat-limit-note (plist-get (nth 5 sent) :system)))))
       ;; The look-back named no status; the event says so.
       (should (string-search "named no status"
                              (plist-get (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :type) "continued"))
@@ -401,7 +401,7 @@
           ;; The tools stay offered, so a provider cannot leak its call syntax
           ;; as text; the system line says to call none.
           (should (plist-get ended :tools))
-          (should (string-search superchat-agent--limit-note (plist-get ended :system)))))
+          (should (string-search superchat-limit-note (plist-get ended :system)))))
       (should (eq status 'done))
       ;; The calls of the last response ran: every call has its result.
       (should (equal (superchat-test-agent--types "t")
