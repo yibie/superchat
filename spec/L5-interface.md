@@ -214,7 +214,9 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
     `permission`, `question` or `answer` event of the turn belongs to the
     call it was asked for, the first call of the turn without a `tool` entry
     when the event came: a dimmed line just before that call's heading, or,
-    for a `question` and its `answer`, a dimmed heading there that folds. An
+    for a `question` and its `answer`, a dimmed heading there that folds. A
+    `redirect` event is a dimmed line before the first call after it, or at
+    the end of Progress when no call follows. An
     intermediate text is a
     level 3 heading `*** 💬 FIRST-LINE`, the first line of the converted
     text cut to 60 characters and `…`, with the whole converted text as its

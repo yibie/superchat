@@ -101,6 +101,24 @@
     (should (< (string-search "Allow it?" head) (string-search "write  :path" head)))
     (should-not (string-search "Allow" (cdr text)))))
 
+(ert-deftest superchat-turn-a-redirect-shows-where-it-came ()
+  (let* ((e #'superchat-test-turn--entry)
+         (user (funcall e 1 'user "hi" nil))
+         (a1 (funcall e 2 'assistant "" '(:calls ((:id "c1" :name "read" :args (:path "a.el"))))))
+         (t1 (funcall e 3 'tool "x" '(:call-id "c1" :name "read")))
+         (go (funcall e 4 'event "Going round: 20 calls" '(:type "redirect")))
+         (a2 (funcall e 5 'assistant "" '(:calls ((:id "c2" :name "read" :args (:path "b.el"))))))
+         (t2 (funcall e 6 'tool "y" '(:call-id "c2" :name "read")))
+         (done (funcall e 7 'assistant "Done." nil)))
+    ;; Before the call that came after it, inside Progress.
+    (let ((head (car (superchat-turn-text (list user a1 t1 go a2 t2 done) nil nil))))
+      (should (< (string-search "a.el" head) (string-search "Going round" head)
+                 (string-search "b.el" head))))
+    ;; With no call after it, at the end of Progress, before Answer.
+    (let ((text (superchat-turn-text (list user a1 t1 go done) nil nil)))
+      (should (< (string-search "Going round" (car text)) (string-search "** Answer" (car text))))
+      (should-not (string-search "Going round" (cdr text))))))
+
 (ert-deftest superchat-turn-a-question-heading-folds ()
   (let* ((user (superchat-test-turn--entry 1 'user "hi" nil))
          (assistant (superchat-test-turn--entry

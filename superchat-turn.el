@@ -273,12 +273,12 @@ person.  Each cell carries its face twice: Org's heading face would hide it."
     (set-match-data (list at (point)))
     t))
 
-(defun superchat-turn--progress (answers results asked done strip)
+(defun superchat-turn--progress (answers results asked done strip &optional after)
   "The Progress heading of the turn whose `assistant' entries other than the
 final answer are ANSWERS, and what it holds: their texts and calls.  RESULTS
 maps a call id to (TOOL ENTRY . SECONDS), ASKED to the permission events asked
-for it; STRIP is the turn's strip.  It is folded once the turn is DONE,
-unless a call failed."
+for it; STRIP is the turn's strip; AFTER, events that came after its last
+call, end it.  It is folded once the turn is DONE, unless a call failed."
   (let ((calls 0) (failed 0) inside waiting)
     (dolist (entry answers)
       (unless (string-empty-p (string-trim (plist-get entry :text)))
@@ -299,6 +299,7 @@ unless a call failed."
                                             :asked (gethash (plist-get call :id) asked))
                                       3)
                 inside))))
+    (dolist (event after) (push (superchat-turn-dim (concat (plist-get event :text) "\n")) inside))
     (when inside
       (superchat-turn--heading
        (concat "** " (and waiting (not done) "⏳ ") "Progress"
@@ -324,20 +325,29 @@ once the final answer is there or the turn is OVER."
          (final (and final (not (plist-get (plist-get final :data) :calls))
                      (not (string-empty-p (string-trim (plist-get final :text))))
                      final))
-         (before nil))
+         (before nil)
+         ;; A redirect comes between responses: it shows before the next call.
+         (redirects nil))
     (dolist (entry entries)
       (pcase (plist-get entry :kind)
-        ('assistant (setq waiting (append waiting (mapcar (lambda (c) (plist-get c :id))
-                                                          (plist-get (plist-get entry :data) :calls)))))
+        ('assistant (let ((calls (plist-get (plist-get entry :data) :calls)))
+                      (when (and redirects calls)
+                        (let ((id (plist-get (car calls) :id)))
+                          (puthash id (append (gethash id asked) (nreverse redirects)) asked))
+                        (setq redirects nil))
+                      (setq waiting (append waiting (mapcar (lambda (c) (plist-get c :id)) calls)))))
         ('tool (let ((id (plist-get (plist-get entry :data) :call-id)))
                  (setq waiting (remove id waiting))
                  (puthash id (cons entry (if before (- (plist-get entry :at) (plist-get before :at)) 0))
                           results)))
         ;; Asked for the next call to run: the first that has no result yet.
-        ('event (when (and waiting (member (plist-get (plist-get entry :data) :type)
-                                           '("permission" "question" "answer")))
-                  (puthash (car waiting) (append (gethash (car waiting) asked) (list entry)) asked)
-                  (setq entries (remq entry entries)))))
+        ('event (cond ((equal (plist-get (plist-get entry :data) :type) "redirect")
+                       (push entry redirects)
+                       (setq entries (remq entry entries)))
+                      ((and waiting (member (plist-get (plist-get entry :data) :type)
+                                            '("permission" "question" "answer")))
+                       (puthash (car waiting) (append (gethash (car waiting) asked) (list entry)) asked)
+                       (setq entries (remq entry entries))))))
       (setq before entry))
     (cl-flet ((others (user) (mapconcat #'superchat-turn--format
                                         (seq-filter (lambda (e) (eq (eq (plist-get e :kind) 'user) user))
@@ -350,7 +360,8 @@ once the final answer is there or the turn is OVER."
                       (concat (superchat-turn-seal "* Assistant\n" (plist-get (car answers) :id))
                               (superchat-turn--progress
                                (seq-remove (lambda (e) (eq e final)) answers) results asked
-                               (or final over) (superchat-turn-strip entries))
+                               (or final over) (superchat-turn-strip entries)
+                               (reverse redirects))
                               (when (or final streaming)
                                 (superchat-turn-seal "** Answer\n" (plist-get final :id))))))
             (let ((tail (concat (when final
