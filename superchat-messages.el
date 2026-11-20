@@ -20,7 +20,10 @@
   "g" #'superchat-messages)
 
 (define-derived-mode superchat-messages-mode special-mode "Superchat-Messages"
-  "What runs sent to the person, newest last.  RET opens its conversation.")
+  "What runs sent to the person, newest last.  RET opens its conversation."
+  (setq header-line-format
+        (substitute-command-keys
+         " \\<superchat-messages-mode-map>\\[superchat-messages-open] open conversation   y n a answer a question   \\[superchat-messages] refresh   \\[quit-window] quit")))
 
 ;;;###autoload
 (defun superchat-messages ()

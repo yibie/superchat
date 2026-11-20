@@ -352,21 +352,21 @@ Plugins live in another repository. This one ships none.
 
 ## superchat-views.el
 
-Read-only buffers that browse the Tape, each with keys that act on the line
-at point. A view opens a conversation by calling
-`superchat-views-open-function` (a `defvar`) with its timeline's name; the
-chat sets it to show that timeline's chat buffer, so this file does not
-need the chat.
+Read-only buffers that browse the Tape; their keys act on the line at
+point, and each names them in its header line, as `*superchat: messages*`
+does. A view opens a conversation by calling `superchat-views-open-function`
+(a `defvar`) with the timeline's name; the chat sets it, so this file does
+not need the chat.
 
-- `(superchat-entries TITLE VIEW)`: calls VIEW with no argument for a list
-  of entries and shows them in `*superchat-view: TITLE*`, in
-  `superchat-entries-mode`: each entry rendered alone by
-  `superchat-view-render`, blocks apart by an empty line, or `No entries.`.
-  `RET` opens the conversation of the entry at point, `n` and `p` go to the
-  next and previous entry, `g` calls VIEW again.
+- `(superchat-entries TITLE VIEW)`: shows the entries VIEW returns, called
+  with no argument, in `*superchat-view: TITLE*` (`superchat-entries-mode`):
+  each rendered alone by `superchat-view-render`, an empty line between, or
+  `No entries.`. `RET` opens the entry's conversation, `n`/`p` go to the
+  next or previous entry, `g` calls VIEW again.
 - `superchat-timers`, a command autoloaded through `superchat-chat.el`:
   `*superchat: timers*`, a `tabulated-list-mode` table of `superchat-timer-list`,
-  soonest first: Next (when it fires), Repeats (`once`, `daily HH:MM`, `dream
-  HH:MM`, `every Nm/h/d`, `~MM-DD` when it lapses), Project (the scope's
-  directory name) and Task (the text's first line). `c` cancels the row's
-  timer, `RET` opens its conversation, `g` lists anew, `S` sorts.
+  soonest first, its column names on the first line: Next (when it fires),
+  Repeats (`once`, `daily HH:MM`, `dream HH:MM`, `every Nm/h/d`, `~MM-DD`
+  when it lapses), Project (the scope's directory name), Task (the text's
+  first line). `c` cancels the row's timer, `RET` opens its conversation,
+  `g` lists anew, `S` sorts.

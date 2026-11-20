@@ -29,7 +29,10 @@
 
 (define-derived-mode superchat-entries-mode special-mode "Superchat-Entries"
   "Entries of the Tape.  RET opens the conversation of the entry at point,
-n and p go to the next and previous entry, g shows them anew.")
+n and p go to the next and previous entry, g shows them anew."
+  (setq header-line-format
+        (substitute-command-keys
+         " \\<superchat-entries-mode-map>\\[superchat-entries-open] open conversation   \\[superchat-entries-next] next   \\[superchat-entries-previous] previous   \\[superchat-entries-refresh] refresh   \\[quit-window] quit")))
 
 (defvar-local superchat-entries--view nil "The function that gives the entries.")
 
@@ -93,7 +96,11 @@ conversation, g shows them anew, S sorts by the column at point."
   (setq tabulated-list-format [("Next" 16 t) ("Repeats" 20 t) ("Project" 16 t)
                                ("Task" 0 nil)]
         tabulated-list-sort-key '("Next")
-        tabulated-list-padding 2)
+        tabulated-list-padding 2
+        tabulated-list-use-header-line nil
+        header-line-format
+        (substitute-command-keys
+         " \\<superchat-timers-mode-map>\\[superchat-timers-cancel] cancel   \\[superchat-timers-open] open conversation   \\[revert-buffer] refresh   \\[tabulated-list-sort] sort by column   \\[quit-window] quit"))
   (add-hook 'tabulated-list-revert-hook #'superchat-timers--entries nil t)
   (tabulated-list-init-header))
 

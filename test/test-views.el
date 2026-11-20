@@ -16,6 +16,7 @@
       (superchat-entries "notes" (lambda () (superchat-view 'notes :scope "/p/")))
       (with-current-buffer "*superchat-view: notes*"
         (should (eq major-mode 'superchat-entries-mode))
+        (should (string-search "open conversation" header-line-format))
         (should (string-search "second note" (buffer-string)))
         ;; Newest first: t2's note, then t1's.
         (superchat-entries-open)
@@ -37,7 +38,9 @@
     (let* (opened (superchat-views-open-function (lambda (tape) (push tape opened))))
       (superchat-timers)
       (with-current-buffer "*superchat: timers*"
-        (goto-char (point-min))
+        (should (string-search "cancel" header-line-format))
+        (goto-char (point-max))
+        (forward-line -1)
         (superchat-timers-open)
         (should (equal opened '("t1")))))))
 

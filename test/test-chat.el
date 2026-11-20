@@ -1175,11 +1175,14 @@ tool `echo', and no chat buffers left behind."
       (superchat-timers)
       (with-current-buffer "*superchat: timers*"
         (should (eq (keymap-lookup superchat-timers-mode-map "c") #'superchat-timers-cancel))
+        ;; The first line names the columns; the timer is on the second.
         (goto-char (point-min))
+        (forward-line 1)
         (superchat-timers-open)
         (should (equal (buffer-name (window-buffer)) (buffer-name (superchat-chat-open "t1")))))
       (with-current-buffer "*superchat: timers*"
         (goto-char (point-min))
+        (forward-line 1)
         (superchat-timers-cancel)
         (should-not (superchat-timer-list))
         (should-not tabulated-list-entries)
