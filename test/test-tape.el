@@ -256,3 +256,16 @@
 
 (provide 'test-tape)
 ;;; test-tape.el ends here
+
+(ert-deftest superchat-tape-directory-is-the-project-or-the-first-user-entry ()
+  (superchat-test-with-tape
+    (should-not (superchat-tape-directory "none"))
+    (superchat-tape-append "p" 'user "x" :scope "/p/")
+    (should (equal (superchat-tape-directory "p") "/p/"))
+    ;; Outside a project: from the first user entry, not a level event first.
+    (superchat-tape-append "h" 'event "" :data '(:type "level") :scope "home")
+    (superchat-tape-append "h" 'user "x" :scope "home" :data '(:directory "/d/"))
+    (superchat-tape-append "h" 'user "y" :scope "home" :data '(:directory "/other/"))
+    (should (equal (superchat-tape-directory "h") "/d/"))
+    (superchat-tape-append "n" 'user "x" :scope "home")
+    (should-not (superchat-tape-directory "n"))))

@@ -60,6 +60,9 @@ Public functions, and no others:
 - `(superchat-tape-new-name)` → a fresh timeline name, `YYYYMMDD-HHMMSS-xxxx`.
 - `(superchat-tape-scope-of DIRECTORY)` → the scope for DIRECTORY, by
   `project-current`.
+- `(superchat-tape-directory TAPE)` → the timeline's working directory: its
+  scope when a project root, else the `:directory` of its first `user`
+  entry, else nil.
 
 There is no function that updates or deletes.
 

@@ -192,5 +192,15 @@ because `sqlite-select' hides a refused write."
       (file-name-as-directory (expand-file-name (project-root project)))
     "home"))
 
+(defun superchat-tape-directory (tape)
+  "The working directory of timeline TAPE: its scope when that is a project
+root, else the `:directory' of its first `user' entry, else nil."
+  (let ((scope (plist-get (car (superchat-tape-entries :tape tape :limit 1)) :scope)))
+    (cond ((null scope) nil)
+          ((not (equal scope "home")) scope)
+          (t (plist-get (plist-get (car (superchat-tape-entries :tape tape :kinds '(user) :limit 1))
+                                   :data)
+                        :directory)))))
+
 (provide 'superchat-tape)
 ;;; superchat-tape.el ends here
