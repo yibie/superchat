@@ -61,8 +61,9 @@ derived from `org-mode`.
   starts at. Input that grows past a window's bottom scrolls it a line at a
   time (`scroll-conservatively` 101 in the buffer), so the input stays at
   the bottom.
-- A run sent from the input area is given every tool but `send`: the person
-  reads its answer in the buffer, and `send` is for runs nobody watches.
+- A run sent from the input area is given `:tools (except "send")`: the
+  offered tools but `send`; the person reads its answer in the buffer, and
+  `send` is for runs nobody watches.
 - Sending from the input area while a run this buffer started goes, when
   the input is not empty and not a command, gives it to that run
   (`superchat-steer`): the
@@ -325,7 +326,9 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
   DISABLE are functions of no arguments. Another keyword is an error.
   Defining a name that is enabled disables the old definition and then
   enables the new one, so loading a plugin's file again keeps it on. A plugin adds tools, views and
-  commands in ENABLE and removes them in DISABLE.
+  commands in ENABLE and removes them in DISABLE. ENABLE runs with
+  `superchat-tool-defer-default` t: a plugin's tools are deferred unless it
+  defines them `:deferred nil`.
 - `(superchat-plugin-enable NAME)`, `(superchat-plugin-disable NAME)`,
   `(superchat-plugin-enabled-p NAME)`.
 - `(superchat-plugin-enable-configured)`: enable each name in the user

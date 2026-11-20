@@ -100,3 +100,16 @@
 
 (provide 'test-plugin)
 ;;; test-plugin.el ends here
+
+(ert-deftest superchat-plugin-tools-are-deferred-unless-it-says ()
+  (let ((superchat-plugin--definitions nil) (superchat-plugin--enabled nil))
+    (superchat-plugin-define 'pt :enable (lambda ()
+                                           (superchat-tool-define "pt-a" :class 'read :function #'ignore)
+                                           (superchat-tool-define "pt-b" :class 'read :function #'ignore
+                                                                  :deferred nil)))
+    (unwind-protect
+        (superchat-test-with-tape
+          (superchat-plugin-enable 'pt)
+          (should-not (member "pt-a" (superchat-tool-offered "t")))
+          (should (member "pt-b" (superchat-tool-offered "t"))))
+      (superchat-tool-remove "pt-a") (superchat-tool-remove "pt-b"))))

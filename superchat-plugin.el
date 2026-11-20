@@ -4,6 +4,7 @@
 
 (require 'cl-lib)
 (require 'superchat)
+(require 'superchat-tools)
 
 (defvar superchat-plugin--definitions nil
   "Alist of (NAME . (:doc S :enable F :disable F)).")
@@ -37,7 +38,8 @@ An error from ENABLE reaches the caller and leaves NAME not enabled."
   (let ((definition (superchat-plugin--definition name)))
     (unless (superchat-plugin-enabled-p name)
       (when-let* ((fn (plist-get definition :enable)))
-        (funcall fn))
+        ;; A plugin's tools wait to be loaded, unless it says otherwise.
+        (let ((superchat-tool-defer-default t)) (funcall fn)))
       (push name superchat-plugin--enabled))))
 
 (defun superchat-plugin-disable (name)

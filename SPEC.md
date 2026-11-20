@@ -70,6 +70,7 @@ Dependencies go one way only:
 inline → chat
 messages → chat
 chat → agent, plugin, recall, timer, turn
+plugin → tools
 timer → inbox
 inbox → agent
 agent → llm, tools, recall, view, context, request, guard
