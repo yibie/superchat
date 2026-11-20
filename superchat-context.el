@@ -35,11 +35,21 @@ before saying that you do not know something the user may have told you.
 Answer briefly and plainly.  When a request is unclear, ask one question."
   "What every request is told first.")
 
-(defun superchat-context--directory (scope)
-  "The line that says where a tool's relative path is against."
-  (format "The working directory is %s: a tool's relative path is against it\
- and `shell' runs there.  Give an absolute path for any other file."
-          (if (equal scope "home") (expand-file-name "~/") scope)))
+(defun superchat-context--directory (tape)
+  "The line that says where a tool's relative path of TAPE is against, or
+that it has none and works in Emacs, from the buffer it came from."
+  (if-let* ((directory (superchat-tape-directory tape)))
+      (format "The working directory is %s: a tool's relative path is against it\
+ and `shell' runs there.  Give an absolute path for any other file." directory)
+    (let ((buffer (plist-get (plist-get (plist-get (car (superchat-tape-entries
+                                                          :tape tape :kinds '(user) :newest t :limit 1))
+                                                    :data)
+                                         :origin)
+                             :buffer)))
+      (concat "This conversation has no working directory: it works in Emacs."
+              (and buffer (format " It came from the buffer %s, which `read' and `edit' take as `buffer'." buffer))
+              " `eval_elisp' reaches the rest of Emacs.  A file tool needs an absolute path;\
+ `shell' runs in a scratch directory of its own."))))
 
 (defun superchat-context--read (file)
   "The text of FILE, or nil when it does not exist."
@@ -107,7 +117,7 @@ A timeline with no entry has no scope, so no rules file and no notes."
                           :scope)))
     (string-join
      (delq nil (list superchat-context--base
-                     (and scope (superchat-context--directory scope))
+                     (and scope (superchat-context--directory tape))
                      (and scope (superchat-context--rules scope))
                      (superchat-context--skills)
                      (and scope (superchat-context--notes scope))

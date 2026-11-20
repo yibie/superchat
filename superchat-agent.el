@@ -397,7 +397,8 @@ is on the Tape, so the next request is built from it as the first was."
                       :scope (plist-get run :scope) :refs (plist-get run :refs)
                       :data (append (and (plist-get run :origin)
                                          (list :origin (plist-get run :origin)))
-                                    (and (plist-get run :ephemeral) (list :ephemeral t))))
+                                    (and (plist-get run :ephemeral) (list :ephemeral t))
+                                    (and (plist-get run :directory) (list :directory (plist-get run :directory)))))
                      :id))))
 
 (defun superchat-agent--mark-interrupted (tape)
@@ -456,11 +457,11 @@ missing one would make a new list."
                       (superchat-tape-entries :tape tape :after (plist-get question :id)))
       question)))
 
-(cl-defun superchat-run (tape text &key scope origin tools system model ephemeral
+(cl-defun superchat-run (tape text &key scope directory origin tools system model ephemeral
                               unattended refs on-text on-entry on-done)
   "Append TEXT as a user entry of timeline TAPE and answer it; return the run.
 SCOPE is that of a new timeline's first entry, by default that of
-`default-directory'.
+`default-directory'; DIRECTORY, outside a project, its working directory.
 TOOLS is a list of tool names, nil for every tool, or `none'.  SYSTEM is
 extra text for the system prompt.  ON-TEXT gets streamed text, ON-ENTRY each
 entry appended, ON-DONE the run, once, with :status done, cancelled or error,
@@ -480,6 +481,8 @@ it too.  An UNATTENDED run asks nobody: it ends `waiting' at a question."
                ;; Unsent from the start: whatever signals, the user's text is written.
                :unsent t :user-id nil
                :scope (unless last (or scope (superchat-tape-scope-of default-directory)))
+               ;; Only the first user entry of a timeline holds it.
+               :directory (unless (superchat-tape-entries :tape tape :kinds '(user) :limit 1) directory)
                :request text :origin origin :ephemeral ephemeral :first id :seen id
                :tools tools :system system :model model :unattended unattended :refs refs
                :on-text on-text :on-entry on-entry :on-done on-done)))

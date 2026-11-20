@@ -11,9 +11,11 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - `(superchat-context-system TAPE &optional EXTRA)` → the system prompt, built
   fresh for each request, in this order:
   1. the base instructions, a constant of at most 40 lines;
-  2. the working directory: the scope, or the home directory for
-     `"home"`, with the line that a tool's relative path is against it and
-     that `shell` runs there;
+  2. the working directory, `superchat-tape-directory`, with the line that a
+     tool's relative path is against it and that `shell` runs there; when
+     nil, that the conversation works in Emacs, names the latest `user`
+     entry's origin buffer, needs absolute paths and runs `shell` in a
+     scratch directory;
   3. the rules file of the scope: `AGENTS.md` at the project root, or
      `AGENTS.md` in `superchat-directory` for `"home"`, when it exists;
   4. the skills catalog: for each `NAME/SKILL.md` under
@@ -34,12 +36,14 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 
 ### A run
 
-- `(superchat-run TAPE TEXT &key scope origin tools system model ephemeral unattended refs on-text on-entry on-done)`
+- `(superchat-run TAPE TEXT &key scope directory origin tools system model ephemeral unattended refs on-text on-entry on-done)`
   → the run, a plist. It appends TEXT as a `user` entry of timeline TAPE and
   answers it.
   - SCOPE: the scope of the first entry of a new timeline; the scope of
     `default-directory` when not given. A timeline that has entries keeps
     its scope.
+  - DIRECTORY: `:directory` of the timeline's first `user` entry, when this
+    run makes it; never taken from the current buffer.
   - ORIGIN: becomes `:origin` of the `user` entry's data.
   - TOOLS: a list of tool names, nil for every tool, or `none`.
   - SYSTEM: the EXTRA of `superchat-context-system`.

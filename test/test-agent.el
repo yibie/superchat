@@ -2270,3 +2270,14 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
       (should (eq (plist-get done :status) 'done))
       (should (plist-get done :paused))
       (should-not (member 'continued (superchat-test-agent--types "t"))))))
+
+(ert-deftest superchat-agent-a-run-records-the-directory-on-the-first-user-entry ()
+  (superchat-test-agent--with
+    (superchat-tape-append "t" 'event "" :data '(:type "level" :level "ask") :scope "home")
+    (superchat-test-script (list '(:text "a") '(:text "b"))
+      (superchat-run "t" "one" :directory "/d/")
+      (superchat-run "t" "two" :directory "/other/"))
+    (should (equal (mapcar (lambda (e) (plist-get (plist-get e :data) :directory))
+                           (superchat-tape-entries :tape "t" :kinds '(user)))
+                   '("/d/" nil)))
+    (should (equal (superchat-tape-directory "t") "/d/"))))

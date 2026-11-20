@@ -33,16 +33,21 @@
 
 (ert-deftest superchat-context-says-the-working-directory ()
   (superchat-test-with-tape
-   (let ((dir (superchat-test-context--project))
-         (home (expand-file-name "~/")))
+   (let ((dir (superchat-test-context--project)))
      (unwind-protect
          (progn
-           (superchat-tape-append "h" 'user "hi" :scope "home")
            (superchat-tape-append "p" 'user "hi" :scope dir)
-           (should (string-match-p (regexp-quote (format "The working directory is %s:" home))
-                                   (superchat-context-system "h")))
+           (superchat-tape-append "d" 'user "hi" :scope "home" :data '(:directory "/d/"))
+           (superchat-tape-append "h" 'user "hi" :scope "home" :data '(:origin (:buffer "*scratch*")))
            (should (string-match-p (regexp-quote (format "The working directory is %s:" dir))
                                    (superchat-context-system "p")))
+           (should (string-match-p (regexp-quote "The working directory is /d/:")
+                                   (superchat-context-system "d")))
+           ;; None: it works in Emacs, from the buffer it came from; never ~.
+           (let ((system (superchat-context-system "h")))
+             (should (string-match-p "no working directory: it works in Emacs" system))
+             (should (string-match-p "came from the buffer \\*scratch\\*" system))
+             (should-not (string-search (expand-file-name "~/") system)))
            (should-not (string-match-p "working directory" (superchat-context-system "none"))))
        (delete-directory dir t)))))
 
