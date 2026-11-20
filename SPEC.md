@@ -107,7 +107,7 @@ points to require. A file requires nothing else, and
 | `AGENTS.md` | 380 words |
 | `SPEC.md` | 2550 words |
 | `spec/L1-memory.md` | 1070 words |
-| `spec/L2-capabilities.md` | 3990 words |
+| `spec/L2-capabilities.md` | 4200 words |
 | `spec/L3-agent.md` | 2950 words |
 | `spec/L4-background.md` | 590 words |
 | `spec/L5-interface.md` | 3780 words |
