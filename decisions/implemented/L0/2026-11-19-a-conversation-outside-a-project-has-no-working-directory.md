@@ -65,4 +65,7 @@ rarely meant:
   there is no migration (rule 3). A new chat opened from the file fixes it.
 - A conversation started by a package with `superchat-run` and no
   `:directory`, outside a project, has none.
-- `superchat-tools.el` is at 799 of 800 lines.
+- With no working directory, `read` and `edit` of a buffer work and a
+  process started from any tool runs in the scratch directory, made for
+  every call of such a timeline. `grep` and `find` moved to
+  `superchat-search.el` to make room in `superchat-tools.el`.
