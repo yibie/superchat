@@ -523,7 +523,8 @@
 
 (ert-deftest superchat-agent-tools-argument ()
   (superchat-test-agent--with
-    (dolist (case `((nil ,(length (superchat-tool-specs))) (none nil) (("echo") 1)))
+    (dolist (case `((nil ,(length (superchat-tool-offered "fresh"))) (none nil) (("echo") 1)
+                    ((except "echo") ,(1- (length (superchat-tool-offered "fresh"))))))
       (let ((tape (superchat-tape-new-name)))
         (superchat-test-script (list '(:text "a"))
           (superchat-run tape "go" :tools (car case))
@@ -2305,3 +2306,35 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
   (let ((superchat-agent-pending-functions (list (lambda (tape) (equal tape "t")))))
     (should (superchat-agent--pending-p "t" nil))
     (should-not (superchat-agent--pending-p "u" nil))))
+
+(ert-deftest superchat-agent-a-tool-loaded-in-a-run-is-offered-next-and-later ()
+  (superchat-test-agent--with
+    (superchat-tool-define "later" :class 'read :deferred t :description "Does a later thing."
+                           :function (lambda (_) "did it"))
+    (unwind-protect
+        (superchat-test-script
+            (list '(:calls ((:id "a" :name "later" :args nil)))
+                  '(:calls ((:id "b" :name "load_tools" :args (:names "later"))))
+                  '(:calls ((:id "c" :name "later" :args nil)))
+                  '(:text "done")
+                  '(:text "again"))
+          (superchat-run "t" "go")
+          (let* ((sent (reverse superchat-test-requests))
+                 (offered (lambda (r) (mapcar (lambda (s) (plist-get s :name)) (plist-get r :tools)))))
+            ;; Not offered, but listed; called anyway, it is refused, and the run goes on.
+            (should-not (member "later" (funcall offered (nth 0 sent))))
+            (should (string-search "- later: Does a later thing." (plist-get (nth 0 sent) :system)))
+            ;; Loaded: the next request offers it and no longer lists it.
+            (should (member "later" (funcall offered (nth 2 sent))))
+            (should-not (string-search "- later:" (plist-get (nth 2 sent) :system)))
+            ;; Calls and results stay paired around the load event.
+            (should (equal (mapcar (lambda (m) (plist-get m :role)) (plist-get (nth 3 sent) :messages))
+                           '(user assistant tool assistant tool assistant tool))))
+          (should (equal (mapcar #'cdr (seq-filter (lambda (e) (eq (car e) 'tool)) (superchat-test-agent--entries "t")))
+                         '("Error: later is not loaded: call load_tools with its name first"
+                           "Loaded later; offered from your next request." "did it")))
+          ;; A later run of the timeline offers it from its first request.
+          (superchat-run "t" "more")
+          (should (member "later" (mapcar (lambda (s) (plist-get s :name))
+                                          (plist-get (car superchat-test-requests) :tools)))))
+      (superchat-tool-remove "later"))))

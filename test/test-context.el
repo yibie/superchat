@@ -149,3 +149,31 @@
 
 (provide 'test-context)
 ;;; test-context.el ends here
+
+(ert-deftest superchat-context-a-project-skill-hides-the-users-and-many-collapse ()
+  (superchat-test-with-tape
+   (let ((dir (superchat-test-context--project)))
+     (unwind-protect
+         (progn
+           (superchat-tape-append "p" 'user "hi" :scope dir)
+           (superchat-test-context--write (concat superchat-directory "skills/pdf/SKILL.md")
+                                          "---\ndescription: USER-PDF\n---\n")
+           (superchat-test-context--write (concat superchat-directory "skills/mine/SKILL.md")
+                                          "---\ndescription: Only the user's\n---\n")
+           (superchat-test-context--write (concat dir ".superchat/skills/pdf/SKILL.md")
+                                          "---\ndescription: PROJECT-PDF\n---\n")
+           (let ((system (superchat-context-system "p")))
+             (should (string-match-p "pdf: PROJECT-PDF" system))
+             (should-not (string-match-p "USER-PDF" system))
+             (should (string-match-p "mine: Only the user's" system)))
+           ;; Above the limit: one line that says how to find them.
+           (let ((superchat-context-skills-listed 1))
+             (let ((system (superchat-context-system "p")))
+               (should (string-match-p "There are 2 skills, each a SKILL.md under" system))
+               (should-not (string-match-p "pdf: " system)))))
+       (delete-directory dir t)))))
+
+(ert-deftest superchat-context-the-base-says-the-memory-tools-are-loaded ()
+  (superchat-test-with-tape
+   (superchat-tape-append "t" 'user "hi" :scope "home")
+   (should (string-match-p "load them with\n`load_tools`" (superchat-context-system "t")))))

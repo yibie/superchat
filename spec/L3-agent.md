@@ -18,11 +18,14 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
      directory, and asks for a file named without a path, not searching;
   3. the rules file of the scope: `AGENTS.md` at the project root, or
      `AGENTS.md` in `superchat-directory` for `"home"`, when it exists;
-  4. the skills catalog: for each `NAME/SKILL.md` under
-     `superchat-directory`/`skills/`, its name and the `description:` line of
-     its frontmatter, with the path, so the model reads the file with
-     `read` when it wants it. A file whose first `---` line is never
-     closed has no frontmatter;
+  4. the skills catalog: for each `NAME/SKILL.md` under a project's
+     `.superchat/skills/` and `superchat-directory`/`skills/`, the project's
+     hiding the user's of the same NAME, its name and the `description:`
+     line of its frontmatter, with the path, so the model reads the file
+     with `read` when it wants it. A file whose first `---` line is never
+     closed has no frontmatter. Above `superchat-context-skills-listed` (a
+     `defvar`, 20) skills, one line instead: how many, where, and to find
+     one with `find` and `grep` over their `description:` lines;
   5. the `notes` view of the scope, newest first, rendered, at most 2000
      characters;
   6. the origin of the latest `user` entry, when it has one;
@@ -45,7 +48,12 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   - DIRECTORY: `:directory` of the timeline's first `user` entry, when this
     run makes it; never taken from the current buffer.
   - ORIGIN: becomes `:origin` of the `user` entry's data.
-  - TOOLS: a list of tool names, nil for every tool, or `none`.
+  - TOOLS: nil for `(superchat-tool-offered TAPE)`, `(except NAMES...)`
+    for that but NAMES, worked out for each request so that a tool loaded
+    in the run is offered next; or an exact list of tool names; or `none`.
+    For nil and `except`, the system prompt ends with
+    `(superchat-tool-catalog TAPE)`. Each call gets the names its request
+    offered as `superchat-tool-call`'s OFFERED.
   - SYSTEM: the EXTRA of `superchat-context-system`.
   - MODEL: the model of every request of the run and of its handoff; nil
     for `superchat-llm-model`.

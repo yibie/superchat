@@ -29,8 +29,9 @@ first.  When one is denied, do not look for another way round it: say what
 you could not do and why, and let the user decide.
 
 Everything said in earlier conversations is on the Tape.  The `recall` tool
-searches it and `note` keeps a conclusion worth keeping.  Search the Tape
-before saying that you do not know something the user may have told you.
+searches it and `note` keeps a conclusion worth keeping; load them with
+`load_tools` when you need them.  Search the Tape before saying that you do
+not know something the user may have told you.
 
 Answer briefly and plainly.  When a request is unclear, ask one question."
   "What every request is told first.")
@@ -79,20 +80,36 @@ Frontmatter is only at the very start and ends at the first line that is `---'."
                when (string-match "\\`description:[ \t]*\\(.*?\\)[ \t]*\\'" line)
                return (match-string 1 line)))))
 
-(defun superchat-context--skills ()
-  "The catalog of skills: name, description and path, never the body."
-  (let ((files (file-expand-wildcards
-                (expand-file-name "skills/*/SKILL.md" superchat-directory))))
-    (when files
-      (concat "Skills you can use.  Read a skill's file with read when its\
+(defvar superchat-context-skills-listed 20
+  "Above this many skills the catalog is one line, which says where to find them.")
+
+(defun superchat-context--skills (scope)
+  "The catalog of skills of SCOPE and the user: name, description and path,
+never the body; a project's skill hides the user's of the same name."
+  (let* ((dirs (append (unless (or (null scope) (equal scope "home"))
+                         (list (expand-file-name ".superchat/skills/" scope)))
+                       (list (expand-file-name "skills/" superchat-directory))))
+         (files (cl-loop with seen for dir in dirs
+                         append (cl-loop for file in (file-expand-wildcards (expand-file-name "*/SKILL.md" dir))
+                                         for name = (file-name-nondirectory
+                                                     (directory-file-name (file-name-directory file)))
+                                         unless (member name seen)
+                                         do (push name seen) and collect file))))
+    (cond
+     ((null files) nil)
+     ((> (length files) superchat-context-skills-listed)
+      (format "There are %d skills, each a SKILL.md under %s.  Find one that fits the task\
+ with find and grep over their description: lines, then read it."
+              (length files) (mapconcat #'abbreviate-file-name dirs " and ")))
+     (t (concat "Skills you can use.  Read a skill's file with read when its\
  description fits the task:\n"
-              (mapconcat
-               (lambda (file)
-                 (format "- %s: %s (%s)"
-                         (file-name-nondirectory (directory-file-name (file-name-directory file)))
-                         (or (superchat-context--description file) "no description")
-                         file))
-               files "\n")))))
+                (mapconcat
+                 (lambda (file)
+                   (format "- %s: %s (%s)"
+                           (file-name-nondirectory (directory-file-name (file-name-directory file)))
+                           (or (superchat-context--description file) "no description")
+                           file))
+                 files "\n"))))))
 
 (defun superchat-context--notes (scope)
   "The notes of SCOPE, newest first; the render's cut drops the oldest."
@@ -120,7 +137,7 @@ A timeline with no entry has no scope, so no rules file and no notes."
      (delq nil (list superchat-context--base
                      (and scope (superchat-context--directory tape))
                      (and scope (superchat-context--rules scope))
-                     (superchat-context--skills)
+                     (superchat-context--skills scope)
                      (and scope (superchat-context--notes scope))
                      (superchat-context--origin tape)
                      extra))

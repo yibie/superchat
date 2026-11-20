@@ -327,7 +327,8 @@ tool that has not answered yet."
                                   (superchat-agent--guard
                                    run (lambda () (superchat-agent--emit run)
                                          (superchat-agent--calls run rest))))))
-                              (lambda () (not (superchat-agent--live run))))
+                              (lambda () (not (superchat-agent--live run)))
+                              (plist-get run :offered))
                       ok t)
               (error (setq why (error-message-string err))))
           (setq returned t)
@@ -376,6 +377,13 @@ with input waiting, the run pauses instead, so that the input drives the next."
          (size (superchat-request-kept-size entries (plist-get run :user-id)))
          (model (or (plist-get run :model) superchat-llm-model))
          (tools (plist-get run :tools))
+         ;; Worked out for each request: a tool loaded in this run is offered next.
+         (names (pcase tools
+                  ('none nil)
+                  ('nil (superchat-tool-offered tape))
+                  (`(except . ,except) (superchat-tool-offered tape except))
+                  (_ tools)))
+         (catalog (and (or (null tools) (eq (car-safe tools) 'except)) (superchat-tool-catalog tape)))
          (last (and superchat-max-rounds (>= (plist-get run :rounds) superchat-max-rounds)))
          ;; The note after a look-back goes with the first request only.
          (resumed (prog1 (plist-get run :resumed) (setf (plist-get run :resumed) nil)))
@@ -383,7 +391,7 @@ with input waiting, the run pauses instead, so that the input drives the next."
          (signals (unless (or last (plist-get run :redirected))
                     (superchat-guard-signals (superchat-agent--since run entries))))
          (redirect (and signals (superchat-guard-going-round-p signals))))
-    (setf (plist-get run :last) last)
+    (setf (plist-get run :last) last (plist-get run :offered) names)
     (cond
      ((> size (* 2 budget))
       (superchat-agent--end
@@ -410,11 +418,12 @@ with input waiting, the run pauses instead, so that the input drives the next."
                                      (and last (superchat-agent--facts (superchat-agent--since run) superchat-agent--limit-note))
                                      (and resumed (concat (superchat-agent--facts (superchat-agent--since run) superchat-agent--resume-note)
                                                           "\n\nYour look-back:\n" resumed))
+                                     (and catalog (concat "\n\n" catalog))
                                      (and redirect (concat "\n\n" (superchat-guard-redirect signals))))
                      ;; The tools stay: a provider that has no tool in the
                      ;; request may leak its call syntax as text. A call of
                      ;; this answer is dropped by --respond.
-                     :tools (unless (eq tools 'none) (superchat-tool-specs tools))
+                     :tools (and names (superchat-tool-specs names))
                      :model (plist-get run :model)
                      :on-text (lambda (text)
                                 (when-let* (((superchat-agent--live run))
@@ -521,7 +530,7 @@ ended the run on that entry."
 missing one would make a new list."
   (append keys (list :tape tape :status 'running :rounds 0 :seq 0 :handle nil :calling nil
                      :stop nil :done nil :text nil :error nil :tries 0 :timer nil
-                     :continues 0 :resumed nil :paused nil :redirected nil :steers nil)))
+                     :continues 0 :resumed nil :paused nil :redirected nil :steers nil :offered nil)))
 
 (defun superchat-question (tape)
   "The `question' event of timeline TAPE that waits for its answer, or nil."
