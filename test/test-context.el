@@ -173,7 +173,9 @@
                (should-not (string-match-p "pdf: " system)))))
        (delete-directory dir t)))))
 
-(ert-deftest superchat-context-the-base-says-the-memory-tools-are-loaded ()
+(ert-deftest superchat-context-the-base-names-the-memory-tools ()
   (superchat-test-with-tape
    (superchat-tape-append "t" 'user "hi" :scope "home")
-   (should (string-match-p "load them with\n`load_tools`" (superchat-context-system "t")))))
+   (let ((system (superchat-context-system "t")))
+     (should (string-search "The `recall` tool" system))
+     (should-not (string-search "load them with" system)))))
