@@ -56,6 +56,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
 | L3 | `superchat-guard.el` | 120 | a run going round: its signals and the one redirect |
+| L3 | `superchat-limit.el` | 200 | the round limit: its notes, the look-back's status, the pause |
 | L4 | `superchat-inbox.el` | 265 | the inbox, its worker, the timers |
 | L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
@@ -70,7 +71,8 @@ inline → chat
 messages → chat
 chat → agent, plugin, recall, inbox, turn
 inbox → agent
-agent → llm, tools, recall, view, context, request, guard
+agent → llm, tools, recall, view, context, request, guard, limit
+limit → request
 request → llm
 recall → tools, view
 context → view
@@ -108,7 +110,7 @@ points to require. A file requires nothing else, and
 | `SPEC.md` | 2550 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 4200 words |
-| `spec/L3-agent.md` | 2950 words |
+| `spec/L3-agent.md` | 3160 words |
 | `spec/L4-background.md` | 590 words |
 | `spec/L5-interface.md` | 3780 words |
 
