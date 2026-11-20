@@ -102,9 +102,26 @@ project: 10 timelines, 53 runs, 283 `shell` calls; home: 41 runs).
 - No save that changed the text: the notice is newer than most of the
   Tape.
 
-So the detector alone finds about one fact in this project's history; the
-model's review of `redirect` and `paused` runs, which cannot be replayed
-without a model, is where most facts would come from.
+So the detector alone finds about one fact in this project's history.
+
+The model's half was then tried: each of the 13 runs of this project that
+hit the round limit, as a record of its calls and first result lines, went
+to DeepSeek (`deepseek-flash`) with the review's rule (facts of the project,
+no advice, at most four). It wrote 51 facts. What repeated:
+
+- "`scripts/check.sh` exits 0 even when a check fails", in 7 runs. False:
+  it exits 1; the runs had piped it (`| tail`), and the pipe exits 0. Under
+  the counting rule above it would have become active.
+- "`edit` does not save; `save_buffer` writes the file", in 8 runs. True
+  then, false since `save_buffer` was removed the same day.
+- True and useful, in one or two runs each: the shell is BSD (`cat -A`
+  fails, `sed -n l` works); a fresh copy needs `-L bridge-lisp`.
+- The rest is noise: file sizes and word counts of the day.
+
+Counting sightings does not make a model's fact true: the same wrong reading
+of the same evidence repeats. A model fact needs a check that does not
+reread the run, before it counts, and facts about tools must lapse when the
+tools change.
 
 ## Acceptance criteria
 
