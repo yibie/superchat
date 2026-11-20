@@ -229,7 +229,7 @@ tool `echo', and no chat buffers left behind."
           (call-interactively (key-binding (kbd "C-c C-c")))))
       (should (equal (plist-get (car (superchat-tape-entries :tape "t1")) :text) "a\nb")))))
 
-(ert-deftest superchat-chat-send-while-running-is-queued-from-the-keys-only ()
+(ert-deftest superchat-chat-send-while-running-steers-from-the-keys-only ()
   (superchat-test-chat--with
     (let ((buffer (superchat-chat-open "t1"))
           (superchat-llm-request-function #'superchat-test-chat--silent))
@@ -237,7 +237,7 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-chat--type buffer "two")
       (with-current-buffer buffer (call-interactively (key-binding (kbd "C-c C-c"))))
       (should (equal (superchat-test-chat--input buffer) ""))
-      (should (string-match-p "^⏸ queued: two$" (superchat-test-chat--waiting buffer)))
+      (should (string-match-p "^↪ for its next step: two$" (superchat-test-chat--waiting buffer)))
       (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1))
       (with-current-buffer buffer
         (should-not (superchat-chat-send "three"))
@@ -1362,7 +1362,7 @@ tool `echo', and no chat buffers left behind."
         (superchat-test-chat--type buffer "three")
         (superchat-test-chat--press buffer "RET")
         (should (equal (superchat-test-chat--input buffer) ""))
-        (should (string-match-p "^⏸ 2 queued: two…$" (superchat-test-chat--waiting buffer)))
+        (should (string-match-p "^↪ 2 for its next step: two…$" (superchat-test-chat--waiting buffer)))
         (should (= (length (superchat-tape-entries :tape "t1" :kinds '(user))) 1))
         (superchat-test-drain))
       (should (equal (mapcar (lambda (e) (plist-get e :text))
@@ -1426,8 +1426,8 @@ tool `echo', and no chat buffers left behind."
       (superchat-test-chat--type buffer "/handoff")
       (superchat-test-chat--said said (superchat-test-chat--press buffer "C-c C-c"))
       (should (equal said "A request is still running; C-c C-k cancels it"))
-      ;; The queue holds what was sent before, and not the command.
-      (should (string-match-p "^⏸ queued: two$" (superchat-test-chat--waiting buffer)))
+      ;; The run holds what was sent before, and not the command.
+      (should (string-match-p "^↪ for its next step: two$" (superchat-test-chat--waiting buffer)))
       (superchat-cancel "t1"))))
 
 (defun superchat-test-chat--hidden (buffer from to)
@@ -1541,3 +1541,30 @@ heading."
 
 (provide 'test-chat)
 ;;; test-chat.el ends here
+
+(ert-deftest superchat-chat-text-sent-while-a-call-runs-reaches-the-same-run ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1")) done)
+      (superchat-tool-define "slow" :class 'read :async t :description "Slow"
+                             :function (lambda (_ d) (setq done d) nil))
+      (unwind-protect
+          (superchat-test-script
+              (list '(:calls ((:id "c" :name "slow" :args nil))) '(:text "Not that file, then."))
+            (with-current-buffer buffer (superchat-chat-send "fix it"))
+            (superchat-test-chat--type buffer "not that file")
+            (superchat-test-chat--press buffer "C-c C-c")
+            (should (string-match-p "^↪ for its next step: not that file$"
+                                    (superchat-test-chat--waiting buffer)))
+            (funcall done "ok")
+            (superchat-test-wait (lambda () (not (superchat-run-active "t1"))))
+            ;; One run: its next request read the correction after the result.
+            (should (equal (mapcar (lambda (m) (plist-get m :role))
+                                   (plist-get (car superchat-test-requests) :messages))
+                           '(user assistant tool user))))
+        (superchat-tool-remove "slow"))
+      (should (equal (mapcar (lambda (e) (plist-get e :text))
+                             (superchat-tape-entries :tape "t1" :kinds '(user)))
+                     '("fix it" "not that file")))
+      (should-not (superchat-test-chat--waiting buffer))
+      (with-current-buffer buffer
+        (should (string-match-p "not that file" (buffer-string)))))))

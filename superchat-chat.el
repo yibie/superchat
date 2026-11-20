@@ -37,6 +37,7 @@
 (defvar-local superchat-chat--timer nil "Timer that keeps the waiting line and the mode line current.")
 (defvar-local superchat-chat--began nil "When the timeline became busy.")
 (defvar-local superchat-chat--queue nil "Texts sent while the timeline was busy, the newest first.")
+(defvar-local superchat-chat--steered nil "Texts given to the run that it has not taken yet, oldest first.")
 (defvar-local superchat-chat--force nil "Non-nil: the queue goes when the run ends, however it ends.")
 (defvar-local superchat-chat--shown 0 "Id of the latest entry shown; nothing at or below it is shown again.")
 
@@ -244,13 +245,15 @@ A question to the person looks like a slow tool unless it says so."
                    'face 'shadow))))))
 
 (defun superchat-chat--queued-line ()
-  "The line that shows the queue, or nil when it is empty."
-  (when-let* ((first (car (last superchat-chat--queue))))
+  "The line that shows the text the run has not taken yet, else the queue, or
+nil when both are empty."
+  (when-let* ((texts (or superchat-chat--steered (reverse superchat-chat--queue)))
+              (first (car texts)))
     (let ((line (car (split-string first "\n"))))
-      (propertize (format "⏸ %squeued: %s\n"
-                          (if (cdr superchat-chat--queue)
-                              (format "%d " (length superchat-chat--queue))
-                            "")
+      (propertize (format "%s %s: %s\n"
+                          (if superchat-chat--steered "↪" "⏸")
+                          (concat (if (cdr texts) (format "%d " (length texts)) "")
+                                  (if superchat-chat--steered "for its next step" "queued"))
                           (if (string-search "\n" first)
                               (concat (substring line 0 (min 60 (length line))) "…")
                             (superchat-turn-cut line 60)))
@@ -321,9 +324,11 @@ waiting line; a timer keeps them current while the timeline is busy."
   (apply #'format (propertize "%s, %s or %s" 'face face)
          (mapcar (lambda (k) (propertize k 'face (delq nil (list 'bold face)))) '("y" "n" "a"))))
 
-(defun superchat-chat--add (_entry)
+(defun superchat-chat--add (entry)
   "Show the entries of the timeline after the latest one shown, the entry just
 appended among them: one that reached the Tape another way is shown too."
+  (when (and (eq (plist-get entry :kind) 'user) (plist-get (plist-get entry :data) :steer))
+    (pop superchat-chat--steered))
   (let ((new (superchat-tape-entries :tape superchat-chat--tape :after superchat-chat--shown)))
     (cond
      ;; A render for an anchor shows the rest of the list itself.
@@ -436,6 +441,11 @@ A line starting with / is a command.  Return nil when nothing was sent."
                          (superchat-chat--status)
                          (when (eq (plist-get run :status) 'error)
                            (message "Request failed: %s" (plist-get run :error)))
+                         ;; Text the run never took goes as the queue would.
+                         ;; It came before anything queued since.
+                         (setq superchat-chat--steered nil
+                               superchat-chat--queue (append superchat-chat--queue
+                                                             (reverse (plist-get run :steers))))
                          (superchat-chat--release (eq (plist-get run :status) 'done))))))
 
 (defun superchat-chat--enqueue (text)
@@ -462,7 +472,8 @@ text back at the start of the input and say so."
 
 (defun superchat-chat--send-input (&optional force)
   "Send the input area; keep it when nothing was sent.  While the timeline is
-busy, queue it, or with FORCE cancel the run and send the queue and the input."
+busy, give it to the run going, queue it behind a handoff, or with FORCE cancel
+the run and send the queue and the input."
   (interactive "P")
   (let* ((buffer (current-buffer))
          (text (string-trim (buffer-substring-no-properties superchat-chat--input
@@ -477,6 +488,12 @@ busy, queue it, or with FORCE cancel the run and send the queue and the input."
       (setq superchat-chat--force t)
       (superchat-chat--cancel))
      ((string-empty-p text) nil)
+     ;; A run going takes it before its next request; a handoff queues it.
+     ((and busy (eq (plist-get busy :status) 'running) (not (string-prefix-p "/" text)))
+      (superchat-steer superchat-chat--tape text)
+      (setq superchat-chat--steered (append superchat-chat--steered (list text)))
+      (funcall clear)
+      (superchat-chat--status))
      ((and busy (not (string-prefix-p "/" text)))
       (superchat-chat--enqueue text)
       (funcall clear))
