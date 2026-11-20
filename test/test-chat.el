@@ -566,6 +566,36 @@ tool `echo', and no chat buffers left behind."
                        "deepseek-v4-pro")))
       (should-not (buffer-local-value 'superchat-chat--model (superchat-chat-open "t2"))))))
 
+(ert-deftest superchat-chat-at-model-answers-one-message ()
+  (superchat-test-chat--with
+    (let ((buffer (superchat-chat-open "t1"))
+          (superchat-llm-provider "deepseek"))
+      (superchat-test-script (list '(:text "one") '(:text "two") '(:text "three"))
+        (with-current-buffer buffer
+          (superchat-chat-send "@deepseek-v4-pro what is 2+2")
+          (superchat-chat-send "and now")
+          ;; An @ that names no model is sent as written.
+          (superchat-chat-send "@nobody hello"))
+        (let ((requests (reverse superchat-test-requests)))
+          (should (equal (plist-get (nth 0 requests) :model) "deepseek-v4-pro"))
+          (should-not (plist-get (nth 1 requests) :model))
+          (should-not (plist-get (nth 2 requests) :model)))
+        (let ((texts (mapcar (lambda (e) (plist-get e :text))
+                             (superchat-tape-entries :tape "t1" :kinds '(user)))))
+          (should (equal texts '("what is 2+2" "and now" "@nobody hello"))))))))
+
+(ert-deftest superchat-chat-at-completes-model-ids ()
+  (superchat-test-chat--with
+    (let ((superchat-llm-provider "deepseek"))
+      (with-current-buffer (superchat-chat-open "t1")
+        (goto-char (point-max))
+        (insert "@deepseek-v")
+        (let ((capf (superchat-chat--complete-model)))
+          (should capf)
+          (should (member "deepseek-v4-pro" (all-completions "" (nth 2 capf)))))
+        (insert " more")
+        (should-not (superchat-chat--complete-model))))))
+
 (ert-deftest superchat-chat-recent-tape-ignores-ephemeral ()
   (superchat-test-chat--with
     (let ((p (expand-file-name "p/" superchat-test-chat--dir))

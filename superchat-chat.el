@@ -207,6 +207,24 @@ heading the person folded or opened stays so, as do those of CHOICES."
        (insert input)
        (superchat-chat--draw choices)))))
 
+(defun superchat-chat--at-model (text)
+  "When TEXT starts with @MODEL, a model id, and more text, (MODEL . REST).
+With no provider set there are no model ids, and the error says what to set."
+  (and (string-match "\\`@\\([^ \t\n]+\\)[ \t\n]+" text)
+       (member (match-string 1 text) (superchat-llm-model-ids))
+       (cons (match-string 1 text) (substring text (match-end 0)))))
+
+(defun superchat-chat--complete-model ()
+  "Complete a model id after an @ that starts the input."
+  (when (>= (point) superchat-chat--input)
+    (save-excursion
+      (let ((end (point)))
+        (goto-char superchat-chat--input)
+        (when (and (looking-at "@\\([^ \t\n]*\\)") (<= end (match-end 0)))
+          (list (match-beginning 1) (match-end 1)
+                (completion-table-dynamic (lambda (_) (superchat-llm-model-ids)))
+                :exclusive 'no))))))
+
 (defun superchat-chat--line (text width)
   "TEXT on one line, cut to WIDTH characters."
   (let ((line (replace-regexp-in-string "[\n\t]+" " " text)))
@@ -419,13 +437,15 @@ A line starting with / is a command.  Return nil when nothing was sent."
       (message "A call waits for your answer: send y, n or a")
       nil))
    (t
-    (let ((tape superchat-chat--tape)
-          (origin (or origin superchat-chat--origin)))
+    (let* ((tape superchat-chat--tape)
+           (origin (or origin superchat-chat--origin))
+           (at (superchat-chat--at-model text))
+           (text (if at (cdr at) text)))
       (setq superchat-chat--origin nil)
       (unwind-protect
           (setq superchat-chat--run
                 (apply #'superchat-run superchat-chat--tape text
-                 :origin origin :model superchat-chat--model
+                 :origin origin :model (if at (car at) superchat-chat--model)
                  ;; The person reads the answer here: `send' is for runs
                  ;; nobody watches.
                  :tools '(except "send")
@@ -570,6 +590,7 @@ separator, so the prompt and the input never fold."
    nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
    'append)
   (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t)
+  (add-hook 'completion-at-point-functions #'superchat-chat--complete-model nil t)
   ;; A redisplay of the buffer is the one moment that costs nothing, and it is
   ;; when a timeline another run made busy is noticed.
   (setq mode-line-format (append mode-line-format '((:eval (superchat-chat--watch))))))
