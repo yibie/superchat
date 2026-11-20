@@ -61,7 +61,9 @@
 (defvar superchat-bridge-data-directory
   (expand-file-name
    "../data/"
-   (file-name-directory (or load-file-name buffer-file-name default-directory)))
+   ;; The true name: a package manager may load this file through a link
+   ;; in a build directory where no `data/' sits beside it.
+   (file-name-directory (file-truename (or load-file-name buffer-file-name default-directory))))
   "Directory of the model catalog files `<provider>.json'.
 It is the `data/' directory next to `lisp/'.")
 
