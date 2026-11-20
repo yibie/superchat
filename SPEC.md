@@ -57,7 +57,8 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
 | L3 | `superchat-guard.el` | 120 | a run going round: its signals and the one redirect |
 | L3 | `superchat-limit.el` | 200 | the round limit: its notes, the look-back's status, the pause |
-| L4 | `superchat-inbox.el` | 265 | the inbox, its worker, the timers |
+| L4 | `superchat-inbox.el` | 200 | the inbox, its worker, `send` |
+| L4 | `superchat-timer.el` | 220 | the timers, their tools, dreaming |
 | L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
@@ -69,7 +70,8 @@ Dependencies go one way only:
 ```
 inline → chat
 messages → chat
-chat → agent, plugin, recall, inbox, turn
+chat → agent, plugin, recall, timer, turn
+timer → inbox
 inbox → agent
 agent → llm, tools, recall, view, context, request, guard, limit
 limit → request
@@ -111,7 +113,7 @@ points to require. A file requires nothing else, and
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 4200 words |
 | `spec/L3-agent.md` | 3160 words |
-| `spec/L4-background.md` | 590 words |
+| `spec/L4-background.md` | 650 words |
 | `spec/L5-interface.md` | 3780 words |
 
 ## Rules against overflow
