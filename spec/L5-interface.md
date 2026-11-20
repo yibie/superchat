@@ -147,6 +147,9 @@ derived from `org-mode`.
   timeline's scope, never whatever `default-directory` happens to be; every
   command that needs a scope (`/new`, `/resume`, `/topic`, `/recall`,
   `/notes`, and the commands of `superchat.el` called from it) uses that.
+  It also keeps a working directory from the buffer current when it is
+  made: a file's directory, a `dired` buffer's, else none; every run gives
+  it as DIRECTORY, which only the first `user` entry keeps.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
   as the user's request. Sending from the input area calls this.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active

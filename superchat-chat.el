@@ -24,6 +24,9 @@
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
 (defvar-local superchat-chat--model nil "Model for this buffer, or nil for the default.")
+(defvar-local superchat-chat--pending-directory nil
+  "The working directory of a timeline outside a project, from the buffer the
+chat was opened from: a file's directory, a `dired' buffer's, or nil.")
 (defvar-local superchat-chat--pending-scope nil
   "Scope given to `superchat-chat-open', for a timeline with no entry yet.")
 (defvar-local superchat-chat--origin nil "Origin for the next request sent, or nil.")
@@ -430,7 +433,9 @@ A line starting with / is a command.  Return nil when nothing was sent."
                          ;; The first request of a timeline fixes its scope.
                          (and superchat-chat--pending-scope
                               (not (superchat-tape-entries :tape tape :limit 1))
-                              (list :scope superchat-chat--pending-scope)))))
+                              (list :scope superchat-chat--pending-scope))
+                         ;; Kept by the timeline's first user entry only.
+                         (list :directory superchat-chat--pending-directory))))
         (superchat-chat--status))
       t))))
 
@@ -573,16 +578,21 @@ separator, so the prompt and the input never fold."
 
 (defun superchat-chat-open (tape &optional scope)
   "The chat buffer of timeline TAPE, made and rendered when there is none.
-SCOPE is the scope of a timeline that has no entry yet."
+SCOPE is the scope of a timeline that has no entry yet; the working directory
+outside a project is that of the buffer current now, a file's or a `dired'
+one's, else none."
   (or (superchat-chat--buffer tape)
-      (with-current-buffer (generate-new-buffer "*superchat: new*")
-        (superchat-chat-mode)
-        (setq superchat-chat--tape tape
-              superchat-chat--pending-scope (or scope (superchat-tape-scope-of default-directory)))
-        (superchat-chat--render)
-        (superchat-chat--status)
-        (rename-buffer (superchat-chat--name tape) t)
-        (current-buffer))))
+      (let ((directory (cond (buffer-file-name (file-name-directory buffer-file-name))
+                             ((derived-mode-p 'dired-mode) default-directory))))
+        (with-current-buffer (generate-new-buffer "*superchat: new*")
+          (superchat-chat-mode)
+          (setq superchat-chat--tape tape
+                superchat-chat--pending-directory directory
+                superchat-chat--pending-scope (or scope (superchat-tape-scope-of default-directory)))
+          (superchat-chat--render)
+          (superchat-chat--status)
+          (rename-buffer (superchat-chat--name tape) t)
+          (current-buffer)))))
 
 (defun superchat-chat-recent-tape (scope)
   "The most recently active timeline of SCOPE that is not ephemeral, or nil."

@@ -1596,3 +1596,22 @@ heading."
       ;; Nothing took it: it is still the buffer's, not lost.
       (should-not (member "mine" (mapcar (lambda (e) (plist-get e :text))
                                          (superchat-tape-entries :tape "t1" :kinds '(user))))))))
+
+(ert-deftest superchat-chat-the-working-directory-comes-from-the-buffer-it-was-opened-from ()
+  (superchat-test-chat--with
+    (let ((file (expand-file-name "notes.txt" superchat-test-chat--dir)))
+      (with-temp-file file (insert "x"))
+      ;; A buffer with no file, as *scratch*: no working directory.
+      (let ((buffer (superchat-chat-open "s1")))
+        (superchat-test-script (list '(:text "ok"))
+          (with-current-buffer buffer (superchat-chat-send "hi")))
+        (should-not (superchat-tape-directory "s1")))
+      ;; A file's buffer: its directory, also when /level came first.
+      (with-current-buffer (find-file-noselect file)
+        (unwind-protect
+            (let ((buffer (superchat-chat-open "f1")))
+              (with-current-buffer buffer (superchat-chat-send "/level auto"))
+              (superchat-test-script (list '(:text "ok"))
+                (with-current-buffer buffer (superchat-chat-send "hi")))
+              (should (equal (superchat-tape-directory "f1") superchat-test-chat--dir)))
+          (kill-buffer))))))
