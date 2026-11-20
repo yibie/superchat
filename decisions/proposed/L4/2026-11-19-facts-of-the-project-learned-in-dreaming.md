@@ -123,6 +123,10 @@ of the same evidence repeats. A model fact needs a check that does not
 reread the run, before it counts, and facts about tools must lapse when the
 tools change.
 
+Until then the person chose to keep facts by hand: the three the trial
+found true (the BSD shell, `check.sh`'s exit status, a copy's load path)
+went into `AGENTS.md`, which every run of this project reads.
+
 ## Acceptance criteria
 
 - Before any code: the detector, replayed offline over this project's Tape

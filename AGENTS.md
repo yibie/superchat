@@ -33,3 +33,9 @@ write one line in `NOTES.md`, starting with the layer it concerns, and go on.
   better. Do not pad, and do not compress code to fit: if it does not fit,
   the design is wrong, say so in `NOTES.md`.
 - A test deletes only what it made with `make-temp-file`.
+- The shell is macOS's: BSD tools, so GNU-only options such as `cat -A` or
+  `grep -P` fail; use `sed -n l` and `grep -E`.
+- `scripts/check.sh` exits 1 when a check fails. Read its last line, `CHECK
+  OK` or `CHECK FAILED`: piped (`| tail`), the exit status is the pipe's, 0.
+- A probe outside `check.sh` runs in a copy made as `check.sh` makes one,
+  where `bridge/lisp` is `bridge-lisp`: `-L . -L bridge-lisp -L test`.
