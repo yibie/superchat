@@ -367,17 +367,19 @@
         (should (equal (plist-get (car (last (superchat-tape-entries :tape "t" :kinds '(assistant)))) :text)
                        "The sum is 21."))))))
 
-(ert-deftest superchat-agent-a-look-back-that-says-blocked-stops-at-auto ()
+(ert-deftest superchat-agent-a-look-back-that-says-blocked-is-judged-too ()
   (superchat-test-agent--with
     (superchat-tape-append "t" 'user "earlier" :scope "home")
     (superchat-permission-set "t" 'auto)
-    (let ((superchat-max-rounds 1) status
+    (let ((superchat-max-rounds 1) (superchat-agent-continues 1) status
           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
-      (superchat-test-script (list call '(:text "Status: blocked\nI need the key."))
+      ;; The limit is not the person: the judge sends it on.
+      (superchat-test-script (list call '(:text "Status: blocked\nThe limit is reached.")
+                                   '(:text "CONTINUE: more files to read.") '(:text "Done."))
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
-        (should (= (length superchat-test-requests) 2)))
+        (should (= (length superchat-test-requests) 4)))
       (should (eq status 'done))
-      (should-not (memq 'continued (superchat-test-agent--types "t"))))))
+      (should (memq 'continued (superchat-test-agent--types "t"))))))
 
 (ert-deftest superchat-agent-a-run-going-round-is-redirected-once ()
   (superchat-test-agent--with

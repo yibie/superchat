@@ -60,7 +60,7 @@ run, or what `superchat-limit-pending-functions' report."
   (or steers (run-hook-with-args-until-success 'superchat-limit-pending-functions tape)))
 
 (defconst superchat-limit-judge-prompt
-  "You judge whether an agent's task is finished. You see the task, facts counted from the record of the agent's calls, and the agent's own look-back, which may be wrong or hopeful: weigh the facts above it. Begin with one line, DONE when the task as asked is done, BLOCKED when the agent needs the person (a decision, a permission, missing information), or CONTINUE when the agent can do more itself. Then one line why."
+  "You judge whether an agent's task is finished. A limit on its number of responses stopped the agent, not its own choice: that it stopped says nothing. You see the task, facts counted from the record of the agent's calls, and the agent's own look-back, which may be empty, wrong or hopeful: weigh the facts above it. Begin with one line: DONE when the task as asked is done; CONTINUE when the agent can do more by itself; BLOCKED only when it cannot go on without the person (a decision only they can make, a permission, information it cannot find). Then one line why."
   "The system prompt of the judge.")
 
 (defun superchat-limit-verdict (text)

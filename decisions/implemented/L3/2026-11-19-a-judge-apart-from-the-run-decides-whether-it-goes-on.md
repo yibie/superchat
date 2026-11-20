@@ -19,7 +19,7 @@ Microsoft's TokenEconomizer has the same judge as an optional third step
 ## Decision
 
 - When a run could go on (the `auto` level, continues left, no input
-  pending, the look-back not `blocked`), `superchat-limit-judge` asks the
+  pending), `superchat-limit-judge` asks the
   run's model in a request of its own: no tool, a short system prompt, one
   message with the task (the run's `user` entries), the facts
   `superchat-request-digest` counts, and the look-back. Its first word is
@@ -30,8 +30,12 @@ Microsoft's TokenEconomizer has the same judge as an optional third step
 - Going on, the look-back becomes a `look-back` event, which no request
   carries as a message; the first request after going on has it once, in
   its system prompt, after the facts.
-- The worker's `Status:` line is an appeal: `blocked` still pauses without
-  a judge, and where the run cannot go on, `finished` still ends it `done`.
+- The worker's `Status:` line is an appeal, `blocked` too: in a live run
+  DeepSeek wrote `blocked` because the limit was reached, and the judge
+  rightly sent it on. Where the run cannot go on, `finished` still ends it
+  `done`.
+- The judge's prompt says the limit, not the agent, stopped it: without
+  that line DeepSeek judged a run cut off at 3 of 8 files `blocked`.
 
 ## Alternatives considered
 
@@ -46,6 +50,10 @@ Microsoft's TokenEconomizer has the same judge as an optional third step
   check's product does not enter the model's context.
 
 ## Consequences
+
+- Live, with DeepSeek, a limit of 3 and eight files to read one per
+  response: the judge said CONTINUE twice, each look-back named what was
+  left, and the run answered the right sum.
 
 - At most two more requests per run at the `auto` level.
 - A run whose look-back says `finished` while its tests still fail can be

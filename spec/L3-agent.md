@@ -304,8 +304,8 @@ What a run says and decides at the round limit, over its entries from its
   superchat-limit-note)`: to call no tool, to begin with a status line, and
   to look back: what is done, what failed and why, what is left, the plan.
 - At the `auto` level, with no input pending, below
-  `superchat-agent-continues` (a `defvar`, 2) times a run, and the look-back
-  (less its status line) not `blocked`, the judge decides; its `verdict`
+  `superchat-agent-continues` (a `defvar`, 2) times a run, the judge
+  decides, whatever the look-back's status; its `verdict`
   event says `Judged VERDICT: TEXT`. `continue` goes on: a `look-back`
   event of it, an event `(:type "continued" :count N)`, the count starts
   again, and the next request's system prompt alone ends with the facts,
