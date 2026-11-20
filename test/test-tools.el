@@ -6,7 +6,6 @@
 (require 'superchat-tape)
 (require 'superchat-permission)
 (require 'superchat-tools)
-(require 'superchat-search)
 
 (defmacro superchat-test-tools--in-scope (&rest body)
   "Run BODY with timeline \"t\" at level auto, scoped to a temporary directory DIR."

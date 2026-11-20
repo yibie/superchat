@@ -67,5 +67,6 @@ rarely meant:
   `:directory`, outside a project, has none.
 - With no working directory, `read` and `edit` of a buffer work and a
   process started from any tool runs in the scratch directory, made for
-  every call of such a timeline. `grep` and `find` moved to
-  `superchat-search.el` to make room in `superchat-tools.el`.
+  every call of such a timeline. The tools stay together in
+  `superchat-tools.el`, whose cap rose to 900 lines: the person wants every
+  tool's definition in one file.
