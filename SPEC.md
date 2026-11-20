@@ -181,7 +181,7 @@ There is no "session" object and no "memory" store. A session is the
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
 | `note` | the conclusion | `(:title STRING)` |
-| `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
+| `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`, the last two with an optional `:until TIME`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
 | `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused`, `redirect`, `look-back`, `verdict` |
 
