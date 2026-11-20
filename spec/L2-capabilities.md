@@ -174,8 +174,11 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   user answered, when asked); when it returns non-nil, the tool does not run
   and its result is `Cancelled.`. It decides
   permission, asks when needed, runs the function with `default-directory`
-  set to the timeline's scope (the user's home directory for `"home"`),
-  appends the result as a `tool` entry and calls ON-RESULT with that entry,
+  set to `(superchat-tape-directory TAPE)`, or, when that is nil,
+  `(superchat-tools-scratch TAPE)`: a directory named after TAPE under
+  `temporary-file-directory`, which a process made there makes first. With
+  no working directory a relative path is an error: `This conversation has
+  no working directory: give an absolute path`. It appends the result as a `tool` entry and calls ON-RESULT with that entry,
   exactly once: before it returns for a synchronous tool, later for an
   asynchronous one. A call that names no known tool or lacks a required
   argument is answered first, with no question and no event. An `ask`

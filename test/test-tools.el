@@ -274,12 +274,21 @@
   (superchat-test-tools--in-scope
     (should (equal (superchat-test-tools--ok "eval_elisp" :code "default-directory")
                    (prin1-to-string dir)))
-    (superchat-tape-append "h" 'user "go" :scope "home")
-    (superchat-permission-set "h" 'auto)
-    (should (equal (plist-get (superchat-test-tools--await
-                                "h" '(:id "x" :name "eval_elisp" :args (:code "default-directory")))
-                              :text)
-                   (prin1-to-string (expand-file-name "~/"))))))
+    (let ((temporary-file-directory (file-name-as-directory (make-temp-file "sc-scratch-" t)))
+          (code '(:id "x" :name "eval_elisp" :args (:code "default-directory"))))
+      (unwind-protect
+          (progn
+            ;; Outside a project: the first user entry's directory, else a
+            ;; scratch directory of the timeline, never ~.
+            (superchat-tape-append "d" 'user "go" :scope "home" :data (list :directory dir))
+            (superchat-permission-set "d" 'auto)
+            (should (equal (plist-get (superchat-test-tools--await "d" code) :text)
+                           (prin1-to-string dir)))
+            (superchat-tape-append "h" 'user "go" :scope "home")
+            (superchat-permission-set "h" 'auto)
+            (should (equal (plist-get (superchat-test-tools--await "h" code) :text)
+                           (prin1-to-string (expand-file-name "superchat-h/" temporary-file-directory)))))
+        (delete-directory temporary-file-directory t)))))
 
 (ert-deftest superchat-tools-result-is-appended-with-quitting-off ()
   (superchat-test-tools--in-scope
@@ -641,7 +650,7 @@ sets `stopped' and cancels the timer."
       (superchat-tape-append "h" 'user "go" :scope "home")
       (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny))
             (skill (expand-file-name "skills/s/SKILL.md" superchat-directory)))
-        (superchat-tool-call "h" '(:id "c" :name "read" :args (:path "x")) #'ignore)
+        (superchat-tool-call "h" '(:id "c" :name "read" :args (:path "/x")) #'ignore)
         (should asked)
         ;; A skill the system prompt offers is read with no question.
         (make-directory (file-name-directory skill) t)
@@ -683,12 +692,20 @@ sets `stopped' and cancels the timer."
 
 (ert-deftest superchat-tools-at-home-a-search-of-the-default-path-is-asked ()
   (superchat-test-with-tape
-    (let ((asked nil))
-      (superchat-tape-append "h" 'user "go" :scope "home")
+    (let ((asked nil) result)
+      (superchat-tape-append "h" 'user "go" :scope "home" :data '(:directory "/tmp/"))
       (let ((superchat-permission-ask-function (lambda (&rest _) (setq asked t) 'deny)))
-        (superchat-tool-call "h" '(:id "c" :name "grep" :args (:pattern "KEY"))
-                             #'ignore)
-        (should asked)))))
+        (superchat-tool-call "h" '(:id "c" :name "grep" :args (:pattern "KEY")) #'ignore)
+        (should asked)
+        ;; With no working directory the default path is refused, not asked.
+        (setq asked nil)
+        (superchat-tape-append "n" 'user "go" :scope "home")
+        (superchat-tool-call "n" '(:id "c" :name "grep" :args (:pattern "KEY"))
+                             (lambda (e) (setq result e)))
+        (should-not asked)
+        (should (plist-get (plist-get result :data) :error))
+        (should (string-search "no working directory: give an absolute path"
+                               (plist-get result :text)))))))
 
 ;;; read
 
@@ -1111,3 +1128,25 @@ DIR is no project: the .git is in a subdirectory."
       (let ((safe-local-variable-values (list (cons 'superchat-lint-project-command value))))
         (should (string-match-p "\\[Lint: echo from the project; exit 1 exited 1:\\]\n\\[Lint: from the project\\]"
                                 (superchat-test-tools--ok "write" :path "b.txt" :content "x")))))))
+
+(ert-deftest superchat-tools-shell-with-no-working-directory-runs-in-scratch ()
+  (superchat-test-with-tape
+    (let* ((temporary-file-directory (file-name-as-directory (make-temp-file "sc-scratch-" t)))
+           (scratch (expand-file-name "superchat-n/" temporary-file-directory))
+           (default-directory temporary-file-directory))
+      (unwind-protect
+          (progn
+            (superchat-tape-append "n" 'user "go" :scope "home")
+            (superchat-permission-set "n" 'auto)
+            ;; Not made by a call that runs no process.
+            (superchat-test-tools--await "n" '(:id "a" :name "eval_elisp" :args (:code "1")))
+            (should-not (file-exists-p scratch))
+            ;; Whatever buffer is current, a file's or not, it is the scratch.
+            (with-temp-buffer
+              (setq default-directory (expand-file-name "~/"))
+              (should (equal (string-trim (car (split-string (plist-get (superchat-test-tools--await
+                                                                         "n" '(:id "b" :name "shell" :args (:command "pwd")))
+                                                                        :text)
+                                                             "\n")))
+                             (directory-file-name scratch)))))
+        (delete-directory temporary-file-directory t)))))

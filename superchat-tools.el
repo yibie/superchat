@@ -83,6 +83,9 @@ A path is expanded as the tool expands it, so what is checked is what is read."
                           (buffer (get-buffer name)))
                 (buffer-file-name buffer)))))
 
+(defvar superchat-tools--loose nil
+  "Non-nil while a call of a timeline with no working directory runs.")
+
 (defun superchat-tools--outside-p (scope tool args)
   "Non-nil when a call of TOOL with ARGS reads outside SCOPE and outside
 `superchat-directory', where the skills the system prompt offers are.  Links
@@ -141,8 +144,10 @@ user was asked.  Return the tool's stop function or nil.  May signal."
                                 (cl-remove-if-not (lambda (a) (plist-get a :required))
                                                   (plist-get tool :args))))
          (scope (plist-get (car (superchat-tape-entries :tape tape :limit 1 :newest t)) :scope))
+         (directory (superchat-tape-directory tape))
+         (superchat-tools--loose (not directory))
          ;; A process made by the tool takes its directory from here.
-         (default-directory (if (equal scope "home") (expand-file-name "~/") scope))
+         (default-directory (or directory (superchat-tools-scratch tape)))
          (superchat-tool-tape tape)
          (why (unless missing (superchat-tools--permit tape call tool args scope))))
     (cond
@@ -228,8 +233,17 @@ to the project and turn to `shell', which the user cannot judge as well.")
   (string-join (append parts (list superchat-tools--division)) " "))
 
 (defun superchat-tools--path (path)
-  "Absolute name of PATH, relative to `default-directory'."
+  "Absolute name of PATH, relative to `default-directory'; a relative PATH is
+an error in a timeline with no working directory."
+  (when (and superchat-tools--loose (not (file-name-absolute-p path)))
+    (error "This conversation has no working directory: give an absolute path"))
   (expand-file-name path default-directory))
+
+(defun superchat-tools-scratch (tape)
+  "The directory where `shell' runs for timeline TAPE when it has no working
+directory; a process made there makes it first."
+  (expand-file-name (concat "superchat-" (replace-regexp-in-string "[^A-Za-z0-9_-]" "_" tape) "/")
+                    temporary-file-directory))
 
 (defun superchat-tools--buffer (name)
   "The live buffer called NAME, or an error."
@@ -431,7 +445,8 @@ not called.  The buffer is killed always."
                     (when why (funcall finish output why))))))
       (condition-case err
           (setq process
-                (make-process
+                (progn (when superchat-tools--loose (make-directory default-directory t))
+                       (make-process
                  :name "superchat-process" :buffer buffer :command command
                  :connection-type 'pipe :noquery t :file-handler t
                  :filter (lambda (process text)
@@ -446,7 +461,7 @@ not called.  The buffer is killed always."
                                         (end 'cut))))))
                  :sentinel (lambda (process _)
                              (unless (process-live-p process)
-                               (end (process-exit-status process))))))
+                               (end (process-exit-status process)))))))
         (error (kill-buffer buffer) (signal (car err) (cdr err))))
       (setq timer (run-at-time seconds nil (lambda () (end 'timeout))))
       (process-send-eof process)
