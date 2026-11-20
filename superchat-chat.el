@@ -214,16 +214,28 @@ With no provider set there are no model ids, and the error says what to set."
        (member (match-string 1 text) (superchat-llm-model-ids))
        (cons (match-string 1 text) (substring text (match-end 0)))))
 
-(defun superchat-chat--complete-model ()
-  "Complete a model id after an @ that starts the input."
+(defun superchat-chat--complete ()
+  "Complete a slash command after a / that starts the input, a model id after an @."
   (when (>= (point) superchat-chat--input)
     (save-excursion
       (let ((end (point)))
         (goto-char superchat-chat--input)
-        (when (and (looking-at "@\\([^ \t\n]*\\)") (<= end (match-end 0)))
-          (list (match-beginning 1) (match-end 1)
-                (completion-table-dynamic (lambda (_) (superchat-llm-model-ids)))
-                :exclusive 'no))))))
+        (when (and (looking-at "\\([/@]\\)\\([^ \t\n]*\\)") (<= end (match-end 0)))
+          (if (equal (match-string 1) "/")
+              (list (match-beginning 2) (match-end 2)
+                    (mapcar #'car superchat-chat--commands)
+                    :exclusive 'no
+                    :annotation-function
+                    (lambda (name) (concat "  " (cddr (assoc name superchat-chat--commands)))))
+            (list (match-beginning 2) (match-end 2)
+                  (completion-table-dynamic (lambda (_) (superchat-llm-model-ids)))
+                  :exclusive 'no)))))))
+
+(defun superchat-chat--complete-now ()
+  "After a / or @ typed as the input's first character, offer completions."
+  (when (and (memq last-command-event '(?/ ?@))
+             (= (point) (1+ superchat-chat--input)))
+    (completion-at-point)))
 
 (defun superchat-chat--line (text width)
   "TEXT on one line, cut to WIDTH characters."
@@ -590,7 +602,8 @@ separator, so the prompt and the input never fold."
    nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
    'append)
   (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t)
-  (add-hook 'completion-at-point-functions #'superchat-chat--complete-model nil t)
+  (add-hook 'completion-at-point-functions #'superchat-chat--complete nil t)
+  (add-hook 'post-self-insert-hook #'superchat-chat--complete-now nil t)
   ;; A redisplay of the buffer is the one moment that costs nothing, and it is
   ;; when a timeline another run made busy is noticed.
   (setq mode-line-format (append mode-line-format '((:eval (superchat-chat--watch))))))

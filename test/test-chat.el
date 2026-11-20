@@ -590,11 +590,34 @@ tool `echo', and no chat buffers left behind."
       (with-current-buffer (superchat-chat-open "t1")
         (goto-char (point-max))
         (insert "@deepseek-v")
-        (let ((capf (superchat-chat--complete-model)))
+        (let ((capf (superchat-chat--complete)))
           (should capf)
           (should (member "deepseek-v4-pro" (all-completions "" (nth 2 capf)))))
         (insert " more")
-        (should-not (superchat-chat--complete-model))))))
+        (should-not (superchat-chat--complete))))))
+
+(ert-deftest superchat-chat-slash-completes-commands ()
+  (superchat-test-chat--with
+    (with-current-buffer (superchat-chat-open "t1")
+      (goto-char (point-max))
+      (insert "/he")
+      (let ((capf (superchat-chat--complete)))
+        (should capf)
+        (should (member "help" (all-completions "he" (nth 2 capf))))
+        (should (string-match-p "List" (funcall (plist-get (nthcdr 3 capf) :annotation-function) "help"))))
+      (insert " x")
+      (should-not (superchat-chat--complete)))))
+
+(ert-deftest superchat-chat-first-slash-offers-completions ()
+  (superchat-test-chat--with
+    (with-current-buffer (superchat-chat-open "t1")
+      (goto-char (point-max))
+      (let ((asked 0))
+        (cl-letf (((symbol-function 'completion-at-point) (lambda () (cl-incf asked))))
+          (let ((last-command-event ?/)) (insert "/") (run-hooks 'post-self-insert-hook))
+          (should (= asked 1))
+          (let ((last-command-event ?/)) (insert "/") (run-hooks 'post-self-insert-hook))
+          (should (= asked 1)))))))
 
 (ert-deftest superchat-chat-recent-tape-ignores-ephemeral ()
   (superchat-test-chat--with
