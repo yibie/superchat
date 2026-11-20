@@ -51,6 +51,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L2 | `superchat-permission.el` | 250 | levels, the decision for one tool call, asking |
 | L2 | `superchat-tools.el` | 800 | the tool registry, running a tool, the built-in tools |
 | L2 | `superchat-recall.el` | 200 | the three tools the model uses on the Tape |
+| L2 | `superchat-lint.el` | 150 | the checks of a file `edit` or `write` just saved |
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
@@ -73,7 +74,7 @@ agent → llm, tools, recall, view, context, request, guard
 request → llm
 recall → tools, view
 context → view
-tools → permission
+tools → permission, lint
 permission, view → tape
 every file → superchat.el
 ```
