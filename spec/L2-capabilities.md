@@ -394,8 +394,8 @@ fixes it in the same round. A lint never refuses a change.
 
 ## superchat-recall.el
 
-Three tools, defined with `superchat-tool-define`, all of class `read` and
-deferred:
+Three tools, defined with `superchat-tool-define`, all of class `read`;
+`recall` and `note` are offered in every request, `tape_query` is deferred:
 `note` only appends to the Tape, so it never asks.
 
 | name | arguments | does |

@@ -716,9 +716,11 @@ tool `echo', and no chat buffers left behind."
       (with-current-buffer (superchat-chat-open "t1") (superchat-chat-send "hi"))
       (let ((names (mapcar (lambda (s) (plist-get s :name))
                            (plist-get (car superchat-test-requests) :tools))))
-        ;; The memory and timer tools wait to be loaded: listed, not offered.
+        ;; recall and note are offered; the rest wait to be loaded.
         (should (member "load_tools" names))
-        (dolist (n '("recall" "tape_query" "note" "follow_up"))
+        (should (member "recall" names))
+        (should (member "note" names))
+        (dolist (n '("tape_query" "follow_up"))
           (should-not (member n names))
           (should (string-search (format "- %s: " n) (plist-get (car superchat-test-requests) :system))))
         ;; The person reads the answer here; send is for runs nobody watches.

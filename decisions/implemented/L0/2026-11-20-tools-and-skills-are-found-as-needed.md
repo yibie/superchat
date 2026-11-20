@@ -68,8 +68,9 @@ exists, then loads its detail when it needs it.
 - A first request of a timeline offers eight tools, not fourteen or more;
   the catalog of deferred tools moves some characters into the system
   prompt.
-- A conversation that needs `recall` spends one round on `load_tools`, once
-  per timeline.
+- A conversation that needs `recall` spent one round on `load_tools`; the
+  person reversed that part:
+  [recall and note are offered in every request](../L2/2026-11-20-recall-and-note-are-offered-in-every-request.md).
 - A plugin whose tools must be offered at once defines them `:deferred
   nil`.
 - The dreaming task's text changed, and `superchat-timer-dream` knows a

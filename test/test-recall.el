@@ -131,5 +131,12 @@
       (should (equal (plist-get (plist-get note :data) :title) "T")))
     (should-error (superchat-recall-note "other" "T" "no scope"))))
 
+(ert-deftest superchat-recall-memory-is-offered-and-the-query-loaded ()
+  (superchat-test-recall--with
+    (let ((offered (superchat-tool-offered "t")))
+      (should (member "recall" offered))
+      (should (member "note" offered))
+      (should-not (member "tape_query" offered)))))
+
 (provide 'test-recall)
 ;;; test-recall.el ends here
