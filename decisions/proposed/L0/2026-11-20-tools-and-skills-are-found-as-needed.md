@@ -22,7 +22,8 @@ exists, then loads its detail when it needs it.
 - **Tools.**
   - A tool is defined `:deferred t` or not. Not deferred, its specification
     goes with every request, as now: a small core (`read`, `grep`, `find`,
-    `edit`, `write`, `shell`, `eval_elisp`). Deferred, the system prompt
+    `edit`, `write`, `shell`, `eval_elisp`, as the person agreed).
+    Deferred, the system prompt
     lists only its name and first sentence.
   - A core tool `load_tools` (`names`) returns the specifications of the
     deferred tools named; from the next request of the run, those tools are
@@ -30,9 +31,10 @@ exists, then loads its detail when it needs it.
     with an error that says to load it first.
   - Plugin tools are deferred unless they say otherwise; the memory tools
     (`recall`, `note`, `tape_query`) and the timer tools are deferred.
-  - What a run loaded is a `load` event on the Tape, so a run continued
-    after a pause, or the next run, can tell; whether loaded tools carry
-    over to later runs of the timeline is part of this decision.
+  - What a run loaded is a `load` event on the Tape. Loaded tools stay
+    offered for every later run of the timeline, as the person decided: a
+    conversation that needed `recall` once will need it again, and
+    reloading costs a round each time.
 - **Skills.**
   - Three steps, as in Anthropic's skills: the catalog (name and
     description), the body (`SKILL.md`), then the files the body points to
@@ -64,7 +66,8 @@ exists, then loads its detail when it needs it.
 
 - A request offers only the core tools and lists the deferred ones by name
   and first sentence; after `load_tools` with `recall`, the next request
-  offers `recall` and the one before did not.
+  offers `recall` and the one before did not; a later run of the same
+  timeline offers it from its first request, another timeline does not.
 - Calling a deferred tool not loaded is an error result naming
   `load_tools`, and the run goes on.
 - With a project skill and a user skill of the same name, the catalog
