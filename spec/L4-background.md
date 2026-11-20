@@ -54,7 +54,7 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
 - `(superchat-timer-start)`, a command: put what is due and wake the worker
   now and every `superchat-timer-poll-seconds` (a `defvar`, 60).
   `(superchat-timer-cancel ID)` cancels.
-- Tools, class `write` (they make unwatched work): `follow_up` (`in` ≥ 60
+- Deferred tools, class `write` (they make unwatched work): `follow_up` (`in` ≥ 60
   seconds, `text`), not to split work; `schedule` (`every` ≥ 60 or `daily`
   `"HH:MM"`, `text`), first due one period after it is set, with `:until`
   `superchat-timer-days` (a `defvar`, 7) days later. Both refuse when the
@@ -62,6 +62,6 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
   fire. Class `read`: `cancel_timer` (`id`). Dreaming has no `:until`.
 - `(superchat-timer-dream SCOPE &optional OFF)` turns dreaming on for
   SCOPE and returns its timer: a `daily` `"03:00"` timer on a new timeline
-  of SCOPE whose text asks to review the notes, to replace with `note`
+  of SCOPE whose text asks to load `recall` and `note`, review the notes, replace with `note`
   those that repeat or are wrong, citing them, and to delete and send
   nothing; one per scope. With OFF it cancels that timer.

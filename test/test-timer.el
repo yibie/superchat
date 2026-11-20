@@ -13,11 +13,13 @@
     (let ((superchat-default-level 'ask)
           (superchat-permission-ask-function (lambda (&rest _) (error "Asked in the minibuffer"))))
       (superchat-test-script
-          (list '(:text "" :calls ((:id "f1" :name "follow_up" :args (:in 60 :text "again")))))
+          (list '(:text "" :calls ((:id "l1" :name "load_tools" :args (:names "follow_up"))))
+                '(:text "" :calls ((:id "f1" :name "follow_up" :args (:in 60 :text "again")))))
         (let ((inhibit-message t))
           (superchat-inbox-put "t" "Your timer 1 is due: again" :unattended t)
           (superchat-test-inbox--idle))
-        ;; A timer makes more work nobody watches: the run waits for the person.
+        ;; Loaded, a timer still makes more work nobody watches: the run waits
+        ;; for the person.
         (should (superchat-question "t"))
         (should-not (superchat-timer-list "t"))))))
 

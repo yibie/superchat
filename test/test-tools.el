@@ -1207,7 +1207,7 @@ DIR is no project: the .git is in a subdirectory."
             (should (string-search "Loaded later" (plist-get r :text))))
           (should (member "later" (superchat-tool-offered "t")))
           (should-not (member "later" (superchat-tool-offered "u")))
-          (should-not (and (superchat-tool-catalog "t") (string-search "later" (superchat-tool-catalog "t"))))
+          (should-not (and (superchat-tool-catalog "t") (string-search "- later:" (superchat-tool-catalog "t"))))
           ;; A tool that is not deferred cannot be loaded.
           (let (r)
             (superchat-tool-call "t" '(:id "c" :name "load_tools" :args (:names "read")) (lambda (e) (setq r e)))

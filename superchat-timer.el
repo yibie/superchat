@@ -104,7 +104,7 @@ that repeats lapses after `superchat-timer-days'."
     (format "Timer %d set; cancel_timer with that id stops it." (plist-get timer :id))))
 
 (superchat-tool-define
- "follow_up" :class 'write
+ "follow_up" :class 'write :deferred t
  :description "Come back to this conversation later, with nobody watching: after IN seconds (60 or more) you get TEXT as a new message. Only for what waits on time or on someone else, or a reminder the person asked for; never to split work you can do now: go on with it in this response. Do not poll."
  :args '((:name "in" :type number :description "Seconds from now" :required t)
          (:name "text" :type string :description "What to do then" :required t))
@@ -117,7 +117,7 @@ that repeats lapses after `superchat-timer-days'."
                (superchat-timer--set (list :at (+ (float-time) in)) (plist-get args :text)))))
 
 (superchat-tool-define
- "schedule" :class 'write
+ "schedule" :class 'write :deferred t
  :description "Do TEXT again and again in this conversation, with nobody watching: every EVERY seconds (at least 60), or daily at DAILY (\"HH:MM\", local time). Only when the person asked for it."
  :args '((:name "every" :type number :description "Seconds between two times")
          (:name "daily" :type string :description "\"HH:MM\" each day")
@@ -144,7 +144,7 @@ that repeats lapses after `superchat-timer-days'."
     (format "Timer %d cancelled." id)))
 
 (superchat-tool-define
- "cancel_timer" :class 'read
+ "cancel_timer" :class 'read :deferred t
  :description "Stop a timer that follow_up or schedule set."
  :args '((:name "id" :type number :description "The timer's id" :required t))
  :function (lambda (args)
@@ -153,7 +153,7 @@ that repeats lapses after `superchat-timer-days'."
 ;;; Dreaming
 
 (defconst superchat-timer--dream
-  "Review the notes of this project while nobody watches. Read them with recall (view notes), and what happened since your last review with recall (views timelines and search). When two notes say the same, or one is wrong or out of date, write one note with the note tool that replaces them: its sources are the ids of the notes it replaces. Delete nothing. Send nothing unless a note contradicts what the person said. When nothing is new since your last review, write nothing."
+  "Review the notes of this project while nobody watches. Load recall and note with load_tools first. Read the notes with recall (view notes), and what happened since your last review with recall (views timelines and search). When two notes say the same, or one is wrong or out of date, write one note with the note tool that replaces them: its sources are the ids of the notes it replaces. Delete nothing. Send nothing unless a note contradicts what the person said. When nothing is new since your last review, write nothing."
   "The task of a dreaming run, and how its timer is known.")
 
 (defun superchat-timer-dream (scope &optional off)
