@@ -26,10 +26,6 @@
 (defvar superchat-agent--runs (make-hash-table :test #'equal)
   "Timeline name to its run, while it has one.")
 
-(defvar superchat-agent-pending-functions nil
-  "Functions called with a timeline's name: non-nil when input waits for it
-outside the run, so that the run, at the round limit, pauses for it.")
-
 (defvar superchat-agent-continues 2
   "At the `auto' level, how many times a run that reached the round limit goes
 on after its look-back, its count of responses starting again.")
@@ -158,44 +154,72 @@ not cancel it, and `superchat-agent--track' must not keep it."
 
 (defun superchat-agent--respond (run response)
   "Record RESPONSE, run its calls in order, make the next request; at the round
-limit, record the answer and end RUN as stopped."
+limit, let the judge decide when RUN may go on, else end it."
   (let* ((calls (plist-get response :calls))
          (last (plist-get run :last))
          ;; A look-back begins with its status; the entry keeps the rest.
-         (status (and last (superchat-limit-status (plist-get response :text))))
-         (text (if last (cdr status) (plist-get response :text))))
+         (status (and last (car (superchat-limit-status (plist-get response :text)))))
+         (text (if last (cdr (superchat-limit-status (plist-get response :text)))
+                 (plist-get response :text))))
     (cl-incf (plist-get run :rounds))
-    (setf (plist-get run :text) text)
-    ;; A call of the last response is not run and not recorded: no tool was
-    ;; called, and the person's answer must not claim otherwise.
-    (superchat-tape-append (plist-get run :tape) 'assistant text
-                           :data (list :model (plist-get response :model)
-                                       :calls (unless last calls)))
-    (superchat-agent--emit run)
-    (when (superchat-agent--live run)
-      (cond ((and last (eq (car status) 'finished)) (superchat-agent--end run 'done))
-            ((and last (not (eq (car status) 'blocked))
-                  (eq (superchat-permission-level (plist-get run :tape)) 'auto)
-                  (< (plist-get run :continues) superchat-agent-continues)
-                  (not (superchat-agent--pending-p run)))
-             (superchat-agent--go-on run (car status)))
-            ;; Not a failure: the look-back is its answer, and the person goes on.
-            (last (superchat-agent--pause run))
-            (calls (superchat-agent--calls run calls))
-            (t (superchat-agent--end run 'done))))))
+    (if (and last (not (eq status 'blocked))
+             (eq (superchat-permission-level (plist-get run :tape)) 'auto)
+             (< (plist-get run :continues) superchat-agent-continues)
+             (not (superchat-limit-pending-p (plist-get run :tape) (plist-get run :steers))))
+        (superchat-agent--judge run text)
+      ;; A call of the last response is not run and not recorded: no tool was
+      ;; called, and the person's answer must not claim otherwise.
+      (superchat-agent--answer run text (plist-get response :model) (unless last calls))
+      (when (superchat-agent--live run)
+        (cond ((and last (eq status 'finished)) (superchat-agent--end run 'done))
+              ;; Not a failure: the look-back is its answer, and the person goes on.
+              (last (superchat-agent--pause run))
+              (calls (superchat-agent--calls run calls))
+              (t (superchat-agent--end run 'done)))))))
 
-(defun superchat-agent--go-on (run status)
-  "RUN reached the round limit at the `auto' level and looked back with STATUS,
-`continue' or nil when it named none: record that it goes on, start its count
-of responses again, and make the next request."
+(defun superchat-agent--answer (run text model calls)
+  "Append RUN's `assistant' entry of TEXT, MODEL and CALLS, and give it out."
+  (setf (plist-get run :text) text)
+  (superchat-tape-append (plist-get run :tape) 'assistant text
+                         :data (list :model model :calls calls))
+  (superchat-agent--emit run))
+
+(defun superchat-agent--judge (run look-back)
+  "RUN could go on after LOOK-BACK: a judge apart from it decides.  `continue'
+goes on, with the look-back an event and out of later requests; `done' ends
+RUN with the look-back its answer; `blocked' pauses it."
+  (let ((tape (plist-get run :tape)))
+    (superchat-agent--track
+     run (lambda ()
+           (superchat-limit-judge
+            (superchat-agent--since run) look-back (plist-get run :model)
+            (lambda (verdict why)
+              (superchat-agent--answered-request run)
+              (when (superchat-agent--live run)
+                (superchat-agent--guard
+                 run (lambda ()
+                       (superchat-tape-append tape 'event (format "Judged %s: %s" verdict why)
+                                              :data (list :type "verdict" :verdict (symbol-name verdict)))
+                       (superchat-agent--emit run)
+                       (if (and (eq verdict 'continue)
+                                (not (superchat-limit-pending-p tape (plist-get run :steers))))
+                           (superchat-agent--go-on run look-back)
+                         (superchat-agent--answer run look-back nil nil)
+                         (if (eq verdict 'done) (superchat-agent--end run 'done)
+                           (superchat-agent--pause run))))))))))))
+
+(defun superchat-agent--go-on (run look-back)
+  "RUN reached the round limit at the `auto' level and the judge said go on:
+record LOOK-BACK as an event, start its count of responses again, and make
+the next request, which alone sees the look-back."
   (cl-incf (plist-get run :continues))
-  (setf (plist-get run :rounds) 0 (plist-get run :resumed) t)
+  (setf (plist-get run :rounds) 0 (plist-get run :resumed) look-back)
+  (superchat-tape-append (plist-get run :tape) 'event (concat "Look-back: " look-back)
+                         :data '(:type "look-back"))
   (superchat-tape-append (plist-get run :tape) 'event
-                         (format "Round limit reached; going on after the look-back above (%d/%d)%s."
-                                 (plist-get run :continues) superchat-agent-continues
-                                 (if status "" ", which named no status"))
-                         :data (list :type "continued" :count (plist-get run :continues)
-                                     :status (and status (symbol-name status))))
+                         (format "Round limit reached; going on (%d/%d)."
+                                 (plist-get run :continues) superchat-agent-continues)
+                         :data (list :type "continued" :count (plist-get run :continues)))
   (superchat-agent--emit run)
   (superchat-agent--step run))
 
@@ -245,16 +269,9 @@ tool that has not answered yet."
       (superchat-agent--step run))))
 
 (defun superchat-agent--since (run &optional entries)
-  "The entries of RUN after its `user' entry, of ENTRIES or of its timeline."
-  (seq-filter (lambda (e) (> (plist-get e :id) (plist-get run :user-id)))
+  "The entries of RUN from its `user' entry on, of ENTRIES or of its timeline."
+  (seq-filter (lambda (e) (>= (plist-get e :id) (plist-get run :user-id)))
               (or entries (superchat-view 'conversation :tape (plist-get run :tape)))))
-
-(defun superchat-agent--pending-p (run)
-  "Non-nil when input waits for RUN's timeline: steered text, or what
-`superchat-agent-pending-functions' report."
-  (or (plist-get run :steers)
-      (run-hook-with-args-until-success 'superchat-agent-pending-functions
-                                        (plist-get run :tape))))
 
 (defun superchat-agent--pause (run)
   "End RUN, at the round limit, `done' and paused: the person goes on."
@@ -271,7 +288,7 @@ with input waiting, the run pauses instead, so that the input drives the next."
         (dolist (text steers)
           (superchat-tape-append (plist-get run :tape) 'user text :data (list :steer t)))
         (superchat-agent--emit run))
-    (when (superchat-agent--pending-p run) (superchat-agent--pause run)))
+    (when (superchat-limit-pending-p (plist-get run :tape) (plist-get run :steers)) (superchat-agent--pause run)))
   (when (superchat-agent--live run) (superchat-agent--request run)))
 
 (defun superchat-agent--request (run)
@@ -315,7 +332,8 @@ with input waiting, the run pauses instead, so that the input drives the next."
                      messages
                      :system (concat (superchat-context-system tape (plist-get run :system))
                                      (and last (superchat-limit-facts (superchat-agent--since run) superchat-limit-note))
-                                     (and resumed (superchat-limit-facts (superchat-agent--since run) superchat-limit-resume-note))
+                                     (and resumed (concat (superchat-limit-facts (superchat-agent--since run) superchat-limit-resume-note)
+                                                          "\n\nYour look-back:\n" resumed))
                                      (and redirect (concat "\n\n" (superchat-guard-redirect signals))))
                      ;; The tools stay: a provider that has no tool in the
                      ;; request may leak its call syntax as text. A call of

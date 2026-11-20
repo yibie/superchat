@@ -107,8 +107,6 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
 - `(superchat-steer TAPE TEXT)`: the run going on TAPE takes TEXT before its
   next request, as a `user` entry with `:steer t`, so never between a call
   and its result. No run going, or one cancelled: an error.
-- `superchat-agent-pending-functions` (a `defvar`): functions called with
-  TAPE, non-nil when input waits for it outside the run.
 - `(superchat-run-active TAPE)` → nil when the timeline is free; while a
   handoff is pending, a plist whose `:status` is `handoff`; while a run is
   going, the run, whose `:status` is `running` (`cancelled` while a cancelled
@@ -277,8 +275,8 @@ functions over a run's entries, which never stop a run.
 
 ## superchat-limit.el
 
-What a run says and decides at the round limit: pure functions over a run's
-entries after its `user` entry; the loop stays in `superchat-agent.el`.
+What a run says and decides at the round limit, over its entries from its
+`user` entry on; the loop stays in `superchat-agent.el`.
 
 - `superchat-limit-note` and `superchat-limit-resume-note`: the system lines
   of the last request and of the first request after going on.
@@ -289,16 +287,31 @@ entries after its `user` entry; the loop stays in `superchat-agent.el`.
   case ignored), nil when it names none, and TEXT without that line.
 - `(superchat-limit-paused ENTRIES)` → the `paused` event's text: the
   responses and the calls counted on the Tape.
+- `superchat-limit-pending-functions` (a `defvar`): functions called with
+  TAPE, non-nil when input waits for it outside the run.
+  `(superchat-limit-pending-p TAPE STEERS)`: STEERS, or one of them says so.
+- `(superchat-limit-judge ENTRIES LOOK-BACK MODEL ON-VERDICT)` → the handle
+  of a request apart from the run, with no tool, system prompt
+  `superchat-limit-judge-prompt` and one message: the `user` entries of
+  ENTRIES as the task, their facts, and LOOK-BACK. ON-VERDICT gets
+  `(superchat-limit-verdict TEXT)`, the first word `done`, `blocked` or
+  `continue` (case and Markdown ignored, `continue` when none or the
+  request failed), and the text.
 - When `superchat-max-rounds` is a number (nil sets no limit), after that
   many model responses in one run, the calls of the last response run
   first, then the run asks the model once more, its tools offered, its
   system prompt ending with `(superchat-limit-facts ENTRIES
-  superchat-limit-note)`. The note says to call no tool, to begin with a
-  status line, and to look back: what is done, what failed and why, what is
-  left, the plan. The answer, less its status line, is an `assistant` entry
-  with no calls. `finished` ends the run `done`. Else, at the `auto` level,
-  not `blocked`, at most `superchat-agent-continues` (a `defvar`, 2) times a
-  run, the run goes on: an `event` `(:type "continued" :count N :status S)`,
-  the count starts again, and the next request's system prompt ends with
-  the facts and `superchat-limit-resume-note`. Otherwise it ends `done`, the
-  look-back its text, with a `paused` event, not `error`.
+  superchat-limit-note)`: to call no tool, to begin with a status line, and
+  to look back: what is done, what failed and why, what is left, the plan.
+- At the `auto` level, with no input pending, below
+  `superchat-agent-continues` (a `defvar`, 2) times a run, and the look-back
+  (less its status line) not `blocked`, the judge decides; its `verdict`
+  event says `Judged VERDICT: TEXT`. `continue` goes on: a `look-back`
+  event of it, an event `(:type "continued" :count N)`, the count starts
+  again, and the next request's system prompt alone ends with the facts,
+  `superchat-limit-resume-note` and the look-back. `done` ends the run
+  `done`; `blocked` pauses it.
+- Otherwise `finished` ends the run `done` and anything else pauses it. A
+  run that does not go on keeps the look-back as an `assistant` entry with
+  no calls, its answer; a pause ends `done` with a `paused` event, not
+  `error`.

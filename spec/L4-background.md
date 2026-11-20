@@ -31,7 +31,7 @@ waits while the timeline is busy and survives Emacs exiting.
   with `message`: `Superchat: TIMELINE waits for your answer: QUESTION`. A
   timeline whose run cannot start is shown with `message` and keeps its
   items; the others start.
-- `superchat-inbox-pending` is in `superchat-agent-pending-functions`: a
+- `superchat-inbox-pending` is in `superchat-limit-pending-functions`: a
   run at the round limit pauses while items wait for its timeline.
 - A tool `send` (`text`), class `read`, appends an `event` of type `sent`
   with TEXT, shows its first line with `message`, and answers `Sent.`.

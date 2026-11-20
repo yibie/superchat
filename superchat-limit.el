@@ -4,7 +4,8 @@
 ;; A run that reaches `superchat-max-rounds' asks the model to look back,
 ;; then pauses or goes on.  This file holds the words of that request, reads
 ;; the status a look-back begins with, and counts what a paused run did.
-;; Pure functions over a run's entries: the loop itself stays in
+;; Functions over a run's entries, and the judge, a request apart from the
+;; run that decides whether it goes on: the loop itself stays in
 ;; superchat-agent.el.
 
 ;;; Code:
@@ -12,6 +13,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'superchat)
+(require 'superchat-llm)
 (require 'superchat-request)
 
 (defconst superchat-limit-note
@@ -19,7 +21,7 @@
   "What the system prompt says of a run's last request, the round limit reached.")
 
 (defconst superchat-limit-resume-note
-  "You reached the limit of model responses and looked back above. Go on: follow your plan, and change the approach where your look-back or the facts below show what went wrong."
+  "You reached the limit of model responses and looked back; your look-back is below, after the facts. Go on: follow its plan, and change the approach where it or the facts show what went wrong."
   "What the system prompt says of the first request after a run went on.")
 
 (defun superchat-limit-facts (entries note)
@@ -47,6 +49,48 @@ Tape, since the model's own account may be empty."
                         sum (length (plist-get (plist-get e :data) :calls)))))
     (format "Paused at the round limit: %d model responses, %d tool call%s. Send a message to go on."
             superchat-max-rounds calls (if (= calls 1) "" "s"))))
+
+(defvar superchat-limit-pending-functions nil
+  "Functions called with a timeline's name: non-nil when input waits for it
+outside the run, so that the run, at the round limit, pauses for it.")
+
+(defun superchat-limit-pending-p (tape steers)
+  "Non-nil when input waits for timeline TAPE: STEERS, the text steered to its
+run, or what `superchat-limit-pending-functions' report."
+  (or steers (run-hook-with-args-until-success 'superchat-limit-pending-functions tape)))
+
+(defconst superchat-limit-judge-prompt
+  "You judge whether an agent's task is finished. You see the task, facts counted from the record of the agent's calls, and the agent's own look-back, which may be wrong or hopeful: weigh the facts above it. Begin with one line, DONE when the task as asked is done, BLOCKED when the agent needs the person (a decision, a permission, missing information), or CONTINUE when the agent can do more itself. Then one line why."
+  "The system prompt of the judge.")
+
+(defun superchat-limit-verdict (text)
+  "The verdict the judge's TEXT begins with: `done', `blocked', or `continue'
+also when it names none."
+  (let ((case-fold-search t))
+    (if (string-match "\\`[ \t\n*`#]*\\(done\\|blocked\\|continue\\)\\b" (or text ""))
+        (intern (downcase (match-string 1 text)))
+      'continue)))
+
+(defun superchat-limit-judge (entries look-back model on-verdict)
+  "Ask MODEL, apart from the run and with no tool, whether the task of ENTRIES,
+a run's entries from its `user' entry on, is finished: its `user' entries are
+the task, its calls the facts; LOOK-BACK is the run's own.  Call ON-VERDICT
+with the verdict and the judge's text; a failed request is `continue'.
+Return the request's handle."
+  (superchat-llm-request
+   (list (list :role 'user
+               :text (format "Task:\n%s\n\nFacts of the run, counted from the record:\n%s\n\nThe agent's look-back:\n%s"
+                             (mapconcat (lambda (e) (plist-get e :text))
+                                        (seq-filter (lambda (e) (eq (plist-get e :kind) 'user)) entries)
+                                        "\n\nThen the person added:\n")
+                             (superchat-request-digest entries) look-back)))
+   :system superchat-limit-judge-prompt :model model
+   :on-done (lambda (response)
+              (let ((text (string-trim (or (plist-get response :text) ""))))
+                (funcall on-verdict (superchat-limit-verdict text) text)))
+   :on-error (lambda (failure)
+               (funcall on-verdict 'continue
+                        (concat "The judge's request failed: " (plist-get failure :message))))))
 
 (provide 'superchat-limit)
 ;;; superchat-limit.el ends here

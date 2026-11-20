@@ -23,7 +23,7 @@ and its Goal plugin makes no continuation decision while input waits
   result breaks the grouping of the request.
 - Text a run never took (it ended, was cancelled, failed, waited, paused) is
   its `:steers` in ON-DONE, in order; the caller decides what to do with it.
-- `superchat-agent-pending-functions`, called with the timeline's name, says
+- `superchat-limit-pending-functions`, called with the timeline's name, says
   whether input waits outside the run; the layer above adds to it. With
   steered text or such input, a run at the round limit pauses at once, with
   no look-back, and does not go on after a look-back.

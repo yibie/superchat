@@ -311,52 +311,61 @@
         (should (= (length superchat-test-requests) 4)))
       (should (eq status 'done)))))
 
-(ert-deftest superchat-agent-at-auto-a-run-looks-back-and-goes-on ()
+(ert-deftest superchat-agent-at-auto-the-judge-lets-a-run-go-on ()
   (superchat-test-agent--with
     (superchat-tape-append "t" 'user "earlier" :scope "home")
     (superchat-permission-set "t" 'auto)
     (let ((superchat-max-rounds 2) (superchat-agent-continues 1) status
           (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
-      (superchat-test-script (list call call '(:text "Look-back one.")
+      (superchat-test-script (list call call '(:text "Status: continue\nLook-back one.")
+                                   '(:text "CONTINUE\nTwo more files to read.")
                                    call call '(:text "Look-back two."))
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
-        ;; Two rounds of two responses, each ended by the look-back the limit asks for.
-        (should (= (length superchat-test-requests) 6))
+        (should (= (length superchat-test-requests) 7))
         (let ((sent (reverse superchat-test-requests)))
           (should (string-search superchat-limit-note (plist-get (nth 2 sent) :system)))
-          ;; The request after the first look-back says to go on, once.
-          (should (string-search superchat-limit-resume-note (plist-get (nth 3 sent) :system)))
-          (should-not (string-search superchat-limit-resume-note (plist-get (nth 4 sent) :system)))
-          (should (string-search superchat-limit-note (plist-get (nth 5 sent) :system)))))
-      ;; The look-back named no status; the event says so.
-      (should (string-search "named no status"
-                             (plist-get (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :type) "continued"))
-                                                  (superchat-tape-entries :tape "t" :kinds '(event)))
-                                        :text)))
-      ;; It went on once, then stopped as at any level.
+          ;; The judge: its own prompt, no tool, the task, the facts and the look-back.
+          (should (equal (plist-get (nth 3 sent) :system) superchat-limit-judge-prompt))
+          (should-not (plist-get (nth 3 sent) :tools))
+          (let ((asked (plist-get (car (plist-get (nth 3 sent) :messages)) :text)))
+            (should (string-search "Task:\ngo" asked))
+            (should (string-search "Calls: echo 2." asked))
+            (should (string-search "Look-back one." asked)))
+          ;; The first request after going on sees the look-back, once, in its
+          ;; system prompt; no request carries it as a message.
+          (should (string-search "Look-back one." (plist-get (nth 4 sent) :system)))
+          (should-not (string-search "Look-back one." (plist-get (nth 5 sent) :system)))
+          (dolist (r (list (nth 4 sent) (nth 5 sent)))
+            (should-not (seq-find (lambda (m) (string-search "Look-back one." (or (plist-get m :text) "")))
+                                  (plist-get r :messages))))
+          (should (string-search superchat-limit-note (plist-get (nth 6 sent) :system)))))
+      ;; It went on once, then paused as at any level.
       (should (eq status 'done))
-      (should (equal (seq-filter (lambda (ty) (memq ty '(continued paused)))
+      (should (equal (seq-filter (lambda (ty) (memq ty '(verdict look-back continued paused)))
                                  (superchat-test-agent--types "t"))
-                     '(continued paused))))))
+                     '(verdict look-back continued paused))))))
 
-(ert-deftest superchat-agent-a-look-back-that-says-finished-ends-the-run ()
-  (superchat-test-agent--with
-    (superchat-tape-append "t" 'user "earlier" :scope "home")
-    (superchat-permission-set "t" 'auto)
-    (let ((superchat-max-rounds 2) status
-          (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
-      (superchat-test-script (list call call '(:text "**Status: finished**\nThe sum is 21."))
-        (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
-        (should (= (length superchat-test-requests) 3))
-        ;; The look-back request carries the facts counted from the Tape.
-        (let ((system (plist-get (car superchat-test-requests) :system)))
-          (should (string-search "Facts of this run, counted from the Tape:" system))
-          (should (string-search "Calls: echo 2." system))))
-      (should (eq status 'done))
-      (should-not (memq 'continued (superchat-test-agent--types "t")))
-      ;; The answer is the look-back without its status line.
-      (should (equal (plist-get (car (last (superchat-tape-entries :tape "t" :kinds '(assistant)))) :text)
-                     "The sum is 21.")))))
+(ert-deftest superchat-agent-the-judge-decides-a-look-back-that-says-finished ()
+  (dolist (case '(("DONE: all read." nil) ("**BLOCKED** needs a key." t)))
+    (superchat-test-agent--with
+      (superchat-tape-append "t" 'user "earlier" :scope "home")
+      (superchat-permission-set "t" 'auto)
+      (let ((superchat-max-rounds 2) run
+            (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
+        (superchat-test-script (list call call '(:text "**Status: finished**\nThe sum is 21.")
+                                     `(:text ,(car case)))
+          (superchat-run "t" "go" :on-done (lambda (r) (setq run r)))
+          (should (= (length superchat-test-requests) 4))
+          ;; The look-back request carries the facts counted from the Tape.
+          (let ((system (plist-get (cadr superchat-test-requests) :system)))
+            (should (string-search "Facts of this run, counted from the Tape:" system))
+            (should (string-search "Calls: echo 2." system))))
+        (should (eq (plist-get run :status) 'done))
+        (should (eq (and (plist-get run :paused) t) (cadr case)))
+        (should-not (memq 'continued (superchat-test-agent--types "t")))
+        ;; The answer is the look-back without its status line.
+        (should (equal (plist-get (car (last (superchat-tape-entries :tape "t" :kinds '(assistant)))) :text)
+                       "The sum is 21."))))))
 
 (ert-deftest superchat-agent-a-look-back-that-says-blocked-stops-at-auto ()
   (superchat-test-agent--with
@@ -2250,7 +2259,7 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
     (superchat-tape-append "t" 'user "earlier" :scope "home")
     (superchat-permission-set "t" 'auto)
     (let* ((superchat-max-rounds 1) done
-           (superchat-agent-pending-functions (list (lambda (tape) (equal tape "t"))))
+           (superchat-limit-pending-functions (list (lambda (tape) (equal tape "t"))))
            (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
       (superchat-test-script (list call '(:text "never asked"))
         (superchat-run "t" "go" :on-done (lambda (r) (setq done r)))
