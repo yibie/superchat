@@ -53,7 +53,7 @@ A function that fails is shown and does not stop the others or the run."
 
 ;; A run at the round limit pauses while items wait for its timeline: they
 ;; drive the next run, not its look-back.
-(add-hook 'superchat-limit-pending-functions #'superchat-inbox-pending)
+(add-hook 'superchat-agent-pending-functions #'superchat-inbox-pending)
 
 (cl-defun superchat-inbox-put (tape text &key source id unattended scope)
   "Put TEXT in the inbox of timeline TAPE and wake the worker; return the item.

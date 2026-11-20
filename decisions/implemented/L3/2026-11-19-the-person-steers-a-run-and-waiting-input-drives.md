@@ -23,12 +23,13 @@ and its Goal plugin makes no continuation decision while input waits
   result breaks the grouping of the request.
 - Text a run never took (it ended, was cancelled, failed, waited, paused) is
   its `:steers` in ON-DONE, in order; the caller decides what to do with it.
-- `superchat-limit-pending-functions`, called with the timeline's name, says
+- `superchat-agent-pending-functions`, called with the timeline's name, says
   whether input waits outside the run; the layer above adds to it. With
   steered text or such input, a run at the round limit pauses at once, with
   no look-back, and does not go on after a look-back.
-- The round-limit code moved to `superchat-limit.el` first, to make room in
-  `superchat-agent.el`.
+- The round-limit code stays in `superchat-agent.el`: it is a step of the
+  run's loop, not a component of its own. It was moved out once for lines
+  alone and moved back; the cap of the file rose to 800 instead.
 
 ## Alternatives considered
 

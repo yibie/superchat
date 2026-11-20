@@ -323,9 +323,9 @@
         (superchat-run "t" "go" :on-done (lambda (r) (setq status (plist-get r :status))))
         (should (= (length superchat-test-requests) 7))
         (let ((sent (reverse superchat-test-requests)))
-          (should (string-search superchat-limit-note (plist-get (nth 2 sent) :system)))
+          (should (string-search superchat-agent--limit-note (plist-get (nth 2 sent) :system)))
           ;; The judge: its own prompt, no tool, the task, the facts and the look-back.
-          (should (equal (plist-get (nth 3 sent) :system) superchat-limit-judge-prompt))
+          (should (equal (plist-get (nth 3 sent) :system) superchat-agent--judge-prompt))
           (should-not (plist-get (nth 3 sent) :tools))
           (let ((asked (plist-get (car (plist-get (nth 3 sent) :messages)) :text)))
             (should (string-search "Task:\ngo" asked))
@@ -338,7 +338,7 @@
           (dolist (r (list (nth 4 sent) (nth 5 sent)))
             (should-not (seq-find (lambda (m) (string-search "Look-back one." (or (plist-get m :text) "")))
                                   (plist-get r :messages))))
-          (should (string-search superchat-limit-note (plist-get (nth 6 sent) :system)))))
+          (should (string-search superchat-agent--limit-note (plist-get (nth 6 sent) :system)))))
       ;; It went on once, then paused as at any level.
       (should (eq status 'done))
       (should (equal (seq-filter (lambda (ty) (memq ty '(verdict look-back continued paused)))
@@ -412,7 +412,7 @@
           ;; The tools stay offered, so a provider cannot leak its call syntax
           ;; as text; the system line says to call none.
           (should (plist-get ended :tools))
-          (should (string-search superchat-limit-note (plist-get ended :system)))))
+          (should (string-search superchat-agent--limit-note (plist-get ended :system)))))
       (should (eq status 'done))
       ;; The calls of the last response ran: every call has its result.
       (should (equal (superchat-test-agent--types "t")
@@ -2261,7 +2261,7 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
     (superchat-tape-append "t" 'user "earlier" :scope "home")
     (superchat-permission-set "t" 'auto)
     (let* ((superchat-max-rounds 1) done
-           (superchat-limit-pending-functions (list (lambda (tape) (equal tape "t"))))
+           (superchat-agent-pending-functions (list (lambda (tape) (equal tape "t"))))
            (call `(:calls (,(superchat-test-agent--call "c" "echo" :x "a")))))
       (superchat-test-script (list call '(:text "never asked"))
         (superchat-run "t" "go" :on-done (lambda (r) (setq done r)))
@@ -2281,3 +2281,27 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
                            (superchat-tape-entries :tape "t" :kinds '(user)))
                    '("/d/" nil)))
     (should (equal (superchat-tape-directory "t") "/d/"))))
+
+(ert-deftest superchat-agent-a-verdict-is-read-from-the-first-word ()
+  (should (eq (superchat-agent--verdict "DONE\nall read") 'done))
+  (should (eq (superchat-agent--verdict "**Blocked**: a key is missing") 'blocked))
+  (should (eq (superchat-agent--verdict "# CONTINUE") 'continue))
+  ;; What names none goes on; the count of going on still bounds it.
+  (should (eq (superchat-agent--verdict "I think it is done.") 'continue))
+  (should (eq (superchat-agent--verdict "DONEish") 'continue))
+  (should (eq (superchat-agent--verdict nil) 'continue)))
+
+(ert-deftest superchat-agent-a-failed-judge-says-continue ()
+  (let (got)
+    (superchat-test-script (list '(:error "boom"))
+      (superchat-agent--ask-judge '((:kind user :text "go")) "lb" nil
+                             (lambda (verdict why) (setq got (cons verdict why)))))
+    (should (eq (car got) 'continue))
+    (should (string-search "failed" (cdr got)))))
+
+(ert-deftest superchat-agent-input-waiting-is-steered-text-or-what-the-hook-says ()
+  (should (superchat-agent--pending-p "t" '("x")))
+  (should-not (superchat-agent--pending-p "t" nil))
+  (let ((superchat-agent-pending-functions (list (lambda (tape) (equal tape "t")))))
+    (should (superchat-agent--pending-p "t" nil))
+    (should-not (superchat-agent--pending-p "u" nil))))

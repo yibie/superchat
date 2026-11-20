@@ -19,7 +19,7 @@ Microsoft's TokenEconomizer has the same judge as an optional third step
 ## Decision
 
 - When a run could go on (the `auto` level, continues left, no input
-  pending), `superchat-limit-judge` asks the
+  pending), a judge request of `superchat-agent.el` asks the
   run's model in a request of its own: no tool, a short system prompt, one
   message with the task (the run's `user` entries), the facts
   `superchat-request-digest` counts, and the look-back. Its first word is
