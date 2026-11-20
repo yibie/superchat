@@ -43,8 +43,8 @@ waits while the timeline is busy and survives Emacs exiting.
 
 Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
 
-- A `timer` (`SPEC.md`) may still fire unless a `:cancel t` timer refs it
-  or, a follow-up (`:at`), it fired.
+- A `timer` (`SPEC.md`) may still fire unless a `:cancel t` timer refs it,
+  its `:until` has passed, or, a follow-up (`:at`), it fired.
   `(superchat-timer-list &optional TAPE)` → those, oldest first. A timer
   is due at the latest time, at or before now and, for a schedule, not
   before its own `:at`, that its `:at`, `:every` from `:from`, or local
@@ -56,8 +56,10 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
   `(superchat-timer-cancel ID)` cancels.
 - Tools, class `write` (they make unwatched work): `follow_up` (`in` ≥ 60
   seconds, `text`), not to split work; `schedule` (`every` ≥ 60 or `daily`
-  `"HH:MM"`, `text`), first due one period after it is set. Class `read`:
-  `cancel_timer` (`id`).
+  `"HH:MM"`, `text`), first due one period after it is set, with `:until`
+  `superchat-timer-days` (a `defvar`, 7) days later. Both refuse when the
+  timeline has `superchat-timer-max` (a `defvar`, 8) timers that may still
+  fire. Class `read`: `cancel_timer` (`id`). Dreaming has no `:until`.
 - `(superchat-timer-dream SCOPE &optional OFF)` turns dreaming on for
   SCOPE and returns its timer: a `daily` `"03:00"` timer on a new timeline
   of SCOPE whose text asks to review the notes, to replace with `note`

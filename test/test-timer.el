@@ -152,3 +152,35 @@
 
 (provide 'test-inbox)
 ;;; test-inbox.el ends here
+
+(ert-deftest superchat-timer-a-conversation-has-a-cap-on-its-timers ()
+  (superchat-test-inbox--with
+    (let ((superchat-timer-max 2))
+      (superchat-tape-append "t" 'user "go" :scope "home")
+      (superchat-test-inbox--tool "follow_up" :in 600 :text "a")
+      (superchat-test-inbox--tool "follow_up" :in 600 :text "b")
+      (let ((refused (superchat-test-inbox--tool "follow_up" :in 600 :text "c")))
+        (should (plist-get (plist-get refused :data) :error))
+        (should (string-search "cancel one first" (plist-get refused :text))))
+      (should (= 2 (length (superchat-timer-list "t"))))
+      ;; Cancelling one makes room.
+      (superchat-timer-cancel (plist-get (car (superchat-timer-list "t")) :id))
+      (superchat-test-inbox--tool "follow_up" :in 600 :text "c")
+      (should (= 2 (length (superchat-timer-list "t")))))))
+
+(ert-deftest superchat-timer-a-schedule-the-model-set-lapses-and-dreaming-does-not ()
+  (superchat-test-inbox--with
+    (superchat-tape-append "t" 'user "go" :scope "home")
+    (superchat-test-inbox--tool "schedule" :every 60 :text "tick")
+    (superchat-timer-dream "/p/")
+    (should (= 2 (length (superchat-timer-list))))
+    (let ((later (+ (float-time) (* 8 86400))))
+      (cl-letf (((symbol-function 'float-time)
+                 (let ((real (symbol-function 'float-time)))
+                   (lambda (&optional time) (if time (funcall real time) later)))))
+        (should (equal (mapcar (lambda (e) (plist-get e :text)) (superchat-timer-list))
+                       (list superchat-timer--dream)))
+        ;; A lapsed schedule puts nothing, whenever it was due.
+        (superchat-timer--fire later)
+        (should-not (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :source) "timer"))
+                              (superchat-tape-entries :tape "t" :kinds '(inbox))))))))

@@ -28,14 +28,23 @@
            " AND json_extract(data, '$.id') = ? LIMIT 1")
    (list (format "%d@%d" id (floor time)))))
 
+(defvar superchat-timer-max 8
+  "Timers that may still fire one conversation may have: a model cannot
+fill the Tape with timers that run nobody watches.")
+
+(defvar superchat-timer-days 7
+  "Days a `schedule' set by the model fires before it lapses; dreaming,
+which code sets, has no end.")
+
 (defun superchat-timer-list (&optional tape)
   "The timers, of TAPE or of every timeline, that may still fire, oldest
-first: not cancelled and, for a follow-up, not fired."
+first: not cancelled, not lapsed and, for a follow-up, not fired."
   (let* ((all (superchat-tape-entries :tape tape :kinds '(timer)))
          (cancelled (cl-loop for e in all when (plist-get (plist-get e :data) :cancel)
                              append (plist-get e :refs))))
     (seq-remove (lambda (e) (let ((data (plist-get e :data)))
                               (or (plist-get data :cancel) (memq (plist-get e :id) cancelled)
+                                  (and (plist-get data :until) (> (float-time) (plist-get data :until)))
                                   (and (plist-get data :at)
                                        (superchat-timer--fired-p (plist-get e :id)
                                                                  (plist-get data :at))))))
@@ -83,8 +92,15 @@ the latest time it is due, however many were missed while Emacs was closed."
   (if (stringp value) (string-to-number value) value))
 
 (defun superchat-timer--set (data text)
-  "Append a timer with DATA and TEXT to the timeline the tool runs for."
-  (let ((timer (superchat-tape-append superchat-tool-tape 'timer text :data data)))
+  "Append a timer with DATA and TEXT to the timeline the tool runs for; one
+that repeats lapses after `superchat-timer-days'."
+  (when (>= (length (superchat-timer-list superchat-tool-tape)) superchat-timer-max)
+    (error "This conversation has %d timers that may still fire; cancel one first"
+           superchat-timer-max))
+  (let ((timer (superchat-tape-append
+                superchat-tool-tape 'timer text
+                :data (if (plist-get data :at) data
+                        (append data (list :until (+ (float-time) (* superchat-timer-days 86400))))))))
     (format "Timer %d set; cancel_timer with that id stops it." (plist-get timer :id))))
 
 (superchat-tool-define
