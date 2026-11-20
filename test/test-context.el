@@ -47,6 +47,7 @@
            (let ((system (superchat-context-system "h")))
              (should (string-match-p "no working directory: it works in Emacs" system))
              (should (string-match-p "came from the buffer \\*scratch\\*" system))
+             (should (string-match-p "ask where it is: do not search the disk" system))
              (should-not (string-search (expand-file-name "~/") system)))
            (should-not (string-match-p "working directory" (superchat-context-system "none"))))
        (delete-directory dir t)))))

@@ -14,8 +14,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   2. the working directory, `superchat-tape-directory`, with the line that a
      tool's relative path is against it and that `shell` runs there; when
      nil, that the conversation works in Emacs, names the latest `user`
-     entry's origin buffer, needs absolute paths and runs `shell` in a
-     scratch directory;
+     entry's origin buffer, needs absolute paths, runs `shell` in a scratch
+     directory, and asks for a file named without a path, not searching;
   3. the rules file of the scope: `AGENTS.md` at the project root, or
      `AGENTS.md` in `superchat-directory` for `"home"`, when it exists;
   4. the skills catalog: for each `NAME/SKILL.md` under

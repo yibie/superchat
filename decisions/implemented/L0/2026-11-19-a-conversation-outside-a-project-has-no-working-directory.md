@@ -34,7 +34,10 @@ rarely meant:
   runs in `superchat-tools-scratch`, a directory named after the timeline
   under `temporary-file-directory`, made when a process first runs there;
   the system prompt says the conversation works in Emacs, names the buffer
-  it came from, and says to give absolute paths.
+  it came from, says to give absolute paths, and to ask where a file named
+  without a path is rather than search for it. Live, without that last
+  line, DeepSeek at `auto` ran `find` over `~` and read an unrelated
+  `x.py`; with it, it ran `pwd` and asked for the path.
 - The permission rules do not change: outside a project, a read outside
   `superchat-directory` is still asked at `ask`.
 

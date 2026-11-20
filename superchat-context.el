@@ -49,7 +49,8 @@ that it has none and works in Emacs, from the buffer it came from."
       (concat "This conversation has no working directory: it works in Emacs."
               (and buffer (format " It came from the buffer %s, which `read' and `edit' take as `buffer'." buffer))
               " `eval_elisp' reaches the rest of Emacs.  A file tool needs an absolute path;\
- `shell' runs in a scratch directory of its own."))))
+ `shell' runs in a scratch directory of its own.  When the person names a\
+ file without its path, ask where it is: do not search the disk for it."))))
 
 (defun superchat-context--read (file)
   "The text of FILE, or nil when it does not exist."
