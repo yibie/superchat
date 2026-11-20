@@ -54,6 +54,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 700 | `superchat-run`: the loop, cancel, handoff |
 | L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
+| L3 | `superchat-guard.el` | 120 | a run going round: its signals and the one redirect |
 | L4 | `superchat-inbox.el` | 265 | the inbox, its worker, the timers |
 | L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
@@ -68,7 +69,7 @@ inline → chat
 messages → chat
 chat → agent, plugin, recall, inbox, turn
 inbox → agent
-agent → llm, tools, recall, view, context, request
+agent → llm, tools, recall, view, context, request, guard
 request → llm
 recall → tools, view
 context → view
@@ -106,7 +107,7 @@ points to require. A file requires nothing else, and
 | `SPEC.md` | 2550 words |
 | `spec/L1-memory.md` | 1070 words |
 | `spec/L2-capabilities.md` | 3990 words |
-| `spec/L3-agent.md` | 2730 words |
+| `spec/L3-agent.md` | 2950 words |
 | `spec/L4-background.md` | 590 words |
 | `spec/L5-interface.md` | 3780 words |
 
@@ -177,7 +178,7 @@ There is no "session" object and no "memory" store. A session is the
 | `note` | the conclusion | `(:title STRING)` |
 | `timer` | the task | `(:at TIME)`, `(:every SECONDS :from TIME)`, `(:daily "HH:MM")`; `(:cancel t)` cancels `:refs` |
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
-| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused` |
+| `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused`, `redirect` |
 
 A correction is a new entry whose `:refs` names the entry it corrects.
 
