@@ -67,7 +67,7 @@ write notes through this one function."
                        :id))))
 
 (superchat-tool-define
- "recall" :class 'read :function #'superchat-recall--view
+ "recall" :class 'read :function #'superchat-recall--view :deferred t
  :description
  (lambda ()
    (concat "Recall from the Tape, which holds everything that happened in every conversation. "
@@ -81,7 +81,7 @@ write notes through this one function."
          (:name "limit" :type number :description "Most entries")))
 
 (superchat-tool-define
- "tape_query" :class 'read :function #'superchat-recall--query
+ "tape_query" :class 'read :function #'superchat-recall--query :deferred t
  :description
  (concat "Run a read-only SELECT on the Tape; rows come back as JSON arrays, one per line, "
          "at most 200. Table: entry(id INTEGER PRIMARY KEY, tape TEXT, kind TEXT, "
@@ -90,7 +90,7 @@ write notes through this one function."
  :args '((:name "sql" :type string :description "A SELECT statement" :required t)))
 
 (superchat-tool-define
- "note" :class 'read :function #'superchat-recall--note
+ "note" :class 'read :function #'superchat-recall--note :deferred t
  :description "Keep a conclusion worth remembering, with the entries it comes from. A note among its sources is replaced by this one: cite a note only to correct it or merge it."
  :args '((:name "title" :type string :description "Short title" :required t)
          (:name "text" :type string :description "The conclusion" :required t)

@@ -24,8 +24,15 @@ Not on the Tape: it lasts until Emacs exits.")
 (defvar superchat-tool-tape nil
   "The timeline of the tool call being run, for a tool that needs it.")
 
-(cl-defun superchat-tool-define (name &key description args class function async)
+(defvar superchat-tool-defer-default nil
+  "The `:deferred' of a tool defined without one; a plugin's ENABLE runs with
+it t, so its tools wait to be loaded.")
+
+(cl-defun superchat-tool-define (name &key description args class function async
+                                      (deferred superchat-tool-defer-default))
   "Define tool NAME, replacing any tool of that name.
+DEFERRED: the tool is offered only once `load_tools' loaded it on a timeline;
+until then the system prompt lists its name and first sentence.
 DESCRIPTION is a string or a function of no arguments returning one.
 ARGS is a list of (:name S :type T :description S :required BOOL), T being
 string, number or boolean.
@@ -36,8 +43,44 @@ as (funcall DONE nil MESSAGE) for an error."
   (unless (memq class '(read write exec))
     (error "Tool %s: class must be read, write or exec, not %S" name class))
   (puthash name (list :description description :args args :class class :function function
-                :async async)
+                :async async :deferred deferred)
            superchat-tools--registry))
+
+(defun superchat-tool-loaded (tape)
+  "The names of the deferred tools `load_tools' loaded on timeline TAPE."
+  (delete-dups (cl-loop for e in (superchat-tape-entries :tape tape :kinds '(event))
+                        when (equal (plist-get (plist-get e :data) :type) "load")
+                        append (plist-get (plist-get e :data) :tools))))
+
+(defun superchat-tool-offered (tape &optional except)
+  "The names of the tools a request of timeline TAPE offers: those not
+deferred, and those loaded on TAPE, but EXCEPT."
+  (let ((loaded (superchat-tool-loaded tape)))
+    (cl-loop for name in (hash-table-keys superchat-tools--registry)
+             unless (or (member name except)
+                        (and (plist-get (gethash name superchat-tools--registry) :deferred)
+                             (not (member name loaded))))
+             collect name)))
+
+(defun superchat-tools--first-sentence (tool)
+  "The first sentence of TOOL's description."
+  (let ((text (plist-get tool :description)))
+    (setq text (if (functionp text) (funcall text) (or text "")))
+    (if (string-match "\\`\\(.*?[.!?]\\)\\(?:[ \n]\\|\\'\\)" text) (match-string 1 text) text)))
+
+(defun superchat-tool-catalog (tape)
+  "The system prompt's list of the deferred tools not loaded on TAPE, or nil."
+  (let ((loaded (superchat-tool-loaded tape)))
+    (when-let* ((names (sort (cl-loop for name being the hash-keys of superchat-tools--registry
+                                      using (hash-values tool)
+                                      when (and (plist-get tool :deferred) (not (member name loaded)))
+                                      collect name)
+                             #'string<)))
+      (concat "More tools, offered once you load them with load_tools:\n"
+              (mapconcat (lambda (name)
+                           (format "- %s: %s" name (superchat-tools--first-sentence
+                                                    (gethash name superchat-tools--registry))))
+                         names "\n")))))
 
 (defun superchat-tool-remove (name)
   "Remove tool NAME."
@@ -173,8 +216,10 @@ user was asked.  Return the tool's stop function or nil.  May signal."
           (funcall done (funcall (plist-get tool :function) args))
           nil))))))
 
-(defun superchat-tool-call (tape call on-result &optional cancelled)
+(defun superchat-tool-call (tape call on-result &optional cancelled offered)
   "Run CALL, (:id S :name S :args PLIST), for timeline TAPE.
+OFFERED, when non-nil, the names the request offered: a call of another tool
+is an error result, which says to load it when it is deferred.
 CANCELLED, a function of no arguments, is asked once the user has answered:
 when it says yes the tool does not run and its result is `Cancelled.'.
 Append the result as a tool entry and call ON-RESULT with it once: before this
@@ -207,10 +252,15 @@ not called.  Whatever the tool or the user does, the result is an entry."
                     (if starting (setq pending (cons text errorp)) (deliver text errorp))))
                 (fail (text)
                   (setq finished t pending (cons text t))))
-      (condition-case err (setq stop (let ((inhibit-quit nil))
-                                       (superchat-tools--start tape call #'finish cancelled)))
-        (error (fail (format "Error: %s" (error-message-string err))))
-        (quit (fail "Interrupted by the user.")))
+      (let ((name (plist-get call :name)))
+        (if (and offered (not (member name offered)))
+            (fail (if (plist-get (gethash name superchat-tools--registry) :deferred)
+                      (format "Error: %s is not loaded: call load_tools with its name first" name)
+                    (format "Error: %s is not offered in this conversation" name)))
+          (condition-case err (setq stop (let ((inhibit-quit nil))
+                                           (superchat-tools--start tape call #'finish cancelled)))
+            (error (fail (format "Error: %s" (error-message-string err))))
+            (quit (fail "Interrupted by the user.")))))
       (setq starting nil)
       (if pending
           (progn (deliver (car pending) (cdr pending)) nil)
@@ -218,6 +268,19 @@ not called.  Whatever the tool or the user does, the result is an entry."
           (unless finished
             (setq finished t)
             (when stop (funcall stop))))))))
+
+(superchat-tool-define
+ "load_tools" :class 'read
+ :description "Load deferred tools by name, from the list in the system prompt; they are offered from your next request on, in this conversation for good."
+ :args '((:name "names" :type string :description "Tool names, separated by commas or spaces" :required t))
+ :function (lambda (args)
+             (let* ((names (split-string (plist-get args :names) "[, \t\n]+" t))
+                    (bad (cl-remove-if (lambda (n) (plist-get (gethash n superchat-tools--registry) :deferred))
+                                       names)))
+               (when bad (error "Not deferred tools: %s" (string-join bad ", ")))
+               (superchat-tape-append superchat-tool-tape 'event (concat "Loaded " (string-join names ", "))
+                                      :data (list :type "load" :tools names))
+               (format "Loaded %s; offered from your next request." (string-join names ", ")))))
 
 ;;; Reading
 

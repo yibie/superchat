@@ -1181,3 +1181,52 @@ DIR is no project: the .git is in a subdirectory."
                                         :text)
                              "\"hi\""))))
         (delete-directory temporary-file-directory t)))))
+
+(ert-deftest superchat-tools-a-deferred-tool-is-offered-once-loaded ()
+  (superchat-test-with-tape
+    (superchat-tool-define "later" :class 'read :deferred t
+                           :description "Does a later thing. More words here."
+                           :function (lambda (_) "did it"))
+    (unwind-protect
+        (progn
+          (superchat-tape-append "t" 'user "go" :scope "home")
+          (superchat-tape-append "u" 'user "go" :scope "home")
+          (should-not (member "later" (superchat-tool-offered "t")))
+          (should (member "read" (superchat-tool-offered "t")))
+          (should-not (member "send" (superchat-tool-offered "t" '("send"))))
+          (should (string-search "- later: Does a later thing." (superchat-tool-catalog "t")))
+          ;; Called before it is loaded: an error result that says what to do.
+          (let (r)
+            (superchat-tool-call "t" '(:id "a" :name "later" :args nil) (lambda (e) (setq r e))
+                                 nil (superchat-tool-offered "t"))
+            (should (plist-get (plist-get r :data) :error))
+            (should (string-search "call load_tools" (plist-get r :text))))
+          ;; Loaded: offered on this timeline only, and gone from its catalog.
+          (let (r)
+            (superchat-tool-call "t" '(:id "b" :name "load_tools" :args (:names "later")) (lambda (e) (setq r e)))
+            (should (string-search "Loaded later" (plist-get r :text))))
+          (should (member "later" (superchat-tool-offered "t")))
+          (should-not (member "later" (superchat-tool-offered "u")))
+          (should-not (and (superchat-tool-catalog "t") (string-search "later" (superchat-tool-catalog "t"))))
+          ;; A tool that is not deferred cannot be loaded.
+          (let (r)
+            (superchat-tool-call "t" '(:id "c" :name "load_tools" :args (:names "read")) (lambda (e) (setq r e)))
+            (should (plist-get (plist-get r :data) :error))))
+      (superchat-tool-remove "later"))))
+
+(ert-deftest superchat-tools-a-tool-not-offered-is-refused-when-the-request-names-its-tools ()
+  (superchat-test-tools--in-scope
+    (let (r)
+      (superchat-tool-call "t" '(:id "a" :name "read" :args (:path ".")) (lambda (e) (setq r e))
+                           nil '("grep"))
+      (should (string-search "not offered" (plist-get r :text))))))
+
+(ert-deftest superchat-tools-a-plugin-defines-deferred-tools-by-default ()
+  (let ((superchat-tool-defer-default t))
+    (superchat-tool-define "p" :class 'read :function #'ignore)
+    (superchat-tool-define "q" :class 'read :function #'ignore :deferred nil))
+  (unwind-protect
+      (progn
+        (should (plist-get (gethash "p" superchat-tools--registry) :deferred))
+        (should-not (plist-get (gethash "q" superchat-tools--registry) :deferred)))
+    (superchat-tool-remove "p") (superchat-tool-remove "q")))

@@ -148,7 +148,7 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
 
 ## superchat-tools.el
 
-- `(superchat-tool-define NAME &key description args class function)`:
+- `(superchat-tool-define NAME &key description args class function async deferred)`:
   ARGS has the shape `superchat-llm-request` takes. DESCRIPTION is a string,
   or a function of no arguments returning one, called each time the specs
   are asked for. FUNCTION is called with one plist of arguments and returns
@@ -166,10 +166,25 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   cannot be made asynchronous: `C-g` interrupts it).
 - `superchat-tool-tape` (a `defvar`): bound to the timeline name while a
   tool's function runs, for the tools that need it.
+- A tool defined `:deferred t` is offered only on a timeline where
+  `load_tools` loaded it: a `load` event `(:type "load" :tools NAMES)`, for
+  good. `:deferred` defaults to `superchat-tool-defer-default` (a `defvar`,
+  nil). `(superchat-tool-loaded TAPE)` → those names;
+  `(superchat-tool-offered TAPE &optional EXCEPT)` → the tools not
+  deferred and the loaded ones, but EXCEPT; `(superchat-tool-catalog TAPE)`
+  → `More tools, offered once you load them with load_tools:` and a line
+  `- NAME: FIRST-SENTENCE` per deferred tool not loaded, or nil.
+- A tool `load_tools` (`names`, separated by commas or spaces), class
+  `read`, not deferred, appends that event and answers `Loaded NAMES;
+  offered from your next request.`; a name of no deferred tool is an error.
 - `(superchat-tool-remove NAME)`, `(superchat-tool-specs &optional NAMES)` →
   the list `superchat-llm-request` takes.
-- `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED)` → nil, or
-  a function of no arguments that stops a tool still running. CANCELLED is
+- `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED OFFERED)` →
+  nil, or a function of no arguments that stops a tool still running. With
+  OFFERED, the names the request offered, a call of another tool is an
+  error result: `NAME is not loaded: call load_tools with its name first`
+  for a deferred tool, else `NAME is not offered in this conversation`.
+  CANCELLED is
   a function of no arguments, asked once permission is decided (after the
   user answered, when asked); when it returns non-nil, the tool does not run
   and its result is `Cancelled.`. It decides
@@ -379,7 +394,8 @@ fixes it in the same round. A lint never refuses a change.
 
 ## superchat-recall.el
 
-Three tools, defined with `superchat-tool-define`, all of class `read`:
+Three tools, defined with `superchat-tool-define`, all of class `read` and
+deferred:
 `note` only appends to the Tape, so it never asks.
 
 | name | arguments | does |
