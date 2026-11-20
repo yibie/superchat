@@ -62,6 +62,7 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
   fire. Class `read`: `cancel_timer` (`id`). Dreaming has no `:until`.
 - `(superchat-timer-dream SCOPE &optional OFF)` turns dreaming on for
   SCOPE and returns its timer: a `daily` `"03:00"` timer on a new timeline
-  of SCOPE whose text asks to load `recall` and `note`, review the notes, replace with `note`
-  those that repeat or are wrong, citing them, and to delete and send
-  nothing; one per scope. With OFF it cancels that timer.
+  of SCOPE, data `:dream t`, whose text asks to review the notes, replace
+  with `note` those that repeat or are wrong, citing them, and to delete
+  and send nothing; one per scope, known by `:dream`, never by its text.
+  With OFF it cancels that timer.

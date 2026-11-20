@@ -132,7 +132,7 @@
 (ert-deftest superchat-timer-dreaming-is-one-daily-timer-per-scope ()
   (superchat-test-inbox--with
     (let ((timer (superchat-timer-dream "/p/")))
-      (should (equal (plist-get timer :data) '(:daily "03:00")))
+      (should (equal (plist-get timer :data) '(:daily "03:00" :dream t)))
       (should (equal (plist-get timer :scope) "/p/"))
       (should (equal (plist-get (superchat-timer-dream "/p/") :id) (plist-get timer :id)))
       (should-not (equal (plist-get (superchat-timer-dream "/q/") :id) (plist-get timer :id)))
@@ -154,6 +154,19 @@
 
 (provide 'test-inbox)
 ;;; test-inbox.el ends here
+
+(ert-deftest superchat-timer-dreaming-is-known-by-its-key-not-its-text ()
+  (superchat-test-inbox--with
+    ;; A dreaming timer set when the task read otherwise is still found.
+    (let ((old (superchat-tape-append "d" 'timer "an older task"
+                                      :data '(:daily "03:00" :dream t) :scope "/p/")))
+      (should (equal (plist-get (superchat-timer-dream "/p/") :id) (plist-get old :id)))
+      (should-not (superchat-timer-dream "/p/" t))
+      (should-not (superchat-timer-list)))
+    ;; A daily timer with the task's text but no key is not dreaming.
+    (superchat-tape-append "e" 'timer superchat-timer--dream
+                           :data '(:daily "03:00") :scope "/q/")
+    (should-not (equal (plist-get (superchat-timer-dream "/q/") :tape) "e"))))
 
 (ert-deftest superchat-timer-a-conversation-has-a-cap-on-its-timers ()
   (superchat-test-inbox--with

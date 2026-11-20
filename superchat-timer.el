@@ -153,19 +153,19 @@ that repeats lapses after `superchat-timer-days'."
 ;;; Dreaming
 
 (defconst superchat-timer--dream
-  "Review the notes of this project while nobody watches. Load recall and note with load_tools first. Read the notes with recall (view notes), and what happened since your last review with recall (views timelines and search). When two notes say the same, or one is wrong or out of date, write one note with the note tool that replaces them: its sources are the ids of the notes it replaces. Delete nothing. Send nothing unless a note contradicts what the person said. When nothing is new since your last review, write nothing."
-  "The task of a dreaming run, and how its timer is known.")
+  "Review the notes of this project while nobody watches. Read the notes with recall (view notes), and what happened since your last review with recall (views timelines and search). When two notes say the same, or one is wrong or out of date, write one note with the note tool that replaces them: its sources are the ids of the notes it replaces. Delete nothing. Send nothing unless a note contradicts what the person said. When nothing is new since your last review, write nothing."
+  "The task of a dreaming run; its timer is known by `:dream', not this text.")
 
 (defun superchat-timer-dream (scope &optional off)
   "Turn dreaming on for SCOPE, a daily review of its notes at 03:00, and
 return its timer; with OFF, turn it off and return nil."
-  (let ((timer (seq-find (lambda (e) (and (equal (plist-get e :text) superchat-timer--dream)
+  (let ((timer (seq-find (lambda (e) (and (plist-get (plist-get e :data) :dream)
                                           (equal (plist-get e :scope) scope)))
                          (superchat-timer-list))))
     (cond (off (when timer (superchat-timer-cancel (plist-get timer :id))) nil)
           (timer)
           (t (superchat-tape-append (superchat-tape-new-name) 'timer superchat-timer--dream
-                                    :data '(:daily "03:00") :scope scope)))))
+                                    :data '(:daily "03:00" :dream t) :scope scope)))))
 
 (provide 'superchat-timer)
 ;;; superchat-timer.el ends here
