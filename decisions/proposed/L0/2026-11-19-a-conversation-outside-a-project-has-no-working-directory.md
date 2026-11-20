@@ -44,11 +44,10 @@ every relative path of a tool resolves and in which `shell` runs
   prompt. Not taken alone: the benchmark run had that line and still
   searched `~`.
 - Make every conversation outside a project ephemeral, held in an
-  in-memory database and lost when Emacs exits. Open: the person asked
-  that such a conversation "start in memory". If that means not kept on
-  the Tape, `recall` and notes could not find it later, and `/resume`
-  could not reopen it; this proposal reads it as "works in Emacs, not on
-  the file system" and keeps the Tape.
+  in-memory database and lost when Emacs exits. Not taken: the person
+  asked that such a conversation "start in memory", and chose the reading
+  "works in Emacs, not on the file system"; kept on the Tape, it stays
+  reachable by `recall`, notes and `/resume`.
 - Use the origin buffer's `default-directory` whatever it is. Not taken:
   for buffers like `*scratch*` that is `~` again.
 
