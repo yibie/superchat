@@ -64,7 +64,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
 | L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 | L5 | `superchat-views.el` | 200 | the timers buffer and the entry lists, each with keys |
-| L5 | `superchat-learn.el` | 680 | a skill drafted from cited code that ran |
+| L5 | `superchat-learn.el` | 760 | a skill drafted from cited code that ran |
 
 Dependencies go one way only:
 
