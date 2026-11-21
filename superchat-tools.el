@@ -878,10 +878,16 @@ When something is cut the whole output is in FILE, made here if needed."
                                 (cl-incf hidden))))))
     (setq names (sort names (lambda (a b) (string< a b))))
     (when query
-      (let ((case-fold-search t) (re (regexp-quote query)))
-        (setq names (seq-filter (lambda (s) (or (string-match-p re (symbol-name s))
-                                                (string-match-p re (superchat-tools--doc-line s))))
-                                names))))
+      ;; Any word may match, in the name or the first doc line; the names
+      ;; that match more of them come first.
+      (let* ((case-fold-search t)
+             (words (mapcar #'regexp-quote (split-string query "[ \t,]+" t)))
+             (hits (lambda (s) (let ((text (concat (symbol-name s) " " (superchat-tools--doc-line s))))
+                                 (seq-count (lambda (w) (string-match-p w text)) words)))))
+        (setq names (mapcar #'car
+                            (seq-sort-by #'cdr #'>
+                                         (seq-filter (lambda (c) (> (cdr c) 0))
+                                                     (mapcar (lambda (s) (cons s (funcall hits s))) names)))))))
     (cond
      ((null names) (format "No public function starts with %s%s." prefix
                            (if query (format " and matches %s" query) "")))
@@ -923,7 +929,7 @@ When something is cut the whole output is in FILE, made here if needed."
  "describe" :class 'read :deferred t
  :description "Find what this Emacs can do, from its own documentation, before calling a function with eval_elisp: give a prefix (telega, telega-chatbuf-) for its public functions grouped, or with query those whose name or first doc line matches; a function for its arguments and documentation; or a buffer for its mode and the commands its keymap binds."
  :args '((:name "prefix" :type string :description "Package or name prefix")
-         (:name "query" :type string :description "Words to match within the prefix")
+         (:name "query" :type string :description "Words, any of which may match, within the prefix")
          (:name "function" :type string :description "A function's name")
          (:name "buffer" :type string :description "A buffer's name"))
  :function (lambda (args)
@@ -939,7 +945,7 @@ When something is cut the whole output is in FILE, made here if needed."
                 ((plist-get args :buffer) (superchat-tools--describe-buffer (plist-get args :buffer)))
                 ((plist-get args :prefix)
                  (superchat-tools--describe-prefix (plist-get args :prefix) (plist-get args :query)))
-                (t (error "Give a prefix, a function or a buffer"))))))
+                (t (error "Give one of the arguments prefix, function or buffer"))))))
 
 (superchat-tool-define
  "shell" :class 'exec :async t

@@ -1269,6 +1269,10 @@ DIR is no project: the .git is in a subdirectory."
           (should-not (string-match-p "Second line" text)))
         ;; A query narrows, and the list says how many more there are.
         (should (string-match-p "f7\\*  Doc" (superchat-test-tools--ok "describe" :prefix "sctdesc" :query "f7")))
+        ;; Any word matches, and a name matching more words comes first.
+        (should (string-match-p ": 4\nsctdesc-msg-f9\\*.*\nsctdesc-chat-f8\\*"
+                                (superchat-test-tools--ok "describe" :prefix "sctdesc"
+                                                          :query "f8 msg-f9 nothing f9")))
         (should (string-match-p "… 5 more" (superchat-test-tools--ok "describe" :prefix "sctdesc" :query "-f")))))))
 
 (ert-deftest superchat-tools-describe-a-function-and-a-buffer ()
