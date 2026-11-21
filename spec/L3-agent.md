@@ -81,7 +81,9 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   1. it builds the messages (`superchat-request.el`), or ends with the refusal;
   2. `superchat-llm-request` with the messages, `superchat-context-system`
      and the tool specs of TOOLS;
-  3. on done it appends the `assistant` entry. If it has calls, it runs each
+  3. on done it appends the `assistant` entry; with no calls, its final
+     `Sources:` line goes, through `superchat-request-sources` from the
+     run's `user` entry, into its `:refs` and `:refs-dropped`. If it has calls, it runs each
      with `superchat-tool-call`, one after the other in order, each started
      when the one before has its result, then goes to 1. If it has none,
      the run ends with status `done`.
@@ -249,13 +251,18 @@ handoff. `(superchat-request-message ENTRY)` → an entry's message or nil;
 `(superchat-request-fit ENTRIES USER-ID BUDGET)` → the messages that fit;
 `(superchat-request-kept-size ENTRIES USER-ID)` → the size of what is never
 left out; `(superchat-request-digest ENTRIES)` → lines counting their
-calls: per tool, failed, files changed, repeated calls, last 3 failures.
+calls: per tool, failed, files changed, repeated calls, last 3 failures;
+`(superchat-request-sources TEXT TAPE AFTER)` → `(TEXT REFS DROPPED)`: a
+final line `Sources: #ID, …` taken out of TEXT, REFS its ids that name a
+`tool` entry of TAPE after AFTER that did not fail, DROPPED how many others
+it named; with no such line, TEXT, nil and 0.
 
 - The messages of a request are the `conversation` view of TAPE turned into
   neutral messages:
   - a `user` entry is a `user` message; an `assistant` entry an `assistant`
     message with its text and calls; a `tool` entry a `tool` message with its
-    call id and name;
+    call id and name, its text after `#ID `, the entry's id, so an answer
+    can name it;
   - an anchor with an empty text gives no message; any other anchor is a
     `user` message, `Summary of the conversation so far:\n` and its summary,
     then, when its `:next` is not empty, `\n\nWhat comes next:\n` and that;

@@ -54,7 +54,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L2 | `superchat-lint.el` | 150 | the checks of a file `edit` or `write` just saved |
 | L3 | `superchat-context.el` | 250 | the system prompt: rules files, skills catalog, notes, origin |
 | L3 | `superchat-agent.el` | 800 | `superchat-run`: the loop, the round limit, cancel, handoff |
-| L3 | `superchat-request.el` | 200 | the messages of a request: groups, budget, what is left out |
+| L3 | `superchat-request.el` | 250 | the messages of a request: groups, budget, what is left out |
 | L3 | `superchat-guard.el` | 120 | a run going round: its signals and the one redirect |
 | L4 | `superchat-inbox.el` | 200 | the inbox, its worker, `send` |
 | L4 | `superchat-timer.el` | 220 | the timers, their tools, dreaming |
@@ -76,7 +76,7 @@ plugin → tools
 timer → inbox
 inbox → agent
 agent → llm, tools, recall, view, context, request, guard
-request → llm
+request → llm, tape
 recall → tools, view
 context → view
 tools → permission, lint

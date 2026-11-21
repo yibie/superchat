@@ -12,6 +12,7 @@
 (require 'subr-x)
 (require 'superchat)
 (require 'superchat-llm)
+(require 'superchat-tape)
 
 (defun superchat-request-message (entry)
   "The neutral message of ENTRY, or nil when the model is told nothing."
@@ -20,8 +21,9 @@
     (pcase (plist-get entry :kind)
       ('user (list :role 'user :text text))
       ('assistant (list :role 'assistant :text text :calls (plist-get data :calls)))
-      ('tool (list :role 'tool :text text :call-id (plist-get data :call-id)
-                   :name (plist-get data :name)))
+      ;; #ID lets an answer name the result in its Sources: line.
+      ('tool (list :role 'tool :text (format "#%d %s" (plist-get entry :id) text)
+                   :call-id (plist-get data :call-id) :name (plist-get data :name)))
       ('anchor (unless (string-empty-p text)
                  (list :role 'user
                        :text (concat "Summary of the conversation so far:\n" text
@@ -186,6 +188,24 @@ calls made more than once, the last failures.  Lines of text."
                                          (mapconcat (lambda (f) (concat "- " f))
                                                     (reverse (take 3 failures)) "\n")))))
        "\n"))))
+
+(defun superchat-request-sources (text tape after)
+  "TEXT of an answer on TAPE whose last line may be `Sources: #ID, ...'.
+Return (TEXT REFS DROPPED): TEXT without that line, REFS the ids naming
+`tool' entries of TAPE after AFTER that did not fail, DROPPED how many
+other ids the line named."
+  (if (not (string-match "\\(?:\\`\\|\n\\)[ \t]*Sources?:[ \t]*\\(#?[0-9][#0-9, \t]*\\)[ \t\n]*\\'" text))
+      (list text nil 0)
+    (let ((kept (string-trim-right (substring text 0 (match-beginning 0))))
+          (ids (mapcar #'string-to-number (split-string (match-string 1 text) "[#, \t]+" t)))
+          refs)
+      (dolist (id (delete-dups ids))
+        (let ((entry (superchat-tape-get id)))
+          (when (and entry (equal (plist-get entry :tape) tape) (> id after)
+                     (eq (plist-get entry :kind) 'tool)
+                     (not (plist-get (plist-get entry :data) :error)))
+            (push id refs))))
+      (list kept (nreverse refs) (- (length (delete-dups ids)) (length refs))))))
 
 (provide 'superchat-request)
 ;;; superchat-request.el ends here

@@ -19,7 +19,7 @@
                    '(user assistant tool)))
     (should-not (superchat-request-message (nth 2 entries)))
     (should (= (superchat-request-size (superchat-request-messages entries))
-               (+ 2 0 (length "nil") 4)))))
+               (+ 2 0 (length "nil") (length "#4 done"))))))
 
 (ert-deftest superchat-request-budget-follows-the-option-else-the-window ()
   (let ((superchat-context-chars 500))
@@ -65,3 +65,23 @@
 
 (provide 'test-request)
 ;;; test-request.el ends here
+
+(ert-deftest superchat-request-sources-keeps-only-this-runs-good-results ()
+  (superchat-test-with-tape
+    (cl-flet ((add (tape kind text &optional data)
+                (plist-get (superchat-tape-append tape kind text :data data :scope "s") :id)))
+      (let* ((old (add "t" 'tool "before the run"))
+             (user (add "t" 'user "go"))
+             (read (add "t" 'tool "the text" '(:call-id "c1" :name "read")))
+             (bad (add "t" 'tool "Error: no" '(:call-id "c2" :name "eval_elisp" :error t)))
+             (other (add "u" 'tool "elsewhere" '(:call-id "c3" :name "read")))
+             (answer (add "t" 'assistant "x")))
+        (should (equal (superchat-request-sources
+                        (format "It says so.\n\nSources: #%d, #%d, #%d, #%d, #%d, #999999\n" read bad other old answer)
+                        "t" user)
+                       (list "It says so." (list read) 5)))
+        ;; With no line, the text is kept as it is.
+        (should (equal (superchat-request-sources "Plain.\nSources are many." "t" user)
+                       (list "Plain.\nSources are many." nil 0)))
+        (should (equal (superchat-request-sources (format "Sources: #%d" read) "t" user)
+                       (list "" (list read) 0)))))))

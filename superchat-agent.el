@@ -254,10 +254,15 @@ limit, let the judge decide when RUN may go on, else end it."
               (t (superchat-agent--end run 'done)))))))
 
 (defun superchat-agent--answer (run text model calls)
-  "Append RUN's `assistant' entry of TEXT, MODEL and CALLS, and give it out."
-  (setf (plist-get run :text) text)
-  (superchat-tape-append (plist-get run :tape) 'assistant text
-                         :data (list :model model :calls calls))
+  "Append RUN's `assistant' entry of TEXT, MODEL and CALLS, and give it out.
+An answer's Sources: line becomes its :refs."
+  (pcase-let ((`(,text ,refs ,dropped)
+               (if calls (list text nil 0)
+                 (superchat-request-sources text (plist-get run :tape) (or (plist-get run :user-id) 0)))))
+    (setf (plist-get run :text) text)
+    (superchat-tape-append (plist-get run :tape) 'assistant text :refs refs
+                           :data (append (list :model model :calls calls)
+                                         (and (> dropped 0) (list :refs-dropped dropped)))))
   (superchat-agent--emit run))
 
 (defun superchat-agent--judge (run look-back)

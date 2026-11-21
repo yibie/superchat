@@ -73,7 +73,9 @@
         (should (equal (plist-get (nth 1 messages) :calls)
                        (list (superchat-test-agent--call "c1" "echo" :x "a"))))
         (should (equal (nth 2 messages)
-                       '(:role tool :text "echo:a" :call-id "c1" :name "echo")))))))
+                       (list :role 'tool
+                             :text (format "#%d echo:a" (plist-get (nth 2 (superchat-tape-entries :tape "t")) :id))
+                             :call-id "c1" :name "echo")))))))
 
 (ert-deftest superchat-agent-two-calls-run-in-order ()
   (superchat-test-agent--with
@@ -207,7 +209,7 @@
     (superchat-test-script (list '(:text "ok"))
       (superchat-run "t" "again")
       (let ((sent (plist-get (car superchat-test-requests) :messages)))
-        (should (string-match-p "\\`Interrupted: Emacs stopped"
+        (should (string-match-p "\\`#[0-9]+ Interrupted: Emacs stopped"
                                 (plist-get (cl-find "c2" sent :key (lambda (m) (plist-get m :call-id))
                                                     :test #'equal)
                                            :text)))))
@@ -1412,8 +1414,18 @@ when the run made no request."
 
 (defun superchat-test-agent--budget-problems (out whole budget)
   "What is wrong with OUT, the request made at BUDGET, given WHOLE, the
-request made from the same entries with room for all of them."
-  (let* ((standin-p (lambda (m) (string-match-p "\\`\\[[0-9]+ earlier entries" (plist-get m :text))))
+request made from the same entries with room for all of them.
+The two are made on different timelines, so a result's #ID is left out."
+  (let* ((plain (lambda (ms) (mapcar (lambda (m)
+                                        (if (eq (plist-get m :role) 'tool)
+                                            (plist-put (copy-sequence m) :text
+                                                       (replace-regexp-in-string
+                                                        "\\`#[0-9]+ " "" (plist-get m :text)))
+                                          m))
+                                      ms)))
+         (out (funcall plain out))
+         (whole (funcall plain whole))
+         (standin-p (lambda (m) (string-match-p "\\`\\[[0-9]+ earlier entries" (plist-get m :text))))
          (stands (cl-remove-if-not standin-p out))
          (rest (cl-remove-if standin-p out))
          (latest (cl-position 'assistant whole :key (lambda (m) (plist-get m :role)) :from-end t))
@@ -2338,3 +2350,27 @@ Run in a fresh Emacs: in this one another test file may have loaded them."
           (should (member "later" (mapcar (lambda (s) (plist-get s :name))
                                           (plist-get (car superchat-test-requests) :tools)))))
       (superchat-tool-remove "later"))))
+
+(ert-deftest superchat-agent-an-answer-keeps-its-sources-as-refs ()
+  (superchat-test-agent--with
+    (superchat-test-script
+        (list `(:text "" :calls (,(superchat-test-agent--call "c1" "echo" :x "a")
+                                 ,(superchat-test-agent--call "c2" "echo" :x "b")))
+              '(:text "placeholder"))
+      ;; The answer cites the first result only; its id is known once it is on the Tape.
+      (cl-letf* ((real (symbol-function 'superchat-request-sources))
+                 ((symbol-function 'superchat-request-sources)
+                  (lambda (_text tape after)
+                    (let ((first (plist-get (cl-find 'tool (superchat-tape-entries :tape tape)
+                                                     :key (lambda (e) (plist-get e :kind)))
+                                            :id)))
+                      (funcall real (format "A is a.\nSources: #%d, #12345" first) tape after)))))
+        (superchat-run "t" "go"))
+      (let* ((entries (superchat-tape-entries :tape "t"))
+             (tools (seq-filter (lambda (e) (eq (plist-get e :kind) 'tool)) entries))
+             (answer (car (last entries))))
+        (should (equal (plist-get answer :text) "A is a."))
+        (should (equal (plist-get answer :refs) (list (plist-get (car tools) :id))))
+        (should (equal (plist-get (plist-get answer :data) :refs-dropped) 1))
+        (should (equal (plist-get (superchat-tape-trace (plist-get (car tools) :id)) :derived)
+                       (list (plist-get answer :id))))))))
