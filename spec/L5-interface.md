@@ -153,16 +153,13 @@ derived from `org-mode`.
   every run gives
   it as DIRECTORY, which only the first `user` entry keeps.
 - `(superchat-chat-send TEXT &optional ORIGIN)`: in a chat buffer, send TEXT
-  as the user's request. Sending from the input area calls this. Text that
-  starts with `@MODEL` and more, MODEL one of `(superchat-llm-model-ids)`,
-  runs with that model for this request only and sends the rest; any other
-  `@` is sent as written. At the start of the input,
-  `completion-at-point` offers the commands, each with its line of help,
-  after `/`, and the model ids after `@`, each noted with its window,
-  input cost and `image`; typing that first `/` or `@` calls it. A known
-  command there shows in `superchat-chat-command`, an unknown one in
-  `superchat-chat-unknown-command`, a model's `@` in
-  `superchat-chat-model`.
+  as the user's request. Sending from the input area calls this; an `@`
+  in it is sent as written. At the start of the input,
+  `completion-at-point` offers the commands after `/`, each with its line
+  of help; typing that first `/` calls it. A known command there shows in
+  `superchat-chat-command`, an unknown one in
+  `superchat-chat-unknown-command`. The model is chosen with `/model`,
+  whose choices are noted with window, input cost and `image`.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
   timeline of SCOPE (the one with the largest entry id) that is not
   ephemeral, or nil. A timeline is ephemeral when one of its `user` entries

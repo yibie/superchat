@@ -32,3 +32,5 @@ read from `/help`.
 
 - A `/` or `@` typed later in the text offers nothing; only the first
   character of the input does.
+- The `@MODEL` completion and face are gone since
+  [2026-11-20-a-model-is-chosen-with-slash-model.md](2026-11-20-a-model-is-chosen-with-slash-model.md).

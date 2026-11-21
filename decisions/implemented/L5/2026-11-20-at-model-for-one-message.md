@@ -32,3 +32,6 @@ Superchat let them write `@MODEL` before the question.
 
 - A message meant to start with an `@word` that happens to be a model id
   goes to that model; write a word before it to send it as text.
+- Reversed by
+  [2026-11-20-a-model-is-chosen-with-slash-model.md](2026-11-20-a-model-is-chosen-with-slash-model.md):
+  `@MODEL` is gone, and `/model` chooses the model.

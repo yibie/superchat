@@ -216,13 +216,6 @@ heading the person folded or opened stays so, as do those of CHOICES."
        (insert input)
        (superchat-chat--draw choices)))))
 
-(defun superchat-chat--at-model (text)
-  "When TEXT starts with @MODEL, a model id, and more text, (MODEL . REST).
-With no provider set there are no model ids, and the error says what to set."
-  (and (string-match "\\`@\\([^ \t\n]+\\)[ \t\n]+" text)
-       (member (match-string 1 text) (superchat-llm-model-ids))
-       (cons (match-string 1 text) (substring text (match-end 0)))))
-
 (defun superchat-chat--table (choices)
   "A completion of CHOICES, strings or (STRING . NOTE) pairs, as capf data."
   (let ((notes (mapcar (lambda (c) (if (consp c) c (cons c nil))) choices)))
@@ -245,8 +238,7 @@ With no provider set there are no model ids, and the error says what to set."
      "  ")))
 
 (defun superchat-chat--complete ()
-  "Complete at the start of the input: a command after /, its arguments
-after the command, a model id after @."
+  "Complete at the start of the input: a command after /, then its arguments."
   (when (>= (point) superchat-chat--input)
     (let ((end (point)))
       (save-excursion
@@ -261,52 +253,33 @@ after the command, a model id after @."
           (when-let* ((args (cdr (assoc (match-string 1) superchat-chat--command-args)))
                       (words (split-string (buffer-substring (match-end 0) end) "[ \t]+"))
                       (start (- end (length (car (last words))))))
-            (cons start (cons end (superchat-chat--table (funcall args (butlast words)))))))
-         ((and (looking-at "@\\([^ \t\n]*\\)") (<= end (match-end 0)))
-          (cons (match-beginning 1)
-                (cons (match-end 1)
-                      (superchat-chat--table
-                       (mapcar (lambda (id) (cons id (superchat-chat--model-note id)))
-                               (superchat-llm-model-ids)))))))))))
-
+            (cons start (cons end (superchat-chat--table (funcall args (butlast words))))))))))))
 (defface superchat-chat-command '((t :inherit font-lock-keyword-face :weight bold))
   "A known slash command at the start of the input."
   :group 'superchat)
 (defface superchat-chat-unknown-command '((t :inherit warning))
   "A slash command at the start of the input that no command is called."
   :group 'superchat)
-(defface superchat-chat-model '((t :inherit font-lock-constant-face :weight bold))
-  "An @MODEL at the start of the input that names a model."
-  :group 'superchat)
-
 (defvar-local superchat-chat--input-face nil "The face of the last input match.")
 
 (defun superchat-chat--input-match (limit)
-  "Font-lock matcher: the command or @MODEL that starts the input, before LIMIT.
+  "Font-lock matcher: the command that starts the input, before LIMIT.
 The face it gets is left in `superchat-chat--input-face'."
-  (let ((start (marker-position superchat-chat--input)) face bounds)
+  (let ((start (marker-position superchat-chat--input)))
     (when (and start (<= (point) start) (< start limit))
       (goto-char start)
-      (cond
-       ((looking-at "/\\([^ \t\n]+\\)")
-        (setq bounds (list (match-beginning 0) (match-end 0))
-              face (if (assoc (match-string 1) superchat-chat--commands)
-                       'superchat-chat-command
-                     'superchat-chat-unknown-command)))
-       ((looking-at "@\\([^ \t\n]+\\)")
-        (setq bounds (list (match-beginning 0) (match-end 0)))
-        (let ((id (match-string 1)))
-          (when (member id (condition-case nil (superchat-llm-model-ids) (user-error nil)))
-            (setq face 'superchat-chat-model)))))
-      (goto-char limit)
-      (when face
-        (set-match-data bounds)
-        (setq superchat-chat--input-face face)
-        t))))
+      (let ((found (looking-at "/\\([^ \t\n]+\\)")))
+        (when found
+          (setq superchat-chat--input-face
+                (if (assoc (match-string 1) superchat-chat--commands)
+                    'superchat-chat-command
+                  'superchat-chat-unknown-command)))
+        (goto-char limit)
+        found))))
 
 (defun superchat-chat--complete-now ()
-  "After a / or @ typed as the input's first character, offer completions."
-  (when (and (memq last-command-event '(?/ ?@))
+  "After a / typed as the input's first character, offer completions."
+  (when (and (eq last-command-event ?/)
              (= (point) (1+ superchat-chat--input)))
     (completion-at-point)))
 
@@ -523,14 +496,12 @@ A line starting with / is a command.  Return nil when nothing was sent."
       nil))
    (t
     (let* ((tape superchat-chat--tape)
-           (origin (or origin superchat-chat--origin))
-           (at (superchat-chat--at-model text))
-           (text (if at (cdr at) text)))
+           (origin (or origin superchat-chat--origin)))
       (setq superchat-chat--origin nil)
       (unwind-protect
           (setq superchat-chat--run
                 (apply #'superchat-run superchat-chat--tape text
-                 :origin origin :model (if at (car at) superchat-chat--model)
+                 :origin origin :model superchat-chat--model
                  ;; The person reads the answer here: `send' is for runs
                  ;; nobody watches.
                  :tools '(except "send")

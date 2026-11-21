@@ -34,3 +34,5 @@ The input also looked the same whether `/levle` named a command or not.
 - Commands defined by plugins can offer their arguments the same way.
 - Styling runs with each refontification of the input and asks for the
   model ids; with no provider set, an `@` is left plain.
+- The `@MODEL` completion and face are gone since
+  [2026-11-20-a-model-is-chosen-with-slash-model.md](2026-11-20-a-model-is-chosen-with-slash-model.md).
