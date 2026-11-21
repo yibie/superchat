@@ -152,8 +152,6 @@
       (should-not (superchat-timer-dream "/p/" t))
       (should-not (superchat-timer-list)))))
 
-(provide 'test-inbox)
-;;; test-inbox.el ends here
 
 (ert-deftest superchat-timer-dreaming-is-known-by-its-key-not-its-text ()
   (superchat-test-inbox--with
@@ -199,3 +197,26 @@
         (superchat-timer--fire later)
         (should-not (seq-find (lambda (e) (equal (plist-get (plist-get e :data) :source) "timer"))
                               (superchat-tape-entries :tape "t" :kinds '(inbox))))))))
+
+(ert-deftest superchat-timer-dreaming-runs-its-functions-once-and-sends-their-text ()
+  (superchat-test-inbox--with
+    (let* ((timer (superchat-timer-dream "/p/"))
+           (calls nil)
+           (superchat-timer-dream-functions
+            (list (lambda (scope) (push scope calls) "2 skills to review: /skills review")
+                  (lambda (_) nil)
+                  (lambda (_) (error "Boom"))))
+           (superchat-inbox-notify-functions nil)
+           (later (+ (float-time) 86400)))
+      (superchat-test-script (list '(:text "nothing new") '(:text "nothing new"))
+        (superchat-timer--fire later)
+        (superchat-timer--fire later)
+        (superchat-test-inbox--idle))
+      (should (equal calls '("/p/")))
+      (should (equal (mapcar (lambda (e) (plist-get e :text))
+                             (seq-filter (lambda (e) (equal (plist-get (plist-get e :data) :type) "sent"))
+                                         (superchat-tape-entries :tape (plist-get timer :tape) :kinds '(event))))
+                     '("2 skills to review: /skills review"))))))
+
+(provide 'test-inbox)
+;;; test-inbox.el ends here

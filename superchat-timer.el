@@ -68,16 +68,30 @@ it is due; nil when there is none."
                         (if (<= today now) today (- today 86400)))))))
     (and time (<= time now) (or (plist-get data :at) (>= time set)) time)))
 
+(defvar superchat-timer-dream-functions nil
+  "Functions called with a SCOPE when its dreaming is due; each returns a
+text for the person, or nil.  Each text is sent from the dreaming timeline.")
+
+(defun superchat-timer--dreamt (timer)
+  "Run `superchat-timer-dream-functions' for the scope of dreaming TIMER and
+send each text they return; a function that fails is shown."
+  (dolist (f superchat-timer-dream-functions)
+    (when-let* ((text (condition-case err (funcall f (plist-get timer :scope))
+                        (error (message "Superchat: dreaming %s failed: %s" f (error-message-string err))
+                               nil))))
+      (superchat-inbox-sent (plist-get timer :tape) text))))
+
 (defun superchat-timer--fire (now)
   "Put the item of each timer due at NOW that has not put it yet: one item for
 the latest time it is due, however many were missed while Emacs was closed."
   (dolist (timer (superchat-timer-list))
-    (when-let* ((time (superchat-timer--due timer now)))
-      (superchat-inbox-put (plist-get timer :tape)
-                           (format "Your timer %d is due: %s" (plist-get timer :id)
-                                   (plist-get timer :text))
-                           :source "timer" :id (format "%d@%d" (plist-get timer :id) (floor time))
-                           :unattended t))))
+    (when-let* ((time (superchat-timer--due timer now))
+                ((superchat-inbox-put (plist-get timer :tape)
+                                      (format "Your timer %d is due: %s" (plist-get timer :id)
+                                              (plist-get timer :text))
+                                      :source "timer" :id (format "%d@%d" (plist-get timer :id) (floor time))
+                                      :unattended t)))
+      (when (plist-get (plist-get timer :data) :dream) (superchat-timer--dreamt timer)))))
 
 ;;;###autoload
 (defun superchat-timer-start ()

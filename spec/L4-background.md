@@ -65,4 +65,8 @@ Timers put work in the inbox (`superchat-inbox-put`); dreaming is one.
   of SCOPE, data `:dream t`, whose text asks to review the notes, replace
   with `note` those that repeat or are wrong, citing them, and to delete
   and send nothing; one per scope, known by `:dream`, never by its text.
-  With OFF it cancels that timer.
+  With OFF it cancels that timer. When it puts its item, each function of
+  `superchat-timer-dream-functions` (a `defvar`) is called with SCOPE; a
+  text one returns is sent from its timeline, and one that fails is shown.
+- `(superchat-inbox-sent TAPE TEXT)` appends the `sent` event of TEXT to
+  TAPE and notifies, as `send` does.

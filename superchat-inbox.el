@@ -115,15 +115,18 @@ with each one's place when there is more than one."
 
 ;;; Sending
 
+(defun superchat-inbox-sent (tape text)
+  "Send TEXT to the person from timeline TAPE: a `sent' event and a notification."
+  (superchat-tape-append tape 'event text :data '(:type "sent"))
+  (superchat-inbox--notify tape text 'sent))
+
 (superchat-tool-define
  "send" :class 'read
  :description "Tell the person something now: a line they see even when they are not reading this conversation. Only in a run the system prompt says nobody watches, and only what they need to act on or asked for; when the person reads the conversation, answer there."
  :args '((:name "text" :type string :description "The message" :required t))
  :function (lambda (args)
-             (let ((text (plist-get args :text)))
-               (superchat-tape-append superchat-tool-tape 'event text :data '(:type "sent"))
-               (superchat-inbox--notify superchat-tool-tape text 'sent)
-               "Sent.")))
+             (superchat-inbox-sent superchat-tool-tape (plist-get args :text))
+             "Sent."))
 
 (provide 'superchat-inbox)
 ;;; superchat-inbox.el ends here
