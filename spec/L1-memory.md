@@ -103,6 +103,7 @@ Built-in views:
 | `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline that has no `user` entry with `:ephemeral t`, most recently active first: its latest anchor if it has one, else its first `user` entry; a timeline with neither is left out |
 | `sources` | `:id` | the entries named by the `:refs` of entry ID |
 | `trace` | `:id` | entry ID, the entries it rests on and the later ones resting on it, in id order |
+| `recipes` | `:name`, `:scope` opt, `:limit` opt (400) | `eval_elisp` results that did not fail, cited in the `:refs` of an answer among the newest LIMIT, whose call's code contains NAME; each code once, newest first, the code added to the entry's data as `:code` |
 
 `conversation` is what a session is. `timelines` is the list of sessions.
 `notes`, `search`, `topic` and `sources` are what memory is.

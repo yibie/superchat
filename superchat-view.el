@@ -185,6 +185,33 @@ later note cites is corrected by it and left out."
                        (append (plist-get trace :sources) (list (plist-get args :id))
                                (plist-get trace :derived)))))))
 
+(defun superchat-view--call-code (tool)
+  "The code of the `eval_elisp' call that `tool' entry TOOL answers, or nil."
+  (let ((id (plist-get (plist-get tool :data) :call-id)))
+    (cl-loop for e in (superchat-tape-entries :tape (plist-get tool :tape) :kinds '(assistant)
+                                              :before (plist-get tool :id) :newest t :limit 5)
+             thereis (cl-loop for call in (plist-get (plist-get e :data) :calls)
+                              when (equal (plist-get call :id) id)
+                              return (plist-get (plist-get call :args) :code)))))
+
+(defun superchat-view--recipes (args)
+  "Results of `eval_elisp' an answer rests on, whose code names :name; newest
+first, each code once, its code added to its data as :code."
+  (let ((name (regexp-quote (plist-get args :name))) codes out)
+    (dolist (answer (superchat-tape-entries :scope (plist-get args :scope)
+                                            :kinds '(assistant) :newest t
+                                            :limit (or (plist-get args :limit) 400)))
+      (dolist (id (plist-get answer :refs))
+        (let* ((tool (superchat-tape-get id))
+               (data (plist-get tool :data))
+               (code (and (equal (plist-get data :name) "eval_elisp")
+                          (not (plist-get data :error))
+                          (superchat-view--call-code tool))))
+          (when (and code (string-match-p name code) (not (member code codes)))
+            (push code codes)
+            (push (plist-put (copy-sequence tool) :data (append data (list :code code))) out)))))
+    (nreverse out)))
+
 (superchat-view-define
  'conversation #'superchat-view--conversation
  ":tape. The timeline from its latest anchor to its end; all of it with no anchor.")
@@ -206,6 +233,9 @@ later note cites is corrected by it and left out."
 (superchat-view-define
  'trace #'superchat-view--trace
  ":id. Entry ID, the entries it rests on and the later ones resting on it.")
+(superchat-view-define
+ 'recipes #'superchat-view--recipes
+ ":name, :scope optional, :limit (400 answers). Cited eval_elisp results whose code names NAME.")
 
 (provide 'superchat-view)
 ;;; superchat-view.el ends here
