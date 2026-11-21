@@ -269,3 +269,17 @@
     (should (equal (superchat-tape-directory "h") "/d/"))
     (superchat-tape-append "n" 'user "x" :scope "home")
     (should-not (superchat-tape-directory "n"))))
+
+(ert-deftest superchat-tape-trace-gives-sources-and-derived ()
+  (superchat-test-with-tape
+    (cl-flet ((add (kind text &optional refs)
+                (plist-get (superchat-tape-append "t" kind text :refs refs :scope "s") :id)))
+      (let* ((_ (add 'user "go"))
+             (b (add 'tool "read it"))
+             (c (add 'tool "probe"))
+             (d (add 'assistant "answer" (list b)))
+             (e (add 'note "kept" (list b d))))
+        (should (equal (superchat-tape-trace d) (list :sources (list b) :derived (list e))))
+        (should (equal (superchat-tape-trace b) (list :sources nil :derived (list d e))))
+        (should-not (plist-get (superchat-tape-trace c) :derived))
+        (should-not (superchat-tape-trace 99999))))))

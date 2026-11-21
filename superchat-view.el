@@ -177,6 +177,14 @@ later note cites is corrected by it and left out."
     (superchat-view--in-order
      (delq nil (mapcar #'superchat-tape-get (plist-get entry :refs))))))
 
+(defun superchat-view--trace (args)
+  "Entry :id with the entries it rests on and those resting on it, in id order."
+  (when-let* ((trace (superchat-tape-trace (plist-get args :id))))
+    (superchat-view--in-order
+     (delq nil (mapcar #'superchat-tape-get
+                       (append (plist-get trace :sources) (list (plist-get args :id))
+                               (plist-get trace :derived)))))))
+
 (superchat-view-define
  'conversation #'superchat-view--conversation
  ":tape. The timeline from its latest anchor to its end; all of it with no anchor.")
@@ -195,6 +203,9 @@ later note cites is corrected by it and left out."
 (superchat-view-define
  'sources #'superchat-view--sources
  ":id. The entries that entry ID refers to.")
+(superchat-view-define
+ 'trace #'superchat-view--trace
+ ":id. Entry ID, the entries it rests on and the later ones resting on it.")
 
 (provide 'superchat-view)
 ;;; superchat-view.el ends here

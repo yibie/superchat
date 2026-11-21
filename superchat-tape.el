@@ -131,6 +131,17 @@ it, and a different one is an error."
   (car (superchat-tape--rows
         (format "SELECT %s FROM entry WHERE id = ?" superchat-tape--columns) (list id))))
 
+(defun superchat-tape-trace (id)
+  "What entry ID rests on and what rests on it: (:sources IDS :derived IDS).
+SOURCES are the ids in its :refs; DERIVED the later entries naming ID in theirs."
+  (when-let* ((entry (superchat-tape-get id)))
+    (list :sources (plist-get entry :refs)
+          :derived (mapcar #'car
+                           (sqlite-select (superchat-tape-open)
+                                          "SELECT entry.id FROM entry, json_each(entry.refs) AS r
+WHERE r.value = ? AND entry.id > ? ORDER BY entry.id"
+                                          (list id id))))))
+
 (cl-defun superchat-tape-entries (&key tape scope kinds after before limit newest)
   "Entries in id order, filtered; AFTER and BEFORE are exclusive ids.
 With NEWEST and LIMIT, the last LIMIT entries."

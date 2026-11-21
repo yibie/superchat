@@ -326,3 +326,14 @@
 
 (provide 'test-view)
 ;;; test-view.el ends here
+
+(ert-deftest superchat-view-trace-shows-sources-entry-and-derived ()
+  (superchat-test-with-tape
+    (cl-flet ((add (kind text &optional refs)
+                (plist-get (superchat-tape-append "t" kind text :refs refs :scope "s") :id)))
+      (let* ((b (add 'tool "read it"))
+             (_ (add 'tool "probe"))
+             (d (add 'assistant "answer" (list b)))
+             (e (add 'note "kept" (list d))))
+        (should (equal (mapcar (lambda (x) (plist-get x :id)) (superchat-view 'trace :id d))
+                       (list b d e)))))))

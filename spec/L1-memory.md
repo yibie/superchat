@@ -44,6 +44,9 @@ Public functions, and no others:
   it, giving another one is an error, and so is giving none for the first
   entry. KIND is one of the eight kind symbols.
 - `(superchat-tape-get ID)` → entry or nil.
+- `(superchat-tape-trace ID)` → `(:sources IDS :derived IDS)`: the ids in
+  entry ID's `:refs`, and the later entries whose `:refs` name ID, in id
+  order; nil when there is no entry ID.
 - `(superchat-tape-entries &key tape scope kinds after before limit newest)`
   → entries in id order. AFTER and BEFORE are ids, exclusive. With NEWEST
   non-nil and LIMIT, the last LIMIT entries, still returned in id order.
@@ -99,6 +102,7 @@ Built-in views:
 | `notes` | `:scope` optional, `:query` optional, `:limit` (default 20) | note entries, newest first; with `:scope`, that scope and `"home"`; with `:query`, the newest LIMIT of the notes that match it. A note that a later note has in `:refs` is corrected (`SPEC.md`) and left out |
 | `timelines` | `:scope` optional, `:limit` (default 30) | for each timeline that has no `user` entry with `:ephemeral t`, most recently active first: its latest anchor if it has one, else its first `user` entry; a timeline with neither is left out |
 | `sources` | `:id` | the entries named by the `:refs` of entry ID |
+| `trace` | `:id` | entry ID, the entries it rests on and the later ones resting on it, in id order |
 
 `conversation` is what a session is. `timelines` is the list of sessions.
 `notes`, `search`, `topic` and `sources` are what memory is.
