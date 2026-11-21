@@ -10,6 +10,7 @@
 (require 'subr-x)
 (require 'superchat)
 (require 'superchat-view)
+(require 'superchat-tools)
 
 (defconst superchat-context--base
   "You are Superchat, an assistant inside the user's Emacs.
@@ -85,18 +86,78 @@ Frontmatter is only at the very start and ends at the first line that is `---'."
 (defvar superchat-context-skills-listed 20
   "Above this many skills the catalog is one line, which says where to find them.")
 
+(defun superchat-context--skill-files (scope)
+  "The SKILL.md files of SCOPE and the user, a project's hiding the user's of
+the same name."
+  (let ((dirs (append (unless (or (null scope) (equal scope "home"))
+                        (list (expand-file-name ".superchat/skills/" scope)))
+                      (list (expand-file-name "skills/" superchat-directory)))))
+    (cons dirs
+          (cl-loop with seen for dir in dirs
+                   append (cl-loop for file in (file-expand-wildcards (expand-file-name "*/SKILL.md" dir))
+                                   for name = (superchat-context--skill-name file)
+                                   unless (member name seen)
+                                   do (push name seen) and collect file)))))
+
+(defun superchat-context--skill-name (file)
+  "The name of the skill whose SKILL.md is FILE."
+  (file-name-nondirectory (directory-file-name (file-name-directory file))))
+
+(defun superchat-context--interface (file)
+  "The entries of the interface.eld beside FILE, read and never evaluated;
+an entry not of the shape is left out."
+  (let ((eld (expand-file-name "interface.eld" (file-name-directory file))))
+    (when-let* ((text (superchat-context--read eld)))
+      (seq-filter
+       (lambda (e)
+         (and (proper-list-p e)
+              (stringp (plist-get e :name)) (string-match-p "\\`[a-z0-9_]+\\'" (plist-get e :name))
+              (memq (plist-get e :class) '(read write exec))
+              (stringp (plist-get e :code))
+              (cl-every (lambda (a) (and (stringp (plist-get a :name))
+                                         (memq (plist-get a :type) '(string number boolean))))
+                        (plist-get e :args))))
+       (condition-case nil (car (read-from-string text)) (error nil))))))
+
+(defun superchat-context--fill (code args values)
+  "The form CODE with each symbol named as one of ARGS replaced by that
+argument's value from VALUES, checked against its type: a value, never code."
+  (let ((given (mapcar (lambda (a)
+                         (let ((v (plist-get values (intern (concat ":" (plist-get a :name))))))
+                           (unless (pcase (plist-get a :type)
+                                     ('string (stringp v)) ('number (numberp v))
+                                     ('boolean (memq v '(t nil :false))))
+                             (error "Argument %s must be a %s" (plist-get a :name) (plist-get a :type)))
+                           (cons (intern (plist-get a :name)) (if (eq v :false) nil v))))
+                       args)))
+    (cl-labels ((walk (x) (cond ((and (symbolp x) (assq x given)) (list 'quote (cdr (assq x given))))
+                                ((consp x) (cons (walk (car x)) (walk (cdr x))))
+                                (t x))))
+      (walk (car (read-from-string code))))))
+
+(defun superchat-context-interfaces (tape)
+  "Make the interfaces of the skills of TAPE's scope its deferred tools, named
+SKILL__NAME; those of other skills go."
+  (dolist (name (superchat-tool-skill-tools)) (superchat-tool-remove name))
+  (let ((scope (plist-get (car (superchat-tape-entries :tape tape :newest t :limit 1)) :scope)))
+    (dolist (file (cdr (superchat-context--skill-files scope)))
+      (let ((skill (superchat-context--skill-name file)))
+        (dolist (e (superchat-context--interface file))
+          (let ((args (plist-get e :args)) (code (plist-get e :code)))
+            (superchat-tool-define
+             (format "%s__%s" (replace-regexp-in-string "[^a-zA-Z0-9_-]" "_" skill) (plist-get e :name))
+             :class (plist-get e :class) :deferred t :skill skill
+             :description (or (plist-get e :doc) code)
+             :args (mapcar (lambda (a) (append a (list :required t))) args)
+             :function (lambda (values)
+                         (let ((debug-on-error nil) (print-escape-newlines t))
+                           (prin1-to-string
+                            (superchat-tool-plain (eval (superchat-context--fill code args values) t))))))))))))
+
 (defun superchat-context--skills (scope)
   "The catalog of skills of SCOPE and the user: name, description and path,
 never the body; a project's skill hides the user's of the same name."
-  (let* ((dirs (append (unless (or (null scope) (equal scope "home"))
-                         (list (expand-file-name ".superchat/skills/" scope)))
-                       (list (expand-file-name "skills/" superchat-directory))))
-         (files (cl-loop with seen for dir in dirs
-                         append (cl-loop for file in (file-expand-wildcards (expand-file-name "*/SKILL.md" dir))
-                                         for name = (file-name-nondirectory
-                                                     (directory-file-name (file-name-directory file)))
-                                         unless (member name seen)
-                                         do (push name seen) and collect file))))
+  (pcase-let ((`(,dirs . ,files) (superchat-context--skill-files scope)))
     (cond
      ((null files) nil)
      ((> (length files) superchat-context-skills-listed)
@@ -107,10 +168,12 @@ never the body; a project's skill hides the user's of the same name."
  description fits the task:\n"
                 (mapconcat
                  (lambda (file)
-                   (format "- %s: %s (%s)"
-                           (file-name-nondirectory (directory-file-name (file-name-directory file)))
-                           (or (superchat-context--description file) "no description")
-                           file))
+                   (let ((n (length (superchat-context--interface file))))
+                     (format "- %s: %s (%s)%s" (superchat-context--skill-name file)
+                             (or (superchat-context--description file) "no description") file
+                             (if (> n 0)
+                                 (format "; %d tools: load_tools %s" n (superchat-context--skill-name file))
+                               ""))))
                  files "\n"))))))
 
 (defun superchat-context--notes (scope)

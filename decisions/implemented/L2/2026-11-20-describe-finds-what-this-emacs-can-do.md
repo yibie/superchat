@@ -5,7 +5,7 @@ Status: implemented
 ## Problem
 
 Step 1 of
-[../../proposed/L0/2026-11-20-what-this-emacs-can-do.md](../../proposed/L0/2026-11-20-what-this-emacs-can-do.md):
+[../../implemented/L0/2026-11-20-what-this-emacs-can-do.md](../../implemented/L0/2026-11-20-what-this-emacs-can-do.md):
 a model working in Emacs guesses function names, and a package can have
 hundreds of them.
 

@@ -5,7 +5,7 @@ Status: implemented
 ## Problem
 
 Gathering recipes from the Tape found only the debris of exploring
-(see [2026-11-20-what-this-emacs-can-do.md](../../proposed/L0/2026-11-20-what-this-emacs-can-do.md)).
+(see [2026-11-20-what-this-emacs-can-do.md](../../implemented/L0/2026-11-20-what-this-emacs-can-do.md)).
 The Tape keeps every call, its arguments, its result and whether it
 failed: 223 `eval_elisp` calls succeeded and 59 failed on the person's
 Tape, and none of that was lost. What it lacks is which calls an answer

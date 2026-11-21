@@ -25,7 +25,8 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
      with `read` when it wants it. A file whose first `---` line is never
      closed has no frontmatter. Above `superchat-context-skills-listed` (a
      `defvar`, 20) skills, one line instead: how many, where, and to find
-     one with `find` and `grep` over their `description:` lines;
+     one with `find` and `grep` over their `description:` lines. A skill
+     with an interface adds `; N tools: load_tools NAME`;
   5. the `notes` view of the scope, newest first, rendered, at most 2000
      characters;
   6. the origin of the latest `user` entry, when it has one;
@@ -34,6 +35,17 @@ a model through `superchat-run`. It uses L1 and L2. A package that requires
   directory line, no rules file and no notes section.
 - Frontmatter is only at the very start of a file and ends at the first line
   that is exactly `---`.
+
+- `(superchat-context-interfaces TAPE)`, called before each request: the
+  tools of every skill go, and each entry of the `interface.eld` beside a
+  skill of TAPE's scope, a list of `(:name :class :doc :args :code)` read
+  with `read` and never evaluated, becomes a deferred tool `SKILL__NAME` of
+  that SKILL; NAME is `[a-z0-9_]+`, an arg a `(:name :type)` of type
+  `string`, `number` or `boolean`, and an entry not of that shape is left
+  out. A call reads CODE, puts in each symbol named as an arg that
+  argument's value, checked against its type and quoted, never as code,
+  evaluates the form with `debug-on-error` nil and prints its value as
+  `eval_elisp` does.
 
 ## superchat-agent.el
 

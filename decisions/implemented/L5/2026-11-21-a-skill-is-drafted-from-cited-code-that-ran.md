@@ -5,7 +5,7 @@ Status: implemented
 ## Problem
 
 Step 2 of
-[../../proposed/L0/2026-11-20-what-this-emacs-can-do.md](../../proposed/L0/2026-11-20-what-this-emacs-can-do.md):
+[../../implemented/L0/2026-11-20-what-this-emacs-can-do.md](../../implemented/L0/2026-11-20-what-this-emacs-can-do.md):
 what a run learns about a package is lost when it ends. Gathering every
 `eval_elisp` call that succeeded found mostly probes; since
 [../L0/2026-11-21-an-answer-names-the-calls-it-rests-on.md](../L0/2026-11-21-an-answer-names-the-calls-it-rests-on.md)

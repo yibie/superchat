@@ -179,3 +179,31 @@
    (let ((system (superchat-context-system "t")))
      (should (string-search "The `recall` tool" system))
      (should-not (string-search "load them with" system)))))
+
+(ert-deftest superchat-context-an-interface-becomes-tools-that-fill-values ()
+  (superchat-test-with-tape
+    (let* ((dir (expand-file-name "skills/sk/" superchat-directory)))
+      (make-directory dir t)
+      (with-temp-file (expand-file-name "SKILL.md" dir) (insert "---\nname: sk\ndescription: Test.\n---\nBody.\n"))
+      (with-temp-file (expand-file-name "interface.eld" dir)
+        (insert "((:name \"add\" :class read :doc \"Add.\" :args ((:name \"a\" :type number) (:name \"b\" :type number)) :code \"(+ a b)\")
+ (:name \"say\" :class write :args ((:name \"text\" :type string)) :code \"(concat \\\"<\\\" text \\\">\\\")\")
+ (:name \"Bad Name\" :class read :code \"1\")
+ (:name \"noclass\" :code \"1\"))"))
+      (superchat-tape-append "t" 'user "go" :scope "home")
+      (unwind-protect
+          (progn
+            (superchat-context-interfaces "t")
+            (should (equal (superchat-tool-skill-tools "sk") '("sk__add" "sk__say")))
+            (should (string-match-p "- sk: Test\\. .*; 2 tools: load_tools sk" (superchat-context-system "t")))
+            (should (equal (plist-get (car (superchat-tool-specs '("sk__add"))) :description) "Add."))
+            (let ((add '((:name "a" :type number) (:name "b" :type number)))
+                  (say '((:name "text" :type string))))
+              (should (equal (eval (superchat-context--fill "(+ a b)" add '(:a 2 :b 3)) t) 5))
+              ;; A string goes in as a value: code in it is never run.
+              (should (equal (eval (superchat-context--fill "(concat \"<\" text \">\")" say
+                                                            '(:text "(kill-emacs)"))
+                                   t)
+                             "<(kill-emacs)>"))
+              (should-error (superchat-context--fill "(+ a b)" add '(:a "2" :b 3)))))
+        (dolist (n (superchat-tool-skill-tools)) (superchat-tool-remove n))))))

@@ -382,6 +382,8 @@ with input waiting, the run pauses instead, so that the input drives the next."
          (size (superchat-request-kept-size entries (plist-get run :user-id)))
          (model (or (plist-get run :model) superchat-llm-model))
          (tools (plist-get run :tools))
+         ;; The skills' interfaces are read again, so an edited one counts.
+         (_ (superchat-context-interfaces tape))
          ;; Worked out for each request: a tool loaded in this run is offered next.
          (names (pcase tools
                   ('none nil)
