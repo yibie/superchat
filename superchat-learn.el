@@ -21,18 +21,22 @@
 (defvar-local superchat-learn--prefix nil "The package prefix of this draft.")
 
 (defun superchat-learn--version (prefix)
-  "The version in the header of the library PREFIX, or nil."
-  (when-let* ((file (locate-library (concat prefix ".el"))))
-    (with-temp-buffer
-      (insert-file-contents file nil 0 4000)
-      (lm-version))))
+  "The version in the header of the library PREFIX, Emacs's for one of its\nown, or nil."
+  (when-let* ((file (locate-library (concat (superchat-learn--name prefix) ".el"))))
+    (or (with-temp-buffer
+          (insert-file-contents file nil 0 4000)
+          (lm-version))
+        ;; A library that comes with Emacs has the Emacs's version.
+        (and (file-in-directory-p file lisp-directory) (concat "Emacs " emacs-version)))))
 
 (defun superchat-learn--prompt (prefix recipes)
   "The request that turns RECIPES of package PREFIX into a SKILL.md."
   (concat
    (format "Write a SKILL.md for the Emacs package %s from the forms below.  Each ran in\
- this Emacs without error, and an answer rested on its result.\n" prefix)
-   "Start with a frontmatter between --- lines holding only `name: " prefix
+ this Emacs without error, and an answer rested on its result.  You have no tools\
+ and need none: all you need is here.  Reply with the file and nothing else.\n" prefix)
+   "Start with a frontmatter between --- lines holding only `name: "
+   (superchat-learn--name prefix)
    "` and `description:` one line on when to use this skill.  Then, for each form\
  worth keeping, a `## ` title, one line on what it does and what it returns, and\
  the form in an ```elisp block copied exactly.  Leave out forms that only probe.\
@@ -59,9 +63,14 @@ Return (TEXT . LEFT-OUT)."
         (insert "\nversion: " version))
       (cons (buffer-string) left))))
 
+(defun superchat-learn--name (prefix)
+  "The skill's name for package PREFIX: PREFIX without a trailing dash."
+  (string-remove-suffix "-" prefix))
+
 (defun superchat-learn--file (prefix)
   "Where the skill of PREFIX is saved."
-  (expand-file-name (format "skills/%s/SKILL.md" prefix) superchat-directory))
+  (expand-file-name (format "skills/%s/SKILL.md" (superchat-learn--name prefix))
+                    superchat-directory))
 
 (defun superchat-learn-save ()
   "Save this draft as the skill of its package."
@@ -111,14 +120,18 @@ Return (TEXT . LEFT-OUT)."
                    :ephemeral t :tools 'none
                    :on-done
                    (lambda (run)
-                     (if (not (eq (plist-get run :status) 'done))
-                         (message "The draft of %s failed: %s" prefix (plist-get run :error))
+                     (cond
+                      ((not (eq (plist-get run :status) 'done))
+                       (message "The draft of %s failed: %s" prefix (plist-get run :error)))
+                      ((not (string-match-p "\\`[ \t\n]*---\n" (or (plist-get run :text) "")))
+                       (message "The model wrote no draft of %s; try /learn again" prefix))
+                      (t
                        (let ((checked (superchat-learn--check
                                        (plist-get run :text)
                                        (mapcar (lambda (e) (plist-get (plist-get e :data) :code))
                                                recipes)
                                        (superchat-learn--version prefix))))
-                         (superchat-learn--show prefix (car checked) (cdr checked))))))))
+                         (superchat-learn--show prefix (car checked) (cdr checked)))))))))
 
 (provide 'superchat-learn)
 ;;; superchat-learn.el ends here

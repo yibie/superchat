@@ -369,10 +369,12 @@ of the package from those forms and their results' first lines: a
 frontmatter of `name` and `description`, then a `## ` title, one line and
 the form in an `elisp` block per form worth keeping. Every block whose
 code, trimmed, is not one of the forms is replaced by a line saying a form
-was left out; `version:` from the library's header (`lm-version`) follows
-`name:`. The draft shows in `*superchat: learn PREFIX*`, its header line
+was left out; `version:` from the library's header (`lm-version`), or
+Emacs's for a library of its own, follows `name:`. The skill's name is
+PREFIX without a trailing dash, and a reply with no frontmatter is said
+and not shown. The draft shows in `*superchat: learn PREFIX*`, its header line
 naming the keys and how many forms were left out: `C-c C-c` writes it to
-`superchat-directory`/`skills/PREFIX/SKILL.md`, asking before it
+`superchat-directory`/`skills/NAME/SKILL.md`, asking before it
 replaces a file; `C-c C-k` drops it. The model writes no file.
 
 ## superchat-views.el

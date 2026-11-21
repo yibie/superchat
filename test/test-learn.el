@@ -36,12 +36,31 @@
         (superchat-learn-save))
       (should (string-match-p "(pkg-get 1)"
                               (with-temp-buffer
-                                (insert-file-contents (expand-file-name "skills/pkg-/SKILL.md"
+                                (insert-file-contents (expand-file-name "skills/pkg/SKILL.md"
                                                                         superchat-directory))
                                 (buffer-string)))))))
+
+(ert-deftest superchat-learn-shows-no-reply-that-is-not-a-draft ()
+  (superchat-test-with-tape
+    (cl-flet ((add (kind text &optional data refs)
+                (plist-get (superchat-tape-append "t" kind text :data data :refs refs :scope "s") :id)))
+      (add 'user "go")
+      (add 'assistant "" (list :calls (list (list :id "c1" :name "eval_elisp"
+                                                  :args (list :code "(pkg-get 1)")))))
+      (add 'assistant "it is 42" nil (list (add 'tool "42" '(:call-id "c1" :name "eval_elisp")))))
+    (let (said)
+      (cl-letf (((symbol-function 'message) (lambda (f &rest a) (setq said (apply #'format f a)))))
+        (superchat-test-script (list '(:text "I'll first find out what it returns."))
+          (superchat-learn "pkg-")
+          (superchat-test-wait (lambda () (and said (string-match-p "no draft" said))))))
+      (should-not (get-buffer "*superchat: learn pkg-*")))))
 
 (ert-deftest superchat-learn-with-nothing-cited-says-so ()
   (superchat-test-with-tape
     (should-error (superchat-learn "nothing-") :type 'user-error)))
 
 ;;; test-learn.el ends here
+
+(ert-deftest superchat-learn-version-of-a-library-and-of-emacs-own ()
+  (should (equal (superchat-learn--version "calendar-") (concat "Emacs " emacs-version)))
+  (should-not (superchat-learn--version "superchat-no-such-library-")))
