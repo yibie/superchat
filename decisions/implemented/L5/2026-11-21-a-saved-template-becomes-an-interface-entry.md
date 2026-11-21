@@ -41,6 +41,12 @@ not made: the recipe stays text only. The person changes a class in
 
 ## Consequences
 
+- A hole whose value is a list, such as a whole date, cannot be an arg, so
+  its template makes no entry. An entry with no hole says it takes no input.
+- A draft block that leaves out the template's top-level `require` forms
+  still matches it, and the template's own text is put in its place: in a
+  live run the model dropped `(require 'calendar)` and the recipe was lost.
+- Two templates that differ only by a `require` make two entries.
 - Most package functions are not marked side-effect-free, so most entries
   start as `write` and ask until the person changes them.
 - `superchat-learn.el`'s cap rises from 680 to 760 lines, by the person's

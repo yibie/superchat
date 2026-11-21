@@ -414,7 +414,8 @@ values put back: for a function named with PREFIX, each hole left records
 `hole` and each value put back `keep`, in `roles.eld`; the runs of matched templates go to `evidence.eld`.
 Each matched template, its kept values put back, also becomes an entry of
 `interface.eld` beside the skill, unless one there has the same code: its
-holes are the args, lower-cased and typed by their value; its name is the
+holes are the args, lower-cased, typed `number` or `string` by their value,
+and a template with a hole of any other value makes no entry; its name is the
 first PREFIX function's name without PREFIX; its doc is the section's
 heading and where each hole comes from. Its class is `read` when it calls
 only functions Emacs marks side-effect-free or pure, those named `-p`, and

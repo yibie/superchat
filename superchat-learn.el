@@ -116,7 +116,16 @@ Return (TEXT LEFT-OUT SHOWN), SHOWN the groups whose blocks it keeps."
       (while (re-search-forward superchat-learn--block nil t)
         (let* ((beg (match-beginning 0)) (end (match-end 0))
                (key (superchat-learn--key (match-string 1)))
-               (g (seq-find (lambda (g) (equal (plist-get g :key) key)) groups)))
+               (loose (superchat-learn--loose (match-string 1)))
+               (g (or (seq-find (lambda (g) (equal (plist-get g :key) key)) groups)
+                      ;; A block without the template's `require' forms is that template.
+                      (and loose (seq-find (lambda (g) (and (plist-get g :text) (equal (superchat-learn--loose (plist-get g :text)) loose)))
+                                           groups)))))
+          (when (and g (not (equal (plist-get g :key) key)))
+            (delete-region beg end)
+            (goto-char beg)
+            (insert "```elisp\n" (plist-get g :text) "\n```")
+            (setq end (point)))
           (if (not g)
               (progn (cl-incf left)
                      (delete-region beg end)
@@ -228,7 +237,7 @@ beside those Emacs marks side-effect-free or pure.")
 (defun superchat-learn--entry (prefix group decided title taken)
   "The interface entry for GROUP, whose holes the person DECIDED, named not
 as one of TAKEN; nil when a hole the entry would write through is unclear."
-  (let* ((holes (cl-loop for (h . d) in decided when (eq d 'hole) collect h))
+  (let* ((holes (delete-dups (cl-loop for (h . d) in decided when (eq d 'hole) collect h)))
          (forms (superchat-learn--fill (plist-get group :forms)
                                        (cl-loop for (h . d) in decided when (eq d 'keep) collect h)))
          (class (superchat-learn--class-of forms))
@@ -238,8 +247,11 @@ as one of TAKEN; nil when a hole the entry would write through is unclear."
                 "[^a-z0-9_]" "" (replace-regexp-in-string
                                  "-" "_" (string-remove-prefix prefix (if fn (symbol-name fn) "recipe")))))
          (name (if (string-empty-p base) "recipe" base)) (n 1))
-    (unless (and (eq class 'write)
-                 (seq-some (lambda (h) (memq (plist-get h :class) '(suspected varies))) holes))
+    (unless (or (and (eq class 'write)
+                     (seq-some (lambda (h) (memq (plist-get h :class) '(suspected varies))) holes))
+                ;; An arg is a string or a number; a hole of a list cannot be one.
+                (seq-some (lambda (h) (not (or (numberp (plist-get h :value)) (stringp (plist-get h :value)))))
+                          holes))
       (while (member name taken) (setq name (format "%s_%d" base (cl-incf n))))
       (cl-labels ((low (x) (let ((h (superchat-learn--named x holes)))
                              (cond (h (intern (downcase (plist-get h :name))))
@@ -248,13 +260,13 @@ as one of TAKEN; nil when a hole the entry would write through is unclear."
         (list :name name :class class
               :doc (mapconcat #'identity
                               (cons (or title (format "A recipe of the %s skill." (superchat-learn--name prefix)))
-                                    (mapcar (lambda (h) (format "%s: %s." (downcase (plist-get h :name))
+                                    (if (null holes) '("It takes no input: it runs exactly as written.")
+                                      (mapcar (lambda (h) (format "%s: %s." (downcase (plist-get h :name))
                                                                 (superchat-learn--from h)))
-                                            holes))
+                                            holes)))
                               "\n")
               :args (mapcar (lambda (h) (list :name (downcase (plist-get h :name))
-                                              :type (let ((v (plist-get h :value)))
-                                                      (cond ((numberp v) 'number) ((stringp v) 'string) (t 'boolean)))))
+                                              :type (if (numberp (plist-get h :value)) 'number 'string)))
                             holes)
               :code (let ((print-escape-newlines t))
                       (prin1-to-string (low (if (cdr forms) (cons 'progn forms) (car forms))))))))))
@@ -578,6 +590,11 @@ the order it is bound, for comparing two forms."
                         ((proper-list-p x) (mapcar (lambda (y) (walk y names)) x))
                         (t (cons (walk (car x) names) (walk (cdr x) names))))))
       (prin1-to-string (mapcar (lambda (f) (walk f nil)) forms)))))
+
+(defun superchat-learn--loose (code)
+  "The key of CODE without its top-level `require' forms, or nil when none is left."
+  (when-let* ((forms (seq-remove (lambda (f) (eq (car-safe f) 'require)) (superchat-learn--forms code))))
+    (superchat-learn--canon forms)))
 
 (defun superchat-learn--key (code)
   "The comparing key of CODE: its forms with locals renamed."
