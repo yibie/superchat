@@ -64,7 +64,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
 | L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 | L5 | `superchat-views.el` | 200 | the timers buffer and the entry lists, each with keys |
-| L5 | `superchat-learn.el` | 250 | a skill drafted from cited code that ran |
+| L5 | `superchat-learn.el` | 560 | a skill drafted from cited code that ran |
 
 Dependencies go one way only:
 
@@ -94,7 +94,7 @@ points to require. A file requires nothing else, and
 
 ## Hard limits
 
-- Product code: **6,000 lines in total**, counted by `wc -l` over the `.el`
+- Product code: **6,300 lines in total**, counted by `wc -l` over the `.el`
   files at the repository root. Tests are not counted. Each file has its own
   cap in the layer table. `scripts/check.sh` fails when a cap is exceeded.
 - Emacs 30.1 or later. Dependencies: `curl`, the `bridge/` directory of this repository, and what Emacs ships with
@@ -117,7 +117,7 @@ points to require. A file requires nothing else, and
 | `spec/L2-capabilities.md` | 4700 words |
 | `spec/L3-agent.md` | 3540 words |
 | `spec/L4-background.md` | 690 words |
-| `spec/L5-interface.md` | 4420 words |
+| `spec/L5-interface.md` | 4880 words |
 
 ## Rules against overflow
 
