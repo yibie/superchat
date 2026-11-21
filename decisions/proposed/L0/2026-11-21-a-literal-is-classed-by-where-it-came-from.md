@@ -113,9 +113,10 @@ each class takes, before any code is written.
 - Most of the Tape's forms predate cited answers; the replay must use all
   successful forms with their runs, and its numbers say what the rule can
   do, not what `/learn` will see.
-- `superchat-learn.el` is at 216/250 lines; the analysis will not fit
-  there. Where it lives (an L1 view of bindings, or an L5 module) is for
-  the person to decide when it is built.
+- The analysis goes in `superchat-learn.el`, with no new module, the
+  person's choice: it is part of drafting a skill. The file is at 216/250
+  lines, so its cap is raised to what the built code needs, in the commit
+  that adds it.
 - The paper's results come from one synthetic benchmark and one agent's
   traces; its authors say its detection of false positives was not
   measured.
