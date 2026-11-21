@@ -153,7 +153,7 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
 
 ## superchat-tools.el
 
-- `(superchat-tool-define NAME &key description args class function async deferred)`:
+- `(superchat-tool-define NAME &key description args class function async deferred skill)`:
   ARGS has the shape `superchat-llm-request` takes. DESCRIPTION is a string,
   or a function of no arguments returning one, called each time the specs
   are asked for. FUNCTION is called with one plist of arguments and returns
@@ -178,10 +178,15 @@ Three levels: `read-only`, `ask` (the default), `auto`. A tool has a class:
   `(superchat-tool-offered TAPE &optional EXCEPT)` → the tools not
   deferred and the loaded ones, but EXCEPT; `(superchat-tool-catalog TAPE)`
   → `More tools, offered once you load them with load_tools:` and a line
-  `- NAME: FIRST-SENTENCE` per deferred tool not loaded, or nil.
+  `- NAME: FIRST-SENTENCE` per deferred tool not loaded and of no SKILL,
+  or nil. `(superchat-tool-skill-tools &optional SKILL)` → the sorted names
+  of the tools defined with that SKILL, of any skill without one.
 - A tool `load_tools` (`names`, separated by commas or spaces), class
   `read`, not deferred, appends that event and answers `Loaded NAMES;
-  offered from your next request.`; a name of no deferred tool is an error.
+  offered from your next request.`; a name that is a SKILL stands for its
+  tools; a name of no deferred tool is an error.
+- `(superchat-tool-plain VALUE)` → VALUE with the text properties of its
+  strings left out, to a nesting of 50, as `eval_elisp` prints it.
 - `(superchat-tool-remove NAME)`, `(superchat-tool-specs &optional NAMES)` →
   the list `superchat-llm-request` takes.
 - `(superchat-tool-call TAPE CALL ON-RESULT &optional CANCELLED OFFERED)` →

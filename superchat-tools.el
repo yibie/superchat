@@ -28,7 +28,7 @@ Not on the Tape: it lasts until Emacs exits.")
   "The `:deferred' of a tool defined without one; a plugin's ENABLE runs with
 it t, so its tools wait to be loaded.")
 
-(cl-defun superchat-tool-define (name &key description args class function async
+(cl-defun superchat-tool-define (name &key description args class function async skill
                                       (deferred superchat-tool-defer-default))
   "Define tool NAME, replacing any tool of that name.
 DEFERRED: the tool is offered only once `load_tools' loaded it on a timeline;
@@ -39,11 +39,13 @@ string, number or boolean.
 CLASS is `read', `write' or `exec'.  FUNCTION takes one plist, returns a string.
 With ASYNC, FUNCTION takes the plist and DONE and returns at once, nothing or a
 function that stops the work; DONE is called once with the result string, or
-as (funcall DONE nil MESSAGE) for an error."
+as (funcall DONE nil MESSAGE) for an error.  SKILL names the skill whose
+interface the tool is: `load_tools' of that name loads it, and the catalog
+leaves it out."
   (unless (memq class '(read write exec))
     (error "Tool %s: class must be read, write or exec, not %S" name class))
   (puthash name (list :description description :args args :class class :function function
-                :async async :deferred deferred)
+                :async async :deferred deferred :skill skill)
            superchat-tools--registry))
 
 (defun superchat-tool-loaded (tape)
@@ -73,7 +75,8 @@ deferred, and those loaded on TAPE, but EXCEPT."
   (let ((loaded (superchat-tool-loaded tape)))
     (when-let* ((names (sort (cl-loop for name being the hash-keys of superchat-tools--registry
                                       using (hash-values tool)
-                                      when (and (plist-get tool :deferred) (not (member name loaded)))
+                                      when (and (plist-get tool :deferred) (not (plist-get tool :skill))
+                                                (not (member name loaded)))
                                       collect name)
                              #'string<)))
       (concat "More tools, offered once you load them with load_tools:\n"
@@ -81,6 +84,13 @@ deferred, and those loaded on TAPE, but EXCEPT."
                            (format "- %s: %s" name (superchat-tools--first-sentence
                                                     (gethash name superchat-tools--registry))))
                          names "\n")))))
+
+(defun superchat-tool-skill-tools (&optional skill)
+  "The names of the tools of SKILL's interface, sorted; of every skill with none."
+  (sort (cl-loop for name being the hash-keys of superchat-tools--registry using (hash-values tool)
+                 when (and (plist-get tool :skill) (or (null skill) (equal skill (plist-get tool :skill))))
+                 collect name)
+        #'string<))
 
 (defun superchat-tool-remove (name)
   "Remove tool NAME."
@@ -272,10 +282,12 @@ not called.  Whatever the tool or the user does, the result is an entry."
 
 (superchat-tool-define
  "load_tools" :class 'read
- :description "Load deferred tools by name, from the list in the system prompt; they are offered from your next request on, in this conversation for good."
+ :description "Load deferred tools by name, from the list in the system prompt, or a skill's interface by the skill's name; they are offered from your next request on, in this conversation for good."
  :args '((:name "names" :type string :description "Tool names, separated by commas or spaces" :required t))
  :function (lambda (args)
-             (let* ((names (split-string (plist-get args :names) "[, \t\n]+" t))
+             (let* ((names (cl-loop for n in (split-string (plist-get args :names) "[, \t\n]+" t)
+                                    ;; A skill's name loads its interface.
+                                    append (or (superchat-tool-skill-tools n) (list n))))
                     (bad (cl-remove-if (lambda (n) (plist-get (gethash n superchat-tools--registry) :deferred))
                                        names)))
                (when bad (error "Not deferred tools: %s" (string-join bad ", ")))
@@ -802,10 +814,10 @@ none does), then save it; the notices of the save and its lint."
                    (dolist (form (nreverse forms)) (push (eval form t) values)))
                  (concat (with-current-buffer log (buffer-substring-no-properties from (point-max)))
                          (let ((print-escape-newlines t))
-                           (mapconcat (lambda (v) (prin1-to-string (superchat-tools--plain v)))
+                           (mapconcat (lambda (v) (prin1-to-string (superchat-tool-plain v)))
                                       (nreverse values) "\n")))))))
 
-(defun superchat-tools--plain (value &optional depth)
+(defun superchat-tool-plain (value &optional depth)
   "VALUE with the text properties of its strings left out, so a buffer's
 text prints as text, not with every property it carries.  Past DEPTH 50
 of nesting VALUE is kept as it is."
@@ -813,11 +825,11 @@ of nesting VALUE is kept as it is."
     (cond ((> depth 50) value)
           ((stringp value) (substring-no-properties value))
           ((proper-list-p value)
-           (mapcar (lambda (v) (superchat-tools--plain v (1+ depth))) value))
-          ((consp value) (cons (superchat-tools--plain (car value) (1+ depth))
-                               (superchat-tools--plain (cdr value) (1+ depth))))
+           (mapcar (lambda (v) (superchat-tool-plain v (1+ depth))) value))
+          ((consp value) (cons (superchat-tool-plain (car value) (1+ depth))
+                               (superchat-tool-plain (cdr value) (1+ depth))))
           ((and (vectorp value) (not (recordp value)))
-           (vconcat (mapcar (lambda (v) (superchat-tools--plain v (1+ depth))) value)))
+           (vconcat (mapcar (lambda (v) (superchat-tool-plain v (1+ depth))) value)))
           (t value))))
 
 (defun superchat-tools--tail (output file spilled)

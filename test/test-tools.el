@@ -1287,3 +1287,19 @@ DIR is no project: the .git is in a subdirectory."
         (use-local-map (let ((m (make-sparse-keymap))) (define-key m "x" #'sctdesc-one) m))
         (should (string-match-p "in fundamental-mode.*\n.*\nsctdesc-one\\* \\[x\\]  Doc"
                                 (superchat-test-tools--ok "describe" :buffer (buffer-name))))))))
+
+(ert-deftest superchat-tools-a-skills-interface-loads-by-the-skills-name ()
+  (unwind-protect
+      (progn
+        (superchat-tool-define "sk.one" :class 'read :deferred t :skill "sk"
+                               :description "One." :function (lambda (_) "1"))
+        (superchat-tool-define "sk.two" :class 'write :deferred t :skill "sk"
+                               :description "Two." :function (lambda (_) "2"))
+        (superchat-test-tools--in-scope
+          (should (equal (sort (superchat-tool-skill-tools "sk") #'string<) '("sk.one" "sk.two")))
+          ;; Not listed one by one: the skills catalog speaks for them.
+          (should-not (string-match-p "sk\\." (or (superchat-tool-catalog "t") "")))
+          (should (string-match-p "Loaded sk.one, sk.two"
+                                  (superchat-test-tools--ok "load_tools" :names "sk")))
+          (should (member "sk.two" (superchat-tool-offered "t")))))
+    (superchat-tool-remove "sk.one") (superchat-tool-remove "sk.two")))
