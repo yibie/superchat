@@ -190,6 +190,84 @@ hole's value was put back."
   "The `version:' of the skill TEXT, or nil."
   (and (string-match "^version: \\(.*\\)$" text) (match-string 1 text)))
 
+;;;; A saved template as an entry of the skill's interface.eld.
+
+(defvar superchat-learn-read-functions '(require list car cdr nth format concat)
+  "Functions a drafted interface entry may call and still be class `read',
+beside those Emacs marks side-effect-free or pure.")
+
+(defun superchat-learn--class-of (forms)
+  "`read' when FORMS call only functions that change nothing, else `write'."
+  (catch 'write
+    (cl-labels ((walk (x)
+                  (when (consp x)
+                    (let ((f (car x)))
+                      (cond ((eq f 'quote))
+                            ((memq f '(let let*))
+                             (dolist (b (cadr x)) (when (consp b) (mapc #'walk (cdr b))))
+                             (mapc #'walk (cddr x)))
+                            ((and (symbolp f) (or (special-form-p f) (macrop f)))
+                             (mapc #'walk (cdr-safe x)))
+                            ((symbolp f)
+                             (unless (or (get f 'side-effect-free) (get f 'pure)
+                                         (memq f superchat-learn-read-functions)
+                                         (string-suffix-p "-p" (symbol-name f)))
+                               (throw 'write 'write))
+                             (mapc #'walk (cdr-safe x)))
+                            (t (mapc #'walk x)))))))
+      (mapc #'walk forms)
+      'read)))
+
+(defun superchat-learn--heading (text code)
+  "The `## ' heading before the block CODE in TEXT, or nil."
+  (when-let* ((at (string-search code text)))
+    (with-temp-buffer
+      (insert (substring text 0 at))
+      (and (re-search-backward "^## +\\(.+\\)$" nil t) (string-trim (match-string 1))))))
+
+(defun superchat-learn--entry (prefix group decided title taken)
+  "The interface entry for GROUP, whose holes the person DECIDED, named not
+as one of TAKEN; nil when a hole the entry would write through is unclear."
+  (let* ((holes (cl-loop for (h . d) in decided when (eq d 'hole) collect h))
+         (forms (superchat-learn--fill (plist-get group :forms)
+                                       (cl-loop for (h . d) in decided when (eq d 'keep) collect h)))
+         (class (superchat-learn--class-of forms))
+         (fn (cl-loop for f in (flatten-tree forms)
+                      thereis (and (symbolp f) (string-prefix-p prefix (symbol-name f)) f)))
+         (base (replace-regexp-in-string
+                "[^a-z0-9_]" "" (replace-regexp-in-string
+                                 "-" "_" (string-remove-prefix prefix (if fn (symbol-name fn) "recipe")))))
+         (name (if (string-empty-p base) "recipe" base)) (n 1))
+    (unless (and (eq class 'write)
+                 (seq-some (lambda (h) (memq (plist-get h :class) '(suspected varies))) holes))
+      (while (member name taken) (setq name (format "%s_%d" base (cl-incf n))))
+      (cl-labels ((low (x) (let ((h (superchat-learn--named x holes)))
+                             (cond (h (intern (downcase (plist-get h :name))))
+                                   ((consp x) (cons (low (car x)) (low (cdr x))))
+                                   (t x)))))
+        (list :name name :class class
+              :doc (mapconcat #'identity
+                              (cons (or title (format "A recipe of the %s skill." (superchat-learn--name prefix)))
+                                    (mapcar (lambda (h) (format "%s: %s." (downcase (plist-get h :name))
+                                                                (superchat-learn--from h)))
+                                            holes))
+                              "\n")
+              :args (mapcar (lambda (h) (list :name (downcase (plist-get h :name))
+                                              :type (let ((v (plist-get h :value)))
+                                                      (cond ((numberp v) 'number) ((stringp v) 'string) (t 'boolean)))))
+                            holes)
+              :code (let ((print-escape-newlines t))
+                      (prin1-to-string (low (if (cdr forms) (cons 'progn forms) (car forms))))))))))
+
+(defun superchat-learn--add-interface (prefix entries)
+  "Add ENTRIES to the interface.eld beside PREFIX's skill; their count."
+  (let* ((file (superchat-learn--beside prefix "interface.eld"))
+         (old (superchat-learn--read-data file))
+         (new (seq-remove (lambda (e) (seq-some (lambda (o) (equal (plist-get o :code) (plist-get e :code))) old))
+                          entries)))
+    (when new (superchat-learn--write-data file (append old new)))
+    (length new)))
+
 (defun superchat-learn-save ()
   "Save this draft as the skill of its package, or add it to that skill.
 A template the person deleted is not drafted again; a hole whose value the
@@ -200,13 +278,14 @@ person put back is kept as a value in later drafts."
          (text (buffer-string))
          (version superchat-learn--new-version)
          (saved (mapcar #'superchat-learn--forms (superchat-learn--blocks text)))
-         kept dropped decided)
+         kept dropped decided pairs interfaced)
     (dolist (g superchat-learn--offered)
       (let ((match (cl-loop for s in saved
                             for r = (superchat-learn--decide s (plist-get g :forms) (plist-get g :holes))
                             unless (eq r :fail) return (list r))))
         (if match
-            (progn (push g kept) (setq decided (append (car match) decided)))
+            (progn (push g kept) (push (cons g (car match)) pairs)
+                   (setq decided (append (car match) decided)))
           (push (plist-get g :text) dropped))))
     (when (or superchat-learn--adding (not (file-exists-p file))
               (y-or-n-p (format "%s exists; replace it? " file)))
@@ -226,13 +305,24 @@ person put back is kept as a value in later drafts."
         (superchat-learn--write-data (superchat-learn--beside prefix "rejected.eld")
                                      (append (superchat-learn--rejected prefix) dropped)))
       (when kept (superchat-learn--add-evidence prefix kept))
+      (let* ((taken (mapcar (lambda (e) (plist-get e :name))
+                            (superchat-learn--read-data (superchat-learn--beside prefix "interface.eld"))))
+             (entries (cl-loop for (g . d) in (nreverse pairs)
+                               for e = (superchat-learn--entry
+                                        prefix g d (superchat-learn--heading text (plist-get g :text)) taken)
+                               when e do (push (plist-get e :name) taken) and collect e)))
+        (setq interfaced (superchat-learn--add-interface prefix entries)))
       (let ((roles (superchat-learn--read-data (superchat-learn--beside prefix "roles.eld"))))
         (dolist (d decided)
           (when-let* ((fn (plist-get (car d) :fn))
                       ((string-prefix-p prefix (symbol-name fn))))
             (setf (alist-get (cons fn (plist-get (car d) :pos)) roles nil nil #'equal) (cdr d))))
         (when decided (superchat-learn--write-data (superchat-learn--beside prefix "roles.eld") roles)))
-      (message "Saved %s%s" file
+      (message "Saved %s%s%s" file
+               (if (> interfaced 0)
+                   (format "; %d entr%s added to interface.eld, read and change their class there"
+                           interfaced (if (= interfaced 1) "y" "ies"))
+                 "")
                (if dropped (format "; %d dropped form(s) will not be drafted again" (length dropped)) ""))
       (quit-window t))))
 
