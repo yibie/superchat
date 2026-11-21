@@ -48,15 +48,19 @@ the person's choice over a new module.
    renamed in binding order; equal templates become one recipe with all
    their results' ids. Templates are written on the code as it ran.
 5. **The draft.** The model is given each template with its holes, their
-   values and origins, and copies the template. Under each kept block code
-   adds how many runs it ran in and where each hole came from; the header
-   counts the holes, the `suspected` ones, and the `unknown` values left as
-   written.
+   values and origins, and copies the template. Under each kept block with
+   holes, code adds where each came from: "from the request", or "read from
+   the result of" the code of the producing call, never its Tape id, which
+   a later run cannot use. The count of runs stays in `evidence.eld`, not in
+   the skill's text, where it would go stale. The header counts the holes,
+   the `suspected` ones, and the `unknown` values left as written.
 6. **The person's decisions.** A saved block matches an offered template
-   when it is the template with any holes' values put back. Each hole left
-   records `hole`, each value put back `keep`, by function and argument
-   position, in `roles.eld` beside the skill; later drafts use these before
-   the origin.
+   when it is the template with any holes' values put back. For a function
+   named with the package's prefix, each hole left records `hole` and each
+   value put back `keep`, by argument position, in `roles.eld` beside the
+   skill; later drafts use these before the origin. Generic functions such
+   as `list` or `equal` record nothing: one decision would spread to every
+   use of them.
 7. **Evidence.** `evidence.eld` beside the skill maps a template to the ids
    of the results it ran as. A later `/learn` adds the runs of templates
    already in the skill; saving adds those of the templates kept.
@@ -93,9 +97,11 @@ the person's choice over a new module.
   trace and stays as written.
 - Not built: declining an `interface.eld` entry for a `write` form with an
   unclear target, since `/learn` does not draft `interface.eld` yet.
+- The run's context is its latest `user` entry: after the person types
+  "继续", the values of the original request fall to `unknown`.
 - A value the model reformatted (`Feb` for `2`) is not matched and stays as
   written: safe, but it merges less.
-- `superchat-learn.el` went from 216 to about 540 lines; its cap from 250 to
+- `superchat-learn.el` went from 216 to 554 lines; its cap from 250 to
   560, and the product's total cap from 6,000 to 6,300 lines, the person's
   choice to raise caps rather than restructure. `spec/L5-interface.md`'s
   ceiling went from 4420 to 4880 words.

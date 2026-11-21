@@ -383,8 +383,9 @@ package from those templates, their holes with values and origins, and
 their results' first lines: a frontmatter of `name` and `description`, then
 a `## ` title, one line and the template in an `elisp` block per form worth
 keeping. Every block that is not one of the templates is replaced by a
-line saying a form was left out, and under each kept one a line says in
-how many runs it ran and where each hole came from; `version:` from the library's header (`lm-version`), or
+line saying a form was left out, and under each kept one with holes a
+line says where each came from: the request, or the code of the call whose
+result it was read from; `version:` from the library's header (`lm-version`), or
 Emacs's for a library of its own, follows `name:`. The skill's name is
 PREFIX without a trailing dash, and a reply with no frontmatter is said
 and not shown. The draft shows in `*superchat: learn PREFIX*`, its header line
@@ -406,8 +407,8 @@ package's version differs from the skill's `version:`, both versions.
 and adds to `rejected.eld` each template the draft showed that no saved
 block matches, so a form the person deletes is not drafted again. A saved
 block matches a template when it is the template with any of its holes'
-values put back: each hole left records `hole`, each value put back `keep`,
-in `roles.eld`; the runs of matched templates go to `evidence.eld`.
+values put back: for a function named with PREFIX, each hole left records
+`hole` and each value put back `keep`, in `roles.eld`; the runs of matched templates go to `evidence.eld`.
 
 ## superchat-views.el
 

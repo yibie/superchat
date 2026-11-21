@@ -11,7 +11,7 @@
     (should (= (nth 1 checked) 1))
     (should (equal (nth 2 checked) (list group)))
     (should (string-match-p "^name: pkg\nversion: 2.3\n" (car checked)))
-    (should (string-match-p "```elisp\n(pkg-get 1)\n```\nRan in 2 runs\\." (car checked)))
+    (should (string-match-p "```elisp\n(pkg-get 1)\n```\n## Made up" (car checked)))
     (should-not (string-match-p "pkg-invented" (car checked)))
     (should (string-match-p "not code that ran" (car checked)))))
 
@@ -39,6 +39,7 @@
     (let ((tpl (superchat-learn--template "(superchat-test-learn-chat 4815162342)" ctx)))
       (should (equal (plist-get tpl :text) "(superchat-test-learn-chat CHAT-ID)"))
       (should (equal (plist-get (car (plist-get tpl :holes)) :class) '(copied . 7))))
+    (should-not (superchat-learn--producer 999999))
     ;; A bound value is named by the argument it reaches.
     (should (equal (plist-get (superchat-learn--template
                                "(let ((y 2027)) (calendar-last-day-of-month 2 y))" ctx)
@@ -190,10 +191,10 @@
           (list '(:text "---\nname: calendar\ndescription: Dates.\n---\n## Last day\nThe last day of a month.\n```elisp\n(calendar-last-day-of-month 2 YEAR)\n```\n"))
         (superchat-learn "calendar-")
         (superchat-test-wait (lambda () (get-buffer "*superchat: learn calendar-*")))
-        (should (string-match-p "Holes: YEAR, here 2027, in the request"
+        (should (string-match-p "Holes: YEAR, here 2027, from the request"
                                 (plist-get (car (last (plist-get (car superchat-test-requests) :messages))) :text))))
       (with-current-buffer "*superchat: learn calendar-*"
-        (should (string-match-p "Ran in 1 run\\. YEAR: in the request\\." (buffer-string)))
+        (should (string-match-p "```\nYEAR: from the request\\." (buffer-string)))
         (should (string-match-p "1 hole" (format "%s" header-line-format)))
         (superchat-learn-save))
       (should (string-match-p "(calendar-last-day-of-month 2 YEAR)"

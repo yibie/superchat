@@ -47,13 +47,26 @@
         ;; A library that comes with Emacs has the Emacs's version.
         (and (file-in-directory-p file lisp-directory) (concat "Emacs " emacs-version)))))
 
+(defun superchat-learn--producer (id)
+  "The call whose result is the entry ID, as code, or nil."
+  (let* ((tool (superchat-tape-get id)) (call (plist-get (plist-get tool :data) :call-id)))
+    (cl-loop for a in (reverse (superchat-tape-entries :tape (plist-get tool :tape) :kinds '(assistant)
+                                                       :before id :newest t :limit 5))
+             thereis (cl-loop for c in (plist-get (plist-get a :data) :calls)
+                              when (equal (plist-get c :id) call)
+                              return (or (plist-get (plist-get c :args) :code)
+                                         (format "%s %S" (plist-get c :name) (plist-get c :args)))))))
+
 (defun superchat-learn--from (hole)
-  "Where the value of HOLE came from, in words."
+  "Where the value of HOLE came from, in words a later run can use."
   (pcase (plist-get hole :class)
-    ('input "in the request")
-    ('decided "kept as a hole before")
+    ('input "from the request")
+    ('decided "a value given each time")
     ('suspected "in the request or in more than one result: check it")
-    (`(copied . ,id) (format "copied from the result of call #%s" id))))
+    (`(copied . ,id) (format "read from the result of %s"
+                             (truncate-string-to-width
+                              (replace-regexp-in-string "[ \t\n]+" " " (or (superchat-learn--producer id) "an earlier call"))
+                              70 nil nil "…")))))
 
 (defun superchat-learn--prompt (prefix groups adding)
   "The request that turns the templates GROUPS of package PREFIX into a
@@ -86,11 +99,10 @@ SKILL.md, or, when ADDING, into sections added to its SKILL.md."
               groups "\n")))
 
 (defun superchat-learn--evidence (group)
-  "The line under a recipe: how many runs it ran in, and its holes."
-  (let ((n (length (plist-get group :ids))))
-    (concat (format "Ran in %d run%s." n (if (= n 1) "" "s"))
-            (mapconcat (lambda (h) (format " %s: %s." (plist-get h :name) (superchat-learn--from h)))
-                       (plist-get group :holes) ""))))
+  "The line under a recipe: where each of its holes came from, or nil."
+  (and (plist-get group :holes)
+       (mapconcat (lambda (h) (format "%s: %s." (plist-get h :name) (superchat-learn--from h)))
+                  (plist-get group :holes) " ")))
 
 (defun superchat-learn--check (draft groups version)
   "DRAFT with each elisp block that is not one of the templates GROUPS left
@@ -111,7 +123,7 @@ Return (TEXT LEFT-OUT SHOWN), SHOWN the groups whose blocks it keeps."
                      (insert "(A form left out here: it is not code that ran.)"))
             (push g shown)
             (goto-char end)
-            (insert "\n" (superchat-learn--evidence g)))))
+            (when-let* ((line (superchat-learn--evidence g))) (insert "\n" line)))))
       (goto-char (point-min))
       (when (and version (re-search-forward "^name:.*$" nil t))
         (insert "\nversion: " version))
@@ -215,7 +227,8 @@ person put back is kept as a value in later drafts."
       (when kept (superchat-learn--add-evidence prefix kept))
       (let ((roles (superchat-learn--read-data (superchat-learn--beside prefix "roles.eld"))))
         (dolist (d decided)
-          (when-let* ((fn (plist-get (car d) :fn)))
+          (when-let* ((fn (plist-get (car d) :fn))
+                      ((string-prefix-p prefix (symbol-name fn))))
             (setf (alist-get (cons fn (plist-get (car d) :pos)) roles nil nil #'equal) (cdr d))))
         (when decided (superchat-learn--write-data (superchat-learn--beside prefix "roles.eld") roles)))
       (message "Saved %s%s" file
