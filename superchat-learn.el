@@ -19,6 +19,7 @@
 (require 'superchat-tape)
 (require 'superchat-view)
 (require 'superchat-agent)
+(require 'superchat-timer)
 
 (defvar-local superchat-learn--prefix nil "The package prefix of this draft.")
 (defvar-local superchat-learn--adding nil "Non-nil when this draft adds to a skill.")
@@ -271,11 +272,22 @@ as one of TAKEN; nil when a hole the entry would write through is unclear."
               :code (let ((print-escape-newlines t))
                       (prin1-to-string (low (if (cdr forms) (cons 'progn forms) (car forms))))))))))
 
+(defun superchat-learn--core (code)
+  "The key of entry CODE without `progn' and top-level `require' forms."
+  (let ((forms (superchat-learn--forms code)))
+    (when (and (null (cdr forms)) (eq (car-safe (car forms)) 'progn))
+      (setq forms (cdar forms)))
+    (superchat-learn--canon (seq-remove (lambda (f) (eq (car-safe f) 'require)) forms))))
+
+(defun superchat-learn--same-entry-p (a b)
+  "Non-nil when interface entries A and B run the same code but for `require's."
+  (equal (superchat-learn--core (plist-get a :code)) (superchat-learn--core (plist-get b :code))))
+
 (defun superchat-learn--add-interface (prefix entries)
   "Add ENTRIES to the interface.eld beside PREFIX's skill; their count."
   (let* ((file (superchat-learn--beside prefix "interface.eld"))
          (old (superchat-learn--read-data file))
-         (new (seq-remove (lambda (e) (seq-some (lambda (o) (equal (plist-get o :code) (plist-get e :code))) old))
+         (new (seq-remove (lambda (e) (seq-some (lambda (o) (superchat-learn--same-entry-p o e)) old))
                           entries)))
     (when new (superchat-learn--write-data file (append old new)))
     (length new)))
@@ -739,6 +751,110 @@ hole yet is of class `varies'."
                                        general (car runs)))))
                       (t runs))))
             (nreverse buckets)))))
+
+;;;; A review of the skills /learn made: what code can tell, and what the model suggests.
+
+(defun superchat-learn--skills ()
+  "The skill directories /learn writes to that hold a SKILL.md."
+  (let ((root (expand-file-name "skills/" superchat-directory)))
+    (and (file-directory-p root)
+         (seq-filter (lambda (d) (file-exists-p (expand-file-name "SKILL.md" d)))
+                     (directory-files root t "\\`[^.]")))))
+
+(defun superchat-learn--findings (dir)
+  "What a person should look at in the skill DIR, as (TEXT ACTION ARG) lists:
+interface entries that repeat one another, and a version that changed."
+  (let* ((entries (superchat-learn--read-data (expand-file-name "interface.eld" dir)))
+         (text (with-temp-buffer (insert-file-contents (expand-file-name "SKILL.md" dir)) (buffer-string)))
+         (was (superchat-learn--old-version text))
+         (now (superchat-learn--version (concat (file-name-nondirectory dir) "-")))
+         out)
+    (cl-loop for (e . rest) on entries
+             do (dolist (o rest)
+                  (when (superchat-learn--same-entry-p e o)
+                    (push (list (format "interface: %s does what %s does; d drops %s"
+                                        (plist-get o :name) (plist-get e :name) (plist-get o :name))
+                                'drop (plist-get o :name))
+                          out))))
+    (when (and was now (not (equal was now)))
+      (push (list (format "version %s → %s: recheck its recipes; RET opens SKILL.md" was now) 'open nil) out))
+    (nreverse (delete-dups out))))
+
+(defun superchat-learn-dream (_scope)
+  "The text dreaming sends when a skill needs a look, once a day, or nil."
+  (let ((n (seq-count #'superchat-learn--findings (superchat-learn--skills)))
+        (mark (expand-file-name "skills/.reviewed" superchat-directory))
+        (today (format-time-string "%F")))
+    (when (and (> n 0) (not (equal (superchat-learn--read-data mark) today)))
+      (superchat-learn--write-data mark today)
+      (format "%d skill(s) to review: /skills review" n))))
+
+(add-hook 'superchat-timer-dream-functions #'superchat-learn-dream)
+
+(defvar-keymap superchat-learn-review-mode-map
+  "d" #'superchat-learn-review-act "RET" #'superchat-learn-review-act
+  "g" #'superchat-learn-review "q" #'quit-window)
+
+(define-derived-mode superchat-learn-review-mode special-mode "Superchat-Review"
+  "What to look at in the skills /learn made; the keys act on the line at point.")
+
+(defun superchat-learn-review-act ()
+  "Drop the repeating interface entry, or open the SKILL.md, of this line."
+  (interactive)
+  (pcase-let ((`(,dir ,action ,arg) (get-text-property (point) 'superchat-learn-finding)))
+    (pcase action
+      ('drop (let ((file (expand-file-name "interface.eld" dir)))
+               (superchat-learn--write-data
+                file (seq-remove (lambda (e) (equal (plist-get e :name) arg)) (superchat-learn--read-data file)))
+               (message "Dropped %s from %s" arg (abbreviate-file-name file))
+               (superchat-learn-review)))
+      ('open (find-file (expand-file-name "SKILL.md" dir)))
+      (_ (user-error "Nothing to do on this line")))))
+
+;;;###autoload
+(defun superchat-learn-review ()
+  "Show what to look at in the skills /learn made.  Code finds repeated
+interface entries and changed versions; a model with no tools suggests recipes
+that overlap, which the person merges by hand or leaves."
+  (interactive)
+  (let ((skills (superchat-learn--skills)) (buf (get-buffer-create "*superchat: skills review*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (superchat-learn-review-mode)
+        (setq header-line-format " d drop the entry   RET act on the line   g refresh   q quit")
+        (unless skills (insert "No skill made by /learn.\n"))
+        (dolist (dir skills)
+          (insert (propertize (file-name-nondirectory dir) 'face 'bold) "\n")
+          (let ((found (superchat-learn--findings dir)))
+            (unless found (insert "  nothing found by code\n"))
+            (dolist (f found)
+              (insert (propertize (concat "  " (car f)) 'superchat-learn-finding (cons dir (cdr f))) "\n"))))
+        (when skills (insert "\nSuggested by the model, to check:\n  asking...\n")))
+      (goto-char (point-min)))
+    (pop-to-buffer buf)
+    (when skills
+      (superchat-run
+       (superchat-tape-new-name)
+       (concat "Below are skills, each a SKILL.md of Emacs Lisp recipes. List recipes that do the same "
+               "thing or overlap enough to merge into one, one line each: the skill, the two section "
+               "titles, and why. Write `none` when there are none. Do not write code.\n\n"
+               (mapconcat (lambda (d) (with-temp-buffer (insert-file-contents (expand-file-name "SKILL.md" d))
+                                                        (buffer-string)))
+                          skills "\n\n"))
+       :ephemeral t :tools 'none
+       :on-done (lambda (run)
+                  (when (buffer-live-p buf)
+                    (with-current-buffer buf
+                      (let ((inhibit-read-only t))
+                        (goto-char (point-max))
+                        (when (search-backward "  asking...\n" nil t)
+                          (replace-match
+                           (concat (replace-regexp-in-string
+                                    "^" "  " (string-trim (or (plist-get run :text)
+                                                              (format "failed: %s" (plist-get run :error)))))
+                                   "\n")
+                           t t))))))))))
 
 (provide 'superchat-learn)
 ;;; superchat-learn.el ends here

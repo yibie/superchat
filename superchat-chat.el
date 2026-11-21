@@ -923,6 +923,9 @@ this scope's `timelines' view with `completing-read'."
                                       (superchat-llm-model-ids)))))
 (superchat-command-define "learn" #'superchat-learn
                           "prefix. Draft the skill of a package from cited code that ran.")
+(superchat-command-define "skills" (lambda (&rest _) (superchat-learn-review))
+                          "review. Show what to look at in the skills /learn made."
+                          (lambda (words) (unless words '(("review" . "")))))
 (superchat-command-define "help" #'superchat-chat--help "List the commands.")
 
 (provide 'superchat-chat)

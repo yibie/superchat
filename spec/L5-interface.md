@@ -420,8 +420,18 @@ first PREFIX function's name without PREFIX; its doc is the section's
 heading and where each hole comes from. Its class is `read` when it calls
 only functions Emacs marks side-effect-free or pure, those named `-p`, and
 those of `superchat-learn-read-functions`, else `write`; a `write` entry
-with a `suspected` or `varies` hole is not made. The person changes a
-class in that file.
+with a `suspected` or `varies` hole is not made, nor one whose code, without
+`progn` and top-level `require` forms, is that of an entry there. The
+person changes a class in that file.
+
+`/skills review` (`superchat-learn-review`) shows, for each skill /learn
+made, what code finds: interface entries that repeat one another (`d`
+drops the later) and a package version that changed since the skill's
+`version:` (`RET` opens its SKILL.md); then a model with no tools lists
+recipes that overlap, which the person merges by hand or leaves. Nothing
+changes without a key. `superchat-learn-dream`, on
+`superchat-timer-dream-functions`, returns `N skill(s) to review: /skills
+review` when code finds something, at most once a day.
 
 ## superchat-views.el
 

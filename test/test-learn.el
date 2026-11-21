@@ -265,3 +265,41 @@
   ;; Different functions are different shapes.
   (should-not (equal (superchat-learn--shape (superchat-learn--forms "(number-to-string 42)"))
                      (superchat-learn--shape (superchat-learn--forms "(string-to-number \"42\")")))))
+
+(ert-deftest superchat-learn-an-entry-that-only-adds-a-require-is-not-added ()
+  (superchat-test-with-tape
+    (let ((superchat-directory (file-name-as-directory superchat-test--made)))
+      (should (= 1 (superchat-learn--add-interface
+                    "cal-" (list (list :name "leap" :code "(calendar-leap-year-p year)")))))
+      (should (= 0 (superchat-learn--add-interface
+                    "cal-" (list (list :name "leap_2" :code "(progn (require 'calendar) (calendar-leap-year-p year))")))))
+      (should (= 1 (length (superchat-learn--read-data (superchat-learn--beside "cal-" "interface.eld"))))))))
+
+(ert-deftest superchat-learn-review-finds-repeats-and-dreaming-says-so-once-a-day ()
+  (superchat-test-with-tape
+    (let* ((superchat-directory (file-name-as-directory superchat-test--made))
+           (dir (expand-file-name "skills/cal/" superchat-directory)))
+      (make-directory dir t)
+      (with-temp-file (expand-file-name "SKILL.md" dir) (insert "---\nname: cal\n---\n"))
+      (should-not (superchat-learn-dream "/p/"))
+      (superchat-learn--write-data
+       (expand-file-name "interface.eld" dir)
+       '((:name "leap" :code "(calendar-leap-year-p year)")
+         (:name "leap_2" :code "(progn (require 'calendar) (calendar-leap-year-p year))")
+         (:name "day" :code "(calendar-day-name date)")))
+      (should (equal (mapcar #'cdr (superchat-learn--findings dir)) '((drop "leap_2"))))
+      (should (equal (superchat-learn-dream "/p/") "1 skill(s) to review: /skills review"))
+      (should-not (superchat-learn-dream "/q/"))
+      (superchat-test-script (list '(:text "none"))
+        (superchat-learn-review)
+        (with-current-buffer "*superchat: skills review*"
+          (superchat-test-wait (lambda () (not (string-search "asking..." (buffer-string)))))
+          (should (string-search "  none" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "leap_2 does what leap does")
+          (superchat-learn-review-act)
+          (should (string-search "nothing found by code" (buffer-string)))))
+      (should (equal (mapcar (lambda (e) (plist-get e :name))
+                             (superchat-learn--read-data (expand-file-name "interface.eld" dir)))
+                     '("leap" "day"))))))
+
