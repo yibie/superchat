@@ -619,6 +619,55 @@ tool `echo', and no chat buffers left behind."
           (let ((last-command-event ?/)) (insert "/") (run-hooks 'post-self-insert-hook))
           (should (= asked 1)))))))
 
+(defun superchat-test-chat--set-input (text)
+  "Make TEXT the input of the current chat buffer, point at its end."
+  (let ((inhibit-read-only t))
+    (delete-region superchat-chat--input (point-max))
+    (goto-char (point-max))
+    (insert text)))
+
+(ert-deftest superchat-chat-completes-command-arguments ()
+  (superchat-test-chat--with
+    (let ((superchat-llm-provider "deepseek"))
+      (with-current-buffer (superchat-chat-open "t1")
+        (goto-char (point-max))
+        (insert "/level a")
+        (let ((capf (superchat-chat--complete)))
+          (should (equal (buffer-substring (nth 0 capf) (nth 1 capf)) "a"))
+          (should (equal (all-completions "a" (nth 2 capf)) '("ask" "auto"))))
+        (superchat-test-chat--set-input "/model ")
+        (let ((capf (superchat-chat--complete)))
+          (should (member "deepseek-flash" (all-completions "" (nth 2 capf))))
+          (should (string-match-p "1M.*\\$0\\.3.*image"
+                                  (funcall (plist-get (nthcdr 3 capf) :annotation-function)
+                                           "deepseek-flash"))))
+        (superchat-test-chat--set-input "@")
+        (let ((capf (superchat-chat--complete)))
+          ;; Both ids start deepseek-, and the text is not extended to it.
+          (should (equal (try-completion "" (nth 2 capf)) "")))
+        (superchat-test-chat--set-input "/level ask ")
+        (should-not (all-completions "" (nth 2 (superchat-chat--complete))))
+        (superchat-test-chat--set-input "/help ")
+        (should-not (superchat-chat--complete))))))
+
+(ert-deftest superchat-chat-styles-the-start-of-the-input ()
+  (superchat-test-chat--with
+    (let ((superchat-llm-provider "deepseek"))
+      (with-current-buffer (superchat-chat-open "t1")
+        (dolist (case '(("/help me" . superchat-chat-command)
+                        ("/nosuch x" . superchat-chat-unknown-command)
+                        ("@deepseek-flash hi" . superchat-chat-model)
+                        ("@nobody hi" . nil)
+                        ("plain /help" . nil)))
+          (superchat-test-chat--set-input (car case))
+          (font-lock-ensure)
+          (let ((face (get-text-property (1+ superchat-chat--input) 'face)))
+            (should (eq (cdr case)
+                        (seq-find (lambda (f) (memq f '(superchat-chat-command
+                                                        superchat-chat-unknown-command
+                                                        superchat-chat-model)))
+                                  (ensure-list face))))))))))
+
 (ert-deftest superchat-chat-recent-tape-ignores-ephemeral ()
   (superchat-test-chat--with
     (let ((p (expand-file-name "p/" superchat-test-chat--dir))

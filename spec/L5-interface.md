@@ -158,8 +158,11 @@ derived from `org-mode`.
   runs with that model for this request only and sends the rest; any other
   `@` is sent as written. At the start of the input,
   `completion-at-point` offers the commands, each with its line of help,
-  after `/`, and the model ids after `@`; typing that first `/` or `@`
-  calls it.
+  after `/`, and the model ids after `@`, each noted with its window,
+  input cost and `image`; typing that first `/` or `@` calls it. A known
+  command there shows in `superchat-chat-command`, an unknown one in
+  `superchat-chat-unknown-command`, a model's `@` in
+  `superchat-chat-model`.
 - `(superchat-chat-recent-tape SCOPE)` → the name of the most recently active
   timeline of SCOPE (the one with the largest entry id) that is not
   ephemeral, or nil. A timeline is ephemeral when one of its `user` entries
@@ -174,9 +177,12 @@ derived from `org-mode`.
   empty query, the `notes` view.
 - `superchat-chat-send` runs a line that starts with `/` as a command.
 - A line starting with `/` is a command. `(superchat-command-define NAME
-  FUNCTION DOC)` and `(superchat-command-remove NAME)`: NAME is written
-  without the slash; FUNCTION is called with the rest of the line, in the
-  chat buffer. DOC begins with the synopsis of the argument when there is
+  FUNCTION DOC &optional ARGS)` and `(superchat-command-remove NAME)`: NAME
+  is written without the slash; FUNCTION is called with the rest of the
+  line, in the chat buffer. ARGS, called with the words typed after the
+  command, returns the next word's choices, strings or `(STRING . NOTE)`
+  pairs, which `completion-at-point` offers: `/level`, `/model`,
+  `/resume`, `/timers` and `/dream` give them. DOC begins with the synopsis of the argument when there is
   one (`[name]`, `query.`); `/help` shows each as `/NAME DOC`. A name that is
   no command is not sent: the message says `Unknown command /NAME; /help
   lists them` and the input stays.

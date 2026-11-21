@@ -49,16 +49,25 @@ chat was opened from: a file's directory, a `dired' buffer's, or nil.")
 (defvar superchat-chat--commands nil
   "Alist of (NAME FUNCTION . DOC), NAME without the slash.")
 
-(defun superchat-command-define (name function doc)
+(defvar superchat-chat--command-args nil
+  "Alist of (NAME . ARGS): the argument completions of a command.")
+
+(defun superchat-command-define (name function doc &optional args)
   "Define slash command NAME (a string without the slash).
-FUNCTION is called with the rest of the line, in the chat buffer."
+FUNCTION is called with the rest of the line, in the chat buffer.  ARGS,
+when given, is called in the chat buffer with the words already typed
+after the command and returns the next word's choices: strings, or
+\(STRING . NOTE) pairs."
   (setq superchat-chat--commands
         (append (assoc-delete-all name superchat-chat--commands)
-                (list (cons name (cons function doc))))))
+                (list (cons name (cons function doc))))
+        superchat-chat--command-args
+        (cons (cons name args) (assoc-delete-all name superchat-chat--command-args))))
 
 (defun superchat-command-remove (name)
   "Remove slash command NAME."
-  (setq superchat-chat--commands (assoc-delete-all name superchat-chat--commands)))
+  (setq superchat-chat--commands (assoc-delete-all name superchat-chat--commands)
+        superchat-chat--command-args (assoc-delete-all name superchat-chat--command-args)))
 
 (defun superchat-chat--scope ()
   "The scope of this buffer.  A chat buffer has its timeline's, else the one it
@@ -214,22 +223,86 @@ With no provider set there are no model ids, and the error says what to set."
        (member (match-string 1 text) (superchat-llm-model-ids))
        (cons (match-string 1 text) (substring text (match-end 0)))))
 
+(defun superchat-chat--table (choices)
+  "A completion of CHOICES, strings or (STRING . NOTE) pairs, as capf data."
+  (let ((notes (mapcar (lambda (c) (if (consp c) c (cons c nil))) choices)))
+    (list (lambda (string pred action)
+            ;; Never extend the text on its own: the list is to choose from.
+            (let ((result (complete-with-action action (mapcar #'car notes) string pred)))
+              (if (and (null action) (stringp result)) string result)))
+          :exclusive 'no
+          :annotation-function
+          (lambda (s) (when-let* ((note (cdr (assoc s notes)))) (concat "  " note))))))
+
+(defun superchat-chat--model-note (id)
+  "The window, input cost and image support of model ID, as one line."
+  (let ((info (superchat-llm-model-info id)))
+    (string-join
+     (delq nil (list (when-let* ((c (plist-get info :context)))
+                       (if (>= c 1000000) (format "%gM" (/ c 1e6)) (format "%dk" (/ c 1000))))
+                     (when-let* ((cost (plist-get info :input-cost))) (format "$%g" cost))
+                     (and (plist-get info :images) "image")))
+     "  ")))
+
 (defun superchat-chat--complete ()
-  "Complete a slash command after a / that starts the input, a model id after an @."
+  "Complete at the start of the input: a command after /, its arguments
+after the command, a model id after @."
   (when (>= (point) superchat-chat--input)
-    (save-excursion
-      (let ((end (point)))
+    (let ((end (point)))
+      (save-excursion
         (goto-char superchat-chat--input)
-        (when (and (looking-at "\\([/@]\\)\\([^ \t\n]*\\)") (<= end (match-end 0)))
-          (if (equal (match-string 1) "/")
-              (list (match-beginning 2) (match-end 2)
-                    (mapcar #'car superchat-chat--commands)
-                    :exclusive 'no
-                    :annotation-function
-                    (lambda (name) (concat "  " (cddr (assoc name superchat-chat--commands)))))
-            (list (match-beginning 2) (match-end 2)
-                  (completion-table-dynamic (lambda (_) (superchat-llm-model-ids)))
-                  :exclusive 'no)))))))
+        (cond
+         ((and (looking-at "/\\([^ \t\n]*\\)") (<= end (match-end 0)))
+          (cons (match-beginning 1)
+                (cons (match-end 1)
+                      (superchat-chat--table
+                       (mapcar (lambda (c) (cons (car c) (cddr c))) superchat-chat--commands)))))
+         ((looking-at "/\\([^ \t\n]+\\)[ \t]+")
+          (when-let* ((args (cdr (assoc (match-string 1) superchat-chat--command-args)))
+                      (words (split-string (buffer-substring (match-end 0) end) "[ \t]+"))
+                      (start (- end (length (car (last words))))))
+            (cons start (cons end (superchat-chat--table (funcall args (butlast words)))))))
+         ((and (looking-at "@\\([^ \t\n]*\\)") (<= end (match-end 0)))
+          (cons (match-beginning 1)
+                (cons (match-end 1)
+                      (superchat-chat--table
+                       (mapcar (lambda (id) (cons id (superchat-chat--model-note id)))
+                               (superchat-llm-model-ids)))))))))))
+
+(defface superchat-chat-command '((t :inherit font-lock-keyword-face :weight bold))
+  "A known slash command at the start of the input."
+  :group 'superchat)
+(defface superchat-chat-unknown-command '((t :inherit warning))
+  "A slash command at the start of the input that no command is called."
+  :group 'superchat)
+(defface superchat-chat-model '((t :inherit font-lock-constant-face :weight bold))
+  "An @MODEL at the start of the input that names a model."
+  :group 'superchat)
+
+(defvar-local superchat-chat--input-face nil "The face of the last input match.")
+
+(defun superchat-chat--input-match (limit)
+  "Font-lock matcher: the command or @MODEL that starts the input, before LIMIT.
+The face it gets is left in `superchat-chat--input-face'."
+  (let ((start (marker-position superchat-chat--input)) face bounds)
+    (when (and start (<= (point) start) (< start limit))
+      (goto-char start)
+      (cond
+       ((looking-at "/\\([^ \t\n]+\\)")
+        (setq bounds (list (match-beginning 0) (match-end 0))
+              face (if (assoc (match-string 1) superchat-chat--commands)
+                       'superchat-chat-command
+                     'superchat-chat-unknown-command)))
+       ((looking-at "@\\([^ \t\n]+\\)")
+        (setq bounds (list (match-beginning 0) (match-end 0)))
+        (let ((id (match-string 1)))
+          (when (member id (condition-case nil (superchat-llm-model-ids) (user-error nil)))
+            (setq face 'superchat-chat-model)))))
+      (goto-char limit)
+      (when face
+        (set-match-data bounds)
+        (setq superchat-chat--input-face face)
+        t))))
 
 (defun superchat-chat--complete-now ()
   "After a / or @ typed as the input's first character, offer completions."
@@ -599,7 +672,8 @@ separator, so the prompt and the input never fold."
   ;; input stays at the bottom instead of jumping to the middle.
   (setq-local scroll-conservatively 101 scroll-margin 0)
   (font-lock-add-keywords
-   nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t)))
+   nil '((superchat-turn-cells (0 (get-text-property (match-beginning 0) 'superchat-turn-cell) t))
+         (superchat-chat--input-match (0 superchat-chat--input-face prepend)))
    'append)
   (add-hook 'kill-buffer-hook #'superchat-chat--stop nil t)
   (add-hook 'completion-at-point-functions #'superchat-chat--complete nil t)
@@ -817,7 +891,12 @@ this scope's `timelines' view with `completing-read'."
          (superchat-chat--switch (superchat-chat-open (superchat-tape-new-name) (superchat-chat--scope))))
  "Start a new timeline in this scope, in this window.")
 (superchat-command-define "resume" #'superchat-chat--resume
-                          "[name] Open another timeline of this scope, or the one named NAME.")
+                          "[name] Open another timeline of this scope, or the one named NAME."
+                          (lambda (words)
+                            (unless words
+                              (mapcar (lambda (e) (cons (plist-get e :tape)
+                                                        (superchat-chat--line (plist-get e :text) 50)))
+                                      (superchat-view 'timelines :scope (superchat-chat--scope))))))
 (superchat-command-define "fork" #'superchat-chat--fork
                           "Fork at the entry at point and open the new timeline.")
 (superchat-command-define "handoff" #'superchat-chat--handoff
@@ -842,7 +921,14 @@ this scope's `timelines' view with `completing-read'."
             (if (string-match "\\`cancel +\\([0-9]+\\)\\'" arg)
                 (message "%s" (superchat-timer-cancel (string-to-number (match-string 1 arg))))
               (superchat-timers)))
- "[cancel ID] Show the timers that may still fire (c cancels, RET opens), or cancel one.")
+ "[cancel ID] Show the timers that may still fire (c cancels, RET opens), or cancel one."
+ (lambda (words)
+   (cond ((null words) '("cancel"))
+         ((equal words '("cancel"))
+          (mapcar (lambda (timer)
+                    (cons (number-to-string (plist-get timer :id))
+                          (superchat-chat--line (plist-get timer :text) 50)))
+                  (superchat-timer-list))))))
 (superchat-command-define
  "dream" (lambda (arg)
            (let ((scope (superchat-chat--scope)))
@@ -850,13 +936,19 @@ this scope's `timelines' view with `completing-read'."
                  (progn (superchat-timer-dream scope t) (message "Dreaming is off for %s" scope))
                (message "Dreaming is on for %s: timer %d, each day at 03:00" scope
                         (plist-get (superchat-timer-dream scope) :id)))))
- "[off] Review this scope's notes each night while nobody watches, or stop.")
+ "[off] Review this scope's notes each night while nobody watches, or stop."
+ (lambda (words) (unless words '("off"))))
 (superchat-command-define "note" #'superchat-chat--note
                           "text. Keep TEXT as a note, as the note tool does.")
 (superchat-command-define "level" #'superchat-chat--level
-                          "[read-only|ask|auto] Show or set the permission level.")
+                          "[read-only|ask|auto] Show or set the permission level."
+                          (lambda (words) (unless words '("read-only" "ask" "auto"))))
 (superchat-command-define "model" #'superchat-chat--model-command
-                          "[name] Show or set the model of this buffer.")
+                          "[name] Show or set the model of this buffer."
+                          (lambda (words)
+                            (unless words
+                              (mapcar (lambda (id) (cons id (superchat-chat--model-note id)))
+                                      (superchat-llm-model-ids)))))
 (superchat-command-define "help" #'superchat-chat--help "List the commands.")
 
 (provide 'superchat-chat)

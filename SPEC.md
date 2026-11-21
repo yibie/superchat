@@ -58,7 +58,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L3 | `superchat-guard.el` | 120 | a run going round: its signals and the one redirect |
 | L4 | `superchat-inbox.el` | 200 | the inbox, its worker, `send` |
 | L4 | `superchat-timer.el` | 220 | the timers, their tools, dreaming |
-| L5 | `superchat-chat.el` | 900 | the chat buffer and slash commands |
+| L5 | `superchat-chat.el` | 1000 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
