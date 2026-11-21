@@ -73,6 +73,7 @@
       (let* ((old (add "t" 'tool "before the run"))
              (user (add "t" 'user "go"))
              (read (add "t" 'tool "the text" '(:call-id "c1" :name "read")))
+             (read2 (add "t" 'tool "more text" '(:call-id "c4" :name "read")))
              (bad (add "t" 'tool "Error: no" '(:call-id "c2" :name "eval_elisp" :error t)))
              (other (add "u" 'tool "elsewhere" '(:call-id "c3" :name "read")))
              (answer (add "t" 'assistant "x")))
@@ -84,4 +85,10 @@
         (should (equal (superchat-request-sources "Plain.\nSources are many." "t" user)
                        (list "Plain.\nSources are many." nil 0)))
         (should (equal (superchat-request-sources (format "Sources: #%d" read) "t" user)
-                       (list "" (list read) 0)))))))
+                       (list "" (list read) 0)))
+        ;; Two good ids drop nothing.
+        (should (equal (superchat-request-sources (format "Seen.\nSources: #%d, #%d" read read2) "t" user)
+                       (list "Seen." (list read read2) 0)))
+        ;; Text before the line, and an id twice, drop nothing that is good.
+        (should (equal (superchat-request-sources (format "Seen.  \nSources: #%d, #%d" read read) "t" user)
+                       (list "Seen." (list read) 0)))))))

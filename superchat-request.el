@@ -196,16 +196,19 @@ Return (TEXT REFS DROPPED): TEXT without that line, REFS the ids naming
 other ids the line named."
   (if (not (string-match "\\(?:\\`\\|\n\\)[ \t]*Sources?:[ \t]*\\(#?[0-9][#0-9, \t]*\\)[ \t\n]*\\'" text))
       (list text nil 0)
-    (let ((kept (string-trim-right (substring text 0 (match-beginning 0))))
-          (ids (mapcar #'string-to-number (split-string (match-string 1 text) "[#, \t]+" t)))
-          refs)
-      (dolist (id (delete-dups ids))
+    ;; Take both out of the match first: splitting and trimming search too.
+    (let* ((line (match-string 1 text))
+           (kept (substring text 0 (match-beginning 0)))
+           (ids (delete-dups (mapcar #'string-to-number (split-string line "[#, \t]+" t))))
+           refs)
+      (setq kept (string-trim-right kept))
+      (dolist (id ids)
         (let ((entry (superchat-tape-get id)))
           (when (and entry (equal (plist-get entry :tape) tape) (> id after)
                      (eq (plist-get entry :kind) 'tool)
                      (not (plist-get (plist-get entry :data) :error)))
             (push id refs))))
-      (list kept (nreverse refs) (- (length (delete-dups ids)) (length refs))))))
+      (list kept (reverse refs) (- (length ids) (length refs))))))
 
 (provide 'superchat-request)
 ;;; superchat-request.el ends here
