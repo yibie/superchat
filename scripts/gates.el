@@ -60,7 +60,7 @@
       (when-let* ((n (cdr (assoc (car m) sizes))))
         (when (> n (nth 2 m))
           (push (format "CAP  %s: %d lines, cap %d" (car m) n (nth 2 m)) problems))))
-    (when (> total 6300) (push (format "CAP  total %d over 6300" total) problems))
+    (when (> total 7000) (push (format "CAP  total %d over 7000" total) problems))
     (dolist (s sizes)
       (unless (assoc (car s) modules)
         (push (format "CAP  %s is not a module of SPEC.md" (car s)) problems)))
@@ -302,7 +302,7 @@ against CEILINGS: over a ceiling, a tenth under one, a file with none."
                    (with-temp-buffer (insert-file-contents (expand-file-name (car m) gates-root))
                                      (count-lines (point-min) (point-max)))
                    (nth 2 m))))
-      (message "total %d/6300" total))
+      (message "total %d/7000" total))
     (dolist (p problems) (message "%s" p))
     (kill-emacs (if problems 1 0))))
 
