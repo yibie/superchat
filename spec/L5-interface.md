@@ -378,7 +378,10 @@ before the origin. A template is kept only when reading it and putting
 each hole's value back gives the form exactly; otherwise the form is kept
 as it is. Forms compare with their `let`, `let*` and `lambda` variables
 renamed in binding order; equal templates are one, with their results'
-ids. A run, `:ephemeral t :tools none`, is asked for a SKILL.md of the
+ids. Templates of one shape (equal once literals, quoted lists of literals
+and upper-case symbols are blanked) are generalised into one: a position
+whose values differ between runs is a hole, of class `varies` when no run
+had a hole there, kept only when every run's code comes back from it. A run, `:ephemeral t :tools none`, is asked for a SKILL.md of the
 package from those templates, their holes with values and origins, and
 their results' first lines: a frontmatter of `name` and `description`, then
 a `## ` title, one line and the template in an `elisp` block per form worth
@@ -393,11 +396,11 @@ naming the keys and how many forms were left out: `C-c C-c` writes it to
 `superchat-directory`/`skills/NAME/SKILL.md`, asking before it
 replaces a file; `C-c C-k` drops it. The model writes no file.
 
-The header line also gives the holes, how many are `suspected`, and how
+The header line also gives the holes, how many are `suspected` or `varies`, and how
 many `unknown` values stay as written.
 
-A skill that exists grows. Templates equal to a block of its SKILL.md, or
-to one in the list `rejected.eld` beside it, are skipped, their runs added
+A skill that exists grows. Templates of the shape of a block of its
+SKILL.md, or of one in the list `rejected.eld` beside it, are skipped, their runs added
 to `evidence.eld` beside it, an alist from a template to its results' ids; with none left this
 is said and nothing is drafted. Otherwise the run is asked for the new
 sections only, with no frontmatter, a reply with no `## ` is not shown,

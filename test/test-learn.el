@@ -202,3 +202,27 @@
       (should (= (length (cdar (superchat-learn--read-data (expand-file-name "evidence.eld" dir)))) 1))
       (should (equal (superchat-learn--read-data (expand-file-name "roles.eld" dir))
                      '(((calendar-last-day-of-month . 1) . hole)))))))
+
+(ert-deftest superchat-learn-runs-of-one-shape-share-a-template ()
+  (require 'calendar)
+  (let* ((ctx (lambda (req) (cons req nil)))
+         (run (lambda (code req)
+                (append (list :code (superchat-learn--forms code))
+                        (superchat-learn--template code (funcall ctx req)))))
+         (a (funcall run "(calendar-last-day-of-month 2 2028)" "February 2028"))
+         (b (funcall run "(calendar-last-day-of-month 4 2025)" "April 2025"))
+         (general (superchat-learn--generalize (list a b))))
+    (should (equal (superchat-learn--shape (plist-get a :forms)) (superchat-learn--shape (plist-get b :forms))))
+    (should (equal (plist-get general :forms) '((calendar-last-day-of-month MONTH YEAR))))
+    (should (equal (mapcar (lambda (h) (list (plist-get h :name) (plist-get h :class))) (plist-get general :holes))
+                   '(("MONTH" varies) ("YEAR" input)))))
+  ;; A hole nested in a part equal in every run still gets each run's value.
+  (let* ((run (lambda (code req) (append (list :code (superchat-learn--forms code))
+                                         (superchat-learn--template code (cons req nil)))))
+         (general (superchat-learn--generalize
+                   (list (funcall run "(list (car (directory-files \"/tmp/reports\")) \"org\")" "/tmp/reports")
+                         (funcall run "(list (car (directory-files \"/tmp/logs\")) \"md\")" "/tmp/logs")))))
+    (should (equal (plist-get general :forms) '((list (car (directory-files DIRECTORY)) OBJECTS)))))
+  ;; Different functions are different shapes.
+  (should-not (equal (superchat-learn--shape (superchat-learn--forms "(number-to-string 42)"))
+                     (superchat-learn--shape (superchat-learn--forms "(string-to-number \"42\")")))))

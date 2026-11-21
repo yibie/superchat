@@ -63,6 +63,7 @@
     ('input "from the request")
     ('decided "a value given each time")
     ('suspected "in the request or in more than one result: check it")
+    ('varies "differs between runs: check it")
     (`(copied . ,id) (format "read from the result of %s"
                              (truncate-string-to-width
                               (replace-regexp-in-string "[ \t\n]+" " " (or (superchat-learn--producer id) "an earlier call"))
@@ -256,7 +257,7 @@ skipped as in it or dropped; VERSION is the package's."
       (let ((inhibit-read-only t)) (erase-buffer) (insert text))
       (superchat-learn-mode)
       (let* ((holes (apply #'append (mapcar (lambda (g) (plist-get g :holes)) shown)))
-             (check (seq-count (lambda (h) (eq (plist-get h :class) 'suspected)) holes))
+             (check (seq-count (lambda (h) (memq (plist-get h :class) '(suspected varies))) holes))
              (written (apply #'+ (mapcar (lambda (g) (length (plist-get g :unknown))) shown))))
         (setq superchat-learn--prefix prefix
               superchat-learn--adding adding
@@ -503,13 +504,14 @@ are holes."
          (file (superchat-learn--file prefix))
          (old (and (file-exists-p file)
                    (with-temp-buffer (insert-file-contents file) (buffer-string))))
-         (in-skill (mapcar #'superchat-learn--key (and old (superchat-learn--blocks old))))
-         (known (append in-skill (mapcar #'superchat-learn--key (superchat-learn--rejected prefix))))
+         (shape (lambda (code) (superchat-learn--shape (superchat-learn--forms code))))
+         (in-skill (mapcar shape (and old (superchat-learn--blocks old))))
+         (known (append in-skill (mapcar shape (superchat-learn--rejected prefix))))
          (groups (let ((superchat-learn--roles
                         (superchat-learn--read-data (superchat-learn--beside prefix "roles.eld"))))
                    (superchat-learn--groups all)))
-         (fresh (seq-remove (lambda (g) (member (plist-get g :key) known)) groups))
-         (again (seq-filter (lambda (g) (member (plist-get g :key) in-skill)) groups))
+         (fresh (seq-remove (lambda (g) (member (plist-get g :shape) known)) groups))
+         (again (seq-filter (lambda (g) (member (plist-get g :shape) in-skill)) groups))
          (version (superchat-learn--version prefix)))
     (when again (superchat-learn--add-evidence prefix again))
     (if (not fresh)
@@ -533,22 +535,103 @@ are holes."
                                                 (and old (superchat-learn--old-version old))
                                                 (- (length groups) (length fresh))))))))))
 
+(defun superchat-learn--blank (x)
+  "X with each literal, quoted list of literals and UPPER-CASE symbol as `_'."
+  (let ((case-fold-search nil))
+    (cond ((or (numberp x) (stringp x)) '_)
+          ((and (symbolp x) x (not (eq x t)) (string-match-p "\\`[A-Z][A-Z0-9-]*\\'" (symbol-name x))) '_)
+          ((and (eq (car-safe x) 'quote) (proper-list-p (cadr x)) (cadr x)
+                (seq-every-p (lambda (e) (or (numberp e) (stringp e))) (cadr x)))
+           '_)
+          ((consp x) (cons (superchat-learn--blank (car x)) (superchat-learn--blank (cdr x))))
+          (t x))))
+
+(defun superchat-learn--shape (forms)
+  "The shape of FORMS: equal for runs of one procedure with other values."
+  (superchat-learn--canon (superchat-learn--blank forms)))
+
+(defun superchat-learn--holds-p (x holes)
+  "Non-nil when X is, or holds, a symbol naming a hole of HOLES."
+  (if (consp x)
+      (or (superchat-learn--holds-p (car x) holes) (superchat-learn--holds-p (cdr x) holes))
+    (superchat-learn--named x holes)))
+
+(defun superchat-learn--generalize (instances)
+  "One template for INSTANCES of one shape, each (:forms TEMPLATE :holes HOLES
+:code FORMS): (:forms TEMPLATE :holes HOLES), or nil when a run's code does not
+come back from it.  A position whose values differ is a hole; one that had no
+hole yet is of class `varies'."
+  (let (holes (all (mapcar (lambda (_) nil) instances)))
+    (cl-labels
+        ((hole (xs name fn pos)
+           (let* ((found (cl-mapcar (lambda (x i) (superchat-learn--named x (plist-get i :holes)))
+                                    xs instances))
+                  (old (seq-find #'identity found))
+                  (base (or (plist-get old :name) name "VALUE"))
+                  (hname base) (n 1))
+             ;; A hole the runs already had, met again: its values are recorded.
+             (when (and old (seq-find (lambda (h) (equal (plist-get h :name) base)) holes))
+               (cl-return-from hole (intern base)))
+             (while (seq-find (lambda (h) (equal (plist-get h :name) hname)) holes)
+               (setq hname (format "%s%d" base (cl-incf n))))
+             (setq all (cl-mapcar (lambda (x h vals) (cons (cons hname (if h (plist-get h :value) x)) vals))
+                                  xs found all))
+             (push (list :name hname :class (or (plist-get old :class) 'varies)
+                         :value (if (car found) (plist-get (car found) :value) (car xs))
+                         :fn (or (plist-get old :fn) fn) :pos (or (plist-get old :pos) pos))
+                   holes)
+             (intern hname)))
+         (walk (xs name fn pos)
+           (let ((x (car xs)))
+             (cond ((and (seq-every-p (lambda (y) (equal y x)) xs)
+                         (not (cl-some (lambda (y i) (superchat-learn--holds-p y (plist-get i :holes)))
+                                       xs instances)))
+                    x)
+                   ((or (seq-some #'atom xs) (seq-some (lambda (y) (eq (car-safe y) 'quote)) xs))
+                    (hole xs name fn pos))
+                   ((and (symbolp (car x)) (proper-list-p x))
+                    (cons (car x) (cl-loop for i from 0 below (length (cdr x))
+                                           collect (walk (mapcar (lambda (y) (nth (1+ i) y)) xs)
+                                                         (superchat-learn--argname (car x) i) (car x) i))))
+                   (t (cons (walk (mapcar #'car xs) name fn pos) (walk (mapcar #'cdr xs) name fn pos)))))))
+      (let ((template (walk (mapcar (lambda (i) (plist-get i :forms)) instances) nil nil nil)))
+        (when (cl-every (lambda (i vals)
+                          (equal (superchat-learn--fill
+                                  template (mapcar (lambda (v) (list :name (car v) :value (cdr v))) vals))
+                                 (plist-get i :code)))
+                        instances all)
+          (list :forms template :holes (nreverse holes)))))))
+
 (defun superchat-learn--groups (recipes)
-  "RECIPES as templates, one per key, newest first; each a plist :key :text
-:forms :holes :unknown :ids :returned."
-  (let (groups)
+  "RECIPES as templates, newest first; each a plist :key :shape :text :forms
+:holes :unknown :ids :returned.  Runs of one shape share one template."
+  (let (buckets)
     (dolist (e recipes)
-      (let* ((tpl (superchat-learn--template (plist-get (plist-get e :data) :code)
-                                             (superchat-learn--context e)))
-             (key (superchat-learn--key (plist-get tpl :text)))
-             (g (seq-find (lambda (g) (equal (plist-get g :key) key)) groups)))
-        (if g
-            (plist-put g :ids (append (plist-get g :ids) (list (plist-get e :id))))
-          (push (append (list :key key :ids (list (plist-get e :id))
-                              :returned (car (split-string (plist-get e :text) "\n")))
-                        tpl)
-                groups))))
-    (nreverse groups)))
+      (let* ((code (plist-get (plist-get e :data) :code))
+             (tpl (superchat-learn--template code (superchat-learn--context e)))
+             (shape (superchat-learn--shape (plist-get tpl :forms)))
+             (one (append (list :key (superchat-learn--key (plist-get tpl :text)) :shape shape
+                                :code (superchat-learn--forms code) :ids (list (plist-get e :id))
+                                :returned (car (split-string (plist-get e :text) "\n")))
+                          tpl))
+             (bucket (assoc shape buckets)))
+        (if bucket (setcdr bucket (append (cdr bucket) (list one))) (push (list shape one) buckets))))
+    (apply #'append
+           (mapcar
+            (lambda (bucket)
+              (let* ((runs (cdr bucket))
+                     (ids (apply #'append (mapcar (lambda (r) (plist-get r :ids)) runs)))
+                     (texts (delete-dups (mapcar (lambda (r) (plist-get r :key)) runs)))
+                     (general (and (cdr texts) (superchat-learn--generalize runs))))
+                (cond ((not (cdr texts)) (list (plist-put (car runs) :ids ids)))
+                      (general
+                       (let ((text (string-trim (mapconcat #'pp-to-string (plist-get general :forms) "\n"))))
+                         (list (append (list :key (superchat-learn--key text) :text text :ids ids
+                                             :forms (superchat-learn--forms text)
+                                             :unknown (apply #'append (mapcar (lambda (r) (plist-get r :unknown)) runs)))
+                                       general (car runs)))))
+                      (t runs))))
+            (nreverse buckets)))))
 
 (provide 'superchat-learn)
 ;;; superchat-learn.el ends here

@@ -61,7 +61,15 @@ the person's choice over a new module.
    skill; later drafts use these before the origin. Generic functions such
    as `list` or `equal` record nothing: one decision would spread to every
    use of them.
-7. **Evidence.** `evidence.eld` beside the skill maps a template to the ids
+7. **Runs of one shape.** Templates equal once literals, quoted lists of
+   literals and upper-case symbols are blanked (locals renamed) are runs of
+   one procedure. They are generalised into one template: where the runs'
+   values differ the position is a hole, `varies` when no run had a hole
+   there, marked for the person like `suspected`. It is kept only when every
+   run's code comes back from it. A skill's existing recipes are matched by
+   this shape too, so a later run of a recipe adds evidence and is not
+   drafted again.
+8. **Evidence.** `evidence.eld` beside the skill maps a template to the ids
    of the results it ran as. A later `/learn` adds the runs of templates
    already in the skill; saving adds those of the templates kept.
 
@@ -82,6 +90,9 @@ the person's choice over a new module.
   producer. Not taken: the paper's own ablation shows it is where its
   accuracy comes from, not the exclusion test; here an ambiguous value is
   `suspected` and counted in the header for the person.
+- Have the model mark which literals came from the request, which it can
+  see when the request rewords a value ("二月" for `2`). Not taken for now:
+  its marks cannot be checked; it can come later, marked for the person.
 - Compare macro-expanded forms. Not taken: expansion runs the person's
   macros, and in the experiment renaming locals did all the merging.
 
@@ -92,16 +103,26 @@ the person's choice over a new module.
   and 311 too small; 105 forms got holes. Requests are mostly in Chinese
   and code in English, so `input` is rare and most holes are values read
   from earlier results.
-- `(calendar-last-day-of-month 2 2027)` after a question on February 2027
-  gives `(calendar-last-day-of-month 2 YEAR)`: the month 2 is too small to
-  trace and stays as written.
+- A synthetic set written by Pi with DeepSeek (48 cases, each value labelled
+  with its true role, traps included) scored: of 53 values made holes by
+  origin, 49 were right (92%); every `copied` hole named the right step;
+  half the values from the request were found (32 of 63), the rest reworded
+  in the request ("March 15, 2026, 12:00" for `"2026-03-15 12:00"`) or too
+  small. Generalising runs of one shape then merged all 12 repeated
+  procedures into one template each (4 before it), with no two procedures
+  merged; its 8 `varies` holes were all true inputs.
+- A single run of `(calendar-last-day-of-month 2 2027)` after a question on
+  February 2027 gives `(calendar-last-day-of-month 2 YEAR)`: the month 2 is
+  too small to trace; a second run with another month makes it `MONTH`.
+- `(load "/tmp/a.el")` and `(load "/tmp/b.el")` in two runs become one
+  template with a `varies` hole: the person decides, and `keep` is recorded.
 - Not built: declining an `interface.eld` entry for a `write` form with an
   unclear target, since `/learn` does not draft `interface.eld` yet.
 - The run's context is its latest `user` entry: after the person types
   "继续", the values of the original request fall to `unknown`.
 - A value the model reformatted (`Feb` for `2`) is not matched and stays as
   written: safe, but it merges less.
-- `superchat-learn.el` went from 216 to 554 lines; its cap from 250 to
-  560, and the product's total cap from 6,000 to 6,300 lines, the person's
+- `superchat-learn.el` went from 216 to 637 lines; its cap from 250 to
+  680, and the product's total cap from 6,000 to 6,300 lines, the person's
   choice to raise caps rather than restructure. `spec/L5-interface.md`'s
   ceiling went from 4420 to 4880 words.
