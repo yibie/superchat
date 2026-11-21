@@ -178,7 +178,7 @@ There is no "session" object and no "memory" store. A session is the
 | kind | `:text` | `:data` |
 |---|---|---|
 | `user` | what the user said | `(:origin PLIST :ephemeral BOOL :steer BOOL :directory PATH)`, all optional; STEER t for text steered to a run; DIRECTORY, on a first `user` entry outside a project, the working directory: ORIGIN `(:buffer NAME :file PATH :mode NAME :line N)`, the mode's name a string; EPHEMERAL t for one question another package asked, not a conversation |
-| `assistant` | the model's text, may be empty | `(:model STRING :calls LIST)`, each call `(:id STRING :name STRING :args PLIST)` |
+| `assistant` | the model's text, may be empty | `(:model STRING :calls LIST)`, each call `(:id STRING :name STRING :args PLIST)`; `:refs-dropped N` when its `Sources:` line named N entries it may not rest on |
 | `tool` | the tool's result as text | `(:call-id STRING :name STRING :error BOOL)` |
 | `anchor` | the summary | `(:name STRING :summary STRING :next STRING)` |
 | `note` | the conclusion | `(:title STRING)` |
@@ -186,7 +186,9 @@ There is no "session" object and no "memory" store. A session is the
 | `inbox` | a message for the next run of its timeline | `(:source STRING :id STRING :unattended BOOL)` |
 | `event` | one line a person can read | `(:type STRING ...)`; types: `permission`, `cancelled`, `error`, `level`, `retry`, `interrupted`, `question`, `answer`, `sent`, `continued`, `paused`, `redirect`, `look-back`, `verdict`, `load` |
 
-A correction is a new entry whose `:refs` names the entry it corrects.
+`:refs` names the entries an entry rests on: an anchor's summarised
+entries, a note's sources, an answer's tool results. A note among a
+note's sources is corrected by it.
 
 The arguments of a call are a plist with keyword keys, `(:path "a.el" :count 5)`,
 everywhere: from `superchat-llm-request`, on the Tape, and into a tool's
