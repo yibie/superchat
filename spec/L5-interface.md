@@ -364,12 +364,27 @@ Plugins live in another repository. This one ships none.
 
 A skill drafted from code that ran. `(superchat-learn PREFIX)`, a
 command: the L1 view `recipes` of PREFIX, from every scope; with none, a
-`user-error`. A run, `:ephemeral t :tools none`, is asked for a SKILL.md
-of the package from those forms and their results' first lines: a
-frontmatter of `name` and `description`, then a `## ` title, one line and
-the form in an `elisp` block per form worth keeping. Every block whose
-code, trimmed, is not one of the forms is replaced by a line saying a form
-was left out; `version:` from the library's header (`lm-version`), or
+`user-error`. Each form becomes a template. Its run is the latest `user`
+entry before the result and the `tool` entries between; each number of at
+least 100 and string of at least 3 characters in the form is classed by
+where it occurs: `input`, in the user text and no earlier result;
+`copied #ID`, in exactly one earlier result and not the user text;
+`suspected`, in more than one of those; `unknown`, in none. Those three
+become holes, named in upper case by the argument they reach (the callee's
+arglist, or the use of a `let` or `setq` variable), one hole per value; a
+quoted list of literals is one hole. `beside` the skill, `roles.eld` holds
+the person's decisions by function and argument position, and they come
+before the origin. A template is kept only when reading it and putting
+each hole's value back gives the form exactly; otherwise the form is kept
+as it is. Forms compare with their `let`, `let*` and `lambda` variables
+renamed in binding order; equal templates are one, with their results'
+ids. A run, `:ephemeral t :tools none`, is asked for a SKILL.md of the
+package from those templates, their holes with values and origins, and
+their results' first lines: a frontmatter of `name` and `description`, then
+a `## ` title, one line and the template in an `elisp` block per form worth
+keeping. Every block that is not one of the templates is replaced by a
+line saying a form was left out, and under each kept one a line says in
+how many runs it ran and where each hole came from; `version:` from the library's header (`lm-version`), or
 Emacs's for a library of its own, follows `name:`. The skill's name is
 PREFIX without a trailing dash, and a reply with no frontmatter is said
 and not shown. The draft shows in `*superchat: learn PREFIX*`, its header line
@@ -377,15 +392,22 @@ naming the keys and how many forms were left out: `C-c C-c` writes it to
 `superchat-directory`/`skills/NAME/SKILL.md`, asking before it
 replaces a file; `C-c C-k` drops it. The model writes no file.
 
-A skill that exists grows. Forms whose code is a block of its SKILL.md, or
-is in the list `rejected.eld` beside it, are skipped; with none left this
+The header line also gives the holes, how many are `suspected`, and how
+many `unknown` values stay as written.
+
+A skill that exists grows. Templates equal to a block of its SKILL.md, or
+to one in the list `rejected.eld` beside it, are skipped, their runs added
+to `evidence.eld` beside it, an alist from a template to its results' ids; with none left this
 is said and nothing is drafted. Otherwise the run is asked for the new
 sections only, with no frontmatter, a reply with no `## ` is not shown,
 and the header line says how many forms were skipped and, when the
 package's version differs from the skill's `version:`, both versions.
 `C-c C-c` then adds the sections at the file's end, sets its `version:`,
-and adds to `rejected.eld` each block the draft showed that is no longer
-in it, so a form the person deletes is not drafted again.
+and adds to `rejected.eld` each template the draft showed that no saved
+block matches, so a form the person deletes is not drafted again. A saved
+block matches a template when it is the template with any of its holes'
+values put back: each hole left records `hole`, each value put back `keep`,
+in `roles.eld`; the runs of matched templates go to `evidence.eld`.
 
 ## superchat-views.el
 

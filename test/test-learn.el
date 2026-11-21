@@ -6,12 +6,75 @@
 
 (ert-deftest superchat-learn-check-keeps-only-code-that-ran ()
   (let* ((draft "---\nname: pkg\ndescription: Use for pkg.\n---\n## Get\nGets one.\n```elisp\n(pkg-get 1)\n```\n## Made up\nNot run.\n```elisp\n(pkg-invented)\n```\n")
-         (checked (superchat-learn--check draft '("(pkg-get 1)") "2.3")))
-    (should (= (cdr checked) 1))
+         (group (list :key (superchat-learn--key "(pkg-get 1)") :ids '(5 9)))
+         (checked (superchat-learn--check draft (list group) "2.3")))
+    (should (= (nth 1 checked) 1))
+    (should (equal (nth 2 checked) (list group)))
     (should (string-match-p "^name: pkg\nversion: 2.3\n" (car checked)))
-    (should (string-match-p "```elisp\n(pkg-get 1)\n```" (car checked)))
+    (should (string-match-p "```elisp\n(pkg-get 1)\n```\nRan in 2 runs\\." (car checked)))
     (should-not (string-match-p "pkg-invented" (car checked)))
     (should (string-match-p "not code that ran" (car checked)))))
+
+(defun superchat-test-learn-chat (chat-id)
+  "A function whose argument is named CHAT-ID."
+  chat-id)
+
+(ert-deftest superchat-learn-a-literal-is-classed-by-where-it-came-from ()
+  (let ((ctx (cons "What day ends February 2027? Load emacs-lisp please."
+                   (list '(:id 7 :text "chats: 4815162342 Work") '(:id 8 :text "also emacs-lisp")))))
+    (should (eq (superchat-learn--origin 2027 ctx) 'input))
+    (should (equal (superchat-learn--origin 4815162342 ctx) '(copied . 7)))
+    (should (eq (superchat-learn--origin "emacs-lisp" ctx) 'suspected))
+    (should (eq (superchat-learn--origin "/tmp/verify.el" ctx) 'unknown))
+    (should (eq (superchat-learn--origin 2 ctx) 'short))
+    ;; A number is a whole token: 202 is not in 2027.
+    (should (eq (superchat-learn--origin 202 ctx) 'unknown))))
+
+(ert-deftest superchat-learn-a-template-holes-inputs-and-copies-only ()
+  (require 'calendar)
+  (let ((ctx (cons "What day ends February 2027?" (list '(:id 7 :text "chats: 4815162342 Work")))))
+    (let ((tpl (superchat-learn--template "(calendar-last-day-of-month 2 2027)" ctx)))
+      (should (equal (plist-get tpl :text) "(calendar-last-day-of-month 2 YEAR)"))
+      (should (eq (plist-get (car (plist-get tpl :holes)) :class) 'input)))
+    (let ((tpl (superchat-learn--template "(superchat-test-learn-chat 4815162342)" ctx)))
+      (should (equal (plist-get tpl :text) "(superchat-test-learn-chat CHAT-ID)"))
+      (should (equal (plist-get (car (plist-get tpl :holes)) :class) '(copied . 7))))
+    ;; A bound value is named by the argument it reaches.
+    (should (equal (plist-get (superchat-learn--template
+                               "(let ((y 2027)) (calendar-last-day-of-month 2 y))" ctx)
+                              :text)
+                   "(let ((y YEAR)) (calendar-last-day-of-month 2 y))"))
+    ;; A value that came from nowhere stays as written.
+    (let ((tpl (superchat-learn--template "(load \"/tmp/verify.el\" nil t)" ctx)))
+      (should (equal (plist-get tpl :text) "(load \"/tmp/verify.el\" nil t)"))
+      (should-not (plist-get tpl :holes))
+      (should (equal (plist-get tpl :unknown) '("/tmp/verify.el"))))
+    ;; A template that does not give the code back is not kept: here the code
+    ;; already holds a symbol named like the hole.
+    (let ((tpl (superchat-learn--template "(calendar-last-day-of-month YEAR 2027)" ctx)))
+      (should-not (plist-get tpl :holes))
+      (should (equal (plist-get tpl :text) "(calendar-last-day-of-month YEAR 2027)")))))
+
+(ert-deftest superchat-learn-compares-with-locals-renamed ()
+  (should (equal (superchat-learn--key "(let ((d 1)) (f d))") (superchat-learn--key "(let ((day 1))\n  (f day))")))
+  (should-not (equal (superchat-learn--key "(f 1)") (superchat-learn--key "(f 2)"))))
+
+(ert-deftest superchat-learn-records-the-persons-decision-on-a-hole ()
+  (let* ((ctx (cons "February 2027" nil))
+         (tpl (superchat-learn--template "(calendar-last-day-of-month 2 2027)" ctx))
+         (holes (plist-get tpl :holes)))
+    (should (equal (superchat-learn--decide (superchat-learn--forms "(calendar-last-day-of-month 2 YEAR)")
+                                            (plist-get tpl :forms) holes)
+                   (list (cons (car holes) 'hole))))
+    (should (equal (superchat-learn--decide (superchat-learn--forms "(calendar-last-day-of-month 2 2027)")
+                                            (plist-get tpl :forms) holes)
+                   (list (cons (car holes) 'keep))))
+    (should (eq (superchat-learn--decide (superchat-learn--forms "(calendar-last-day-of-month 3 YEAR)")
+                                         (plist-get tpl :forms) holes)
+                :fail))
+    ;; A kept value is used in later drafts in place of the origin.
+    (let ((superchat-learn--roles '(((calendar-last-day-of-month . 1) . keep))))
+      (should-not (plist-get (superchat-learn--template "(calendar-last-day-of-month 2 2027)" ctx) :holes)))))
 
 (ert-deftest superchat-learn-drafts-from-cited-code-and-saves-on-request ()
   (superchat-test-with-tape
@@ -111,3 +174,30 @@
         (cl-letf (((symbol-function 'message) (lambda (f &rest a) (setq said (apply #'format f a)))))
           (superchat-learn "pkg-"))
         (should (string-match-p "No new form" said))))))
+
+(ert-deftest superchat-learn-drafts-a-template-and-keeps-its-evidence ()
+  (require 'calendar)
+  (superchat-test-with-tape
+    (let* ((superchat-directory (file-name-as-directory superchat-test--made))
+           (dir (expand-file-name "skills/calendar/" superchat-directory)))
+      (superchat-tape-append "t" 'user "What is the last day of February 2027?" :scope "s")
+      (superchat-tape-append "t" 'assistant ""
+                             :data (list :calls (list (list :id "c1" :name "eval_elisp"
+                                                            :args (list :code "(calendar-last-day-of-month 2 2027)")))))
+      (let ((tool (plist-get (superchat-tape-append "t" 'tool "28" :data '(:call-id "c1" :name "eval_elisp")) :id)))
+        (superchat-tape-append "t" 'assistant "28" :refs (list tool)))
+      (superchat-test-script
+          (list '(:text "---\nname: calendar\ndescription: Dates.\n---\n## Last day\nThe last day of a month.\n```elisp\n(calendar-last-day-of-month 2 YEAR)\n```\n"))
+        (superchat-learn "calendar-")
+        (superchat-test-wait (lambda () (get-buffer "*superchat: learn calendar-*")))
+        (should (string-match-p "Holes: YEAR, here 2027, in the request"
+                                (plist-get (car (last (plist-get (car superchat-test-requests) :messages))) :text))))
+      (with-current-buffer "*superchat: learn calendar-*"
+        (should (string-match-p "Ran in 1 run\\. YEAR: in the request\\." (buffer-string)))
+        (should (string-match-p "1 hole" (format "%s" header-line-format)))
+        (superchat-learn-save))
+      (should (string-match-p "(calendar-last-day-of-month 2 YEAR)"
+                              (with-temp-buffer (insert-file-contents (expand-file-name "SKILL.md" dir)) (buffer-string))))
+      (should (= (length (cdar (superchat-learn--read-data (expand-file-name "evidence.eld" dir)))) 1))
+      (should (equal (superchat-learn--read-data (expand-file-name "roles.eld" dir))
+                     '(((calendar-last-day-of-month . 1) . hole)))))))
