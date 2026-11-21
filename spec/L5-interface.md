@@ -377,6 +377,16 @@ naming the keys and how many forms were left out: `C-c C-c` writes it to
 `superchat-directory`/`skills/NAME/SKILL.md`, asking before it
 replaces a file; `C-c C-k` drops it. The model writes no file.
 
+A skill that exists grows. Forms whose code is a block of its SKILL.md, or
+is in the list `rejected.eld` beside it, are skipped; with none left this
+is said and nothing is drafted. Otherwise the run is asked for the new
+sections only, with no frontmatter, a reply with no `## ` is not shown,
+and the header line says how many forms were skipped and, when the
+package's version differs from the skill's `version:`, both versions.
+`C-c C-c` then adds the sections at the file's end, sets its `version:`,
+and adds to `rejected.eld` each block the draft showed that is no longer
+in it, so a form the person deletes is not drafted again.
+
 ## superchat-views.el
 
 Read-only buffers that browse the Tape; their keys act on the line at
