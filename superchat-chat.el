@@ -22,6 +22,7 @@
 (require 'superchat-plugin)
 (require 'superchat-turn)
 (require 'superchat-views)
+(require 'superchat-learn)
 
 (defvar-local superchat-chat--tape nil "Name of this buffer's timeline.")
 (defvar-local superchat-chat--model nil "Model for this buffer, or nil for the default.")
@@ -920,6 +921,8 @@ this scope's `timelines' view with `completing-read'."
                             (unless words
                               (mapcar (lambda (id) (cons id (superchat-chat--model-note id)))
                                       (superchat-llm-model-ids)))))
+(superchat-command-define "learn" #'superchat-learn
+                          "prefix. Draft the skill of a package from cited code that ran.")
 (superchat-command-define "help" #'superchat-chat--help "List the commands.")
 
 (provide 'superchat-chat)

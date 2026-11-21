@@ -200,6 +200,7 @@ Built-in commands, and no others:
 | `/note text` | append TEXT as a `note` entry to this timeline, as `superchat-note` does |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model for this buffer; a name that is not one of `(superchat-llm-model-ids)`, the model ids of the provider, is a `user-error` that lists them |
+| `/learn prefix` | `superchat-learn` of PREFIX |
 | `/help` | list commands |
 
 `/new`, `/resume` and `/fork` show the conversation they open in the window
@@ -358,6 +359,21 @@ Plugins live in another repository. This one ships none.
   buffer of the line's timeline. On a question's line, `y`, `n` or `a`
   (`superchat-messages-answer`) sends that key from its chat buffer, draws
   the buffer again and shows the chat buffer.
+
+## superchat-learn.el
+
+A skill drafted from code that ran. `(superchat-learn PREFIX)`, a
+command: the L1 view `recipes` of PREFIX, from every scope; with none, a
+`user-error`. A run, `:ephemeral t :tools none`, is asked for a SKILL.md
+of the package from those forms and their results' first lines: a
+frontmatter of `name` and `description`, then a `## ` title, one line and
+the form in an `elisp` block per form worth keeping. Every block whose
+code, trimmed, is not one of the forms is replaced by a line saying a form
+was left out; `version:` from the library's header (`lm-version`) follows
+`name:`. The draft shows in `*superchat: learn PREFIX*`, its header line
+naming the keys and how many forms were left out: `C-c C-c` writes it to
+`superchat-directory`/`skills/PREFIX/SKILL.md`, asking before it
+replaces a file; `C-c C-k` drops it. The model writes no file.
 
 ## superchat-views.el
 
