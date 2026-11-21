@@ -20,6 +20,13 @@ hundreds of them.
 - `superchat-tools.el`'s cap goes from 900 to 1000: tool definitions stay
   in that one file, as the person asked.
 
+- Names with `--` are internal by convention, but telega keeps its whole
+  TDLib API there (`telega--sendMessage`, 570 such functions): an overview
+  counts them and says to give `PREFIX--` to list them. A live run that
+  could not see them made 25 `describe` and 10 `eval_elisp` calls.
+- Starting a tool's process no longer sends end of input to one that has
+  already exited, a race that failed the grep test now and then.
+
 ## Alternatives considered
 
 - List every function of a package at once. Not taken: telega alone has

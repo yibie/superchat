@@ -1260,7 +1260,9 @@ DIR is no project: the .git is in a subdirectory."
           (should (string-match-p "36 public functions start with sctdesc, 36 of them commands" text))
           (should (string-match-p "^sctdesc-chat-  25$" text))
           (should (string-match-p "^sctdesc-msg-  10$" text))
-          (should-not (string-match-p "private" text)))
+          (should-not (string-match-p "private" text))
+          (should (string-match-p "^1 more are named sctdesc--\\.\\.\\., internal" text)))
+        (should (string-match-p "sctdesc--private\\*" (superchat-test-tools--ok "describe" :prefix "sctdesc--")))
         ;; A group small enough is listed with each first line.
         (let ((text (superchat-test-tools--ok "describe" :prefix "sctdesc-msg-")))
           (should (string-match-p "^sctdesc-msg-f3\\*  Doc of sctdesc-msg-f3\\.$" text))

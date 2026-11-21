@@ -484,7 +484,8 @@ not called.  The buffer is killed always."
                                (end (process-exit-status process))))))
         (error (kill-buffer buffer) (signal (car err) (cdr err))))
       (setq timer (run-at-time seconds nil (lambda () (end 'timeout))))
-      (process-send-eof process)
+      ;; A fast command may have exited already; it needs no end of input.
+      (when (process-live-p process) (process-send-eof process))
       (lambda () (end nil)))))
 
 (defun superchat-tools--glob (glob)
@@ -866,11 +867,15 @@ When something is cut the whole output is in FILE, made here if needed."
 
 (defun superchat-tools--describe-prefix (prefix query)
   "The public functions named PREFIX..., grouped, or those QUERY matches."
-  (let (names)
+  (let ((inner (string-search "--" prefix)) (hidden 0) names)
+    ;; Names with -- are internal by convention, yet some packages keep
+    ;; their API there (telega--sendMessage): they are counted, and listed
+    ;; when the prefix itself has --.
     (mapatoms (lambda (s) (let ((n (symbol-name s)))
-                            (when (and (fboundp s) (string-prefix-p prefix n)
-                                       (not (string-search "--" n)))
-                              (push s names)))))
+                            (when (and (fboundp s) (string-prefix-p prefix n))
+                              (if (or inner (not (string-search "--" n)))
+                                  (push s names)
+                                (cl-incf hidden))))))
     (setq names (sort names (lambda (a b) (string< a b))))
     (when query
       (let ((case-fold-search t) (re (regexp-quote query)))
@@ -892,6 +897,10 @@ When something is cut the whole output is in FILE, made here if needed."
                     (1+ (alist-get group groups 0 nil #'equal)))))
           (concat (format "%d public functions start with %s, %d of them commands.\n"
                           (length names) prefix (seq-count #'commandp names))
+                  (if (> hidden 0)
+                      (format "%d more are named %s--..., internal by convention; give that prefix to list them.\n"
+                              hidden (string-remove-suffix "-" prefix))
+                    "")
                   (superchat-tools--fn-lines
                    (mapcar (lambda (g) (format "%s  %d" (car g) (cdr g)))
                            (sort groups (lambda (a b) (> (cdr a) (cdr b)))))
