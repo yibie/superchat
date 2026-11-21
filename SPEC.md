@@ -64,7 +64,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
 | L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 | L5 | `superchat-views.el` | 200 | the timers buffer and the entry lists, each with keys |
-| L5 | `superchat-learn.el` | 760 | a skill drafted from cited code that ran |
+| L5 | `superchat-learn.el` | 880 | a skill drafted from cited code that ran |
 
 Dependencies go one way only:
 
@@ -73,7 +73,7 @@ inline → chat
 messages → chat
 chat → agent, learn, plugin, recall, timer, turn, views
 views → timer, view
-learn → agent, tape, view
+learn → agent, tape, view, timer
 plugin → tools
 timer → inbox
 inbox → agent
@@ -116,8 +116,8 @@ points to require. A file requires nothing else, and
 | `spec/L1-memory.md` | 1170 words |
 | `spec/L2-capabilities.md` | 4700 words |
 | `spec/L3-agent.md` | 3540 words |
-| `spec/L4-background.md` | 690 words |
-| `spec/L5-interface.md` | 4880 words |
+| `spec/L4-background.md` | 740 words |
+| `spec/L5-interface.md` | 5120 words |
 
 ## Rules against overflow
 
