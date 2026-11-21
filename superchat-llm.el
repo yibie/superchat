@@ -117,6 +117,19 @@ the provider or model is unset or unknown: the request reports those."
                       (superchat-bridge-model-context-window m))))
         (and (numberp window) (> window 0) window)))))
 
+(defun superchat-llm-model-info (model)
+  "What MODEL of `superchat-llm-provider' offers, a plist, or nil when unknown.
+:context is its window in tokens, :input-cost US dollars per million input
+tokens, :images non-nil when it takes images; each is nil when unknown."
+  (superchat-llm--models t)
+  (when-let* (((stringp superchat-llm-provider))
+              (m (superchat-bridge-models-get-model
+                  (superchat-llm--models) superchat-llm-provider model)))
+    (let ((cost (superchat-bridge-model-cost m)))
+      (list :context (superchat-bridge-model-context-window m)
+            :input-cost (and cost (superchat-bridge-model-cost-rates-input cost))
+            :images (and (member "image" (superchat-bridge-model-input m)) t)))))
+
 (defun superchat-llm--now ()
   "Milliseconds since the epoch."
   (floor (* 1000 (float-time))))

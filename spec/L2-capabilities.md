@@ -83,6 +83,9 @@ requires `llm.el`.
   `user-error` says what to set when the provider is not set or not known,
   and names the entry of `superchat-llm-providers` whose function
   signalled.
+- `(superchat-llm-model-info MODEL)` → `(:context N :input-cost X :images
+  BOOL)` for MODEL of `superchat-llm-provider`, each nil when unknown; nil
+  when the model is unknown.
 - `(superchat-llm-context-window &optional MODEL)` → the context window, in
   tokens, of MODEL (default `superchat-llm-model`) of the provider, as the
   bridge's model data gives it; nil when the data has none, or when the

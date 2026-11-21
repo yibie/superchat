@@ -938,3 +938,13 @@ STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
                                 :type 'user-error)))
         (should (string-match-p id (cadr err)))
         (should-not (string-match-p "set  in\\|set  or" (cadr err)))))))
+
+(ert-deftest superchat-llm-model-info-from-the-data ()
+  (let ((superchat-llm-provider "deepseek"))
+    (let ((flash (superchat-llm-model-info "deepseek-flash"))
+          (pro (superchat-llm-model-info "deepseek-v4-pro")))
+      (should (equal (plist-get flash :context) 1000000))
+      (should (equal (plist-get flash :input-cost) 0.3))
+      (should (plist-get flash :images))
+      (should-not (plist-get pro :images)))
+    (should-not (superchat-llm-model-info "no-such-model"))))
