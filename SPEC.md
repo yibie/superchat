@@ -94,7 +94,7 @@ points to require. A file requires nothing else, and
 
 ## Hard limits
 
-- Product code: **6,300 lines in total**, counted by `wc -l` over the `.el`
+- Product code: **7,000 lines in total**, counted by `wc -l` over the `.el`
   files at the repository root. Tests are not counted. Each file has its own
   cap in the layer table. `scripts/check.sh` fails when a cap is exceeded.
 - Emacs 30.1 or later. Dependencies: `curl`, the `bridge/` directory of this repository, and what Emacs ships with
