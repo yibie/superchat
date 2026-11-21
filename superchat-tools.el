@@ -844,6 +844,94 @@ When something is cut the whole output is in FILE, made here if needed."
           (and file (format "Showing lines %d-%d of %d. Full output: %s"
                             (- total n -1) total total file)))))
 
+(defun superchat-tools--doc-line (symbol)
+  "The first line of SYMBOL's documentation, or empty."
+  (let ((doc (condition-case nil (documentation symbol t) (error nil))))
+    (if doc (car (split-string doc "\n")) "")))
+
+(defun superchat-tools--fn-line (symbol &optional keys)
+  "One line on function SYMBOL: its name, a * when a command, its keys, its doc."
+  (let ((keys (or keys (mapconcat #'key-description (where-is-internal symbol nil nil t) " "))))
+    (format "%s%s%s  %s" symbol (if (commandp symbol) "*" "")
+            (if (string-empty-p keys) "" (format " [%s]" keys))
+            (superchat-tools--doc-line symbol))))
+
+(defun superchat-tools--fn-lines (lines what)
+  "LINES about WHAT, at most 30, saying how many more there are."
+  (concat (format "%s: %d\n" what (length lines))
+          (string-join (seq-take lines 30) "\n")
+          (when (> (length lines) 30)
+            (format "\n… %d more; give a query or a longer prefix to narrow"
+                    (- (length lines) 30)))))
+
+(defun superchat-tools--describe-prefix (prefix query)
+  "The public functions named PREFIX..., grouped, or those QUERY matches."
+  (let (names)
+    (mapatoms (lambda (s) (let ((n (symbol-name s)))
+                            (when (and (fboundp s) (string-prefix-p prefix n)
+                                       (not (string-search "--" n)))
+                              (push s names)))))
+    (setq names (sort names (lambda (a b) (string< a b))))
+    (when query
+      (let ((case-fold-search t) (re (regexp-quote query)))
+        (setq names (seq-filter (lambda (s) (or (string-match-p re (symbol-name s))
+                                                (string-match-p re (superchat-tools--doc-line s))))
+                                names))))
+    (cond
+     ((null names) (format "No public function starts with %s%s." prefix
+                           (if query (format " and matches %s" query) "")))
+     ((or query (<= (length names) 30))
+      (superchat-tools--fn-lines (mapcar #'superchat-tools--fn-line names)
+                                (format "Functions of %s (* a command)" prefix)))
+     (t (let ((groups nil))
+          (dolist (s names)
+            (let* ((rest (substring (symbol-name s) (length prefix)))
+                   (cut (and (> (length rest) 1) (string-search "-" rest 1)))
+                   (group (concat prefix (if cut (substring rest 0 (1+ cut)) rest))))
+              (setf (alist-get group groups nil nil #'equal)
+                    (1+ (alist-get group groups 0 nil #'equal)))))
+          (concat (format "%d public functions start with %s, %d of them commands.\n"
+                          (length names) prefix (seq-count #'commandp names))
+                  (superchat-tools--fn-lines
+                   (mapcar (lambda (g) (format "%s  %d" (car g) (cdr g)))
+                           (sort groups (lambda (a b) (> (cdr a) (cdr b)))))
+                   "Groups (describe one as the prefix, or give a query)")))))))
+
+(defun superchat-tools--describe-buffer (name)
+  "The major mode of buffer NAME and the commands its local keymap binds."
+  (let ((buffer (or (get-buffer name) (error "No buffer named %s" name))) lines)
+    (with-current-buffer buffer
+      (when-let* ((map (current-local-map)))
+        (map-keymap (lambda (event binding)
+                      (when (and (symbolp binding) (commandp binding))
+                        (push (superchat-tools--fn-line binding (key-description (vector event)))
+                              lines)))
+                    map))
+      (concat (format "Buffer %s, in %s.\n" name major-mode)
+              (superchat-tools--fn-lines (sort lines #'string<) "Commands its keymap binds")))))
+
+(superchat-tool-define
+ "describe" :class 'read :deferred t
+ :description "Find what this Emacs can do, from its own documentation, before calling a function with eval_elisp: give a prefix (telega, telega-chatbuf-) for its public functions grouped, or with query those whose name or first doc line matches; a function for its arguments and documentation; or a buffer for its mode and the commands its keymap binds."
+ :args '((:name "prefix" :type string :description "Package or name prefix")
+         (:name "query" :type string :description "Words to match within the prefix")
+         (:name "function" :type string :description "A function's name")
+         (:name "buffer" :type string :description "A buffer's name"))
+ :function (lambda (args)
+             (let ((function (plist-get args :function)))
+               (cond
+                (function
+                 (let ((symbol (intern-soft function)))
+                   (unless (and symbol (fboundp symbol)) (error "No function named %s" function))
+                   (format "%S%s\n\n%s" (cons symbol (help-function-arglist symbol t))
+                           (if (commandp symbol) "  (a command)" "")
+                           (or (condition-case nil (documentation symbol) (error nil))
+                               "No documentation."))))
+                ((plist-get args :buffer) (superchat-tools--describe-buffer (plist-get args :buffer)))
+                ((plist-get args :prefix)
+                 (superchat-tools--describe-prefix (plist-get args :prefix) (plist-get args :query)))
+                (t (error "Give a prefix, a function or a buffer"))))))
+
 (superchat-tool-define
  "shell" :class 'exec :async t
  :description "Run a shell command in the project directory, with no input: for outside programs (build, tests, git). Returns the end of its output, at most 2000 lines or the character limit (the whole output is then saved to a file the notice names), and its exit status. Never use it to read, list or search files (cat, head, tail, sed -n, ls, find, grep): use read (offset and limit for a range of lines; a directory is listed), find and grep (glob, ignore_case, context), which the user can see and judge. Act on the running Emacs with eval_elisp."

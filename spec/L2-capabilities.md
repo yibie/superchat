@@ -249,6 +249,7 @@ Built-in tools, and no others:
 | `edit` | write | `path` or `buffer`, `old`, `new` | replace OLD by NEW and save, as Changing says |
 | `write` | write | `path`, `content` | CONTENT becomes the whole text of the file PATH, saved |
 | `eval_elisp` | exec | `code` | read every form in CODE, evaluate in order with `debug-on-error`, `debug-on-signal` and `debug-on-quit` nil, return what was printed to `*Messages*` meanwhile, then the value of each form printed without its strings' text properties, one line each in order, a newline inside a value written `\n`; an error is the call's result, never the debugger, which would hold the run until the person leaves it |
+| `describe` | read, deferred | `prefix`, `query`, `function` or `buffer`, each opt | what this Emacs can do, from its documentation: for PREFIX its public functions (no `--` in the name), listed when at most 30 or QUERY matches them by name or first doc line, else counted by the group of the next name part; for FUNCTION its arglist and documentation; for BUFFER its major mode and the commands its local keymap binds; a list of more than 30 shows 30 and says how many more; each function as its name, `*` when a command, its global keys and first doc line |
 | `shell` | exec | `command`, `timeout` opt | run through `shell-file-name` with no input, at most TIMEOUT seconds (default `superchat-shell-seconds`), return the end of the output and the exit status, as Running says; asynchronous |
 
 The descriptions of the tools state the division: files through `read`,

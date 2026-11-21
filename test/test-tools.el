@@ -1239,3 +1239,45 @@ DIR is no project: the .git is in a subdirectory."
         (should (plist-get (gethash "p" superchat-tools--registry) :deferred))
         (should-not (plist-get (gethash "q" superchat-tools--registry) :deferred)))
     (superchat-tool-remove "p") (superchat-tool-remove "q")))
+
+(defmacro superchat-test-tools--with-functions (names &rest body)
+  "Define each of NAMES as a function for BODY, then remove them."
+  (declare (indent 1))
+  `(unwind-protect
+       (progn (dolist (n ,names)
+                (defalias (intern n) (lambda () (interactive) nil)
+                  (format "Doc of %s.\nSecond line." n)))
+              ,@body)
+     (dolist (n ,names) (fmakunbound (intern n)) (unintern n obarray))))
+
+(ert-deftest superchat-tools-describe-groups-a-large-prefix ()
+  (let ((names (append (mapcar (lambda (i) (format "sctdesc-chat-f%d" i)) (number-sequence 1 25))
+                       (mapcar (lambda (i) (format "sctdesc-msg-f%d" i)) (number-sequence 1 10))
+                       '("sctdesc" "sctdesc--private"))))
+    (superchat-test-tools--with-functions names
+      (superchat-test-tools--in-scope
+        (let ((text (superchat-test-tools--ok "describe" :prefix "sctdesc")))
+          (should (string-match-p "36 public functions start with sctdesc, 36 of them commands" text))
+          (should (string-match-p "^sctdesc-chat-  25$" text))
+          (should (string-match-p "^sctdesc-msg-  10$" text))
+          (should-not (string-match-p "private" text)))
+        ;; A group small enough is listed with each first line.
+        (let ((text (superchat-test-tools--ok "describe" :prefix "sctdesc-msg-")))
+          (should (string-match-p "^sctdesc-msg-f3\\*  Doc of sctdesc-msg-f3\\.$" text))
+          (should-not (string-match-p "Second line" text)))
+        ;; A query narrows, and the list says how many more there are.
+        (should (string-match-p "f7\\*  Doc" (superchat-test-tools--ok "describe" :prefix "sctdesc" :query "f7")))
+        (should (string-match-p "… 5 more" (superchat-test-tools--ok "describe" :prefix "sctdesc" :query "-f")))))))
+
+(ert-deftest superchat-tools-describe-a-function-and-a-buffer ()
+  (superchat-test-tools--with-functions '("sctdesc-one")
+    (superchat-test-tools--in-scope
+      (should (string-match-p "\\`(sctdesc-one)  (a command)\n\nDoc of sctdesc-one\\.\nSecond line\\."
+                              (superchat-test-tools--ok "describe" :function "sctdesc-one")))
+      (should (string-match-p "No function named nosuch-fn"
+                              (superchat-test-tools--err "describe" :function "nosuch-fn")))
+      (with-temp-buffer
+        (rename-buffer "sctdesc-buf" t)
+        (use-local-map (let ((m (make-sparse-keymap))) (define-key m "x" #'sctdesc-one) m))
+        (should (string-match-p "in fundamental-mode.*\n.*\nsctdesc-one\\* \\[x\\]  Doc"
+                                (superchat-test-tools--ok "describe" :buffer (buffer-name))))))))
