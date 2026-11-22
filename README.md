@@ -9,6 +9,8 @@
 
 Ask it to find today's Telega messages about a topic, list the Org headings due this week, or fix a failing test in the buffer you are working on.
 
+[![Superchat answers a question, learns a skill with /learn, and uses the skill's typed tool in a new conversation](docs/demo.gif)](docs/demo.mp4)
+
 ## Why Superchat
 
 Claude Code or Codex can call `emacsclient --eval`, agent-shell runs them in an Emacs buffer, and gptel with gptel-agent brings chat and tools into Emacs. Superchat takes a different approach: its loop runs inside your Emacs, keeps every step on one record, and is built to accumulate capabilities through its own work.
