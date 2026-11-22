@@ -1,130 +1,47 @@
 # Superchat
 
-Superchat puts a language model inside Emacs. It is three things:
+> An AI agent that lives in Emacs, keeps a record of its work, learns reusable skills from what it has done, and keeps working when you are away.
 
-- **The AI layer of Emacs.** Any command or package can ask a model to do
-  something with one function, `superchat-run`.
-- **A coding assistant.** The model reads and edits your buffers and files,
-  under a permission level you set.
-- **A personal agent.** Everything that happens is kept on one append-only
-  record, the Tape, and the model can look things up in it later.
+- **It lives in Emacs.** The agent loop runs in your Emacs process. It reads and edits your buffers, runs Lisp in your session, and looks up any installed package's functions in Emacs's own documentation.
+- **It keeps a record.** Every conversation, tool call and result goes on one append-only record, the Tape. Ask next week what was decided today, and it finds it.
+- **It learns from what worked.** `/learn` turns the code behind a good answer into a skill with typed tools, so the next time is one call instead of a search.
+- **It keeps working.** Timers, an inbox and background runs let it follow up later, ask you only when it must, and notify you.
 
-This is a clean rewrite. `SPEC.md` is the whole contract; this page is the
-short way in.
+Ask it to find today's Telega messages about a topic, list the Org headings due this week, or fix a failing test in the buffer you are working on.
 
-## Requirements
+## Why Superchat
 
-- Emacs 30.1 or later, built with SQLite.
-- `curl`.
-- Nothing else. The model client is the `bridge/` directory of this
-  repository.
+Claude Code or Codex can call `emacsclient --eval`, agent-shell runs them in an Emacs buffer, and gptel with gptel-agent brings chat and tools into Emacs. Superchat takes a different approach, built around three things:
 
-## Set up
-
-```elisp
-(add-to-list 'load-path "/path/to/superchat-next/")
-(add-to-list 'load-path "/path/to/superchat-next/bridge/lisp/")
-(autoload 'superchat "superchat-chat" nil t)
-(autoload 'superchat-note "superchat-chat" nil t)
-(autoload 'superchat-recall "superchat-chat" nil t)
-(autoload 'superchat-rewrite "superchat-inline" nil t)
-(autoload 'superchat-ask "superchat-inline" nil t)
-
-(setq superchat-llm-provider "deepseek"
-      superchat-llm-model "deepseek-flash")
-```
-
-The API key is read from the environment, for DeepSeek from
-`DEEPSEEK_API_KEY`. When it is missing, the error names the variable to set.
-
-Then `M-x superchat`.
-
-### Other providers
-
-These names work for `superchat-llm-provider` out of the box: `deepseek`,
-`ant-ling`, `baseten`, `cerebras`, `groq`, `huggingface`, `moonshotai`,
-`moonshotai-cn`, `nvidia`, `qwen-token-plan`, `qwen-token-plan-cn`,
-`qwen-token-plan-individual`, `together`, `xiaomi`, `xiaomi-token-plan-ams`,
-`xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `zai`, `zai-coding-cn`.
-Only `deepseek` has been used against the real service.
-
-A model on your own machine (Ollama, LM Studio), or any other server that
-speaks the OpenAI Chat Completions API, needs one entry and no key:
-
-```elisp
-(with-eval-after-load 'superchat-llm
-  (push (cons "ollama"
-              (lambda ()
-                (superchat-bridge-openai-compatible-provider
-                 :id "ollama" :base-url "http://localhost:11434/v1"
-                 :models '("qwen3.5:9b"))))
-        superchat-llm-providers))
-(setq superchat-llm-provider "ollama" superchat-llm-model "qwen3.5:9b")
-```
-
-Anthropic, OpenAI and Gemini use other wire formats and are not supported
-yet.
-
-## Using it
-
-### The chat buffer
-
-`M-x superchat` opens the most recent conversation of the current project,
-or a new one. Outside a project the conversation belongs to "home". With a
-prefix argument it always starts a new one. A path the model uses is
-relative to that root, or to your home directory outside a project, and the
-prompt tells it which.
-
-| key | does |
+| | Superchat |
 |---|---|
-| `RET` or `C-c C-c` in the input area | send; while the answer runs, the text goes into it before its next step |
-| `C-u C-c C-c` | cancel what is running and send |
-| `C-c C-k` | cancel what is running |
-| `C-g` | interrupt a tool that keeps Emacs busy |
+| **The agent lives inside Emacs** | Its loop runs in your Emacs, not in another process that reaches Emacs one shell call at a time. |
+| **A persistent working record** | Not a chat history: every tool call and result, searchable, and the source of notes and skills. |
+| **Work continues** | Timers, an inbox and runs nobody watches carry work past the current conversation. |
 
-| command | does |
-|---|---|
-| `/new` | a new conversation in the same project |
-| `/resume` | open another conversation of this project |
-| `/fork` | branch off at the entry at point |
-| `/handoff [name]` | summarise so far and go on from the summary |
-| `/topic name` | show what was said under a handoff of that name |
-| `/recall query` | search everything kept |
-| `/notes` | show the notes |
-| `/note text` | keep a note |
-| `/timers` | what may still fire; `/timers cancel ID` drops one |
-| `/dream` | review this project's notes each night; `/dream off` stops it |
-| `/level [read-only\|ask\|auto]` | show or set the permission level |
-| `/model [name]` | show or set the model of this buffer |
-| `/help` | list the commands |
+Choose Superchat when the work is in Emacs (Telega, Org, elfeed, your open buffers, your config) and you want the agent to remember it and build on it. Choose an external agent through agent-shell when you need its model or tooling, and gptel for a light, provider-rich client you extend yourself. They can live side by side.
 
-### In any buffer
+## What it can do
 
-- `M-x superchat-rewrite`: select a region, say what to change, see the
-  replacement over it. `C-c C-c` accepts, `C-c C-k` discards.
-- `M-x superchat-ask`: ask about the region; the question goes to the chat
-  buffer beside the window.
-- `M-x superchat-note`: keep a note.
-- `M-x superchat-recall`: search what was kept; with an empty query, show
-  the notes.
+Superchat is one working loop: it acts, remembers what it did, learns from what worked, and continues when you are gone.
 
-### What the model can do
+### Act in Emacs
 
-| tool | class |
-|---|---|
-| `read` (a file, a buffer or a directory), `grep`, `find`, `load_tools` | read |
-| `recall`, `note`; `tape_query` (loaded on first use) | read |
-| `edit`, `write` (each saves the file) | write |
-| `eval_elisp`, `shell` | exec |
+The model runs Lisp in your Emacs (`eval_elisp`), reads and edits buffers and files, searches with `grep` and `find`, and runs shell commands. When it does not know a package, it calls `describe` to look up its API: a prefix lists its functions, a keyword narrows the search, a function name shows its arguments and documentation, and a buffer shows its mode's commands. It looks things up instead of guessing.
 
-Every request offers the tools above but `tape_query`. It, the timer tools
-and a plugin's tools are listed in the system prompt by name and first
-sentence, and the model loads the ones it needs with `load_tools`; once
-loaded, they stay offered for the rest of that conversation. Skills are
-found the same way: the catalog lists each one in `skills/` and a project's
-`.superchat/skills/`, and the model reads a skill's file only when it fits.
+### Remember
 
-The permission level decides what happens when the model calls a tool:
+The Tape is one SQLite file that is only ever appended to; a conversation is a view of it. The model searches earlier work with `recall`, keeps conclusions with `note`, and queries the Tape with read-only SQL. Each answer that relies on tool results names them (`Sources:`), so the record shows what an answer rests on. With `/dream` on, the model reviews the project's notes each night and replaces those that repeat or are out of date.
+
+### Learn
+
+When a task worked, `/learn PACKAGE` drafts a skill from the code the answers cited, so the next time is one call instead of a search. Only code that ran and was cited goes in, word for word. Values that came from your request or an earlier result become named holes, runs of the same procedure share one template, and saving writes typed tools the model can call next time. The draft waits for you: `C-c C-c` saves, `C-c C-k` drops, and a form you delete is not proposed again. `/skills review` shows repeated tools and skills whose package has changed.
+
+### Continue
+
+The model can set itself a `follow_up` or a `schedule`. Work waits in an inbox that survives Emacs closing, and a background run answers it while Emacs is running; nothing runs while Emacs is closed. `send` shows you a line, `M-x superchat-messages` lists what was sent and every question waiting for you, and `superchat-inbox-notify-functions` can turn each into a system notification.
+
+## Safety and control
 
 | level | read | write | exec |
 |---|---|---|---|
@@ -132,156 +49,85 @@ The permission level decides what happens when the model calls a tool:
 | `ask` (default) | allowed | asks you | asks you |
 | `auto` | allowed | allowed | allowed |
 
-When it asks, `y` allows once, `n` refuses, `a` allows that tool for the rest
-of the conversation in this Emacs session.
+When a tool asks for permission, `y` allows it once, `n` refuses, `a` allows that tool for the rest of the conversation. A run nobody watches never blocks Emacs: a call that needs permission becomes a question, and the run waits for you.
 
-`shell` and `grep` run in the background, so Emacs stays usable.
-`eval_elisp` runs Lisp inside Emacs and can hold it; `C-g` stops it.
+Long tasks are kept on track: a failed request is retried where it failed; at 80 model responses the model looks back over its work; a run that goes round in circles is told once to change its approach; and text you send while it runs reaches it before its next step.
 
-### Memory
+## Quick start
 
-There is one store, the Tape: an SQLite file that is only ever appended to.
-A conversation is a view of it. So is memory: the model searches earlier
-conversations with `recall`, queries the Tape with read-only SQL through
-`tape_query`, and writes down conclusions with `note`. You do the same with
-`/recall`, `/notes` and `/note`. The model's reasoning is never stored.
+Requirements: Emacs 30.1 or later built with SQLite, and `curl`. The model client ships in this repository.
 
-A long conversation is summarised before a new request when it has grown
-past the budget; within one request, the oldest entries are left out when
-they do not fit, and the model is told how many. The budget is half of the
-model's context window unless you set `superchat-context-chars`. A request
-that cannot be made to fit is not sent: the run ends with an error that
-says how large it was.
-
-### Rules and skills
-
-- `AGENTS.md` at a project root is given to the model for conversations of
-  that project; `AGENTS.md` in `superchat-directory` for "home".
-- A skill is `skills/NAME/SKILL.md` in `superchat-directory`. The model sees
-  each skill's name and `description:` line and reads the file when it needs
-  it.
-
-### While you are away
-
-A conversation can be given work that nobody is typing into. It waits in an
-inbox until the conversation is free, survives Emacs being closed, and is
-answered by a run of its own; the items of one batch are answered together.
-
-| what | does |
-|---|---|
-| `follow_up` (seconds), `schedule` (every, or daily `"HH:MM"`) | the model asks to be woken with a task later, or again and again; `cancel_timer` drops one |
-| `send` | a run you are not watching shows you a line now |
-| `M-x superchat-timer-start` | starts the clock when Emacs starts |
-| `superchat-inbox-notify-functions` | each `send` and each waiting question, for a notification hook of your own |
-
-An unattended run asks nobody: a call that needs permission comes back as a
-question, the run waits, and a message says so. Answer it with `y`, `n` or
-`a` on its line in `M-x superchat-messages`.
-
-`/dream` gives this project's notes a night review: at 03:00 the model
-reads them and replaces, with `note`, those that repeat or are wrong. It
-sends nothing. It is off until you ask for it.
-
-## Options
-
-| option | default | meaning |
-|---|---|---|
-| `superchat-directory` | `superchat/` in your Emacs directory | where the Tape, rules and skills live |
-| `superchat-tape-file` | nil | the Tape file; nil means `tape.sqlite` in that directory |
-| `superchat-llm-provider` | nil | provider name; required |
-| `superchat-llm-model` | nil | model id of that provider; required |
-| `superchat-llm-reasoning` | nil | nil for none, or `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `superchat-default-level` | `ask` | permission level of a new conversation |
-| `superchat-context-chars` | nil | how much conversation one request may carry; nil follows the model's context window, or give a number of characters |
-| `superchat-max-rounds` | 80 | model responses in one run before it looks back; at the `auto` level a separate judge request then decides whether it goes on, twice at most; nil sets no limit |
-| `superchat-tool-max-chars` | 20000 | longest tool result kept |
-| `superchat-shell-seconds` | 60 | longest a `shell` command may run |
-| `superchat-plugins` | nil | plugins to enable |
-
-## For other packages
-
-Ask one question and get the text back, without a chat buffer:
+With [elpaca](https://github.com/progfolio/elpaca):
 
 ```elisp
-(superchat-run (superchat-tape-new-name) "Summarise this: ..."
-               :tools 'none
-               :ephemeral t
-               :on-done (lambda (run)
-                          (pcase (plist-get run :status)
-                            ('done (message "%s" (plist-get run :text)))
-                            ('error (message "%s" (plist-get run :error))))))
+(elpaca (superchat :repo "yibie/superchat"
+                   :main "superchat.el"
+                   :files (:defaults "bridge/lisp/*.el")))
+
+(setq superchat-llm-provider "deepseek"
+      superchat-llm-model "deepseek-flash")
 ```
 
-`:ephemeral t` keeps the question out of the list of conversations. Leave
-`:tools` out to give the model every tool.
+Put the key in the environment (`DEEPSEEK_API_KEY` for DeepSeek; a missing key's error names the variable), then:
 
-A plugin adds tools, views and chat commands:
+1. `M-x superchat` in a project opens its latest conversation.
+2. Ask: "Find where the config is loaded and add a timeout option." It reads files, asks before it edits, runs the tests and answers. Type while it works to redirect it.
+3. Ask it to remember: "Note that releases go out on Fridays." Next week, in a new conversation: "When do releases go out?"
+4. After it has done a package task well, `/learn telega-` keeps the recipe.
 
-```elisp
-(superchat-plugin-define 'weather
-  :doc "Tell the model the weather."
-  :enable (lambda ()
-            (superchat-tool-define
-             "weather" :class 'read :description "Weather of a city."
-             :args '((:name "city" :type string :required t))
-             :function (lambda (args) (my-weather (plist-get args :city)))))
-  :disable (lambda () (superchat-tool-remove "weather")))
-(setq superchat-plugins '(weather))
-```
+Type `/` in the input to see every command.
 
-A tool that waits for a process is defined with `:async t`; see `SPEC.md`.
-Plugins live in their own repository; this one ships none.
+To enable timers and nightly reviews, run `M-x superchat-timer-start` once, or add `(superchat-timer-start)` to your init file.
+
+Other providers, a local model, and installing by hand: [docs/reference.md](docs/reference.md#providers).
 
 ## How well it codes
 
-Measured on 2026-11-18 with Aider's polyglot benchmark: 225 Exercism
-exercises in C++, Go, Java, JavaScript, Python and Rust. Both harnesses
-ran the same model, `deepseek-flash` on DeepSeek's API with reasoning
-`high`, under the protocol of Aider's own benchmark: the instructions and
-the stub files go in, the tests stay hidden, and a failure gets a second
-attempt with the first 50 lines of the test output.
+On Aider's polyglot benchmark (225 Exercism exercises in six languages, 2026-11-18), with the same model, `deepseek-flash` at reasoning `high`, under the protocol of Aider's benchmark (tests hidden, a second attempt with the first 50 lines of test output):
 
-| Language | Superchat | Aider 0.86.2 |
-| --- | --- | --- |
-| C++ | 23/26 | 23/26 |
-| Go | 35/39 | 32/39 |
-| Java | 33/47 | 28/47 |
-| JavaScript | 43/49 | 40/49 |
-| Python | 31/34 | 28/34 |
-| Rust | 28/30 | 29/30 |
-| **All** | **193/225 (85.8%)** | **180/225 (80.0%)** |
+| | Superchat | Aider 0.86.2 |
+|---|---|---|
+| Passed | **193/225 (85.8%)** | 180/225 (80.0%) |
+| On the first attempt | 119 | 117 |
 
-On the first attempt the two are even (119 and 117 passed); Superchat gains
-on the second, because it runs and inspects code with its own tools, which
-Aider's benchmark mode does not.
+Superchat's larger gain comes on the second attempt, where it can run and inspect code with its own tools. The score is strict: 15 exercises where the model went looking for the hidden tests count as failed; without that rule it is 204/225. Per language, Superchat/Aider: Go 35/32, Java 33/28, JavaScript 43/40, Python 31/28, Rust 28/29, C++ 23/23. One run each.
 
-Superchat's score is strict. With a shell, the model went looking for the
-hidden tests: in 15 exercises it tried to fetch them from Exercism's GitHub
-or found a copy of the benchmark on the disk. The shell ran without network,
-but some attempts got through. Each of those 15 counts as failed, so 11
-passes were taken away; without that rule Superchat scored 204/225 (90.7%).
-Keep that in mind when Superchat works where answers it must not see are
-within reach.
+## How it works
 
-One run of each; with 225 exercises a single exercise moves the score by
-half a point. The runner is not part of this repository.
+- **Layers.** L0 base and the model bridge, L1 memory (the Tape), L2 tools and permissions, L3 the agent loop, L4 background work, L5 the interface. Each layer uses only the public functions of those below; gates check it.
+- **The Tape** is the single source of truth. Every request is rebuilt from it, which is why a failed request can be retried in place and a run cut off by Emacs closing is marked on the next run.
+- **The bridge** is an Emacs Lisp port of part of `@earendil-works/pi-ai`, over `curl`.
+- **The contract** is [`SPEC.md`](SPEC.md) and the layer specifications it links; each rule change comes with a decision note under `decisions/`.
+
+## Reference
+
+- [docs/reference.md](docs/reference.md): keys, commands, tools, options and providers.
+- [docs/api.md](docs/api.md): `superchat-run` for other packages, plugins, and typed tools in a skill.
+
+Common commands: `/new`, `/resume`, `/recall`, `/note`, `/learn`, `/level`, `/model` and `/help`. In any buffer, `M-x superchat-rewrite` changes the region and `M-x superchat-ask` asks about it.
+
+## Limits
+
+- **Two wire formats.** The bridge speaks the OpenAI Chat Completions API and Anthropic's Messages API; OpenAI Responses and Gemini are not supported yet. Anthropic is tested against a stubbed server only, not the real service.
+- **No sub-agents.** Conversations run side by side but do not delegate to one another.
+- **No MCP**, no images yet.
+- **Always-on means while Emacs is open.** Timers missed while it was closed fire once when it starts.
+
+## FAQ
+
+**Is my data sent anywhere?** Only the requests to the model provider you choose. The Tape, notes and skills stay in `superchat-directory`.
+
+**Can it break things?** At the default level it asks before every edit, write and command. Use `auto` only in projects you trust: then it edits files, runs commands and sets timers without asking.
+
+**Does it work with a local model?** Yes, through any OpenAI-compatible server such as Ollama or LM Studio; see [docs/reference.md](docs/reference.md#providers).
+
+**It stopped after many steps. Is that an error?** No. At the round limit it looks back over its work and pauses; send a message to go on.
 
 ## Development
 
 ```sh
-scripts/check.sh          # Superchat: line caps, compile, tests
+scripts/check.sh          # line caps, gates, compile, tests
 scripts/check-bridge.sh   # the bridge
 ```
 
-Both run in a temporary copy and print `CHECK OK`. Read `SPEC.md` and
-`AGENTS.md` before changing anything: product code has a line cap per file
-and 6,000 lines in total.
-
-`bridge/` is an Emacs Lisp port of part of `@earendil-works/pi-ai` 1.4.0:
-the OpenAI Chat Completions API over `curl`. `bridge/docs/PORTING.md` says
-which upstream files are ported.
-
-## What it does not do
-
-No sub-agents, no MCP, no workflows, no permission that survives Emacs
-restarting. Anthropic, OpenAI and Gemini are not among the wire formats yet.
+Both run in a temporary copy and must print `CHECK OK`. Read [`SPEC.md`](SPEC.md) and [`AGENTS.md`](AGENTS.md) before changing anything.
