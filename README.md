@@ -1,57 +1,19 @@
 # Superchat
 
-> An AI agent that lives in Emacs, keeps a record of its work, learns reusable skills from what it has done, and keeps working when you are away.
+> An Emacs agent that builds on its own experience, turning successful work into reusable skills to expand what it can do.
 
 - **It lives in Emacs.** The agent loop runs in your Emacs process. It reads and edits your buffers, runs Lisp in your session, and looks up any installed package's functions in Emacs's own documentation.
 - **It keeps a record.** Every conversation, tool call and result goes on one append-only record, the Tape. Ask next week what was decided today, and it finds it.
-- **It learns from what worked.** `/learn` turns the code behind a good answer into a skill with typed tools, so the next time is one call instead of a search.
+- **It grows from what worked.** `/learn` turns the code behind a good answer into a skill with typed tools, so the next time is one call instead of a search.
 - **It keeps working.** Timers, an inbox and background runs let it follow up later, ask you only when it must, and notify you.
 
 Ask it to find today's Telega messages about a topic, list the Org headings due this week, or fix a failing test in the buffer you are working on.
 
 ## Why Superchat
 
-Claude Code or Codex can call `emacsclient --eval`, agent-shell runs them in an Emacs buffer, and gptel with gptel-agent brings chat and tools into Emacs. Superchat takes a different approach, built around three things:
+Claude Code or Codex can call `emacsclient --eval`, agent-shell runs them in an Emacs buffer, and gptel with gptel-agent brings chat and tools into Emacs. Superchat takes a different approach: its loop runs inside your Emacs, keeps every step on one record, and is built to accumulate capabilities through its own work.
 
-| | Superchat |
-|---|---|
-| **The agent lives inside Emacs** | Its loop runs in your Emacs, not in another process that reaches Emacs one shell call at a time. |
-| **A persistent working record** | Not a chat history: every tool call and result, searchable, and the source of notes and skills. |
-| **Work continues** | Timers, an inbox and runs nobody watches carry work past the current conversation. |
-
-Choose Superchat when the work is in Emacs (Telega, Org, elfeed, your open buffers, your config) and you want the agent to remember it and build on it. Choose an external agent through agent-shell when you need its model or tooling, and gptel for a light, provider-rich client you extend yourself. They can live side by side.
-
-## What it can do
-
-Superchat is one working loop: it acts, remembers what it did, learns from what worked, and continues when you are gone.
-
-### Act in Emacs
-
-The model runs Lisp in your Emacs (`eval_elisp`), reads and edits buffers and files, searches with `grep` and `find`, and runs shell commands. When it does not know a package, it calls `describe` to look up its API: a prefix lists its functions, a keyword narrows the search, a function name shows its arguments and documentation, and a buffer shows its mode's commands. It looks things up instead of guessing.
-
-### Remember
-
-The Tape is one SQLite file that is only ever appended to; a conversation is a view of it. The model searches earlier work with `recall`, keeps conclusions with `note`, and queries the Tape with read-only SQL. Each answer that relies on tool results names them (`Sources:`), so the record shows what an answer rests on. With `/dream` on, the model reviews the project's notes each night and replaces those that repeat or are out of date.
-
-### Learn
-
-When a task worked, `/learn PACKAGE` drafts a skill from the code the answers cited, so the next time is one call instead of a search. Only code that ran and was cited goes in, word for word. Values that came from your request or an earlier result become named holes, runs of the same procedure share one template, and saving writes typed tools the model can call next time. The draft waits for you: `C-c C-c` saves, `C-c C-k` drops, and a form you delete is not proposed again. `/skills review` shows repeated tools and skills whose package has changed.
-
-### Continue
-
-The model can set itself a `follow_up` or a `schedule`. Work waits in an inbox that survives Emacs closing, and a background run answers it while Emacs is running; nothing runs while Emacs is closed. `send` shows you a line, `M-x superchat-messages` lists what was sent and every question waiting for you, and `superchat-inbox-notify-functions` can turn each into a system notification.
-
-## Safety and control
-
-| level | read | write | exec |
-|---|---|---|---|
-| `read-only` | allowed | refused | refused |
-| `ask` (default) | allowed | asks you | asks you |
-| `auto` | allowed | allowed | allowed |
-
-When a tool asks for permission, `y` allows it once, `n` refuses, `a` allows that tool for the rest of the conversation. A run nobody watches never blocks Emacs: a call that needs permission becomes a question, and the run waits for you.
-
-Long tasks are kept on track: a failed request is retried where it failed; at 80 model responses the model looks back over its work; a run that goes round in circles is told once to change its approach; and text you send while it runs reaches it before its next step.
+Choose Superchat when you want an agent that does more than use Emacs as an editor: one that builds up a working knowledge of your Emacs and turns experience into reusable capabilities. Choose an external agent through agent-shell when you need its model or tooling, and gptel for a light, provider-rich client you extend yourself. They can live side by side.
 
 ## Quick start
 
@@ -81,6 +43,80 @@ To enable timers and nightly reviews, run `M-x superchat-timer-start` once, or a
 
 Other providers, a local model, and installing by hand: [docs/reference.md](docs/reference.md#providers).
 
+## What it can do
+
+Superchat is built around a loop that improves with use: it acts in Emacs, records what it does, turns successful work into skills, and uses those skills on later tasks.
+
+```
+use Emacs → explore what it can do → record the work that succeeded
+          → distill skills → call them next time → take on more
+```
+
+### Act in Emacs
+
+The model runs Lisp in your Emacs (`eval_elisp`), reads and edits buffers and files, searches with `grep` and `find`, and runs shell commands.
+
+When it does not know a package, it calls `describe` to look up its API: a prefix lists its functions, a keyword narrows the search, a function name shows its arguments and documentation, and a buffer shows its mode's commands. It looks things up instead of guessing.
+
+### Remember
+
+The **Tape** is one SQLite file that is only ever appended to; a conversation is a view of it. The model searches earlier work with `recall`, keeps conclusions with `note`, and queries the Tape with read-only SQL.
+
+Each answer that relies on tool results names them (`Sources:`), so the record shows what an answer rests on. That record is what skills are drawn from.
+
+With `/dream` on, the model reviews the project's notes each night and replaces those that repeat or are out of date.
+
+### Learn and improve
+
+When a task works, `/learn PACKAGE` drafts a skill from the code the answers cited. Only code that ran and was cited goes in, word for word. Values that came from your request or an earlier result become named holes, and runs of the same procedure share one template. Saving also writes typed tools the model can call next time.
+
+What that looks like (abridged):
+
+```text
+You    Is 2027 a leap year?
+         ✓ describe    calendar leap
+         ✓ eval_elisp  (calendar-leap-year-p 2027)
+Agent  No.
+
+You    /learn calendar-
+         skills/calendar/SKILL.md        (calendar-leap-year-p YEAR)
+         skills/calendar/interface.eld   calendar__leap_year_p  year: number  read
+
+Later, in another conversation:
+You    Is 2032 a leap year?
+         ✓ calendar__leap_year_p  :year 2032
+Agent  Yes.
+```
+
+The draft waits for you: `C-c C-c` saves, `C-c C-k` drops, and a form you delete is not proposed again. `/skills review` shows repeated tools and skills whose package has changed.
+
+The result is a growing set of skills: the agent does more without rediscovering the same procedures, and nothing joins that set without your say.
+
+### Continue
+
+The model can set itself a `follow_up` or a `schedule`. Work waits in an inbox that survives Emacs closing, and a background run answers it while Emacs is running; nothing runs while Emacs is closed.
+
+`send` shows you a line, `M-x superchat-messages` lists what was sent and every question waiting for you, and `superchat-inbox-notify-functions` lets you configure system notifications.
+
+## Safety and control
+
+| level | read | write | exec |
+|---|---|---|---|
+| `read-only` | allowed | refused | refused |
+| `ask` (default) | allowed | asks you | asks you |
+| `auto` | allowed | allowed | allowed |
+
+When a tool asks for permission, `y` allows it once, `n` refuses, `a` allows that tool for the rest of the conversation. A run nobody watches never blocks Emacs: a call that needs permission becomes a question, and the run waits for you.
+
+Long tasks are kept on track: a failed request is retried where it failed; at 80 model responses the model looks back over its work; a run that goes round in circles is told once to change its approach; and text you send while it runs reaches it before its next step.
+
+## How it works
+
+- **Layers.** L0 base and the model bridge, L1 memory (the Tape), L2 tools and permissions, L3 the agent loop, L4 background work, L5 the interface. Each layer uses only the public functions of those below; gates check it.
+- **The Tape** is the single source of truth. Every request is rebuilt from it, which is why a failed request can be retried in place and a run cut off by Emacs closing is marked on the next run.
+- **The bridge** is an Emacs Lisp port of part of `@earendil-works/pi-ai`, over `curl`.
+- **The contract** is [`SPEC.md`](SPEC.md) and the layer specifications it links; each rule change comes with a decision note under `decisions/`.
+
 ## How well it codes
 
 On Aider's polyglot benchmark (225 Exercism exercises in six languages, 2026-11-18), with the same model, `deepseek-flash` at reasoning `high`, under the protocol of Aider's benchmark (tests hidden, a second attempt with the first 50 lines of test output):
@@ -91,13 +127,6 @@ On Aider's polyglot benchmark (225 Exercism exercises in six languages, 2026-11-
 | On the first attempt | 119 | 117 |
 
 Superchat's larger gain comes on the second attempt, where it can run and inspect code with its own tools. The score is strict: 15 exercises where the model went looking for the hidden tests count as failed; without that rule it is 204/225. Per language, Superchat/Aider: Go 35/32, Java 33/28, JavaScript 43/40, Python 31/28, Rust 28/29, C++ 23/23. One run each.
-
-## How it works
-
-- **Layers.** L0 base and the model bridge, L1 memory (the Tape), L2 tools and permissions, L3 the agent loop, L4 background work, L5 the interface. Each layer uses only the public functions of those below; gates check it.
-- **The Tape** is the single source of truth. Every request is rebuilt from it, which is why a failed request can be retried in place and a run cut off by Emacs closing is marked on the next run.
-- **The bridge** is an Emacs Lisp port of part of `@earendil-works/pi-ai`, over `curl`.
-- **The contract** is [`SPEC.md`](SPEC.md) and the layer specifications it links; each rule change comes with a decision note under `decisions/`.
 
 ## Reference
 
@@ -114,6 +143,8 @@ Common commands: `/new`, `/resume`, `/recall`, `/note`, `/learn`, `/level`, `/mo
 - **Always-on means while Emacs is open.** Timers missed while it was closed fire once when it starts.
 
 ## FAQ
+
+**How is it different from Superchat 1.x?** It is a rewrite: about 6,500 lines plus a built-in model client, against about 125,000; six checked layers in place of many loosely joined parts; and an agent that names its sources and turns cited work into skills. MCP and sub-agents are not in it yet. Moving over, what to type now and a full comparison: [docs/migrating.md](docs/migrating.md).
 
 **Is my data sent anywhere?** Only the requests to the model provider you choose. The Tape, notes and skills stay in `superchat-directory`.
 

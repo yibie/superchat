@@ -27,8 +27,9 @@ write one line in `NOTES.md`, starting with the layer it concerns, and go on.
   `~/Documents/emacs/package/superchat` may be read and its code borrowed.
   What is borrowed is reshaped toward the display of agent-shell, which is
   closer to what a person needs; it follows SPEC.md's rules against overflow,
-  the layer's line cap and this repository's style. Nothing else is read
-  there, for any other layer.
+  the layer's line cap and this repository's style. For `docs/migrating.md`
+  only, its README, its `defcustom`s and its line counts may be read, to
+  compare; no code is borrowed. Nothing else is read there.
 - Each module has a line cap in `SPEC.md`. Under the cap is good; far under is
   better. Do not pad or compress code to fit. Split a module by what it is,
   never by its line count: when code does not fit, stop and tell the
