@@ -35,4 +35,4 @@ A plugin adds tools, views and chat commands:
 
 ## Typed tools in a skill
 
-A skill can also declare typed tools in an `interface.eld` beside its `SKILL.md`, each a piece of Lisp with typed arguments and a class; `/learn` writes these for you. See `SPEC.md`.
+A skill can also declare typed tools in an `interface.eld` beside its `SKILL.md`, each a piece of Lisp with typed arguments and a class; `/learn` writes these for you; [learn.md](learn.md) shows a skill growing over three rounds. See `SPEC.md`.

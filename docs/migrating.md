@@ -58,7 +58,7 @@ No measured comparison of speed between the two versions has been made.
 
 ## Not in Superchat 2
 
-These 1.x features have no counterpart yet: MCP servers, sub-agents, profiles, the review screen for edits before saving, `superchat-annotate` and `superchat-note`, compile watching with sandboxed fixes, the Telega cowork mode, generated UI, and Org Babel blocks. Edits in 2 are saved by the tool, under the permission level, with undo in the buffer.
+These 1.x features have no counterpart yet: MCP servers, sub-agents, workflows (`>>name`), profiles, the review screen for edits before saving, `superchat-annotate` and `superchat-note`, compile watching with sandboxed fixes, the Telega cowork mode, generated UI, and Org Babel blocks. Edits in 2 are saved by the tool, under the permission level, with undo in the buffer.
 
 ## Similar and different
 

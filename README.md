@@ -70,9 +70,11 @@ With `/dream` on, the model reviews the project's notes each night and replaces 
 
 ### Learn and improve
 
-When a task works, `/learn PACKAGE` drafts a skill from the code the answers cited. Only code that ran and was cited goes in, word for word. Values that came from your request or an earlier result become named holes, and runs of the same procedure share one template. Saving also writes typed tools the model can call next time.
+When the agent works something out, `/learn` keeps it as a recipe for next time.
 
-What that looks like (abridged):
+The first time you ask "Is 2027 a leap year?", the agent does not know how to check that in Emacs. It looks through Emacs's documentation, finds `calendar-leap-year-p`, runs it on 2027 and answers. Then you type `/learn calendar-`, and Superchat writes down what worked as a new tool: give it a year, and it runs `calendar-leap-year-p` on that year. You read the draft and save it.
+
+A week later, in a new conversation, you ask about 2032. The agent skips the search and uses the saved tool:
 
 ```text
 You    Is 2027 a leap year?
@@ -81,8 +83,7 @@ You    Is 2027 a leap year?
 Agent  No.
 
 You    /learn calendar-
-         skills/calendar/SKILL.md        (calendar-leap-year-p YEAR)
-         skills/calendar/interface.eld   calendar__leap_year_p  year: number  read
+         draft: a calendar skill with one tool, leap-year check, takes a year
 
 Later, in another conversation:
 You    Is 2032 a leap year?
@@ -90,7 +91,7 @@ You    Is 2032 a leap year?
 Agent  Yes.
 ```
 
-The draft waits for you: `C-c C-c` saves, `C-c C-k` drops, and a form you delete is not proposed again. `/skills review` shows repeated tools and skills whose package has changed.
+Only code that ran and that an answer relied on goes into a recipe, word for word; the values that came from your request become what the tool takes. In the draft, `C-c C-c` saves, `C-c C-k` drops, and a form you delete is not proposed again. `/skills review` shows repeated tools and skills whose package has changed.
 
 The result is a growing set of skills: the agent does more without rediscovering the same procedures, and nothing joins that set without your say.
 
@@ -134,6 +135,8 @@ Superchat's larger gain comes on the second attempt, where it can run and inspec
 
 - [docs/reference.md](docs/reference.md): keys, commands, tools, options and providers.
 - [docs/api.md](docs/api.md): `superchat-run` for other packages, plugins, and typed tools in a skill.
+- [docs/faq.md](docs/faq.md): what happens when you hand it a task, what you control, and how it improves.
+- [docs/learn.md](docs/learn.md): how a skill grows over three rounds of `/learn`, and the files it keeps.
 
 Common commands: `/new`, `/resume`, `/recall`, `/note`, `/learn`, `/level`, `/model` and `/help`. In any buffer, `M-x superchat-rewrite` changes the region and `M-x superchat-ask` asks about it.
 
@@ -154,7 +157,13 @@ Common commands: `/new`, `/resume`, `/recall`, `/note`, `/learn`, `/level`, `/mo
 
 **Does it work with a local model?** Yes, through any OpenAI-compatible server such as Ollama or LM Studio; see [docs/reference.md](docs/reference.md#providers).
 
+**What is the Tape?** Superchat's memory follows [Tape](https://tape.systems), a data model for context with four parts. A *tape* is the record of what happened, in order. An *entry* is one fact on it, never changed: in Superchat a SQLite trigger refuses updates and deletes, so a correction is a new entry. An *anchor* is a point to rebuild context from: `/handoff` and `/fork` write one, and everything before it stays. A *view* is the context put together for a task: a conversation is the entries from the latest anchor on, and `recall` searches all of them. Each request is built from a view of the Tape, never carried over from the last one.
+
+**What does `/learn` keep, and how does a skill grow?** Beside each `SKILL.md`: `roles.eld`, which values stay holes and which you kept; `evidence.eld`, the results each template ran as; `rejected.eld`, the forms you deleted from a draft. Three rounds of `/learn calendar-`, file by file: [docs/learn.md](docs/learn.md).
+
 **It stopped after many steps. Is that an error?** No. At the round limit it looks back over its work and pauses; send a message to go on.
+
+More questions, on what it can do, how it works, what you control, memory, skills and background work: [docs/faq.md](docs/faq.md).
 
 ## Development
 

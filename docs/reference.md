@@ -21,7 +21,7 @@ Type `/` at the start of the input for the commands, completed with their argume
 | `/recall query`, `/notes`, `/note text` | search what was kept; show the notes; keep one |
 | `/timers` | the timers that may still fire (`c` cancels, `RET` opens) |
 | `/dream [off]` | the nightly review of this project's notes |
-| `/learn prefix`, `/skills review` | draft a skill from code that ran; review the skills |
+| `/learn prefix`, `/skills review` | draft a skill from code that ran ([how it grows](learn.md)); review the skills |
 | `/level [read-only\|ask\|auto]` | show or set the permission level |
 | `/model [name]` | show or set the model of this conversation |
 | `/help` | list the commands |
