@@ -629,7 +629,8 @@ finished messages and the messages the third request sent."
   (let ((names (mapcar #'car (default-value 'superchat-llm-providers))))
     (should (member "deepseek" names))
     (should (member "groq" names))
-    (should (equal (cdr names) (superchat-bridge-provider-ids)))
+    (should (member "anthropic" names))
+    (should (equal (cddr names) (superchat-bridge-provider-ids)))
     (should (equal (superchat-bridge-provider-id
                     (funcall (cdr (assoc "groq" (default-value 'superchat-llm-providers)))))
                    "groq"))))
@@ -948,3 +949,91 @@ STATUS-LINE with JSON BODY.  Return (STARTS . R), R as `test-llm--ask'."
       (should (plist-get flash :images))
       (should-not (plist-get pro :images)))
     (should-not (superchat-llm-model-info "no-such-model"))))
+
+;; Anthropic Messages, through the same entry point: a tool call streamed in
+;; pieces, then the call and its result sent back in Anthropic's shape.
+
+(ert-deftest superchat-llm-anthropic-calls-a-tool-and-gets-its-result-back ()
+  (let* ((requests nil)
+         (process-environment (list "ANTHROPIC_API_KEY=dummy" "HOME=/nonexistent"))
+         (superchat-bridge-retry-run-at-time-function (lambda (&rest _) nil))
+         (superchat-bridge-retry-cancel-timer-function #'ignore)
+         (superchat-bridge-http-start-function
+          (lambda (_args _config stdin on-output on-exit)
+            (setq requests (append requests (list (list stdin on-output on-exit))))
+            #'ignore))
+         (superchat-llm-providers '(("anthropic" . superchat-bridge-anthropic-provider)))
+         (superchat-llm-provider "anthropic") (superchat-llm-model "claude-haiku-4-5")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil)
+         (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request)
+         (events
+          '(("message_start" . "{\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}")
+            ("content_block_start" . "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_a\",\"name\":\"list_buffers\",\"input\":{}}}")
+            ("content_block_delta" . "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"all\\\":\"}}")
+            ("content_block_delta" . "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"true}\"}}")
+            ("content_block_stop" . "{\"type\":\"content_block_stop\",\"index\":0}")
+            ("message_delta" . "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}")
+            ("message_stop" . "{\"type\":\"message_stop\"}")))
+         (tool '(:name "list_buffers" :description "List the open buffers"
+                 :args ((:name "all" :type boolean :description "Include hidden"))))
+         (r (test-llm--ask (list (test-llm--user "hi")) :system "Be brief." :tools (list tool))))
+    (pcase-let ((`(,_ ,on-output ,on-exit) (car requests)))
+      (funcall on-output
+               (encode-coding-string
+                (concat "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"
+                        (mapconcat (lambda (e) (format "event: %s\ndata: %s\n\n" (car e) (cdr e)))
+                                   events ""))
+                'utf-8))
+      (funcall on-exit 0 ""))
+    (should-not (plist-get r :errors))
+    (let ((first (json-parse-string (car (nth 0 requests)) :object-type 'alist)))
+      (should (equal (alist-get 'name (aref (alist-get 'tools first) 0)) "list_buffers")))
+    (let ((done (car (plist-get r :done))))
+      (should (equal (plist-get done :calls)
+                     '((:id "toolu_a" :name "list_buffers" :args (:all t)))))
+      (test-llm--ask (list (test-llm--user "hi")
+                           (list :role 'assistant :text "" :calls (plist-get done :calls))
+                           (list :role 'tool :call-id "toolu_a" :name "list_buffers"
+                                 :text "*scratch*"))
+                     :system "Be brief." :tools (list tool))
+      (let* ((second (json-parse-string (car (nth 1 requests)) :object-type 'alist))
+             (messages (append (alist-get 'messages second) nil))
+             (blocks (lambda (role type)
+                       (cl-loop for m in messages when (equal (alist-get 'role m) role)
+                                append (cl-remove-if-not
+                                        (lambda (b) (equal (alist-get 'type b) type))
+                                        (and (vectorp (alist-get 'content m))
+                                             (append (alist-get 'content m) nil))))))
+             (use (car (funcall blocks "assistant" "tool_use")))
+             (result (car (funcall blocks "user" "tool_result"))))
+        (should (equal (alist-get 'id use) "toolu_a"))
+        (should (equal (alist-get 'tool_use_id result) "toolu_a"))))))
+
+(ert-deftest superchat-llm-anthropic-429-is-a-rate-limit ()
+  (let* ((requests nil)
+         (process-environment (list "ANTHROPIC_API_KEY=dummy" "HOME=/nonexistent"))
+         (superchat-bridge-retry-run-at-time-function (lambda (&rest _) nil))
+         (superchat-bridge-retry-cancel-timer-function #'ignore)
+         (superchat-bridge-http-start-function
+          (lambda (_args _config _stdin on-output on-exit)
+            (setq requests (append requests (list (list on-output on-exit))))
+            #'ignore))
+         (superchat-llm-providers '(("anthropic" . superchat-bridge-anthropic-provider)))
+         (superchat-llm-provider "anthropic") (superchat-llm-model "claude-haiku-4-5")
+         (superchat-llm-reasoning nil) (superchat-llm--models nil) (superchat-llm--kept nil)
+         (superchat-llm-request-function #'superchat-llm--request)
+         (r (test-llm--ask (list (test-llm--user "hi")))))
+    (pcase-let ((`(,on-output ,on-exit) (car requests)))
+      (funcall on-output
+               (encode-coding-string
+                (concat "HTTP/1.1 429 Too Many Requests\r\nretry-after: 0\r\nContent-Type: application/json\r\n\r\n"
+                        "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"slow down\"}}")
+                'utf-8))
+      (funcall on-exit 0 ""))
+    (test-llm--settle)
+    (should (= (length requests) 1))
+    (should-not (plist-get r :done))
+    (let ((failure (car (plist-get r :errors))))
+      (should (eq (plist-get failure :kind) 'rate-limit))
+      (should (eql (plist-get failure :status) 429)))))

@@ -10,15 +10,17 @@
 (require 'subr-x)
 (require 'superchat)
 (require 'superchat-bridge)
+(require 'superchat-bridge-provider-anthropic)
 (require 'superchat-bridge-provider-deepseek)
 (require 'superchat-bridge-providers)
 (require 'superchat-bridge-utils-abort)
 (require 'superchat-bridge-utils-retry)
 
 (defvar superchat-llm-providers
-  (cons '("deepseek" . superchat-bridge-deepseek-provider)
-        (mapcar (lambda (id) (cons id (apply-partially #'superchat-bridge-provider id)))
-                (superchat-bridge-provider-ids)))
+  (append '(("deepseek" . superchat-bridge-deepseek-provider)
+            ("anthropic" . superchat-bridge-anthropic-provider))
+          (mapcar (lambda (id) (cons id (apply-partially #'superchat-bridge-provider id)))
+                  (superchat-bridge-provider-ids)))
   "Alist from a provider name to a function of no arguments that returns a
 bridge provider.  The name is the provider's id.  A plugin may add to it.")
 

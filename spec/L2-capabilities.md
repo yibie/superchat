@@ -99,8 +99,8 @@ requires `llm.el`.
   `superchat-llm-request`, `superchat-llm-model-ids` or
   `superchat-llm-context-window`, so a fixed entry is seen by `/model` too.
   It starts with
-  one entry for each provider the bridge has (`"deepseek"`, `"groq"`,
-  `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
+  one entry for each provider the bridge has (`"deepseek"`, `"anthropic"`,
+  `"groq"`, `"moonshotai"` ...); a plugin or the user adds to it. The bridge models
   collection is made from it on first use.
 - A server on the user's own machine (LM Studio, Ollama) or any other
   OpenAI-compatible endpoint has no entry of its own. The user adds one:

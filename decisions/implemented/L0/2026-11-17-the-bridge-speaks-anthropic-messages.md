@@ -1,6 +1,6 @@
 # Decision: The bridge speaks Anthropic's Messages API
 
-Status: proposed
+Status: implemented
 
 ## Problem
 
@@ -16,20 +16,23 @@ package, and today it reaches only OpenAI-compatible endpoints.
 `providers/anthropic` in Tier 1, next to the DeepSeek pair that was
 ported; `bridge/docs/PORTING.md` still marks both `todo`.
 
-## Proposal
+## Decision
 
-- Port `src/api/anthropic-messages.ts` to
-  `lisp/superchat-bridge-api-anthropic-messages.el` and
+- `src/api/anthropic-messages.ts` is ported to
+  `bridge/lisp/superchat-bridge-api-anthropic-messages.el` and
   `src/providers/anthropic.ts` to
-  `lisp/superchat-bridge-provider-anthropic.el`, by the rules of
-  `bridge/TIER1.md`: file by file from the upstream source, semantics as in
-  the source, tests translated from its tests, `scripts/check-bridge.sh`
-  green, the rows of `PORTING.md` updated.
-- `superchat-llm-providers` gets the entry `"anthropic"`; nothing else in
-  `superchat-llm.el` changes, since it reaches every API through
-  `superchat-bridge-models-stream-simple`.
-- The other APIs stay `todo`; each would be a decision of its own, in the
-  order of the models it opens.
+  `bridge/lisp/superchat-bridge-provider-anthropic.el`, by the rules of
+  `bridge/TIER1.md`, with their tests translated; `bridge/docs/PORTING.md`
+  marks both done and lists each branch left out whole.
+- `superchat-llm-providers` has the entry `"anthropic"`, second after
+  `"deepseek"`; nothing else in `superchat-llm.el` changes.
+- An HTTP error reads as the SDK's: the status, a space, the body's JSON, so
+  `superchat-llm.el` reads its kind as it reads DeepSeek's.
+- Left out whole: OAuth keys (`sk-ant-oat`) and the Claude Code identity
+  they carry, GitHub Copilot, federation, the SDK's client options and
+  default headers, and grammar sampling. A request that needs one ends with
+  an error event.
+- The other APIs stay `todo`.
 
 ## Alternatives considered
 
@@ -40,14 +43,19 @@ ported; `bridge/docs/PORTING.md` still marks both `todo`.
   answer: it opens the models but not their own features (thinking blocks,
   prompt caching) that the source's adapter carries.
 
-## Acceptance criteria
+## Consequences
 
-- `scripts/check-bridge.sh` prints `CHECK OK` with the new files and their
-  translated tests; no test touches the network.
-- With `superchat-llm-provider` `"anthropic"` and a stub HTTP seam, a
-  request streams text, a tool call and its result, and a 429 reaches
-  ON-ERROR with kind `rate-limit`.
-- A run against the real API, with a key, answers and calls a tool.
+- With a key in `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`), the 17
+  Claude models of `bridge/data/anthropic.json` can be asked, with thinking,
+  tool calls and prompt caching.
+- Tests in `test/test-llm.el` pin it through `superchat-llm-request` with a
+  stub HTTP seam: a tool call streamed in pieces comes back as a call, the
+  next request carries the `tool_use` and its `tool_result`, and a 429 is
+  one failure of kind `rate-limit`.
+- No run has been made against the real API: there was no key. The README
+  says so.
+- Other providers whose data names `anthropic-messages` models
+  (openrouter, vercel-ai-gateway and others) are not wired to this API.
 
 ## Risks
 
