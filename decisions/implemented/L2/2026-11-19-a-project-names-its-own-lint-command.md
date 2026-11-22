@@ -27,8 +27,10 @@ check by hand.
   (`enable-local-variables` `:safe`). Without that, an untrusted
   `.dir-locals.el` would ask its question from inside a tool call, holding
   Emacs, with nobody watching in a background run.
-- This repository's `.dir-locals.el` runs the gates and reports any line
-  but `ok` and the total.
+- This repository ships no `.dir-locals.el`: an untrusted one asks its
+  question each time a file of the repository is opened, for everyone who
+  clones it. A maintainer sets the gates command in their own config, as a
+  directory class (`dir-locals-set-class-variables`), which Emacs trusts.
 
 ## Alternatives considered
 
