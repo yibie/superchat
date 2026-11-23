@@ -61,6 +61,7 @@ Each module belongs to one layer. `scripts/check.sh` reads this table.
 | L5 | `superchat-chat.el` | 1000 | the chat buffer and slash commands |
 | L5 | `superchat-turn.el` | 400 | the text of one turn: its calls, its strip, Markdown as Org |
 | L5 | `superchat-inline.el` | 600 | rewrite a region in place; ask about a region |
+| L5 | `superchat-complete.el` | 220 | completion at point, shown as ghost text |
 | L5 | `superchat-plugin.el` | 150 | define, enable, disable a plugin |
 | L5 | `superchat-messages.el` | 100 | the buffer of what runs sent |
 | L5 | `superchat-views.el` | 200 | the timers buffer and the entry lists, each with keys |
@@ -70,6 +71,7 @@ Dependencies go one way only:
 
 ```
 inline → chat
+complete → llm
 messages → chat
 chat → agent, learn, plugin, recall, timer, turn, views
 views → timer, view

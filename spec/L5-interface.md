@@ -1,7 +1,7 @@
 # L5 interface: the chat buffer, inline commands, plugins
 
 Part of the [specification](../SPEC.md). Modules: `superchat-chat.el`,
-`superchat-turn.el`, `superchat-inline.el`, `superchat-plugin.el`,
+`superchat-turn.el`, `superchat-inline.el`, `superchat-complete.el`, `superchat-plugin.el`,
 `superchat-messages.el`, `superchat-views.el`. This
 layer is what the person uses; every effect it has goes through
 `superchat-run` and the public functions of the layers below.
@@ -328,6 +328,27 @@ The text of a turn, from its entries, and the answers' Markdown as Org.
   there with `superchat-chat-send`. When that timeline is busy, the question
   joins the chat buffer's queue instead, and the message names the chat
   buffer and says the question is queued.
+
+## superchat-complete.el
+
+- `superchat-complete-mode` (an autoloaded buffer-local minor mode): 0.3 s
+  after a command that changed the buffer, with point before no word or
+  symbol character and after a space or tab or before only closing
+  delimiters and blanks, it calls `superchat-complete`.
+- `superchat-complete` (an autoloaded command): one `superchat-llm-request`
+  with reasoning off, no tools, no run; nothing goes on the Tape. It sends
+  the file's name and mode and the text around point with `<CURSOR>` at
+  point: in a mode derived from `lisp-data-mode`, the top-level form at
+  point and the two before it, to the line starting the next one; elsewhere
+  60 lines before and 20 after. The answer, its fence and a repeated line
+  start removed, shows dimmed after point. It is dropped when the buffer or
+  point changed meanwhile.
+- While it shows, `TAB` (`superchat-complete-accept`) inserts it and `C-g`
+  (`superchat-complete-dismiss`) hides it, above other minor modes' keys.
+  Typing its next character shortens it; any other command hides it and
+  cancels the request.
+- A failed request says why in the echo area. One that cannot start (no
+  provider or model) turns the mode off in that buffer.
 
 ## superchat-plugin.el
 
